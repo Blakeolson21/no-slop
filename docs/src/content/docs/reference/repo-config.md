@@ -8,7 +8,7 @@ Per-repo configuration lives in `.no-mistakes.yaml` at the root of your reposito
 :::caution[Security: gate-control fields are read from the default branch]
 `commands.*` execute arbitrary shell on the daemon host via `sh -c` / `cmd.exe /c`, and `agent` selects which process launches there (including ordered fallback lists, ACP aliases such as `cursor`, and `acp:` targets) with the maintainer's credentials.
 To prevent a supply-chain attack where a contributor lands a hostile value on a gated branch, the daemon always reads **`commands` and `agent` from your default branch** (e.g. `origin/main`), never from the pushed SHA, and reads them at the exact commit a fresh fetch resolved (so a stale `origin/<default>` ref cannot serve a value the live default branch removed).
-The daemon also reads `document.instructions`, `review.path_instructions`, `disable_project_settings`, `no_ci`, and `ci.rerun_transient` only from that trusted copy.
+The daemon also reads `document.instructions`, the `review` section (`review.path_instructions`, `review.convergence`), `disable_project_settings`, `no_ci`, and `ci.rerun_transient` only from that trusted copy.
 If the default branch cannot be fetched and resolved to a readable commit, or its present `.no-mistakes.yaml` cannot be read and parsed, the run aborts before launching an agent.
 A readable default-branch tree with no `.no-mistakes.yaml` is valid and uses defaults.
 Commit the gate-control settings you want to your default branch.
@@ -279,6 +279,35 @@ These checks run on whichever copy of the file is parsed, including the pushed b
 #### Trust
 
 Like `document.instructions`, this field steers gate behavior, so it is honored **only from the trusted default-branch copy** of `.no-mistakes.yaml`, regardless of [`allow_repo_commands`](#allow_repo_commands): a value present only on a pushed branch is ignored, so a contributor cannot inject instructions into the review that gates them.
+
+### review.convergence
+
+Thresholds for the review-loop convergence guard.
+
+| | |
+|---|---|
+| Type | `object` with `non_decreasing_rounds`, `recurring_rounds`, `budget_minutes` (all `int`) |
+| Default | `non_decreasing_rounds: 3`, `recurring_rounds: 3`, `budget_minutes: 120` |
+
+A review-fix loop can *ladder* instead of converge: each fix round relocates a defect or creates new files that the next re-review then flags, so findings per round never shrink, and from the outside every round looks like fresh progress. After every review round the pipeline computes a convergence report from the round history: findings count per round, cumulative review time, findings in files outside the originally submitted diff, and finding classes that recur across rounds under different ids and file paths (identity comes from normalized finding content, so a defect that moves files is still recognized as the same defect).
+
+The gate always carries this report as its `convergence` block, so the history is visible without tallying rounds by hand. The guard trips when any threshold is met:
+
+- `non_decreasing_rounds`: the findings count has not decreased across this many trailing consecutive rounds (the observed ladder was `1,1,1,2,3,3,3`).
+- `recurring_rounds`: one finding class has recurred in this many distinct rounds.
+- `budget_minutes`: cumulative review execution time (excluding time parked at gates) has reached this budget.
+
+Set a threshold to `0` to disable that trigger; negative values are rejected. A tripped guard is **advisory**: it never aborts the run and never suppresses a finding. It stops `auto_fix.review` from funding further automatic fix rounds, stops `--yes` from auto-answering the gate with `fix`, parks the gate with an explicit convergence warning, and leaves approve/skip/fix available for a deliberate decision.
+
+```yaml
+review:
+  convergence:
+    non_decreasing_rounds: 3
+    recurring_rounds: 3
+    budget_minutes: 90
+```
+
+Like the rest of the `review` section, these thresholds are honored **only from the trusted default-branch copy** of `.no-mistakes.yaml`: a pushed branch cannot widen or disable the guard on its own run.
 
 ### Command process lifetime
 

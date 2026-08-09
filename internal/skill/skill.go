@@ -305,6 +305,15 @@ funds up to 3 fix rounds per step. It approves clean gates and gates with only
 for explicit adjudication instead of approving them. Only use it when the user
 has asked you to drive the whole run without checking back unless fixing stalls.
 
+A review ` + "`gate:`" + ` may carry a ` + "`convergence`" + ` block: findings per round
+(` + "`rounds: 1,1,2`" + `), cumulative review time, findings in files outside the
+originally submitted diff, and finding classes recurring across rounds even
+when they moved files. When that block includes a ` + "`warning`" + `, the pipeline has
+judged the review loop non-converging: ` + "`--yes`" + ` stops funding fix rounds at
+that gate. Do not respond ` + "`fix`" + ` by default there - read the history and
+recurring findings, then deliberately approve, skip, fix specific findings, or
+escalate to the user.
+
 ## Inspecting state
 
 ` + "```sh" + `

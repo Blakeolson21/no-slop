@@ -8,6 +8,7 @@ import (
 
 	toon "github.com/toon-format/toon-go"
 
+	"github.com/kunchenguid/no-mistakes/internal/convergence"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -91,6 +92,10 @@ type stepView struct {
 	AutoFixLimit     int
 	PendingFixSource string
 	QuietWarning     time.Duration
+	// ConvergenceJSON is the review step's persisted convergence report
+	// (internal/convergence.Report), rendered as the gate's convergence
+	// block. Empty when the step never produced one.
+	ConvergenceJSON string
 }
 
 // runView is a render-ready view of a pipeline run.
@@ -145,6 +150,9 @@ func runViewFromIPC(r *ipc.RunInfo) runView {
 		if s.FindingsJSON != nil {
 			sv.FindingsJSON = *s.FindingsJSON
 		}
+		if s.ConvergenceJSON != nil {
+			sv.ConvergenceJSON = *s.ConvergenceJSON
+		}
 		rv.Steps = append(rv.Steps, sv)
 	}
 	return rv
@@ -181,6 +189,9 @@ func runViewFromDB(r *db.Run, steps []*db.StepResult) runView {
 		}
 		if s.FindingsJSON != nil {
 			sv.FindingsJSON = *s.FindingsJSON
+		}
+		if s.ConvergenceJSON != nil {
+			sv.ConvergenceJSON = *s.ConvergenceJSON
 		}
 		rv.Steps = append(rv.Steps, sv)
 	}
@@ -457,6 +468,10 @@ func gateFields(gate stepView) []toon.Field {
 	if gate.Name == string(types.StepReview) {
 		gfields = append(gfields, toon.Field{Key: "note", Value: "Review auto-fix is disabled by default (`auto_fix.review: 0`; a repo or global `auto_fix.review > 0` override re-enables it), so blocking and ask-user review findings park for your decision rather than being silently self-fixed."})
 	}
+	report, hasReport := convergence.ParseReport(gate.ConvergenceJSON)
+	if hasReport {
+		gfields = append(gfields, convergenceField(report))
+	}
 	rows := make([]findingRow, 0, len(parsed.Items))
 	for _, f := range parsed.Items {
 		rows = append(rows, findingRow{
@@ -469,17 +484,57 @@ func gateFields(gate stepView) []toon.Field {
 	}
 	gfields = append(gfields, toon.Field{Key: "findings", Value: rows})
 
+	help := []string{
+		"Run `no-mistakes axi respond --action approve` to accept this step and continue",
+		"Run `no-mistakes axi respond --action fix --findings <ids>` to have the pipeline fix the selected findings (do not edit files yourself)",
+		"Run `no-mistakes axi respond --action skip` to skip this step",
+		fmt.Sprintf("Run `no-mistakes axi logs --step %s --full` to read the full step log", gate.Name),
+		"A long-running call is working, not stalled - background it if your harness needs to, but the run never advances past a gate on its own. Read every return; on a `gate:`, respond; loop until an `outcome:`.",
+		preserveGateFixCommitsGuidance,
+	}
+	// A tripped convergence guard demotes fix from being the obvious next
+	// step: the adjudication guidance leads the help block, before the
+	// standard respond commands.
+	if hasReport && report.Tripped() {
+		help = append([]string{convergenceHelpGuidance}, help...)
+	}
+
 	return []toon.Field{
 		{Key: "gate", Value: toon.NewObject(gfields...)},
-		{Key: "help", Value: []string{
-			"Run `no-mistakes axi respond --action approve` to accept this step and continue",
-			"Run `no-mistakes axi respond --action fix --findings <ids>` to have the pipeline fix the selected findings (do not edit files yourself)",
-			"Run `no-mistakes axi respond --action skip` to skip this step",
-			fmt.Sprintf("Run `no-mistakes axi logs --step %s --full` to read the full step log", gate.Name),
-			"A long-running call is working, not stalled - background it if your harness needs to, but the run never advances past a gate on its own. Read every return; on a `gate:`, respond; loop until an `outcome:`.",
-			preserveGateFixCommitsGuidance,
-		}},
+		{Key: "help", Value: help},
 	}
+}
+
+// convergenceHelpGuidance is the point-of-use instruction at a gate whose
+// review loop the guard flagged as not converging.
+const convergenceHelpGuidance = "Convergence warning: this review loop is measurably not converging (see gate.convergence). Do not respond `fix` by default - read the round history and recurring findings, then deliberately approve, skip, fix specific findings, or escalate to the user."
+
+// convergenceField renders a persisted convergence report as the gate's
+// convergence block: the per-round history an operator would otherwise have
+// to tally across separate invocations.
+func convergenceField(report *convergence.Report) toon.Field {
+	fields := []toon.Field{
+		{Key: "rounds", Value: convergence.FormatRoundCounts(report.RoundFindings)},
+		{Key: "review_time", Value: formatCompactDuration(time.Duration(report.ReviewMS) * time.Millisecond)},
+	}
+	if report.NewSurfaceFindings != nil {
+		fields = append(fields, toon.Field{Key: "findings_outside_submitted_diff", Value: *report.NewSurfaceFindings})
+	}
+	if len(report.Recurring) > 0 {
+		entries := make([]string, 0, len(report.Recurring))
+		for _, class := range report.Recurring {
+			entry := fmt.Sprintf("%s (rounds %s)", class.Label, convergence.FormatRoundCounts(class.Rounds))
+			if len(class.Files) > 0 {
+				entry += " in " + strings.Join(class.Files, ", ")
+			}
+			entries = append(entries, entry)
+		}
+		fields = append(fields, toon.Field{Key: "recurring", Value: entries})
+	}
+	if report.Warning != "" {
+		fields = append(fields, toon.Field{Key: "warning", Value: report.Warning})
+	}
+	return toon.Field{Key: "convergence", Value: toon.NewObject(fields...)}
 }
 
 // truncate shortens s to limit runes, appending a disclosure of the full size

@@ -12,6 +12,7 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/branchsync"
 	"github.com/kunchenguid/no-mistakes/internal/cimonitor"
+	"github.com/kunchenguid/no-mistakes/internal/convergence"
 	"github.com/kunchenguid/no-mistakes/internal/daemon"
 	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/gate"
@@ -481,7 +482,11 @@ func driveRunWithReconciler(ctx context.Context, progress io.Writer, client *ipc
 			}
 			action, findingIDs, resolved := gateResolution(gate, used)
 			if !resolved {
-				fmt.Fprintf(progress, "%s gate still has actionable findings after %d fix round(s); leaving the run parked for explicit adjudication\n", gate.Name, used)
+				if report, ok := convergence.ParseReport(gate.ConvergenceJSON); ok && report.Tripped() {
+					fmt.Fprintf(progress, "%s gate parked by the convergence guard: %s; leaving the run parked for explicit adjudication\n", gate.Name, report.Warning)
+				} else {
+					fmt.Fprintf(progress, "%s gate still has actionable findings after %d fix round(s); leaving the run parked for explicit adjudication\n", gate.Name, used)
+				}
 				return run, false, nil
 			}
 			if action == types.ActionFix {
@@ -542,6 +547,13 @@ func gateResolution(gate stepView, fixRoundsUsed int) (action types.ApprovalActi
 	parsed, err := types.ParseFindingsJSON(gate.FindingsJSON)
 	if err != nil || !types.HasActionableFindings(parsed) {
 		return types.ActionApprove, nil, true
+	}
+	// The convergence guard outranks the per-step fix budget: a gate the
+	// pipeline flagged as measurably not converging is never auto-funded
+	// another fix round, however much budget remains. It is handed back as
+	// an explicit decision point instead.
+	if report, ok := convergence.ParseReport(gate.ConvergenceJSON); ok && report.Tripped() {
+		return "", nil, false
 	}
 	if fixRoundsUsed >= maxYesFixRoundsPerStep {
 		return "", nil, false

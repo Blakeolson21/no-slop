@@ -178,7 +178,30 @@ type ReviewRaw struct {
 	// at least one changed file; a run that touches nothing matching leaves
 	// the review prompt exactly as it is without this setting.
 	PathInstructions []PathInstruction `yaml:"path_instructions"`
+	// Convergence configures the review-loop ladder guard thresholds. It
+	// rides the Review section's trust boundary: honored only from the
+	// trusted default-branch copy, so a pushed branch cannot widen or
+	// disable the guard on its own run.
+	Convergence ConvergenceRaw `yaml:"convergence"`
 }
+
+// ConvergenceRaw is the YAML representation of the review convergence guard
+// thresholds. Pointer fields distinguish "not set" (default applies) from an
+// explicit 0 (that trigger disabled).
+type ConvergenceRaw struct {
+	NonDecreasingRounds *int `yaml:"non_decreasing_rounds"`
+	RecurringRounds     *int `yaml:"recurring_rounds"`
+	BudgetMinutes       *int `yaml:"budget_minutes"`
+}
+
+// Default review convergence guard thresholds. These are the documented
+// defaults in docs/src/content/docs/reference/repo-config.md; change both
+// together.
+const (
+	DefaultReviewConvergenceNonDecreasingRounds = 3
+	DefaultReviewConvergenceRecurringRounds     = 3
+	DefaultReviewConvergenceBudgetMinutes       = 120
+)
 
 // PathInstruction is one glob-scoped block of review guidance. Path follows the
 // same match rules as ignore_patterns: no slash matches by basename, a trailing
@@ -412,9 +435,25 @@ type Document struct {
 
 // Review is the resolved review-step config. PathInstructions come from the
 // trusted default-branch repo config and scope extra review guidance to the
-// changed paths each glob matches.
+// changed paths each glob matches. Convergence carries the resolved
+// review-loop ladder guard thresholds from the same trusted section.
 type Review struct {
 	PathInstructions []PathInstruction
+	Convergence      Convergence
+}
+
+// Convergence holds the resolved review convergence guard thresholds. A zero
+// value for a field disables that trigger.
+type Convergence struct {
+	// NonDecreasingRounds trips the guard when the review findings count has
+	// not decreased across this many trailing consecutive rounds.
+	NonDecreasingRounds int
+	// RecurringRounds trips the guard when one finding class recurs in this
+	// many distinct review rounds.
+	RecurringRounds int
+	// BudgetMinutes trips the guard when cumulative review execution time
+	// reaches this budget.
+	BudgetMinutes int
 }
 
 // TestRaw is the YAML representation of test-step settings.
@@ -1311,7 +1350,40 @@ func validateReviewRaw(review ReviewRaw) error {
 	if total := ReviewPathInstructionsBytes(review.PathInstructions); total > MaxReviewPathInstructionsBytes {
 		return fmt.Errorf("review.path_instructions would add up to %d bytes to the review prompt, at most %d are allowed so the prompt stays within budget", total, MaxReviewPathInstructionsBytes)
 	}
+	for _, threshold := range []struct {
+		key   string
+		value *int
+	}{
+		{"non_decreasing_rounds", review.Convergence.NonDecreasingRounds},
+		{"recurring_rounds", review.Convergence.RecurringRounds},
+		{"budget_minutes", review.Convergence.BudgetMinutes},
+	} {
+		if threshold.value != nil && *threshold.value < 0 {
+			return fmt.Errorf("review.convergence.%s must not be negative (0 disables the trigger)", threshold.key)
+		}
+	}
 	return nil
+}
+
+// resolveConvergence applies explicit repo values onto the documented
+// defaults. An explicit 0 disables that trigger; an unset field keeps the
+// default.
+func resolveConvergence(raw ConvergenceRaw) Convergence {
+	resolved := Convergence{
+		NonDecreasingRounds: DefaultReviewConvergenceNonDecreasingRounds,
+		RecurringRounds:     DefaultReviewConvergenceRecurringRounds,
+		BudgetMinutes:       DefaultReviewConvergenceBudgetMinutes,
+	}
+	if raw.NonDecreasingRounds != nil {
+		resolved.NonDecreasingRounds = *raw.NonDecreasingRounds
+	}
+	if raw.RecurringRounds != nil {
+		resolved.RecurringRounds = *raw.RecurringRounds
+	}
+	if raw.BudgetMinutes != nil {
+		resolved.BudgetMinutes = *raw.BudgetMinutes
+	}
+	return resolved
 }
 
 // validatePathInstructionGlob mirrors how ignore_patterns are matched: a
@@ -1614,7 +1686,10 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		Intent:               intent,
 		Test:                 test,
 		Document:             Document{Instructions: strings.TrimSpace(repo.Document.Instructions)},
-		Review:               Review{PathInstructions: resolvePathInstructions(repo.Review.PathInstructions)},
+		Review: Review{
+			PathInstructions: resolvePathInstructions(repo.Review.PathInstructions),
+			Convergence:      resolveConvergence(repo.Review.Convergence),
+		},
 		// repo is the EffectiveRepoConfig result, so this value is already
 		// trusted-only (EffectiveRepoConfig sourced it from the trusted copy).
 		DisableProjectSettings: repo.DisableProjectSettings,

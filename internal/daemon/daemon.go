@@ -911,20 +911,21 @@ func runToInfo(d *db.DB, r *db.Run, steps []*db.StepResult) *ipc.RunInfo {
 
 func stepToInfo(d *db.DB, s *db.StepResult) ipc.StepResultInfo {
 	info := ipc.StepResultInfo{
-		ID:             s.ID,
-		RunID:          s.RunID,
-		StepName:       s.StepName,
-		StepOrder:      s.StepOrder,
-		Status:         s.Status,
-		ExitCode:       s.ExitCode,
-		DurationMS:     s.DurationMS,
-		FindingsJSON:   s.FindingsJSON,
-		Error:          s.Error,
-		StartedAt:      s.StartedAt,
-		CompletedAt:    s.CompletedAt,
-		LastActivityAt: s.LastActivityAt,
-		LastActivity:   s.LastActivity,
-		AgentPID:       s.AgentPID,
+		ID:              s.ID,
+		RunID:           s.RunID,
+		StepName:        s.StepName,
+		StepOrder:       s.StepOrder,
+		Status:          s.Status,
+		ExitCode:        s.ExitCode,
+		DurationMS:      s.DurationMS,
+		FindingsJSON:    s.FindingsJSON,
+		Error:           s.Error,
+		StartedAt:       s.StartedAt,
+		CompletedAt:     s.CompletedAt,
+		LastActivityAt:  s.LastActivityAt,
+		LastActivity:    s.LastActivity,
+		AgentPID:        s.AgentPID,
+		ConvergenceJSON: s.ConvergenceJSON,
 	}
 	if s.AutoFixLimit != nil {
 		info.AutoFixLimit = *s.AutoFixLimit

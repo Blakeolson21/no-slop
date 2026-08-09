@@ -289,12 +289,16 @@ type StepResultInfo struct {
 	FixRoundCount    int      `json:"fix_round_count,omitempty"`
 	AutoFixLimit     int      `json:"auto_fix_limit,omitempty"`
 	PendingFixSource string   `json:"pending_fix_source,omitempty"`
-	Error            *string  `json:"error,omitempty"`
-	StartedAt        *int64   `json:"started_at,omitempty"`
-	CompletedAt      *int64   `json:"completed_at,omitempty"`
-	LastActivityAt   *int64   `json:"last_activity_at,omitempty"`
-	LastActivity     *string  `json:"last_activity,omitempty"`
-	AgentPID         *int     `json:"agent_pid,omitempty"`
+	// ConvergenceJSON is the review step's persisted convergence report
+	// (internal/convergence.Report), so gate renders reached over IPC carry
+	// the per-round history without a separate database read.
+	ConvergenceJSON *string `json:"convergence_json,omitempty"`
+	Error           *string `json:"error,omitempty"`
+	StartedAt       *int64  `json:"started_at,omitempty"`
+	CompletedAt     *int64  `json:"completed_at,omitempty"`
+	LastActivityAt  *int64  `json:"last_activity_at,omitempty"`
+	LastActivity    *string `json:"last_activity,omitempty"`
+	AgentPID        *int    `json:"agent_pid,omitempty"`
 }
 
 // --- Events (for subscribe stream) ---

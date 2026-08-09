@@ -791,11 +791,26 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			e.emitRunEvent(ipc.EventRunUpdated, run, repo)
 		}
 
+		// Review-loop convergence: rebuild and persist the report after every
+		// review round so status surfaces always carry the per-round history.
+		// A tripped guard is advisory - it stops the pipeline from spending
+		// further automatic fix rounds and parks the gate for an explicit
+		// decision, but never aborts the run and never blocks an explicit
+		// approve, skip, or fix response.
+		convergenceTripped := false
+		if stepName == types.StepReview {
+			report := e.evaluateReviewConvergence(ctx, sr.ID, run, workDir)
+			if report.Tripped() {
+				convergenceTripped = true
+				writeLog("convergence warning: " + report.Warning)
+			}
+		}
+
 		// Check if auto-fix should be attempted.
 		// Only auto-fix findings whose action is "auto-fix".
 		// This runs before the NeedsApproval check so that all severity
 		// levels (including "info") get a chance at automatic fixing.
-		if outcome.AutoFixable && autoFixLimit > 0 && autoFixAttempts < autoFixLimit {
+		if outcome.AutoFixable && autoFixLimit > 0 && autoFixAttempts < autoFixLimit && !convergenceTripped {
 			fixableFindings := autoFixableFindingsJSON(outcome.Findings)
 			if fixableFindings != "" {
 				autoFixAttempts++
@@ -823,10 +838,15 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			}
 		}
 
-		if !outcome.NeedsApproval && !hasAskUserFindingsJSON(outcome.Findings) {
+		if !outcome.NeedsApproval && !hasAskUserFindingsJSON(outcome.Findings) &&
+			!(convergenceTripped && actionableFindingsCountJSON(outcome.Findings) > 0) {
 			// Step completed without needing approval.
 			// Any remaining info-only or non-blocking findings
 			// are acceptable and don't block the pipeline.
+			// A tripped convergence guard with actionable findings falls
+			// through to the park below instead: completing here would let a
+			// non-converging loop end as "passed" carrying the very findings
+			// the guard flagged, adjudicated by nobody.
 			skipRemaining = outcome.SkipRemaining
 			stepSkipped = outcome.Skipped
 			break

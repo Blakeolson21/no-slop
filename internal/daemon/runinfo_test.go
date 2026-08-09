@@ -103,3 +103,41 @@ func TestStepToInfoNoFixSummariesWithoutFixRounds(t *testing.T) {
 		t.Errorf("fix summaries = %v, want none", info.FixSummaries)
 	}
 }
+
+func TestStepToInfoCarriesConvergenceReport(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer d.Close()
+
+	repo, err := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
+	if err != nil {
+		t.Fatalf("insert repo: %v", err)
+	}
+	run, err := d.InsertRun(repo.ID, "feature", "abc", "def")
+	if err != nil {
+		t.Fatalf("insert run: %v", err)
+	}
+	step, err := d.InsertStepResult(run.ID, types.StepReview)
+	if err != nil {
+		t.Fatalf("insert step: %v", err)
+	}
+
+	if info := stepToInfo(d, step); info.ConvergenceJSON != nil {
+		t.Fatalf("step without a report should carry none, got %q", *info.ConvergenceJSON)
+	}
+
+	report := `{"round_findings":[1,1,1],"review_ms":1000,"warning":"review loop is not converging: test"}`
+	if err := d.SetStepConvergence(step.ID, report); err != nil {
+		t.Fatalf("set convergence: %v", err)
+	}
+	step, err = d.GetStepResult(step.ID)
+	if err != nil {
+		t.Fatalf("reload step: %v", err)
+	}
+	info := stepToInfo(d, step)
+	if info.ConvergenceJSON == nil || *info.ConvergenceJSON != report {
+		t.Fatalf("convergence json = %v, want %q", info.ConvergenceJSON, report)
+	}
+}
