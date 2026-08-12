@@ -269,6 +269,15 @@ func TestScanRedundantCommentAcquitsConventionalDocumentation(t *testing.T) {
 			},
 		},
 		{
+			name: "adjacent-code overlap with an unlisted invariant",
+			file: precheck.File{
+				Path:         "cache.go",
+				AddedContent: "// Atomically update cache value.\n\n",
+				CurrentContent: "// Atomically update cache value.\n" +
+					"update(cache, value)\n",
+			},
+		},
+		{
 			name: "declaration comment with a return invariant",
 			file: precheck.File{
 				Path:         "retry.go",

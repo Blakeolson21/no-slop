@@ -137,7 +137,7 @@ func TestLoadGitChangesPreservesCommentLineageBelowRenameThreshold(t *testing.T)
 	gitRun(t, dir, "config", "user.email", "test@example.com")
 	gitRun(t, dir, "config", "user.name", "Test")
 	var baseline strings.Builder
-	baseline.WriteString("package sample\n\nfunc New(value string) string {\n\tif value == \"\" { return \"default\" }\n\treturn value\n}\n\n// normalize key before lookup; normalize key before lookup.\n")
+	baseline.WriteString("package sample\n\nfunc f() {}\n\n// normalize key before lookup; normalize key before lookup.\n")
 	for index := 0; index < 40; index++ {
 		baseline.WriteString("const old")
 		baseline.WriteString(strconv.Itoa(index))
@@ -152,7 +152,7 @@ func TestLoadGitChangesPreservesCommentLineageBelowRenameThreshold(t *testing.T)
 
 	gitRun(t, dir, "mv", "old.go", "new.go")
 	var current strings.Builder
-	current.WriteString("package sample\n\nfunc New(value string) string {\n\tif value == \"\" { return \"default\" }\n\treturn value\n}\n\n// normalize key before lookup; normalize key before lookup.\n")
+	current.WriteString("package sample\n\nfunc f() {}\n\n// normalize key before lookup; normalize key before lookup.\n")
 	for index := 0; index < 520; index++ {
 		current.WriteString("var replacement")
 		current.WriteString(strconv.Itoa(index))
@@ -161,7 +161,7 @@ func TestLoadGitChangesPreservesCommentLineageBelowRenameThreshold(t *testing.T)
 		current.WriteString("}\n")
 	}
 	writeFixture(t, dir, "new.go", current.String())
-	writeFixture(t, dir, "unrelated.go", "package sample\n\nfunc New(value int) int { return value + 1 }\n\n// normalize key before lookup; normalize key before lookup.\nvar unrelated = true\n")
+	writeFixture(t, dir, "unrelated.go", "package sample\n\nfunc f(value int) int { return value + 1 }\n\n// normalize key before lookup; normalize key before lookup.\nvar unrelated = true\n")
 	gitRun(t, dir, "add", "new.go")
 	gitRun(t, dir, "add", "unrelated.go")
 	gitRun(t, dir, "commit", "-m", "rewrite and rename")

@@ -78,13 +78,6 @@ var docFillerWords = map[string]bool{
 	"verifies": true, "when": true, "whether": true, "with": true,
 }
 
-var qualificationWords = map[string]bool{
-	"after": true, "before": true, "despite": true, "during": true,
-	"except": true, "never": true, "only": true, "once": true,
-	"unless": true, "until": true, "when": true, "whether": true,
-	"while": true, "without": true,
-}
-
 // Scan runs every conservative lens pre-check. Intent is optional; only the
 // scope-expansion check uses it, and it emits nothing when intent is absent.
 func Scan(files []File, intent string) []Finding {
@@ -315,17 +308,11 @@ func commentRestatesNextCode(comment string, lines []string, lexed []lexedSource
 		codeWords["decrement"] = true
 	}
 	for _, word := range commentWords {
-		if qualificationWords[word] && !codeWords[word] {
+		if !codeWords[word] {
 			return false
 		}
 	}
-	overlap := 0
-	for _, word := range commentWords {
-		if codeWords[word] {
-			overlap++
-		}
-	}
-	return float64(overlap)/float64(len(commentWords)) >= 0.75
+	return true
 }
 
 // adjacentCodeLine returns the code a comment documents: the next non-comment

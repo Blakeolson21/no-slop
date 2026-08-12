@@ -107,7 +107,7 @@ func attachDeletedCommentBaselines(changes []Change) {
 		}
 		for added := range changes {
 			current, ok := identities[added]
-			if !ok || changes[added].Status != risk.Added {
+			if !ok || changes[added].Status != risk.Added || filepath.Dir(changes[deleted].Path) != filepath.Dir(changes[added].Path) {
 				continue
 			}
 			score := goLineageScore(baseline, current)
@@ -159,9 +159,6 @@ func goLineageScore(baseline, current goFileIdentity) int {
 		if current.declarations[declaration] > 0 {
 			score += size
 		}
-	}
-	if score < 32 {
-		return 0
 	}
 	return score
 }
