@@ -23,6 +23,7 @@ type campaignCase struct {
 	CaseID             string        `json:"case_id"`
 	Alias              string        `json:"alias"`
 	Tier               string        `json:"tier"`
+	Intent             string        `json:"intent"`
 	ConditioningLenses []string      `json:"conditioning_lenses"`
 	ThreadFixture      *prose.Thread `json:"thread_fixture,omitempty"`
 }
@@ -59,7 +60,10 @@ func main() {
 			fatal(err)
 		}
 		started := time.Now()
-		findings, err := corpus.ReplayMandatory(context.Background(), diff, testCase.ThreadFixture)
+		findings, err := corpus.ReplayMandatory(context.Background(), diff, corpus.ReplayOptions{
+			Intent: testCase.Intent,
+			Thread: testCase.ThreadFixture,
+		})
 		if err != nil {
 			fatal(fmt.Errorf("replay %s: %w", testCase.Alias, err))
 		}

@@ -1,0 +1,922 @@
+{
+  "schema_version": 1,
+  "policy": "unconditioned",
+  "model": "opencode/deepseek-v4-flash-free",
+  "timeout_seconds": 30,
+  "created_at": "2026-08-12T16:05:53Z",
+  "invocations": [
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-001"
+      ],
+      "tier": "single-review",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "vacuous-check",
+          "path": "guard.go",
+          "line": 8,
+          "description": "comparison uses the same expression on both sides"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-002"
+      ],
+      "tier": "single-review",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "test-capitulation",
+          "path": "calc_test.go",
+          "line": 12,
+          "description": "test-count floor dropped from 1 to 0"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-003"
+      ],
+      "tier": "single-review",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "self-consistent-oracle",
+          "path": "price_test.go",
+          "line": 20,
+          "description": "independent literal oracle was replaced with a production-derived expression"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-004"
+      ],
+      "tier": "single-review",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "comment-defended-workaround",
+          "path": "policy.go",
+          "line": 14,
+          "description": "a justification comment accompanies a permissive return or security bypass"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-005"
+      ],
+      "tier": "single-review",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "scope-expansion",
+          "path": "deploy/dashboard.go",
+          "line": 1,
+          "description": "new runtime or schema file exceeds the stated intent"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-006"
+      ],
+      "tier": "single-review",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "asserted-followup-without-artifact",
+          "path": "handler.go",
+          "line": 19,
+          "description": "follow-up or approval is asserted without an issue, ticket, URL, or approval reference"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-007"
+      ],
+      "tier": "single-review",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "fail-open-default",
+          "path": "blocklist.go",
+          "line": 24,
+          "description": "an error, timeout, or unreadable state becomes a permissive result"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-008"
+      ],
+      "tier": "single-review",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "rule-applied-in-one-place-not-sibling",
+          "path": "loader.go",
+          "line": 41,
+          "description": "the configured-path branch stays permissive beside an explicit-path failure"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-009"
+      ],
+      "tier": "single-review",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "vacuous-check",
+          "path": "cache.go",
+          "line": 34,
+          "description": "previousGeneration snapshots c.generation only after it was mutated"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-010"
+      ],
+      "tier": "single-review",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "test-capitulation",
+          "path": "money_test.go",
+          "line": 27,
+          "description": "numeric tolerance widened from 0.001 to 0.02"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-011"
+      ],
+      "tier": "single-review",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "self-consistent-oracle",
+          "path": "checksum_test.go",
+          "line": 18,
+          "description": "independent literal oracle was replaced with a production-derived expression"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-012"
+      ],
+      "tier": "single-review",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "comment-defended-workaround",
+          "path": "roles.go",
+          "line": 42,
+          "description": "a justification comment accompanies a permissive return or security bypass"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-013"
+      ],
+      "tier": "single-review",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "scope-expansion",
+          "path": "metrics/server.go",
+          "line": 1,
+          "description": "new runtime or schema file exceeds the stated intent"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-014"
+      ],
+      "tier": "single-review",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "asserted-followup-without-artifact",
+          "path": "session.go",
+          "line": 55,
+          "description": "follow-up or approval is asserted without an issue, ticket, URL, or approval reference"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-015"
+      ],
+      "tier": "single-review",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "fail-open-default",
+          "path": "health.go",
+          "line": 29,
+          "description": "an error, timeout, or unreadable state becomes a permissive result"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-016"
+      ],
+      "tier": "single-review",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "rule-applied-in-one-place-not-sibling",
+          "path": "authorize.go",
+          "line": 52,
+          "description": "one transport branch denies the error while its sibling still allows it"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-017"
+      ],
+      "tier": "full-adversarial",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "vacuous-check",
+          "path": "internal/auth/token.go",
+          "line": 67,
+          "description": "comparison helper receives the same expression twice"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-018"
+      ],
+      "tier": "full-adversarial",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "test-capitulation",
+          "path": "internal/auth/nonce_test.go",
+          "line": 44,
+          "description": "test-count floor dropped from 1 to 0"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-019"
+      ],
+      "tier": "full-adversarial",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "self-consistent-oracle",
+          "path": "internal/security/cipher_test.go",
+          "line": 33,
+          "description": "independent literal oracle was replaced with a production-derived expression"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-020"
+      ],
+      "tier": "full-adversarial",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "comment-defended-workaround",
+          "path": ".github/scripts/publish.go",
+          "line": 21,
+          "description": "a justification comment accompanies a permissive return or security bypass"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-021"
+      ],
+      "tier": "full-adversarial",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "scope-expansion",
+          "path": "migrations/042_audit_events.sql",
+          "line": 1,
+          "description": "new runtime or schema file exceeds the stated intent"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-022"
+      ],
+      "tier": "full-adversarial",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "asserted-followup-without-artifact",
+          "path": "internal/security/headers.go",
+          "line": 76,
+          "description": "follow-up or approval is asserted without an issue, ticket, URL, or approval reference"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-023"
+      ],
+      "tier": "full-adversarial",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "fail-open-default",
+          "path": "internal/auth/permissions.go",
+          "line": 39,
+          "description": "an error, timeout, or unreadable state becomes a permissive result"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-024"
+      ],
+      "tier": "full-adversarial",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "rule-applied-in-one-place-not-sibling",
+          "path": "internal/security/routes.go",
+          "line": 88,
+          "description": "validation was added to one versioned route but not its sibling"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-025"
+      ],
+      "tier": "leak-scan-only",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "leak-identity-scan",
+          "path": "examples/client.conf",
+          "line": 2,
+          "description": "possible credential assignment shape"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-026"
+      ],
+      "tier": "leak-scan-only",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "leak-identity-scan",
+          "path": "fixtures/key.txt",
+          "line": 1,
+          "description": "possible private key shape"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-027"
+      ],
+      "tier": "leak-scan-only",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "leak-identity-scan",
+          "path": "scripts/run.sh",
+          "line": 3,
+          "description": "possible personal home path"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-028"
+      ],
+      "tier": "leak-scan-only",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "leak-identity-scan",
+          "path": "deploy/sample.env",
+          "line": 1,
+          "description": "possible credential assignment shape"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-029"
+      ],
+      "tier": "leak-scan-only",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "thread-closed",
+          "path": "",
+          "line": 0,
+          "description": "target issue or pull request is not open"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-030"
+      ],
+      "tier": "leak-scan-only",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "thread-closed",
+          "path": "",
+          "line": 0,
+          "description": "target issue or pull request is not open"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-031"
+      ],
+      "tier": "leak-scan-only",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "duplicate-claim",
+          "path": "outbound/comment.md",
+          "line": 0,
+          "description": "an existing comment already makes substantially the same claim"
+        }
+      ]
+    },
+    {
+      "kind": "mandatory",
+      "case_aliases": [
+        "case-032"
+      ],
+      "tier": "leak-scan-only",
+      "round": 0,
+      "elapsed_ms": 0,
+      "findings": [
+        {
+          "lens": "duplicate-claim",
+          "path": "outbound/review.md",
+          "line": 0,
+          "description": "an existing comment already makes substantially the same claim"
+        }
+      ]
+    },
+    {
+      "kind": "review",
+      "priority_lens": "vacuous-check",
+      "case_aliases": [
+        "case-001",
+        "case-009"
+      ],
+      "tier": "single-review",
+      "round": 1,
+      "elapsed_ms": 30034,
+      "response": {
+        "findings": []
+      },
+      "raw_response": "",
+      "error": "timed out after 30s"
+    },
+    {
+      "kind": "review",
+      "priority_lens": "vacuous-check",
+      "case_aliases": [
+        "case-017"
+      ],
+      "tier": "full-adversarial",
+      "round": 1,
+      "elapsed_ms": 30040,
+      "response": {
+        "findings": []
+      },
+      "raw_response": "",
+      "error": "timed out after 30s"
+    },
+    {
+      "kind": "review",
+      "priority_lens": "vacuous-check",
+      "case_aliases": [
+        "case-017"
+      ],
+      "tier": "full-adversarial",
+      "round": 2,
+      "elapsed_ms": 30035,
+      "response": {
+        "findings": []
+      },
+      "raw_response": "",
+      "error": "timed out after 30s"
+    },
+    {
+      "kind": "review",
+      "priority_lens": "test-capitulation",
+      "case_aliases": [
+        "case-002",
+        "case-010"
+      ],
+      "tier": "single-review",
+      "round": 1,
+      "elapsed_ms": 30034,
+      "response": {
+        "findings": []
+      },
+      "raw_response": "",
+      "error": "timed out after 30s"
+    },
+    {
+      "kind": "review",
+      "priority_lens": "test-capitulation",
+      "case_aliases": [
+        "case-018"
+      ],
+      "tier": "full-adversarial",
+      "round": 1,
+      "elapsed_ms": 30033,
+      "response": {
+        "findings": []
+      },
+      "raw_response": "",
+      "error": "timed out after 30s"
+    },
+    {
+      "kind": "review",
+      "priority_lens": "test-capitulation",
+      "case_aliases": [
+        "case-018"
+      ],
+      "tier": "full-adversarial",
+      "round": 2,
+      "elapsed_ms": 30031,
+      "response": {
+        "findings": []
+      },
+      "raw_response": "",
+      "error": "timed out after 30s"
+    },
+    {
+      "kind": "review",
+      "priority_lens": "self-consistent-oracle",
+      "case_aliases": [
+        "case-003",
+        "case-011"
+      ],
+      "tier": "single-review",
+      "round": 1,
+      "elapsed_ms": 30033,
+      "response": {
+        "findings": []
+      },
+      "raw_response": "",
+      "error": "timed out after 30s"
+    },
+    {
+      "kind": "review",
+      "priority_lens": "self-consistent-oracle",
+      "case_aliases": [
+        "case-019"
+      ],
+      "tier": "full-adversarial",
+      "round": 1,
+      "elapsed_ms": 30034,
+      "response": {
+        "findings": []
+      },
+      "raw_response": "",
+      "error": "timed out after 30s"
+    },
+    {
+      "kind": "review",
+      "priority_lens": "self-consistent-oracle",
+      "case_aliases": [
+        "case-019"
+      ],
+      "tier": "full-adversarial",
+      "round": 2,
+      "elapsed_ms": 30034,
+      "response": {
+        "findings": []
+      },
+      "raw_response": "",
+      "error": "timed out after 30s"
+    },
+    {
+      "kind": "review",
+      "priority_lens": "comment-defended-workaround",
+      "case_aliases": [
+        "case-004",
+        "case-012"
+      ],
+      "tier": "single-review",
+      "round": 1,
+      "elapsed_ms": 30033,
+      "response": {
+        "findings": []
+      },
+      "raw_response": "",
+      "error": "timed out after 30s"
+    },
+    {
+      "kind": "review",
+      "priority_lens": "comment-defended-workaround",
+      "case_aliases": [
+        "case-020"
+      ],
+      "tier": "full-adversarial",
+      "round": 1,
+      "elapsed_ms": 30037,
+      "response": {
+        "findings": []
+      },
+      "raw_response": "",
+      "error": "timed out after 30s"
+    },
+    {
+      "kind": "review",
+      "priority_lens": "comment-defended-workaround",
+      "case_aliases": [
+        "case-020"
+      ],
+      "tier": "full-adversarial",
+      "round": 2,
+      "elapsed_ms": 30035,
+      "response": {
+        "findings": []
+      },
+      "raw_response": "",
+      "error": "timed out after 30s"
+    },
+    {
+      "kind": "review",
+      "priority_lens": "scope-expansion",
+      "case_aliases": [
+        "case-005",
+        "case-013"
+      ],
+      "tier": "single-review",
+      "round": 1,
+      "elapsed_ms": 30031,
+      "response": {
+        "findings": []
+      },
+      "raw_response": "",
+      "error": "timed out after 30s"
+    },
+    {
+      "kind": "review",
+      "priority_lens": "scope-expansion",
+      "case_aliases": [
+        "case-021"
+      ],
+      "tier": "full-adversarial",
+      "round": 1,
+      "elapsed_ms": 30032,
+      "response": {
+        "findings": []
+      },
+      "raw_response": "",
+      "error": "timed out after 30s"
+    },
+    {
+      "kind": "review",
+      "priority_lens": "scope-expansion",
+      "case_aliases": [
+        "case-021"
+      ],
+      "tier": "full-adversarial",
+      "round": 2,
+      "elapsed_ms": 30033,
+      "response": {
+        "findings": []
+      },
+      "raw_response": "",
+      "error": "timed out after 30s"
+    },
+    {
+      "kind": "review",
+      "priority_lens": "asserted-followup-without-artifact",
+      "case_aliases": [
+        "case-006",
+        "case-014"
+      ],
+      "tier": "single-review",
+      "round": 1,
+      "elapsed_ms": 30033,
+      "response": {
+        "findings": []
+      },
+      "raw_response": "",
+      "error": "timed out after 30s"
+    },
+    {
+      "kind": "review",
+      "priority_lens": "asserted-followup-without-artifact",
+      "case_aliases": [
+        "case-022"
+      ],
+      "tier": "full-adversarial",
+      "round": 1,
+      "elapsed_ms": 30032,
+      "response": {
+        "findings": []
+      },
+      "raw_response": "",
+      "error": "timed out after 30s"
+    },
+    {
+      "kind": "review",
+      "priority_lens": "asserted-followup-without-artifact",
+      "case_aliases": [
+        "case-022"
+      ],
+      "tier": "full-adversarial",
+      "round": 2,
+      "elapsed_ms": 30034,
+      "response": {
+        "findings": []
+      },
+      "raw_response": "",
+      "error": "timed out after 30s"
+    },
+    {
+      "kind": "review",
+      "priority_lens": "fail-open-default",
+      "case_aliases": [
+        "case-007",
+        "case-015"
+      ],
+      "tier": "single-review",
+      "round": 1,
+      "elapsed_ms": 30033,
+      "response": {
+        "findings": []
+      },
+      "raw_response": "",
+      "error": "timed out after 30s"
+    },
+    {
+      "kind": "review",
+      "priority_lens": "fail-open-default",
+      "case_aliases": [
+        "case-023"
+      ],
+      "tier": "full-adversarial",
+      "round": 1,
+      "elapsed_ms": 30033,
+      "response": {
+        "findings": []
+      },
+      "raw_response": "",
+      "error": "timed out after 30s"
+    },
+    {
+      "kind": "review",
+      "priority_lens": "fail-open-default",
+      "case_aliases": [
+        "case-023"
+      ],
+      "tier": "full-adversarial",
+      "round": 2,
+      "elapsed_ms": 30033,
+      "response": {
+        "findings": []
+      },
+      "raw_response": "",
+      "error": "timed out after 30s"
+    },
+    {
+      "kind": "review",
+      "priority_lens": "rule-applied-in-one-place-not-sibling",
+      "case_aliases": [
+        "case-008",
+        "case-016"
+      ],
+      "tier": "single-review",
+      "round": 1,
+      "elapsed_ms": 30033,
+      "response": {
+        "findings": []
+      },
+      "raw_response": "",
+      "error": "timed out after 30s"
+    },
+    {
+      "kind": "review",
+      "priority_lens": "rule-applied-in-one-place-not-sibling",
+      "case_aliases": [
+        "case-024"
+      ],
+      "tier": "full-adversarial",
+      "round": 1,
+      "elapsed_ms": 30033,
+      "response": {
+        "findings": []
+      },
+      "raw_response": "",
+      "error": "timed out after 30s"
+    },
+    {
+      "kind": "review",
+      "priority_lens": "rule-applied-in-one-place-not-sibling",
+      "case_aliases": [
+        "case-024"
+      ],
+      "tier": "full-adversarial",
+      "round": 2,
+      "elapsed_ms": 30034,
+      "response": {
+        "findings": []
+      },
+      "raw_response": "",
+      "error": "timed out after 30s"
+    }
+  ],
+  "total_elapsed_ms": 720807
+}

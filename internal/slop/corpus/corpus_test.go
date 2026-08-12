@@ -2,6 +2,7 @@ package corpus_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,7 +116,7 @@ func TestReplayMandatoryChecksUsesDiffAndThreadFixtureWithoutExpectations(t *tes
 	diff := []byte("diff --git a/sample.env b/sample.env\nnew file mode 100644\n--- /dev/null\n+++ b/sample.env\n@@ -0,0 +1 @@\n+api_key=\"EXAMPLE_NOT_A_REAL_KEY_123456789\"\n" +
 		"diff --git a/outbound/comment.md b/outbound/comment.md\nnew file mode 100644\n--- /dev/null\n+++ b/outbound/comment.md\n@@ -0,0 +1 @@\n+Please review the timeout fallback.\n" +
 		"diff --git a/calc_test.go b/calc_test.go\n--- a/calc_test.go\n+++ b/calc_test.go\n@@ -12,3 +11,0 @@\n-func TestNegative(t *testing.T) {\n-\tt.Fatal(\"negative\")\n-}\n")
-	findings, err := corpus.ReplayMandatory(context.Background(), diff, &prose.Thread{Open: false})
+	findings, err := corpus.ReplayMandatory(context.Background(), diff, corpus.ReplayOptions{Thread: &prose.Thread{Open: false}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,6 +164,89 @@ func TestSeedCorpusCoversEachTaxonomyLens(t *testing.T) {
 	} {
 		if seen[finding] < minimum {
 			t.Errorf("finding class %q has %d corpus cases, want at least %d", finding, seen[finding], minimum)
+		}
+	}
+}
+
+func TestReplayMandatoryChecksMatchEverySeedWithoutExtras(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join("..", "..", "..", "corpus")
+	cases, err := corpus.Load(filepath.Join(root, "seeds"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestData, err := os.ReadFile(filepath.Join(root, "campaign.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct {
+		Cases []struct {
+			CaseID        string        `json:"case_id"`
+			Intent        string        `json:"intent"`
+			ThreadFixture *prose.Thread `json:"thread_fixture"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	inputs := make(map[string]struct {
+		intent string
+		thread *prose.Thread
+	}, len(manifest.Cases))
+	for _, item := range manifest.Cases {
+		inputs[item.CaseID] = struct {
+			intent string
+			thread *prose.Thread
+		}{intent: item.Intent, thread: item.ThreadFixture}
+	}
+
+	results := corpus.Results{SchemaVersion: corpus.CurrentSchemaVersion, Policy: "mechanical-regression"}
+	for _, testCase := range cases {
+		input, ok := inputs[testCase.ID]
+		if !ok {
+			t.Fatalf("campaign is missing corpus case %q", testCase.ID)
+		}
+		findings, err := corpus.ReplayMandatory(context.Background(), testCase.Diff, corpus.ReplayOptions{Intent: input.intent, Thread: input.thread})
+		if err != nil {
+			t.Fatalf("replay %s: %v", testCase.ID, err)
+		}
+		results.Cases = append(results.Cases, corpus.CaseResult{CaseID: testCase.ID, Findings: findings})
+	}
+
+	comparison, err := corpus.Compare(cases, results, results)
+	if err != nil {
+		t.Fatal(err)
+	}
+	score := comparison.Unconditioned
+	if score.Found != 32 || score.Missed != 0 || score.FalsePositive != 0 {
+		t.Fatalf("mechanical corpus score = found %d, missed %d, false-positive %d; want 32, 0, 0", score.Found, score.Missed, score.FalsePositive)
+	}
+}
+
+func TestCampaignPoliciesCarryRoundFourDecisionRules(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join("..", "..", "..", "corpus", "policies")
+	for _, name := range []string{"conditioned.md", "unconditioned.md"} {
+		content, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		policy := strings.ToLower(string(content))
+		for _, decisionRule := range []string{
+			"same expression on both sides",
+			"numeric tolerance changed to a larger threshold",
+			"independent literal or standard vector",
+			"nearby permissive returns",
+			"compare every new file",
+			"approval reference",
+			"privileged objects returned",
+			"versioned routes",
+		} {
+			if !strings.Contains(policy, decisionRule) {
+				t.Errorf("%s is missing decision rule %q", name, decisionRule)
+			}
 		}
 	}
 }

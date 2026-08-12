@@ -93,6 +93,7 @@ func TestRunGatePrintsMandatoryCheckStatus(t *testing.T) {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
 	}
 	for _, want := range []string{
+		"mandatory check: lens pre-check completed (0 findings)",
 		"mandatory check: leak scan completed (0 findings)",
 		"mandatory check: test-count floor completed (0 findings)",
 		"mandatory check: prose oracle completed (0 findings)",

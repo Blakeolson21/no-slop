@@ -124,6 +124,7 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 	reasoningEffort := flags.String("reasoning-effort", "", "generating model reasoning effort")
 	laneID := flags.String("lane-id", "", "generating agent lane identifier")
 	changeClass := flags.String("change-class", "", "change class recorded with provenance")
+	intent := flags.String("intent", "", "stated scope used by deterministic and reviewer checks")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -193,6 +194,7 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 		DefaultBranch: defaultBranch,
 		BaseRef:       baseRef,
 		HeadRef:       headRef,
+		Intent:        strings.TrimSpace(*intent),
 		Files:         changes,
 		Config: engine.Config{
 			Risk: risk.Config{
@@ -483,6 +485,6 @@ func printResult(stdout io.Writer, result engine.Result) {
 
 func writeUsage(output io.Writer) {
 	fmt.Fprintln(output, "NoSlop is the reviewer that knows the author is an AI.")
-	fmt.Fprintln(output, "usage: noslop gate [--repo DIR] [--base REF] [--head REF] [--tier TIER] [--force-tier] [--thread URL] [--blocklist FILE] [--provider NAME] [--model NAME] [--reasoning-effort LEVEL] [--lane-id ID] [--change-class CLASS]")
+	fmt.Fprintln(output, "usage: noslop gate [--repo DIR] [--base REF] [--head REF] [--intent TEXT] [--tier TIER] [--force-tier] [--thread URL] [--blocklist FILE] [--provider NAME] [--model NAME] [--reasoning-effort LEVEL] [--lane-id ID] [--change-class CLASS]")
 	fmt.Fprintln(output, "       noslop evaluate --corpus DIR --unconditioned-results FILE --conditioned-results FILE")
 }

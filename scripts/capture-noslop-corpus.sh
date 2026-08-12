@@ -160,7 +160,7 @@ for lens in "${lenses[@]}"; do
         reduce $observed[0].findings[] as $finding (.;
           .cases |= map(if .case_id == $finding.case_id then .findings += [($finding | del(.case_id))] else . end)
         ) |
-        .cases |= map(.findings |= unique_by(.lens, .path, .line, .description))
+        .cases |= map(.findings |= unique_by(.lens, .path, .line))
       ' "$results_tmp" >"$temp_dir/results-next.json"
       mv "$temp_dir/results-next.json" "$results_tmp"
 

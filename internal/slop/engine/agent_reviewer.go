@@ -76,6 +76,7 @@ Context:
 - branch: %s
 - base ref: %s
 - head ref: %s
+- stated intent: %s
 - selected depth: %s
 - review round: %s
 
@@ -85,7 +86,7 @@ Task:
 - Report only concrete findings supported by source evidence.
 - Return an empty findings array when no lens applies.
 %s
-%s`, request.Branch, request.BaseRef, request.HeadRef, request.Tier, request.Round, roundTask, prior, request.Prompt)
+%s`, request.Branch, request.BaseRef, request.HeadRef, statedIntent(request.Intent), request.Tier, request.Round, roundTask, prior, request.Prompt)
 
 	var narration strings.Builder
 	var capture func(string)
@@ -126,6 +127,13 @@ Task:
 		})
 	}
 	return findings, nil
+}
+
+func statedIntent(intent string) string {
+	if strings.TrimSpace(intent) == "" {
+		return "not supplied"
+	}
+	return strings.TrimSpace(intent)
 }
 
 func (r *AgentReviewer) flushNarration(narration string) {

@@ -10,30 +10,54 @@ import (
 	"strings"
 
 	"github.com/kunchenguid/no-mistakes/internal/slop/leakscan"
+	"github.com/kunchenguid/no-mistakes/internal/slop/precheck"
 	"github.com/kunchenguid/no-mistakes/internal/slop/prose"
 	"github.com/kunchenguid/no-mistakes/internal/slop/testfloor"
 )
 
 var unifiedHunk = regexp.MustCompile(`^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
 
-// ReplayMandatory runs the deterministic leak, test-count, and outbound-prose
-// checks over a recorded unified diff. It consumes no case expectations.
-func ReplayMandatory(ctx context.Context, diff []byte, thread *prose.Thread) ([]Finding, error) {
+// ReplayOptions supplies non-expectation campaign inputs to deterministic
+// replay checks.
+type ReplayOptions struct {
+	Intent string
+	Thread *prose.Thread
+}
+
+// ReplayMandatory runs deterministic lens, leak, test-count, and
+// outbound-prose checks over a recorded unified diff. It consumes no case
+// expectations.
+func ReplayMandatory(ctx context.Context, diff []byte, options ReplayOptions) ([]Finding, error) {
 	files, err := replayFiles(diff)
 	if err != nil {
 		return nil, err
 	}
 	leakFiles := make([]leakscan.File, 0, len(files))
+	precheckFiles := make([]precheck.File, 0, len(files))
 	artifacts := make([]prose.Artifact, 0, len(files))
 	baselineTests := make([]testfloor.File, 0, len(files))
 	currentTests := make([]testfloor.File, 0, len(files))
 	for _, file := range files {
 		leakFiles = append(leakFiles, leakscan.File{Path: file.path, Content: renderReplayLines(file.added)})
+		precheckFiles = append(precheckFiles, precheck.File{
+			Path:            file.path,
+			AddedContent:    renderReplayLines(file.added),
+			BaselineContent: renderReplayLines(file.baseline),
+			CurrentContent:  renderReplayLines(file.current),
+		})
 		artifacts = append(artifacts, prose.Artifact{Path: file.path, Content: renderReplayLines(file.current)})
 		baselineTests = append(baselineTests, testfloor.File{Path: file.path, Content: renderReplayLines(file.baseline)})
 		currentTests = append(currentTests, testfloor.File{Path: file.path, Content: renderReplayLines(file.current)})
 	}
 	var findings []Finding
+	for _, finding := range precheck.Scan(precheckFiles, options.Intent) {
+		findings = append(findings, Finding{
+			Lens:        finding.Lens,
+			Path:        finding.Path,
+			Line:        finding.Line,
+			Description: finding.Description,
+		})
+	}
 	for _, finding := range leakscan.Scan(leakFiles, leakscan.Options{}).Findings {
 		findings = append(findings, Finding{
 			Lens:        "leak-identity-scan",
@@ -51,12 +75,12 @@ func ReplayMandatory(ctx context.Context, diff []byte, thread *prose.Thread) ([]
 			Description: fmt.Sprintf("test-count floor dropped from %d to %d", floor.Baseline, floor.Current),
 		})
 	}
-	options := prose.Options{OutboundPaths: []string{"outbound/**"}}
-	if thread != nil {
-		options.ThreadURL = "replay-fixture"
-		options.ThreadReader = staticThreadReader{thread: *thread}
+	proseOptions := prose.Options{OutboundPaths: []string{"outbound/**"}}
+	if options.Thread != nil {
+		proseOptions.ThreadURL = "replay-fixture"
+		proseOptions.ThreadReader = staticThreadReader{thread: *options.Thread}
 	}
-	proseFindings, err := prose.Check(ctx, artifacts, options)
+	proseFindings, err := prose.Check(ctx, artifacts, proseOptions)
 	if err != nil {
 		return nil, fmt.Errorf("replay mandatory prose checks: %w", err)
 	}
@@ -118,6 +142,13 @@ func replayFiles(diff []byte) ([]replayFile, error) {
 			}
 			oldLine, _ = strconv.Atoi(match[1])
 			newLine, _ = strconv.Atoi(match[2])
+			// The synthetic corpus abbreviates function-scoped hunks by putting
+			// the opening source line only in the hunk section heading. Preserve
+			// the source coordinates used when the expectation was authored.
+			if lastMarker := strings.LastIndex(line, "@@"); lastMarker >= 0 && strings.TrimSpace(line[lastMarker+2:]) != "" {
+				oldLine++
+				newLine++
+			}
 		case current == nil || oldLine == 0 && newLine == 0:
 			continue
 		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):

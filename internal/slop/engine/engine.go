@@ -7,6 +7,7 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/slop/leakscan"
 	"github.com/kunchenguid/no-mistakes/internal/slop/lenses"
+	"github.com/kunchenguid/no-mistakes/internal/slop/precheck"
 	"github.com/kunchenguid/no-mistakes/internal/slop/prose"
 	"github.com/kunchenguid/no-mistakes/internal/slop/risk"
 	"github.com/kunchenguid/no-mistakes/internal/slop/testfloor"
@@ -46,6 +47,7 @@ type Input struct {
 	DefaultBranch string
 	BaseRef       string
 	HeadRef       string
+	Intent        string
 	Files         []Change
 	Config        Config
 }
@@ -65,6 +67,7 @@ type ReviewRequest struct {
 	Branch        string
 	BaseRef       string
 	HeadRef       string
+	Intent        string
 	Tier          risk.Tier
 	Round         ReviewRound
 	PriorFindings []Finding
@@ -160,6 +163,10 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 	}
 	result := Result{Decision: decision}
 
+	lensFindings := runLensPrecheck(input.Files, input.Intent)
+	result.Findings = append(result.Findings, lensFindings...)
+	result.MandatoryChecks = append(result.MandatoryChecks, MandatoryCheck{Name: "lens pre-check", Enabled: true, Findings: len(lensFindings)})
+
 	leakFindings, exemptions := runLeakScan(input.Files, input.Config.Blocklist, input.Config.RefuseLeakExemptions)
 	result.Findings = append(result.Findings, leakFindings...)
 	result.LeakExemptions = exemptions
@@ -207,6 +214,7 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 					Branch:        input.Branch,
 					BaseRef:       input.BaseRef,
 					HeadRef:       input.HeadRef,
+					Intent:        input.Intent,
 					Tier:          decision.Tier,
 					Round:         round,
 					PriorFindings: append([]Finding(nil), priorFindings...),
@@ -257,6 +265,30 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 	return result, nil
 }
 
+func runLensPrecheck(files []Change, intent string) []Finding {
+	input := make([]precheck.File, 0, len(files))
+	for _, file := range files {
+		input = append(input, precheck.File{
+			Path:            file.Path,
+			AddedContent:    file.AddedContent,
+			BaselineContent: file.BaselineContent,
+			CurrentContent:  file.CurrentContent,
+		})
+	}
+	findings := precheck.Scan(input, intent)
+	result := make([]Finding, 0, len(findings))
+	for _, finding := range findings {
+		result = append(result, Finding{
+			Lens:        finding.Lens,
+			Severity:    "error",
+			Path:        finding.Path,
+			Line:        finding.Line,
+			Description: finding.Description,
+		})
+	}
+	return result
+}
+
 func containsProbe(probes []string, target string) bool {
 	for _, probe := range probes {
 		if probe == target {
@@ -270,7 +302,7 @@ func appendUniqueFindings(existing []Finding, additions ...Finding) []Finding {
 	for _, addition := range additions {
 		duplicate := false
 		for _, current := range existing {
-			if addition.Lens == current.Lens && addition.Path == current.Path && addition.Line == current.Line && addition.Description == current.Description {
+			if addition.Lens == current.Lens && addition.Path == current.Path && addition.Line == current.Line {
 				duplicate = true
 				break
 			}

@@ -81,6 +81,12 @@ Name the comparison explicitly:
 ./bin/noslop gate --base origin/main --head HEAD
 ```
 
+Supply the requested scope when the gate should mechanically compare new files and reviewer findings with intent:
+
+```sh
+./bin/noslop gate --base origin/main --intent "Add the no-store response header only."
+```
+
 Override validation depth:
 
 ```sh
