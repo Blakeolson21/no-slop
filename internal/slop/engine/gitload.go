@@ -3,13 +3,10 @@ package engine
 import (
 	"context"
 	"fmt"
-	"go/parser"
-	"go/token"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/slop/risk"
@@ -80,67 +77,7 @@ func LoadGitChanges(ctx context.Context, workDir, baseRef, headRef string) ([]Ch
 		}
 		changes = append(changes, change)
 	}
-	markAmbiguousCommentIdentity(changes)
 	return changes, nil
-}
-
-func markAmbiguousCommentIdentity(changes []Change) {
-	deletedComments := make(map[string]bool)
-	for _, change := range changes {
-		if change.Status != risk.Deleted || filepath.Ext(change.Path) != ".go" {
-			continue
-		}
-		for comment := range goCommentTexts(change.BaselineContent) {
-			deletedComments[comment] = true
-		}
-	}
-	if len(deletedComments) == 0 {
-		return
-	}
-	for index := range changes {
-		change := &changes[index]
-		if change.Status != risk.Added || filepath.Ext(change.Path) != ".go" {
-			continue
-		}
-		for comment := range goCommentTexts(change.CurrentContent) {
-			if deletedComments[comment] {
-				change.CommentIdentityAmbiguous = true
-				break
-			}
-		}
-	}
-}
-
-func goCommentTexts(content string) map[string]bool {
-	parsed, _ := parser.ParseFile(token.NewFileSet(), "", content, parser.ParseComments)
-	if parsed == nil {
-		return nil
-	}
-	comments := make(map[string]bool, len(parsed.Comments))
-	for _, group := range parsed.Comments {
-		identity := normalizedCommentIdentity(group.Text())
-		if identity != "" {
-			comments[identity] = true
-		}
-	}
-	return comments
-}
-
-func normalizedCommentIdentity(comment string) string {
-	words := strings.FieldsFunc(strings.ToLower(comment), func(letter rune) bool {
-		return !unicode.IsLetter(letter) && !unicode.IsDigit(letter)
-	})
-	if len(words) < 8 {
-		return ""
-	}
-	distinct := make(map[string]bool, len(words))
-	for _, word := range words {
-		distinct[word] = true
-	}
-	if len(distinct) < 4 {
-		return ""
-	}
-	return strings.Join(words, " ")
 }
 
 func loadBaselineSiblingContent(ctx context.Context, workDir, baseRef, path string) (string, error) {

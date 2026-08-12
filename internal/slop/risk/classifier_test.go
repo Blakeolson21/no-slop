@@ -76,47 +76,6 @@ func TestClassifyOrdinarySourceChangeUsesSingleReviewTier(t *testing.T) {
 	}
 }
 
-func TestClassifyAmbiguousCommentIdentityRaisesTierAndGuardsOverride(t *testing.T) {
-	t.Parallel()
-
-	change := risk.ChangeSet{
-		Branch:        "feature/cache-key",
-		DefaultBranch: "main",
-		Files: []risk.FileChange{{
-			Path:   "internal/cache/key.go",
-			Status: risk.Added,
-			Added:  18,
-		}},
-	}
-	ordinary, err := risk.Classify(change, risk.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	change.Files[0].AmbiguousCommentIdentity = true
-	escalated, err := risk.Classify(change, risk.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ordinary.Tier != risk.TierSingleReview || escalated.Tier != risk.TierFullAdversarial || !escalated.TierEscalated {
-		t.Fatalf("ordinary = %+v, escalated = %+v, want one-tier escalation", ordinary, escalated)
-	}
-	if !strings.Contains(escalated.String(), "distinctive matching comments across deleted and added Go files require reviewer judgment") {
-		t.Fatalf("decision does not disclose comment ambiguity:\n%s", escalated.String())
-	}
-
-	refused, err := risk.Classify(change, risk.Config{OverrideTier: risk.TierSingleReview})
-	if err == nil || !refused.OverrideRefused || refused.Tier != risk.TierFullAdversarial {
-		t.Fatalf("decision = %+v, error = %v, want lower override refused", refused, err)
-	}
-	forced, err := risk.Classify(change, risk.Config{OverrideTier: risk.TierSingleReview, ForceTier: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if forced.Tier != risk.TierSingleReview || !forced.OverrideForced {
-		t.Fatalf("decision = %+v, want forced lower override recorded", forced)
-	}
-}
-
 func TestClassifyHighReachNewLogicUsesFullAdversarialTier(t *testing.T) {
 	t.Parallel()
 

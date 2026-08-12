@@ -123,7 +123,7 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 	base := flags.String("base", "", "base revision, default is merge-base with the default branch")
 	head := flags.String("head", "HEAD", "head revision")
 	tier := flags.String("tier", "auto", "validation tier: auto, leak-scan-only, single-review, full-adversarial")
-	forceTier := flags.Bool("force-tier", false, "allow --tier to lower a policy-escalated tier")
+	forceTier := flags.Bool("force-tier", false, "allow --tier to lower a provenance-escalated tier")
 	thread := flags.String("thread", "", "GitHub issue or pull request URL for outbound text")
 	blocklist := flags.String("blocklist", "", "private-name blocklist file override")
 	provider := flags.String("provider", "", "generating agent provider")
