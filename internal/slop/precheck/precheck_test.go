@@ -252,6 +252,15 @@ func TestScanRedundantCommentAcquitsConventionalDocumentation(t *testing.T) {
 			},
 		},
 		{
+			name: "unchanged inline comment on edited code",
+			file: precheck.File{
+				Path:            "cache.go",
+				AddedContent:    "newValue := load() /* normalize key before lookup; normalize key before lookup */\n",
+				BaselineContent: "oldValue := load() /* normalize key before lookup; normalize key before lookup */\n",
+				CurrentContent:  "newValue := load() /* normalize key before lookup; normalize key before lookup */\n",
+			},
+		},
+		{
 			name: "indented command sample inside a doc comment",
 			file: precheck.File{
 				Path: "version.go",
@@ -514,6 +523,18 @@ func TestScanFlagsRedundantCommentShapes(t *testing.T) {
 				Path:           "cache.go",
 				AddedContent:   "value := cache[key] // normalize key before lookup; normalize key before lookup.\n",
 				CurrentContent: "value := cache[key] // normalize key before lookup; normalize key before lookup.\n",
+			},
+			line:        1,
+			description: "comment repeats a phrase internally",
+		},
+		{
+			name: "new duplicate inline comment beside existing copy",
+			file: precheck.File{
+				Path:            "cache.go",
+				AddedContent:    "copy := cache[key] // normalize key before lookup; normalize key before lookup.\n\n",
+				BaselineContent: "value := cache[key] // normalize key before lookup; normalize key before lookup.\n",
+				CurrentContent: "copy := cache[key] // normalize key before lookup; normalize key before lookup.\n" +
+					"value := cache[key] // normalize key before lookup; normalize key before lookup.\n",
 			},
 			line:        1,
 			description: "comment repeats a phrase internally",

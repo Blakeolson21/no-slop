@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/slop/engine"
@@ -88,6 +89,42 @@ func TestLoadGitChangesRecognizesExactRename(t *testing.T) {
 	}}, "")
 	if len(findings) != 0 {
 		t.Fatalf("exact rename produced findings: %+v", findings)
+	}
+}
+
+func TestLoadGitChangesPreservesModifiedRenameIdentity(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-b", "main")
+	gitRun(t, dir, "config", "user.email", "test@example.com")
+	gitRun(t, dir, "config", "user.name", "Test")
+	writeFixture(t, dir, "old.go", "package sample\n\nfunc increment(i int) int {\n\t// increment i\n\ti += 1\n\treturn i\n}\n\nfunc value() int { return 1 }\n")
+	gitRun(t, dir, "add", "old.go")
+	gitRun(t, dir, "commit", "-m", "base")
+	base := gitRun(t, dir, "rev-parse", "HEAD")
+	gitRun(t, dir, "mv", "old.go", "new.go")
+	writeFixture(t, dir, "new.go", "package sample\n\nfunc increment(i int) int {\n\t// increment i\n\ti += 1\n\treturn i\n}\n\nfunc value() int { return 2 }\n")
+	gitRun(t, dir, "add", "new.go")
+	gitRun(t, dir, "commit", "-m", "rename and edit")
+	head := gitRun(t, dir, "rev-parse", "HEAD")
+
+	changes, err := engine.LoadGitChanges(context.Background(), dir, base, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 1 {
+		t.Fatalf("changes = %+v, want one modified rename", changes)
+	}
+	change := changes[0]
+	if change.Status != risk.Modified || change.Path != "new.go" || change.Added != 1 || change.Deleted != 1 {
+		t.Fatalf("change = %+v, want one-line modified rename", change)
+	}
+	if strings.Contains(change.AddedContent, "increment i") {
+		t.Fatalf("added content rescanned unchanged comment: %q", change.AddedContent)
+	}
+	if findings := precheck.Scan([]precheck.File{{Path: change.Path, AddedContent: change.AddedContent, BaselineContent: change.BaselineContent, CurrentContent: change.CurrentContent}}, ""); len(findings) != 0 {
+		t.Fatalf("modified rename produced findings: %+v", findings)
 	}
 }
 

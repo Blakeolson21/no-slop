@@ -97,7 +97,8 @@ func detectRedundantComment(file File) []Finding {
 	var findings []Finding
 	current := splitLines(file.CurrentContent)
 	lexed, declarations := lexSource(file.Path, current)
-	for _, block := range commentBlocks(file, lexed) {
+	baseline, _ := lexSource(file.Path, splitLines(file.BaselineContent))
+	for _, block := range commentBlocks(file, lexed, baseline) {
 		description := ""
 		switch {
 		case hasRepeatedPhrase(block.text):
@@ -132,22 +133,61 @@ type commentBlock struct {
 // are sentence fragments that never document the code beneath the block. Only
 // blocks the change actually touched are returned, reported at their first
 // added line.
-func commentBlocks(file File, lines []lexedSourceLine) []commentBlock {
+func commentBlocks(file File, lines, baseline []lexedSourceLine) []commentBlock {
 	added := make(map[int]bool)
 	for _, line := range addedLines(file) {
 		added[line.number] = true
 	}
+	baselineInline := make(map[string]int)
+	for _, block := range allCommentBlocks(baseline) {
+		if !block.standalone && block.text != "" {
+			baselineInline[block.text]++
+		}
+	}
+	current := allCommentBlocks(lines)
+	for _, block := range current {
+		if block.standalone || firstAddedLine(block, added) != 0 || baselineInline[block.text] == 0 {
+			continue
+		}
+		baselineInline[block.text]--
+	}
+	var blocks []commentBlock
+	for _, block := range current {
+		line := firstAddedLine(block, added)
+		if line == 0 {
+			continue
+		}
+		existed := false
+		if !block.standalone && block.text != "" && baselineInline[block.text] > 0 {
+			baselineInline[block.text]--
+			existed = true
+		}
+		block.line = line
+		if block.text != "" && !existed {
+			blocks = append(blocks, block)
+		}
+	}
+	return blocks
+}
+
+func firstAddedLine(block commentBlock, added map[int]bool) int {
+	for number := block.line; number <= block.lastLine; number++ {
+		if added[number] {
+			return number
+		}
+	}
+	return 0
+}
+
+func allCommentBlocks(lines []lexedSourceLine) []commentBlock {
 	var blocks []commentBlock
 	for number := 1; number <= len(lines); number++ {
 		if !lines[number-1].comment {
 			continue
 		}
 		body := lines[number-1].body
-		block := commentBlock{lastLine: number, standalone: lines[number-1].standalone}
+		block := commentBlock{line: number, lastLine: number, standalone: lines[number-1].standalone}
 		for {
-			if added[number] && block.line == 0 {
-				block.line = number
-			}
 			if !isCodeSample(body) {
 				block.text += " " + strings.TrimSpace(body)
 			}
@@ -162,7 +202,7 @@ func commentBlocks(file File, lines []lexedSourceLine) []commentBlock {
 			body = lines[number-1].body
 		}
 		block.text = strings.TrimSpace(block.text)
-		if block.line != 0 && block.text != "" {
+		if block.text != "" {
 			blocks = append(blocks, block)
 		}
 	}
