@@ -33,15 +33,15 @@ const (
 
 // FileChange is the classifier's path-level input.
 type FileChange struct {
-	Path             string
-	BaselinePath     string
-	Status           ChangeStatus
-	Added            int
-	Deleted          int
-	BaselineContent  string
-	BaselineContext  string
-	CurrentContent   string
-	AmbiguousLineage bool
+	Path                     string
+	BaselinePath             string
+	Status                   ChangeStatus
+	Added                    int
+	Deleted                  int
+	BaselineContent          string
+	BaselineContext          string
+	CurrentContent           string
+	AmbiguousCommentIdentity bool
 }
 
 // ChangeSet describes the complete diff and where it will land.
@@ -81,7 +81,8 @@ type Decision struct {
 	OriginalTier        Tier
 	RequestedTier       Tier
 	Rationale           string
-	ProvenanceEscalated bool
+	TierEscalated       bool
+	EscalationReason    string
 	PriorityLenses      []string
 	DeterministicProbes []string
 }
@@ -116,11 +117,6 @@ func Classify(change ChangeSet, cfg Config) (Decision, error) {
 		Novelty:       novelty,
 		Reversibility: classifyReversibility(change, cfg.HighRiskPaths),
 	}
-	if anyAmbiguousLineage(change.Files) {
-		decision.Novelty = Axis{Score: 3, Reason: "deleted and added source identity requires reviewer judgment"}
-		decision.Tier = TierFullAdversarial
-		return finalizeDecision(decision, cfg)
-	}
 	singleThreshold, fullThreshold := thresholds(cfg)
 	total := decision.BlastRadius.Score + decision.Novelty.Score + decision.Reversibility.Score
 	switch {
@@ -131,12 +127,17 @@ func Classify(change ChangeSet, cfg Config) (Decision, error) {
 	default:
 		decision.Tier = TierLeakScanOnly
 	}
+	if anyAmbiguousCommentIdentity(change.Files) {
+		decision.Tier = raiseTier(decision.Tier)
+		decision.TierEscalated = true
+		decision.EscalationReason = "matching comments across deleted and added Go files require reviewer judgment"
+	}
 	return finalizeDecision(decision, cfg)
 }
 
-func anyAmbiguousLineage(files []FileChange) bool {
+func anyAmbiguousCommentIdentity(files []FileChange) bool {
 	for _, file := range files {
-		if file.AmbiguousLineage {
+		if file.AmbiguousCommentIdentity {
 			return true
 		}
 	}
@@ -162,7 +163,7 @@ func conditionOnProvenance(decision Decision, cfg Config) Decision {
 	history, err := cfg.ProvenanceStore.Recent(laneID, model, 10)
 	if err != nil {
 		decision.Tier = TierFullAdversarial
-		decision.ProvenanceEscalated = true
+		decision.TierEscalated = true
 		decision.Rationale = fmt.Sprintf("history could not be read for lane %s and model %s; escalating to full-adversarial", laneID, model)
 		return decision
 	}
@@ -197,7 +198,7 @@ func conditionOnProvenance(decision Decision, cfg Config) Decision {
 
 	primary := decision.PriorityLenses[0]
 	decision.Tier = raiseTier(decision.Tier)
-	decision.ProvenanceEscalated = true
+	decision.TierEscalated = true
 	decision.Rationale = fmt.Sprintf("lane %s: %d %s findings in last %d changes, escalating", laneID, scores[primary], primary, len(history))
 	for _, lens := range decision.PriorityLenses {
 		if lens == "test-capitulation" {
@@ -227,17 +228,17 @@ func applyOverride(decision Decision, override Tier, force bool) (Decision, erro
 		if override == decision.Tier {
 			return decision, nil
 		}
-		if decision.ProvenanceEscalated && tierRank(override) < tierRank(decision.Tier) && !force {
+		if decision.TierEscalated && tierRank(override) < tierRank(decision.Tier) && !force {
 			decision.OverrideRefused = true
 			decision.OriginalTier = decision.Tier
 			decision.RequestedTier = override
-			return decision, fmt.Errorf("classify change: --tier %s contradicts provenance-driven escalation to %s; use --force-tier to accept the lower tier", override, decision.Tier)
+			return decision, fmt.Errorf("classify change: --tier %s contradicts policy-driven escalation to %s; use --force-tier to accept the lower tier", override, decision.Tier)
 		}
 		decision.OriginalTier = decision.Tier
 		decision.RequestedTier = override
 		decision.Tier = override
 		decision.Overridden = true
-		decision.OverrideForced = force && decision.ProvenanceEscalated && tierRank(override) < tierRank(decision.OriginalTier)
+		decision.OverrideForced = force && decision.TierEscalated && tierRank(override) < tierRank(decision.OriginalTier)
 		return decision, nil
 	default:
 		return Decision{}, fmt.Errorf("classify change: invalid tier override %q", override)
@@ -631,6 +632,9 @@ func (d Decision) String() string {
 		printed += fmt.Sprintf("\noverride forced: %s -> %s", d.OriginalTier, d.Tier)
 	} else if d.Overridden {
 		printed += fmt.Sprintf("\noverride: %s -> %s", d.OriginalTier, d.Tier)
+	}
+	if d.EscalationReason != "" {
+		printed += "\nescalation: " + d.EscalationReason
 	}
 	printed += "\nprovenance: " + d.Rationale
 	if len(d.PriorityLenses) > 0 {

@@ -129,7 +129,7 @@ func TestLoadGitChangesPreservesModifiedRenameIdentity(t *testing.T) {
 	}
 }
 
-func TestLoadGitChangesPreservesCommentLineageBelowRenameThreshold(t *testing.T) {
+func TestLoadGitChangesMarksAmbiguousCommentIdentityWithoutSuppressingAddedComments(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -145,12 +145,12 @@ func TestLoadGitChangesPreservesCommentLineageBelowRenameThreshold(t *testing.T)
 		baseline.WriteString(strconv.Itoa(index))
 		baseline.WriteString("\"\n")
 	}
-	writeFixture(t, dir, "old.go", baseline.String())
-	gitRun(t, dir, "add", "old.go")
+	writeFixture(t, dir, "legacy/old.go", baseline.String())
+	gitRun(t, dir, "add", "legacy/old.go")
 	gitRun(t, dir, "commit", "-m", "base")
 	base := gitRun(t, dir, "rev-parse", "HEAD")
 
-	gitRun(t, dir, "mv", "old.go", "new.go")
+	gitRun(t, dir, "rm", "legacy/old.go")
 	var current strings.Builder
 	current.WriteString("package sample\n\nfunc f() {}\n\n// normalize key before lookup; normalize key before lookup.\n")
 	for index := 0; index < 520; index++ {
@@ -160,10 +160,12 @@ func TestLoadGitChangesPreservesCommentLineageBelowRenameThreshold(t *testing.T)
 		current.WriteString(strconv.Itoa(index))
 		current.WriteString("}\n")
 	}
-	writeFixture(t, dir, "new.go", current.String())
-	writeFixture(t, dir, "unrelated.go", "package sample\n\nfunc f(value int) int { return value + 1 }\n\n// normalize key before lookup; normalize key before lookup.\nvar unrelated = true\n")
-	gitRun(t, dir, "add", "new.go")
-	gitRun(t, dir, "add", "unrelated.go")
+	writeFixture(t, dir, "modern/new.go", current.String())
+	writeFixture(t, dir, "aaa.go", "package sample\n\nfunc f(value int) int { return value + 1 }\n\n// normalize key before lookup; normalize key before lookup.\nvar unrelated = true\n")
+	writeFixture(t, dir, "plain.go", "package sample\n\nvar plain = true\n")
+	gitRun(t, dir, "add", "modern/new.go")
+	gitRun(t, dir, "add", "aaa.go")
+	gitRun(t, dir, "add", "plain.go")
 	gitRun(t, dir, "commit", "-m", "rewrite and rename")
 	head := gitRun(t, dir, "rev-parse", "HEAD")
 
@@ -171,54 +173,42 @@ func TestLoadGitChangesPreservesCommentLineageBelowRenameThreshold(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(changes) != 3 {
-		t.Fatalf("changes = %+v, want deletion and two additions", changes)
+	if len(changes) != 4 {
+		t.Fatalf("changes = %+v, want deletion and three additions", changes)
 	}
 	var added *engine.Change
 	var unrelated *engine.Change
+	var plain *engine.Change
 	var precheckFiles []precheck.File
-	var riskFiles []risk.FileChange
 	for index := range changes {
 		change := &changes[index]
-		riskFiles = append(riskFiles, risk.FileChange{
-			Path:             change.Path,
-			BaselinePath:     change.BaselinePath,
-			Status:           change.Status,
-			Added:            change.Added,
-			Deleted:          change.Deleted,
-			AmbiguousLineage: change.CommentLineageAmbiguous,
-		})
-		if change.Status == risk.Added && change.Path == "new.go" {
+		if change.Status == risk.Added && change.Path == "modern/new.go" {
 			added = change
 		}
-		if change.Status == risk.Added && change.Path == "unrelated.go" {
+		if change.Status == risk.Added && change.Path == "aaa.go" {
 			unrelated = change
 		}
+		if change.Status == risk.Added && change.Path == "plain.go" {
+			plain = change
+		}
 		precheckFiles = append(precheckFiles, precheck.File{
-			Path:                   change.Path,
-			CommentBaselinePath:    change.CommentBaselinePath,
-			AddedContent:           change.AddedContent,
-			CommentAddedContent:    change.CommentAddedContent,
-			CommentBaselineContent: change.CommentBaselineContent,
-			CurrentContent:         change.CurrentContent,
+			Path:           change.Path,
+			AddedContent:   change.AddedContent,
+			CurrentContent: change.CurrentContent,
 		})
 	}
-	if added == nil || added.Path != "new.go" || added.BaselinePath != "" || added.CommentBaselinePath != "old.go" || added.Added < 500 {
-		t.Fatalf("changes = %+v, want semantic addition with comment-only lineage", changes)
+	if added == nil || added.BaselinePath != "" || added.Added < 500 {
+		t.Fatalf("changes = %+v, want cross-directory low-similarity addition", changes)
 	}
-	if unrelated == nil || !added.CommentLineageAmbiguous || !unrelated.CommentLineageAmbiguous {
-		t.Fatalf("changes = %+v, want both additions marked as ambiguous", changes)
+	if unrelated == nil || !added.CommentIdentityAmbiguous || !unrelated.CommentIdentityAmbiguous {
+		t.Fatalf("changes = %+v, want exact matching comments marked as ambiguous", changes)
 	}
-	decision, err := risk.Classify(risk.ChangeSet{Branch: "feature/rewrite", DefaultBranch: "main", Files: riskFiles}, risk.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if decision.Tier != risk.TierFullAdversarial || decision.Novelty.Reason != "deleted and added source identity requires reviewer judgment" {
-		t.Fatalf("decision = %+v, want substantial addition routed full", decision)
+	if plain == nil || plain.CommentIdentityAmbiguous {
+		t.Fatalf("changes = %+v, want comment-free addition left unambiguous", changes)
 	}
 	findings := precheck.Scan(precheckFiles, "")
-	if len(findings) != 1 || findings[0].Lens != "redundant-comment" || findings[0].Path != "unrelated.go" {
-		t.Fatalf("findings = %+v, want one unmatched added comment", findings)
+	if len(findings) != 2 || findings[0].Lens != "redundant-comment" || findings[0].Path != "aaa.go" || findings[1].Path != "modern/new.go" {
+		t.Fatalf("findings = %+v, want every matching added comment scanned", findings)
 	}
 }
 

@@ -15,19 +15,16 @@ import (
 
 // Change contains the revision content each mechanical check needs.
 type Change struct {
-	Path                    string
-	BaselinePath            string
-	CommentBaselinePath     string
-	Status                  risk.ChangeStatus
-	Added                   int
-	Deleted                 int
-	AddedContent            string
-	CommentAddedContent     string
-	CurrentContent          string
-	BaselineContent         string
-	CommentBaselineContent  string
-	CommentLineageAmbiguous bool
-	BaselineContext         string
+	Path                     string
+	BaselinePath             string
+	Status                   risk.ChangeStatus
+	Added                    int
+	Deleted                  int
+	AddedContent             string
+	CurrentContent           string
+	BaselineContent          string
+	CommentIdentityAmbiguous bool
+	BaselineContext          string
 }
 
 // Config controls classification and mandatory artifact checks.
@@ -140,15 +137,15 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 	riskFiles := make([]risk.FileChange, 0, len(input.Files))
 	for _, file := range input.Files {
 		riskFiles = append(riskFiles, risk.FileChange{
-			Path:             file.Path,
-			BaselinePath:     file.BaselinePath,
-			Status:           file.Status,
-			Added:            file.Added,
-			Deleted:          file.Deleted,
-			BaselineContent:  file.BaselineContent,
-			BaselineContext:  file.BaselineContext,
-			CurrentContent:   file.CurrentContent,
-			AmbiguousLineage: file.CommentLineageAmbiguous,
+			Path:                     file.Path,
+			BaselinePath:             file.BaselinePath,
+			Status:                   file.Status,
+			Added:                    file.Added,
+			Deleted:                  file.Deleted,
+			BaselineContent:          file.BaselineContent,
+			BaselineContext:          file.BaselineContext,
+			CurrentContent:           file.CurrentContent,
+			AmbiguousCommentIdentity: file.CommentIdentityAmbiguous,
 		})
 	}
 	riskConfig := input.Config.Risk
@@ -276,14 +273,11 @@ func runLensPrecheck(files []Change, intent string) []Finding {
 	input := make([]precheck.File, 0, len(files))
 	for _, file := range files {
 		input = append(input, precheck.File{
-			Path:                   file.Path,
-			BaselinePath:           file.BaselinePath,
-			CommentBaselinePath:    file.CommentBaselinePath,
-			AddedContent:           file.AddedContent,
-			CommentAddedContent:    file.CommentAddedContent,
-			BaselineContent:        file.BaselineContent,
-			CommentBaselineContent: file.CommentBaselineContent,
-			CurrentContent:         file.CurrentContent,
+			Path:            file.Path,
+			BaselinePath:    file.BaselinePath,
+			AddedContent:    file.AddedContent,
+			BaselineContent: file.BaselineContent,
+			CurrentContent:  file.CurrentContent,
 		})
 	}
 	findings := precheck.Scan(input, intent)

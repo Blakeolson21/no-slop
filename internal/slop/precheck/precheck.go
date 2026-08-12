@@ -21,14 +21,11 @@ import (
 // AddedContent preserves new-revision line numbers by leaving unchanged lines
 // blank, matching the representation used by the leak scanner.
 type File struct {
-	Path                   string
-	BaselinePath           string
-	CommentBaselinePath    string
-	AddedContent           string
-	CommentAddedContent    string
-	BaselineContent        string
-	CommentBaselineContent string
-	CurrentContent         string
+	Path            string
+	BaselinePath    string
+	AddedContent    string
+	BaselineContent string
+	CurrentContent  string
 }
 
 // Finding is one source-backed deterministic lens match.
@@ -82,10 +79,9 @@ var docFillerWords = map[string]bool{
 // scope-expansion check uses it, and it emits nothing when intent is absent.
 func Scan(files []File, intent string) []Finding {
 	var findings []Finding
-	commentBaselines := make(map[commentBaselineKey]map[string]int)
 	findings = append(findings, detectScopeExpansion(files, intent)...)
 	for _, file := range files {
-		findings = append(findings, detectRedundantComment(file, commentBaselines)...)
+		findings = append(findings, detectRedundantComment(file)...)
 		sibling := detectSiblingRule(file)
 		workaround := detectCommentDefendedWorkaround(file)
 		findings = append(findings, sibling...)
@@ -101,37 +97,16 @@ func Scan(files []File, intent string) []Finding {
 	return uniqueSorted(findings)
 }
 
-type commentBaselineKey struct {
-	path    string
-	content string
-}
-
-func detectRedundantComment(file File, sharedBaselines map[commentBaselineKey]map[string]int) []Finding {
+func detectRedundantComment(file File) []Finding {
 	var findings []Finding
 	current := splitLines(file.CurrentContent)
 	lexed, declarations := lexSource(file.Path, current)
-	baselinePath := file.CommentBaselinePath
-	baselineContent := file.CommentBaselineContent
-	addedContent := file.CommentAddedContent
+	baselinePath := file.BaselinePath
 	if baselinePath == "" {
-		baselinePath = file.BaselinePath
-		if baselinePath == "" {
-			baselinePath = file.Path
-		}
-		baselineContent = file.BaselineContent
-		addedContent = file.AddedContent
+		baselinePath = file.Path
 	}
-	baseline, _ := lexSource(baselinePath, splitLines(baselineContent))
-	var baselineComments map[string]int
-	if file.CommentBaselinePath != "" {
-		key := commentBaselineKey{path: baselinePath, content: baselineContent}
-		baselineComments = sharedBaselines[key]
-		if baselineComments == nil {
-			baselineComments = countCommentBlocks(baseline)
-			sharedBaselines[key] = baselineComments
-		}
-	}
-	for _, block := range commentBlocks(addedContent, lexed, baseline, baselineComments) {
+	baseline, _ := lexSource(baselinePath, splitLines(file.BaselineContent))
+	for _, block := range commentBlocks(file.AddedContent, lexed, baseline) {
 		description := ""
 		switch {
 		case hasRepeatedPhrase(block.text, declarations[block.lastLine]):
@@ -166,14 +141,12 @@ type commentBlock struct {
 // are sentence fragments that never document the code beneath the block. Only
 // blocks the change actually touched are returned, reported at their first
 // added line.
-func commentBlocks(addedContent string, lines, baseline []lexedSourceLine, baselineComments map[string]int) []commentBlock {
+func commentBlocks(addedContent string, lines, baseline []lexedSourceLine) []commentBlock {
 	added := make(map[int]bool)
 	for _, line := range addedContentLines(addedContent) {
 		added[line.number] = true
 	}
-	if baselineComments == nil {
-		baselineComments = countCommentBlocks(baseline)
-	}
+	baselineComments := countCommentBlocks(baseline)
 	current := allCommentBlocks(lines)
 	for _, block := range current {
 		if firstAddedLine(block, added) != 0 || baselineComments[block.text] == 0 {

@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"fmt"
+	"go/parser"
+	"go/token"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -77,43 +79,50 @@ func LoadGitChanges(ctx context.Context, workDir, baseRef, headRef string) ([]Ch
 		}
 		changes = append(changes, change)
 	}
-	attachDeletedCommentBaselines(changes)
+	markAmbiguousCommentIdentity(changes)
 	return changes, nil
 }
 
-func attachDeletedCommentBaselines(changes []Change) {
-	type baseline struct {
-		path    string
-		content strings.Builder
-	}
-	byDirectory := make(map[string]*baseline)
+func markAmbiguousCommentIdentity(changes []Change) {
+	deletedComments := make(map[string]bool)
 	for _, change := range changes {
 		if change.Status != risk.Deleted || filepath.Ext(change.Path) != ".go" {
 			continue
 		}
-		directory := filepath.Dir(change.Path)
-		group := byDirectory[directory]
-		if group == nil {
-			group = &baseline{path: change.Path}
-			byDirectory[directory] = group
+		for comment := range goCommentTexts(change.BaselineContent) {
+			deletedComments[comment] = true
 		}
-		group.content.WriteString(change.BaselineContent)
-		group.content.WriteByte('\n')
+	}
+	if len(deletedComments) == 0 {
+		return
 	}
 	for index := range changes {
 		change := &changes[index]
 		if change.Status != risk.Added || filepath.Ext(change.Path) != ".go" {
 			continue
 		}
-		group := byDirectory[filepath.Dir(change.Path)]
-		if group == nil {
-			continue
+		for comment := range goCommentTexts(change.CurrentContent) {
+			if deletedComments[comment] {
+				change.CommentIdentityAmbiguous = true
+				break
+			}
 		}
-		change.CommentBaselinePath = group.path
-		change.CommentBaselineContent = group.content.String()
-		change.CommentAddedContent = change.AddedContent
-		change.CommentLineageAmbiguous = true
 	}
+}
+
+func goCommentTexts(content string) map[string]bool {
+	parsed, _ := parser.ParseFile(token.NewFileSet(), "", content, parser.ParseComments)
+	if parsed == nil {
+		return nil
+	}
+	comments := make(map[string]bool, len(parsed.Comments))
+	for _, group := range parsed.Comments {
+		text := strings.TrimSpace(group.Text())
+		if text != "" {
+			comments[text] = true
+		}
+	}
+	return comments
 }
 
 func loadBaselineSiblingContent(ctx context.Context, workDir, baseRef, path string) (string, error) {

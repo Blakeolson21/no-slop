@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -230,10 +231,6 @@ func LoadCaseSet(path string, cases []Case) ([]Case, error) {
 	return selected, nil
 }
 
-type byteWriter interface {
-	Write([]byte) (int, error)
-}
-
 func framedSnapshot(caseJSON, diff []byte) []byte {
 	var framed bytes.Buffer
 	writeFramed(&framed, caseJSON)
@@ -241,7 +238,7 @@ func framedSnapshot(caseJSON, diff []byte) []byte {
 	return framed.Bytes()
 }
 
-func writeFramed(writer byteWriter, value []byte) {
+func writeFramed(writer io.Writer, value []byte) {
 	var size [8]byte
 	binary.BigEndian.PutUint64(size[:], uint64(len(value)))
 	_, _ = writer.Write(size[:])
