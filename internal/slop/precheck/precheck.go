@@ -73,10 +73,16 @@ var docFillerWords = map[string]bool{
 	"ensures": true, "for": true, "function": true, "given": true, "handle": true,
 	"handles": true, "helper": true, "here": true, "if": true, "in": true,
 	"is": true, "it": true, "its": true, "method": true, "new": true,
-	"of": true, "on": true, "report": true, "reports": true, "return": true,
-	"returns": true, "test": true, "tests": true, "that": true, "used": true,
-	"using": true, "value": true, "values": true, "verified": true, "verifies": true,
-	"verify": true, "when": true, "whether": true, "with": true,
+	"of": true, "report": true, "reports": true, "test": true, "tests": true,
+	"that": true, "used": true, "using": true, "value": true, "values": true,
+	"verifies": true, "when": true, "whether": true, "with": true,
+}
+
+var qualificationWords = map[string]bool{
+	"after": true, "before": true, "despite": true, "during": true,
+	"except": true, "never": true, "only": true, "once": true,
+	"unless": true, "until": true, "when": true, "whether": true,
+	"while": true, "without": true,
 }
 
 // Scan runs every conservative lens pre-check. Intent is optional; only the
@@ -157,18 +163,18 @@ func commentBlocks(addedContent string, lines, baseline []lexedSourceLine) []com
 	for _, line := range addedContentLines(addedContent) {
 		added[line.number] = true
 	}
-	baselineInline := make(map[string]int)
+	baselineComments := make(map[string]int)
 	for _, block := range allCommentBlocks(baseline) {
-		if !block.standalone && block.text != "" {
-			baselineInline[block.text]++
+		if block.text != "" {
+			baselineComments[block.text]++
 		}
 	}
 	current := allCommentBlocks(lines)
 	for _, block := range current {
-		if block.standalone || firstAddedLine(block, added) != 0 || baselineInline[block.text] == 0 {
+		if firstAddedLine(block, added) != 0 || baselineComments[block.text] == 0 {
 			continue
 		}
-		baselineInline[block.text]--
+		baselineComments[block.text]--
 	}
 	var blocks []commentBlock
 	for _, block := range current {
@@ -177,8 +183,8 @@ func commentBlocks(addedContent string, lines, baseline []lexedSourceLine) []com
 			continue
 		}
 		existed := false
-		if !block.standalone && block.text != "" && baselineInline[block.text] > 0 {
-			baselineInline[block.text]--
+		if block.text != "" && baselineComments[block.text] > 0 {
+			baselineComments[block.text]--
 			existed = true
 		}
 		block.line = line
@@ -285,6 +291,11 @@ func commentRestatesNextCode(comment string, lines []string, lexed []lexedSource
 	}
 	if strings.Contains(compact, "--") || strings.Contains(compact, "-=") {
 		codeWords["decrement"] = true
+	}
+	for _, word := range commentWords {
+		if qualificationWords[word] && !codeWords[word] {
+			return false
+		}
 	}
 	overlap := 0
 	for _, word := range commentWords {

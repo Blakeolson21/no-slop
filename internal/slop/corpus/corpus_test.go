@@ -1,8 +1,10 @@
 package corpus_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -67,7 +69,7 @@ func TestLoadCaseSetSelectsAnExplicitHistoricalSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	digest := sha256.Sum256([]byte(caseJSON + diff))
+	digest := historicalCaseSetDigest("case-a", []byte(caseJSON), []byte(diff))
 	manifest := fmt.Sprintf(`{"schema_version":1,"name":"round-four","content_sha256":"%x","case_ids":["case-a"]}`, digest)
 	if err := os.WriteFile(path, []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
@@ -78,6 +80,20 @@ func TestLoadCaseSetSelectsAnExplicitHistoricalSnapshot(t *testing.T) {
 	}
 	if len(selected) != 1 || selected[0].ID != "case-a" {
 		t.Fatalf("selected cases = %+v, want case-a", selected)
+	}
+
+	if err := os.WriteFile(filepath.Join(caseDir, "case.json"), []byte(caseJSON+diff[:1]), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(caseDir, "change.diff"), []byte(diff[1:]), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	shifted, err := corpus.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := corpus.LoadCaseSet(path, shifted); err == nil || !strings.Contains(err.Error(), "content SHA-256") {
+		t.Fatalf("boundary-shifted content error = %v", err)
 	}
 
 	if err := os.WriteFile(path, []byte(`{"schema_version":1,"name":"round-four","content_sha256":"0000000000000000000000000000000000000000000000000000000000000000","case_ids":["missing"]}`), 0o644); err != nil {
@@ -93,6 +109,23 @@ func TestLoadCaseSetSelectsAnExplicitHistoricalSnapshot(t *testing.T) {
 	if _, err := corpus.LoadCaseSet(path, cases); err == nil || !strings.Contains(err.Error(), "content SHA-256") {
 		t.Fatalf("changed content error = %v", err)
 	}
+}
+
+func historicalCaseSetDigest(id string, caseJSON, diff []byte) [sha256.Size]byte {
+	var snapshot bytes.Buffer
+	writeHistoricalFrame(&snapshot, caseJSON)
+	writeHistoricalFrame(&snapshot, diff)
+	var aggregate bytes.Buffer
+	writeHistoricalFrame(&aggregate, []byte(id))
+	writeHistoricalFrame(&aggregate, snapshot.Bytes())
+	return sha256.Sum256(aggregate.Bytes())
+}
+
+func writeHistoricalFrame(buffer *bytes.Buffer, value []byte) {
+	var size [8]byte
+	binary.BigEndian.PutUint64(size[:], uint64(len(value)))
+	buffer.Write(size[:])
+	buffer.Write(value)
 }
 
 func TestHistoricalCaseSetReplaysBaselineAndRoundFourCaptures(t *testing.T) {

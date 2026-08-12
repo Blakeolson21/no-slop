@@ -129,7 +129,7 @@ func TestLoadGitChangesPreservesModifiedRenameIdentity(t *testing.T) {
 	}
 }
 
-func TestLoadGitChangesPreservesLowSimilarityRenameIdentity(t *testing.T) {
+func TestLoadGitChangesPreservesCommentLineageBelowRenameThreshold(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -138,11 +138,6 @@ func TestLoadGitChangesPreservesLowSimilarityRenameIdentity(t *testing.T) {
 	gitRun(t, dir, "config", "user.name", "Test")
 	var baseline strings.Builder
 	baseline.WriteString("package sample\n\n// normalize key before lookup; normalize key before lookup.\n")
-	for index := 0; index < 10; index++ {
-		baseline.WriteString("const shared")
-		baseline.WriteString(strconv.Itoa(index))
-		baseline.WriteString(" = true\n")
-	}
 	for index := 0; index < 40; index++ {
 		baseline.WriteString("const old")
 		baseline.WriteString(strconv.Itoa(index))
@@ -158,11 +153,6 @@ func TestLoadGitChangesPreservesLowSimilarityRenameIdentity(t *testing.T) {
 	gitRun(t, dir, "mv", "old.go", "new.go")
 	var current strings.Builder
 	current.WriteString("package sample\n\n// normalize key before lookup; normalize key before lookup.\n")
-	for index := 0; index < 10; index++ {
-		current.WriteString("const shared")
-		current.WriteString(strconv.Itoa(index))
-		current.WriteString(" = true\n")
-	}
 	for index := 0; index < 520; index++ {
 		current.WriteString("var replacement")
 		current.WriteString(strconv.Itoa(index))

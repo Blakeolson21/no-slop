@@ -13,8 +13,7 @@ import (
 )
 
 const (
-	renameDetection        = "--find-renames"
-	commentRenameDetection = "--find-renames=1%"
+	renameDetection = "--find-renames"
 )
 
 // LoadGitChanges materializes the committed change between two refs. Git
@@ -26,14 +25,6 @@ func LoadGitChanges(ctx context.Context, workDir, baseRef, headRef string) ([]Ch
 	statusOutput, err := git.Output(ctx, workDir, "diff", "--name-status", "-z", renameDetection, baseRef, headRef, "--")
 	if err != nil {
 		return nil, fmt.Errorf("load changed paths: %w", err)
-	}
-	commentStatusOutput, err := git.Output(ctx, workDir, "diff", "--name-status", "-z", commentRenameDetection, baseRef, headRef, "--")
-	if err != nil {
-		return nil, fmt.Errorf("load comment lineage: %w", err)
-	}
-	commentRenames, err := renamedDestinations(commentStatusOutput)
-	if err != nil {
-		return nil, fmt.Errorf("load comment lineage: %w", err)
 	}
 	entries := splitNUL(statusOutput)
 	changes := make([]Change, 0, len(entries)/2)
@@ -84,45 +75,38 @@ func LoadGitChanges(ctx context.Context, workDir, baseRef, headRef string) ([]Ch
 		if err != nil {
 			return nil, err
 		}
-		if status == risk.Added {
-			if commentBaselinePath := commentRenames[path]; commentBaselinePath != "" {
-				change.CommentBaselinePath = commentBaselinePath
-				change.CommentBaselineContent, err = showGitFile(ctx, workDir, baseRef, commentBaselinePath)
-				if err != nil {
-					return nil, fmt.Errorf("load comment baseline %q: %w", path, err)
-				}
-				change.CommentAddedContent, _, _, err = loadAddedContent(ctx, workDir, baseRef, headRef, commentBaselinePath, path, true, commentRenameDetection)
-				if err != nil {
-					return nil, err
-				}
-			}
-		}
 		changes = append(changes, change)
 	}
+	attachDeletedCommentBaselines(changes)
 	return changes, nil
 }
 
-func renamedDestinations(output string) (map[string]string, error) {
-	entries := splitNUL(output)
-	result := make(map[string]string)
-	for index := 0; index < len(entries); {
-		status := entries[index]
-		index++
-		if index >= len(entries) {
-			return nil, fmt.Errorf("unexpected git name-status output")
-		}
-		baselinePath := entries[index]
-		index++
-		if !strings.HasPrefix(status, "R") {
+func attachDeletedCommentBaselines(changes []Change) {
+	var deleted strings.Builder
+	baselinePath := ""
+	for _, change := range changes {
+		if change.Status != risk.Deleted || !strings.EqualFold(filepath.Ext(change.Path), ".go") {
 			continue
 		}
-		if index >= len(entries) {
-			return nil, fmt.Errorf("rename is missing its destination")
+		if baselinePath == "" {
+			baselinePath = change.Path
 		}
-		result[entries[index]] = baselinePath
-		index++
+		deleted.WriteString(change.BaselineContent)
+		deleted.WriteByte('\n')
 	}
-	return result, nil
+	if deleted.Len() == 0 {
+		return
+	}
+	baseline := deleted.String()
+	for index := range changes {
+		change := &changes[index]
+		if change.Status != risk.Added || !strings.EqualFold(filepath.Ext(change.Path), ".go") {
+			continue
+		}
+		change.CommentBaselinePath = baselinePath
+		change.CommentBaselineContent = baseline
+		change.CommentAddedContent = change.AddedContent
+	}
 }
 
 func loadBaselineSiblingContent(ctx context.Context, workDir, baseRef, path string) (string, error) {

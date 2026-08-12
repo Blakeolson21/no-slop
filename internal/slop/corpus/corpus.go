@@ -5,6 +5,7 @@ package corpus
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -144,7 +145,7 @@ func Load(root string) ([]Case, error) {
 			return nil, fmt.Errorf("load corpus case %q: recorded diff is empty", entry.Name())
 		}
 		testCase.Directory = dir
-		testCase.snapshotContent = append(append([]byte(nil), encoded...), testCase.Diff...)
+		testCase.snapshotContent = framedSnapshot(encoded, testCase.Diff)
 		cases = append(cases, testCase)
 	}
 	if len(cases) == 0 {
@@ -219,13 +220,32 @@ func LoadCaseSet(path string, cases []Case) ([]Case, error) {
 			return nil, fmt.Errorf("load case set %q: unknown case %q", set.Name, id)
 		}
 		selected = append(selected, testCase)
-		_, _ = digest.Write(testCase.snapshotContent)
+		writeFramed(digest, []byte(testCase.ID))
+		writeFramed(digest, testCase.snapshotContent)
 	}
 	actual := fmt.Sprintf("%x", digest.Sum(nil))
 	if !strings.EqualFold(actual, set.ContentSHA256) {
 		return nil, fmt.Errorf("load case set %q: content SHA-256 is %s, want %s", set.Name, actual, set.ContentSHA256)
 	}
 	return selected, nil
+}
+
+type byteWriter interface {
+	Write([]byte) (int, error)
+}
+
+func framedSnapshot(caseJSON, diff []byte) []byte {
+	var framed bytes.Buffer
+	writeFramed(&framed, caseJSON)
+	writeFramed(&framed, diff)
+	return framed.Bytes()
+}
+
+func writeFramed(writer byteWriter, value []byte) {
+	var size [8]byte
+	binary.BigEndian.PutUint64(size[:], uint64(len(value)))
+	_, _ = writer.Write(size[:])
+	_, _ = writer.Write(value)
 }
 
 // Compare scores captured conditioned and unconditioned policy findings.

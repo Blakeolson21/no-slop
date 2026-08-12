@@ -260,6 +260,24 @@ func TestScanRedundantCommentAcquitsConventionalDocumentation(t *testing.T) {
 			},
 		},
 		{
+			name: "adjacent-code overlap with an ordering qualification",
+			file: precheck.File{
+				Path:         "retry.go",
+				AddedContent: "// Record retry status after timeout attempt.\n\n",
+				CurrentContent: "// Record retry status after timeout attempt.\n" +
+					"record(retry, status, timeout, attempt)\n",
+			},
+		},
+		{
+			name: "declaration comment with a return invariant",
+			file: precheck.File{
+				Path:         "retry.go",
+				AddedContent: "// RetryBudget is verified on return.\n\n",
+				CurrentContent: "// RetryBudget is verified on return.\n" +
+					"var RetryBudget = 3\n",
+			},
+		},
+		{
 			name: "repeated phrase preceded by negation",
 			file: precheck.File{
 				Path:           "process.go",
