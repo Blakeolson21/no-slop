@@ -91,6 +91,29 @@ func TestClassifyHighReachNewLogicUsesFullAdversarialTier(t *testing.T) {
 	}
 }
 
+func TestClassifySubstantialOrdinarySourceAdditionUsesFullAdversarialTier(t *testing.T) {
+	t.Parallel()
+
+	decision, err := risk.Classify(risk.ChangeSet{
+		Branch:        "feature/new-command",
+		DefaultBranch: "main",
+		Files: []risk.FileChange{{
+			Path:   "cmd/tool/main.go",
+			Status: risk.Added,
+			Added:  1200,
+		}},
+	}, risk.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Tier != risk.TierFullAdversarial {
+		t.Fatalf("decision = %+v, want substantial new source to reach full review", decision)
+	}
+	if decision.BlastRadius.Score != 3 {
+		t.Fatalf("blast radius = %+v, want substantial source reach", decision.BlastRadius)
+	}
+}
+
 func TestClassifyPrintsExplicitTierOverride(t *testing.T) {
 	t.Parallel()
 
@@ -110,6 +133,25 @@ func TestClassifyPrintsExplicitTierOverride(t *testing.T) {
 	}
 }
 
+func TestClassifyDoesNotPrintNoOpTierOverride(t *testing.T) {
+	t.Parallel()
+
+	decision, err := risk.Classify(risk.ChangeSet{
+		Branch:        "docs/wording",
+		DefaultBranch: "main",
+		Files:         []risk.FileChange{{Path: "README.md", Status: risk.Modified, Added: 1, Deleted: 1}},
+	}, risk.Config{OverrideTier: risk.TierLeakScanOnly})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Overridden {
+		t.Fatalf("decision = %+v, want matching override treated as no-op", decision)
+	}
+	if strings.Contains(decision.String(), "override:") {
+		t.Fatalf("decision prints a no-op override:\n%s", decision.String())
+	}
+}
+
 func TestClassifyTreatsConfiguredSubtreeAsHighRisk(t *testing.T) {
 	t.Parallel()
 
@@ -123,6 +165,31 @@ func TestClassifyTreatsConfiguredSubtreeAsHighRisk(t *testing.T) {
 	}
 	if decision.BlastRadius.Score != 3 || decision.Tier != risk.TierFullAdversarial {
 		t.Fatalf("decision = %+v, want configured subtree to route full", decision)
+	}
+}
+
+func TestClassifyTreatsConfiguredMarkdownAsHighRiskInstructions(t *testing.T) {
+	t.Parallel()
+
+	decision, err := risk.Classify(risk.ChangeSet{
+		Branch:        "feature/agent-policy",
+		DefaultBranch: "main",
+		Files: []risk.FileChange{
+			{Path: "AGENTS.md", Status: risk.Modified, Added: 1, Deleted: 1},
+			{Path: "skills/deploy/SKILL.md", Status: risk.Modified, Added: 1, Deleted: 1},
+		},
+	}, risk.Config{HighRiskPaths: []string{"AGENTS.md", "skills/**"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Tier != risk.TierFullAdversarial {
+		t.Fatalf("tier = %q, want %q: %+v", decision.Tier, risk.TierFullAdversarial, decision)
+	}
+	if decision.BlastRadius.Score != 3 || decision.Novelty.Score != 2 {
+		t.Fatalf("axes = blast %+v novelty %+v, want high-risk instruction change", decision.BlastRadius, decision.Novelty)
+	}
+	if strings.Contains(decision.String(), "do not reach runtime code") {
+		t.Fatalf("decision states a false Markdown shortcut:\n%s", decision.String())
 	}
 }
 
@@ -146,6 +213,40 @@ func TestClassifyConsistentIdentifierRenameAsMechanical(t *testing.T) {
 	}
 	if decision.Novelty.Score != 0 || !strings.Contains(decision.Novelty.Reason, "identifier renames") {
 		t.Fatalf("novelty = %+v, want mechanical source edit", decision.Novelty)
+	}
+}
+
+func TestClassifyCallTargetAndArgumentSwapAsChangedLogic(t *testing.T) {
+	t.Parallel()
+
+	baseline := "package policy\nfunc allowed(actor, resource string) bool { return strings.HasPrefix(actor, \"admin:\") && owns(actor, resource) }\n"
+	for name, current := range map[string]string{
+		"call target":   "package policy\nfunc allowed(actor, resource string) bool { return strings.Contains(actor, \"admin:\") && owns(actor, resource) }\n",
+		"argument swap": "package policy\nfunc allowed(actor, resource string) bool { return strings.HasPrefix(actor, \"admin:\") && owns(resource, actor) }\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			decision, err := risk.Classify(risk.ChangeSet{
+				Branch:        "feature/authorization-policy",
+				DefaultBranch: "main",
+				Files: []risk.FileChange{{
+					Path:            "policy.go",
+					Status:          risk.Modified,
+					Added:           1,
+					Deleted:         1,
+					BaselineContent: baseline,
+					CurrentContent:  current,
+				}},
+			}, risk.Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Novelty.Score != 2 {
+				t.Fatalf("novelty = %+v, want changed logic", decision.Novelty)
+			}
+			if decision.Tier == risk.TierLeakScanOnly {
+				t.Fatalf("tier = %q, want reviewer tier", decision.Tier)
+			}
+		})
 	}
 }
 

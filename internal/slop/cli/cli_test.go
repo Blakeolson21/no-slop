@@ -19,8 +19,9 @@ func TestRunGatePrintsMarkdownTierAndReasons(t *testing.T) {
 	runGit(t, dir, "init", "-b", "main")
 	runGit(t, dir, "config", "user.email", "test@example.com")
 	runGit(t, dir, "config", "user.name", "Test")
+	writeFile(t, dir, ".noslop-blocklist", "# intentionally empty\n")
 	writeFile(t, dir, "README.md", "# Project\n")
-	runGit(t, dir, "add", "README.md")
+	runGit(t, dir, "add", ".noslop-blocklist", "README.md")
 	runGit(t, dir, "commit", "-m", "initial")
 	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
 	runGit(t, dir, "switch", "-c", "docs/readme")
@@ -55,12 +56,13 @@ func TestRunGatePrintsOverrideAndStillBlocksLeak(t *testing.T) {
 	runGit(t, dir, "init", "-b", "main")
 	runGit(t, dir, "config", "user.email", "test@example.com")
 	runGit(t, dir, "config", "user.name", "Test")
+	writeFile(t, dir, ".noslop-blocklist", "# intentionally empty\n")
 	writeFile(t, dir, "policy.go", "package policy\n")
-	runGit(t, dir, "add", "policy.go")
+	runGit(t, dir, "add", ".noslop-blocklist", "policy.go")
 	runGit(t, dir, "commit", "-m", "initial")
 	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
 	runGit(t, dir, "switch", "-c", "feature/policy")
-	writeFile(t, dir, "policy.go", "package policy\n\nconst token = \"ghp_"+"abcdefghijklmnopqrstuvwxyzABCDEFGHIJ\"\n")
+	writeFile(t, dir, "policy.go", "package policy\n\nconst token = \"ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ\"\n") // noslop:allow-leak
 	runGit(t, dir, "add", "policy.go")
 	runGit(t, dir, "commit", "-m", "change")
 
@@ -104,6 +106,33 @@ func TestRunGateFailsClosedWhenExplicitBlocklistIsMissing(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "read private-name blocklist") {
 		t.Fatalf("stderr does not name blocklist failure: %s", stderr.String())
+	}
+}
+
+func TestRunGateFailsClosedWhenConfiguredBlocklistIsMissing(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	writeFile(t, dir, ".no-mistakes.yaml", "slop:\n  leak_scan:\n    blocklist_file: missing-private-names\n")
+	writeFile(t, dir, "README.md", "# Project\n")
+	runGit(t, dir, "add", ".no-mistakes.yaml", "README.md")
+	runGit(t, dir, "commit", "-m", "initial")
+	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	runGit(t, dir, "switch", "-c", "docs/readme")
+	writeFile(t, dir, "README.md", "# Project\n\nPlain update.\n")
+	runGit(t, dir, "add", "README.md")
+	runGit(t, dir, "commit", "-m", "docs")
+
+	var stdout, stderr bytes.Buffer
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base}, &stdout, &stderr, slopcli.Options{})
+	if exitCode != 2 {
+		t.Fatalf("exit = %d, want evaluation failure\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "read private-name blocklist") {
+		t.Fatalf("stderr does not name configured blocklist failure: %s", stderr.String())
 	}
 }
 

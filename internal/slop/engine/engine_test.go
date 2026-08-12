@@ -132,7 +132,7 @@ func TestRunMandatoryLeakScanStillRunsUnderLightOverride(t *testing.T) {
 			Path:           "internal/auth/policy.go",
 			Status:         risk.Added,
 			Added:          100,
-			AddedContent:   "token=ghp_" + "abcdefghijklmnopqrstuvwxyzABCDEFGHIJ\n",
+			AddedContent:   "token=ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ\n", // noslop:allow-leak
 			CurrentContent: "package auth\n",
 		}},
 		Config: engine.Config{TierOverride: risk.TierLeakScanOnly},
@@ -145,5 +145,30 @@ func TestRunMandatoryLeakScanStillRunsUnderLightOverride(t *testing.T) {
 	}
 	if result.Passed || len(result.Findings) != 1 || result.Findings[0].Lens != "leak-identity-scan" {
 		t.Fatalf("result = %+v, want mandatory leak finding", result)
+	}
+}
+
+func TestRunTestCountFloorStillRunsUnderLightOverride(t *testing.T) {
+	t.Parallel()
+
+	result, err := engine.Run(context.Background(), engine.Input{
+		WorkDir:       t.TempDir(),
+		Branch:        "feature/calculator",
+		DefaultBranch: "main",
+		Files: []engine.Change{{
+			Path:            "calc_test.go",
+			Status:          risk.Modified,
+			Added:           0,
+			Deleted:         4,
+			BaselineContent: "package calc\nfunc TestPositive(t *testing.T) {}\nfunc TestNegative(t *testing.T) {}\n",
+			CurrentContent:  "package calc\nfunc TestPositive(t *testing.T) {}\n",
+		}},
+		Config: engine.Config{TestCountFloor: true, TierOverride: risk.TierLeakScanOnly},
+	}, engine.Dependencies{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Passed || len(result.Findings) != 1 || result.Findings[0].Lens != "test-capitulation" {
+		t.Fatalf("result = %+v, want mandatory test-count finding", result)
 	}
 }

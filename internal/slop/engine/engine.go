@@ -142,7 +142,7 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 	result := Result{Decision: decision}
 
 	result.Findings = append(result.Findings, runLeakScan(input.Files, input.Config.Blocklist)...)
-	if input.Config.TestCountFloor && decision.Tier != risk.TierLeakScanOnly {
+	if input.Config.TestCountFloor {
 		result.Findings = append(result.Findings, runTestFloor(input.Files)...)
 	}
 	proseFindings, err := runProseOracle(ctx, input, deps.ThreadReader)

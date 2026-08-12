@@ -110,7 +110,7 @@ Configure the `noslop gate` front stage. The classifier always prints its tier a
 | --- | --- | --- | --- |
 | `slop.risk.single_review_threshold` | `int` | `3` | Minimum sum of the three risk axes for `single-review` |
 | `slop.risk.full_adversarial_threshold` | `int` | `6` | Minimum sum for `full-adversarial`; must be greater than the single-review threshold |
-| `slop.risk.high_risk_paths` | `string[]` | Empty | Extra glob patterns treated as high-reach paths |
+| `slop.risk.high_risk_paths` | `string[]` | Empty | Extra glob patterns treated as high-reach paths, including Markdown instruction files |
 | `slop.leak_scan.blocklist_file` | `string` | `.noslop-blocklist` | Repository-relative or absolute private-name file |
 | `slop.prose.outbound_paths` | `string[]` | `outbound/**` | Paths whose changed Markdown is intended for publication |
 | `slop.prose.ai_tell_words` | `string[]` | Empty | Additional case-insensitive vocabulary to flag |
@@ -119,7 +119,9 @@ Configure the `noslop gate` front stage. The classifier always prints its tier a
 
 `slop.test_command` is deliberately separate from `commands.test`. The inherited pipeline uses `commands.test` for focused local validation. NoSlop's full tier uses `slop.test_command` as the explicit adversarial test gate.
 
-The private-name file accepts one literal entry per line. Blank lines and lines beginning with `#` are ignored. Matching is case-insensitive. Keep real hostnames, codenames, project names, and other private identities out of the repository. The default filename is ignored in this repository.
+The private-name file accepts one literal entry per line. Blank lines and lines beginning with `#` are ignored. Matching is case-insensitive. Keep real hostnames, codenames, project names, and other private identities out of the repository. The default filename is ignored in this repository. A configured file that is missing or unreadable stops the gate with an evaluation error.
+
+Use `noslop:allow-leak` on the same source line as an intentional credential-shaped or private-name fixture. The exemption applies only to that line and stays visible in review.
 
 Markdown can opt into the prose oracle without a matching path by adding front matter:
 
@@ -129,11 +131,13 @@ outbound: true
 ---
 ```
 
-When `noslop gate --thread <url>` is provided and at least one outbound artifact changed, NoSlop calls `gh` to confirm that the target GitHub issue or pull request is open and to compare the draft with existing comments. An unavailable or unreadable live thread fails the command closed.
+When `noslop gate --thread <url>` is provided, NoSlop requires at least one outbound artifact and calls `gh` to confirm that the target GitHub issue or pull request is open and to compare the draft with existing comments. No outbound artifact, an unavailable thread, or an unreadable thread fails the command closed.
 
-When an outbound line cites a repository-relative `.json` or `.csv` file and states a number, NoSlop checks that the number appears in or can be derived from the file's numeric values. Supported derivations include totals, counts, averages, minima, maxima, ratios, and percentages.
+When an outbound line cites a repository-relative `.json` or `.csv` file and states a number, NoSlop checks that the number appears in or can be derived from the file's numeric values. Supported derivations include totals, counts, averages, minima, maxima, ratios between two named fields, and outcome percentages derived from named pass, fail, or skip fields. Direct claims against named evidence must name the matching field.
 
-The complete lens definitions are in [`docs/taxonomy.md`](../../../../taxonomy.md).
+The default thresholds let high-risk changes and new source additions of at least 500 lines reach `full-adversarial` on a feature branch. Smaller ordinary source changes remain eligible for `single-review`.
+
+The complete lens definitions are in the [NoSlop taxonomy](./slop-taxonomy/).
 
 ### agent
 

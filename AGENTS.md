@@ -43,8 +43,8 @@ Safest local verification sequence after non-trivial changes:
 
 **NoSlop Front Stage**
 
-- `cmd/noslop` runs the standalone front stage through `internal/slop/engine`: classify first, publish the decision through `OnDecision`, then run mandatory leak and artifact checks before tier-specific review or tests. A tier override must remain visible in `risk.Decision.String`; leak scanning is never tier-skippable.
-- `internal/slop/lenses` owns the reviewer prompt catalog and `docs/taxonomy.md` owns the public explanation. Keep the names and guidance aligned. Mechanical checks live in `internal/slop/leakscan` and `internal/slop/testfloor` rather than in reviewer prose.
+- `cmd/noslop` runs the standalone front stage through `internal/slop/engine`: classify first, publish the decision through `OnDecision`, then run mandatory leak and artifact checks before tier-specific review or tests. A tier override that changes the selected tier must remain visible in `risk.Decision.String`; leak scanning and the configured test-count floor are never tier-skippable.
+- `internal/slop/lenses` owns the reviewer prompt catalog and `docs/src/content/docs/reference/slop-taxonomy.md` owns the public explanation. Keep the names and guidance aligned. Mechanical checks live in `internal/slop/leakscan` and `internal/slop/testfloor` rather than in reviewer prose.
 - `.noslop-blocklist` is local private data and ignored. Findings may name a file and line but must never reproduce the matched credential or private identity.
 
 **Agent-Guidance Surfaces**

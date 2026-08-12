@@ -1,3 +1,8 @@
+---
+title: NoSlop Taxonomy
+description: Named failure lenses for AI-authored changes.
+---
+
 # NoSlop taxonomy
 
 NoSlop reviews AI-authored changes through named failure lenses. A lens is not a verdict by itself. The reviewer must connect it to a concrete path, violated invariant, or unsupported claim in the current change.
@@ -20,7 +25,7 @@ Description: Tests were changed to accept the implementation instead of preservi
 
 Reviewer guidance: Compare test strength with the base revision. Look for deleted cases, skipped tests, wider tolerances, weaker assertions, changed expected values without independent evidence, and coverage removed from an important branch. A passing suite is not proof when the suite became easier to pass.
 
-Mechanical pre-check: Test-count floor. NoSlop counts recognizable test declarations in the changed files at the base and head revisions. A lower head count blocks the gate even when the configured test command passes.
+Mechanical pre-check: Test-count floor. NoSlop counts recognizable test declarations in the changed files at the base and head revisions. A lower head count blocks the gate at every tier, including an operator override, even when the configured test command passes.
 
 ## Self-consistent oracle
 
@@ -87,5 +92,7 @@ Mechanical pre-check: None in v1.
 The leak and identity scan is an artifact-wide mechanical check, not a reviewer-only lens. It runs at every tier before any optional reviewer or test command.
 
 The scanner checks common credential shapes, private key headers, personal home paths, and user-configured identity markers. Findings never reproduce the matched value. Private names come from `.noslop-blocklist` by default, with one entry per line. Keep the real blocklist outside version control and add the names that are private in your own environment.
+
+A configured blocklist that cannot be read stops evaluation. Intentional fixture literals can carry `noslop:allow-leak` on the same source line. The exemption applies only to that line.
 
 NoSlop ships generic placeholder entries only. It does not ship any operator's actual hostnames, codenames, project names, or identity data.

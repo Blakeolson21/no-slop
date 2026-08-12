@@ -112,7 +112,10 @@ func Check(ctx context.Context, artifacts []Artifact, opts Options) ([]Finding, 
 		}
 	}
 
-	if opts.ThreadURL != "" && len(outbound) > 0 {
+	if opts.ThreadURL != "" && len(outbound) == 0 {
+		return nil, fmt.Errorf("check live thread: no outbound artifact in diff")
+	}
+	if opts.ThreadURL != "" {
 		if opts.ThreadReader == nil {
 			return nil, fmt.Errorf("check live thread: no thread reader configured")
 		}
@@ -166,7 +169,7 @@ func checkEvidenceLine(artifactPath string, lineNumber int, line, root string) [
 		if len(assigned) == 0 {
 			continue
 		}
-		values, err := evidenceValues(root, citation)
+		evidence, err := evidenceValues(root, citation)
 		if err != nil {
 			findings = append(findings, Finding{
 				Kind:        EvidenceUnreadable,
@@ -177,7 +180,7 @@ func checkEvidenceLine(artifactPath string, lineNumber int, line, root string) [
 			continue
 		}
 		for _, claim := range assigned {
-			supported := numbersForOperation(values, detectOperation(line, claim))
+			supported := numbersForOperation(evidence, detectOperation(line, claim), line)
 			if !containsNumber(supported, claim.value) {
 				findings = append(findings, Finding{
 					Kind:        EvidenceMismatch,
@@ -245,7 +248,12 @@ func spanDistance(leftStart, leftEnd, rightStart, rightEnd int) int {
 	return 0
 }
 
-func evidenceValues(root, citation string) ([]float64, error) {
+type evidenceValue struct {
+	name  string
+	value float64
+}
+
+func evidenceValues(root, citation string) ([]evidenceValue, error) {
 	rootAbs, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
@@ -265,19 +273,27 @@ func evidenceValues(root, citation string) ([]float64, error) {
 		if err := json.Unmarshal(content, &value); err != nil {
 			return nil, err
 		}
-		var numbers []float64
-		collectJSONNumbers(value, &numbers)
+		var numbers []evidenceValue
+		collectJSONNumbers(value, "", &numbers)
 		return numbers, nil
 	case ".csv":
 		rows, err := csv.NewReader(strings.NewReader(string(content))).ReadAll()
 		if err != nil {
 			return nil, err
 		}
-		var numbers []float64
-		for _, row := range rows {
-			for _, cell := range row {
+		var numbers []evidenceValue
+		var headers []string
+		if len(rows) > 0 {
+			headers = append([]string(nil), rows[0]...)
+		}
+		for rowIndex, row := range rows {
+			for column, cell := range row {
 				if number, err := strconv.ParseFloat(strings.TrimSpace(cell), 64); err == nil {
-					numbers = append(numbers, number)
+					name := ""
+					if rowIndex > 0 && column < len(headers) {
+						name = headers[column]
+					}
+					numbers = append(numbers, evidenceValue{name: name, value: number})
 				}
 			}
 		}
@@ -287,17 +303,17 @@ func evidenceValues(root, citation string) ([]float64, error) {
 	}
 }
 
-func collectJSONNumbers(value any, numbers *[]float64) {
+func collectJSONNumbers(value any, name string, numbers *[]evidenceValue) {
 	switch typed := value.(type) {
 	case float64:
-		*numbers = append(*numbers, typed)
+		*numbers = append(*numbers, evidenceValue{name: name, value: typed})
 	case []any:
 		for _, item := range typed {
-			collectJSONNumbers(item, numbers)
+			collectJSONNumbers(item, name, numbers)
 		}
 	case map[string]any:
-		for _, item := range typed {
-			collectJSONNumbers(item, numbers)
+		for key, item := range typed {
+			collectJSONNumbers(item, key, numbers)
 		}
 	}
 }
@@ -349,44 +365,133 @@ func detectOperation(line string, claim numericClaim) evidenceOperation {
 	return closestKind
 }
 
-func numbersForOperation(values []float64, operation evidenceOperation) []float64 {
-	if len(values) == 0 {
+func numbersForOperation(evidence []evidenceValue, operation evidenceOperation, line string) []float64 {
+	if len(evidence) == 0 {
 		return nil
 	}
-	derived := append([]float64(nil), values...)
+	values := make([]float64, 0, len(evidence))
 	sum := 0.0
-	minimum, maximum := values[0], values[0]
-	for _, value := range values {
+	minimum, maximum := evidence[0].value, evidence[0].value
+	for _, item := range evidence {
+		value := item.value
+		values = append(values, value)
 		sum += value
 		minimum = math.Min(minimum, value)
 		maximum = math.Max(maximum, value)
 	}
 	switch operation {
+	case operationDirect:
+		return directEvidenceNumbers(evidence, line)
 	case operationSum:
-		derived = append(derived, sum)
+		return []float64{sum}
 	case operationCount:
-		derived = append(derived, float64(len(values)))
+		return []float64{float64(len(values))}
 	case operationAverage:
-		derived = append(derived, sum/float64(len(values)))
+		return []float64{sum / float64(len(values))}
 	case operationMinimum:
-		derived = append(derived, minimum)
+		return []float64{minimum}
 	case operationMaximum:
-		derived = append(derived, maximum)
-	case operationRatio, operationPercent:
-		for _, numerator := range values {
-			for _, denominator := range values {
-				if denominator == 0 {
-					continue
-				}
-				ratio := numerator / denominator
-				if operation == operationPercent {
-					ratio *= 100
-				}
-				derived = append(derived, ratio)
-			}
+		return []float64{maximum}
+	case operationPercent:
+		return namedPercentages(evidence, line)
+	case operationRatio:
+		return namedRatios(evidence, line)
+	}
+	return nil
+}
+
+func directEvidenceNumbers(evidence []evidenceValue, line string) []float64 {
+	matched := matchingEvidence(evidence, line)
+	if len(matched) > 0 {
+		return evidenceNumbers(matched)
+	}
+	for _, item := range evidence {
+		if strings.TrimSpace(item.name) != "" {
+			return nil
 		}
 	}
-	return derived
+	return evidenceNumbers(evidence)
+}
+
+func namedPercentages(evidence []evidenceValue, line string) []float64 {
+	matched := matchingEvidence(evidence, line)
+	if len(matched) != 1 {
+		return nil
+	}
+	numerator := matched[0]
+	kind := outcomeKind(numerator.name)
+	if kind == "" {
+		return nil
+	}
+	denominator := 0.0
+	for _, item := range evidence {
+		itemKind := outcomeKind(item.name)
+		if itemKind == "pass" || itemKind == "fail" || kind == "skip" && itemKind == "skip" {
+			denominator += item.value
+		}
+	}
+	if denominator == 0 {
+		return nil
+	}
+	return []float64{numerator.value / denominator * 100}
+}
+
+func namedRatios(evidence []evidenceValue, line string) []float64 {
+	matched := matchingEvidence(evidence, line)
+	if len(matched) != 2 || matched[1].value == 0 {
+		return nil
+	}
+	return []float64{matched[0].value / matched[1].value}
+}
+
+func matchingEvidence(evidence []evidenceValue, line string) []evidenceValue {
+	words := make(map[string]bool)
+	for _, word := range claimToken.FindAllString(strings.ToLower(line), -1) {
+		words[normalizeEvidenceName(word)] = true
+	}
+	var matched []evidenceValue
+	for _, item := range evidence {
+		name := normalizeEvidenceName(item.name)
+		if name != "" && words[name] {
+			matched = append(matched, item)
+		}
+	}
+	return matched
+}
+
+func normalizeEvidenceName(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "pass", "passes", "passed", "success", "successes", "succeeded":
+		return "pass"
+	case "fail", "fails", "failed", "failure", "failures", "error", "errors":
+		return "fail"
+	case "skip", "skips", "skipped":
+		return "skip"
+	default:
+		return strings.TrimSuffix(value, "s")
+	}
+}
+
+func outcomeKind(name string) string {
+	switch normalizeEvidenceName(name) {
+	case "pass":
+		return "pass"
+	case "fail":
+		return "fail"
+	case "skip":
+		return "skip"
+	default:
+		return ""
+	}
+}
+
+func evidenceNumbers(evidence []evidenceValue) []float64 {
+	values := make([]float64, 0, len(evidence))
+	for _, item := range evidence {
+		values = append(values, item.value)
+	}
+	return values
 }
 
 func containsNumber(values []float64, claim float64) bool {

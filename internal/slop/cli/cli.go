@@ -108,12 +108,11 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 		return fmt.Errorf("no committed changes between %s and %s", baseRef, headRef)
 	}
 
-	explicitBlocklist := strings.TrimSpace(*blocklist) != ""
 	blocklistPath := strings.TrimSpace(*blocklist)
 	if blocklistPath == "" {
 		blocklistPath = cfg.Slop.LeakScan.BlocklistFile
 	}
-	blocklistEntries, err := loadBlocklist(workDir, blocklistPath, explicitBlocklist)
+	blocklistEntries, err := loadBlocklist(workDir, blocklistPath)
 	if err != nil {
 		return err
 	}
@@ -211,7 +210,7 @@ func defaultReviewerFactory(ctx context.Context, cfg *config.Config, stderr io.W
 	return engine.NewAgentReviewer(ag, func(text string) { fmt.Fprint(stderr, text) }), ag, nil
 }
 
-func loadBlocklist(workDir, configured string, required bool) ([]string, error) {
+func loadBlocklist(workDir, configured string) ([]string, error) {
 	if configured == "" {
 		return nil, nil
 	}
@@ -221,9 +220,6 @@ func loadBlocklist(workDir, configured string, required bool) ([]string, error) 
 	}
 	content, err := os.ReadFile(path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) && !required {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("read private-name blocklist: %w", err)
 	}
 	return leakscan.ParseBlocklist(string(content)), nil

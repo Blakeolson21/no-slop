@@ -18,15 +18,15 @@ Every gate starts by scoring:
 - Novelty: new logic, changed logic, mechanical work, or documentation.
 - Reversibility: whether a revert is enough to contain the result.
 
-The selected tier and all three reasons print before validation continues. Use `--tier` to override the result. The output records both the original and overridden tier.
+The selected tier and all three reasons print before validation continues. Use `--tier` to override the result. When the override changes the tier, the output records both the original and overridden tier.
 
 | Tier | Work |
 | --- | --- |
-| `leak-scan-only` | Mandatory leak and identity checks, plus any applicable artifact oracle |
-| `single-review` | Mandatory checks, the test-count floor, and one reviewer pass through every slop lens |
+| `leak-scan-only` | Mandatory leak and identity checks, the configured test-count floor, plus any applicable artifact oracle |
+| `single-review` | Mandatory checks and one reviewer pass through every slop lens |
 | `full-adversarial` | Mandatory checks, a lens review, an adversarial challenge round, the test-count floor, and the configured test command |
 
-A Markdown-only diff always routes to `leak-scan-only` unless the operator overrides it.
+A Markdown-only diff routes to `leak-scan-only` unless it matches a configured high-risk path or the operator overrides it. Substantial new source additions also reach the full tier even on a feature branch.
 
 ### AI-slop lenses
 
@@ -41,13 +41,13 @@ The reviewer receives eight named lenses:
 - `fail-open-default`
 - `rule-applied-in-one-place-not-sibling`
 
-Every finding carries its lens name. [The taxonomy](docs/taxonomy.md) defines the failure, reviewer guidance, and available mechanical pre-check for each lens.
+Every finding carries its lens name. [The taxonomy](docs/src/content/docs/reference/slop-taxonomy.md) defines the failure, reviewer guidance, and available mechanical pre-check for each lens.
 
 ### Artifact-class oracles
 
-Secrets and private identity markers are scanned at every tier. The scanner recognizes common credential shapes, personal home paths, and private names from a local blocklist. Findings identify the file and line without copying the matched value.
+Secrets and private identity markers are scanned at every tier. The scanner recognizes common credential shapes, personal home paths, and private names from a local blocklist. A configured blocklist that cannot be read stops evaluation. Findings identify the file and line without copying the matched value. Intentional fixture literals can use `noslop:allow-leak` on the same source line.
 
-Outbound text can be selected by a configured path or `outbound: true` front matter. The prose oracle checks AI-tell vocabulary, em dashes, cited JSON or CSV numbers, and optional live GitHub issue or pull request state. With `--thread`, it uses `gh` to verify the thread is open and checks whether an existing comment already makes substantially the same claim.
+Outbound text can be selected by a configured path or `outbound: true` front matter. The prose oracle checks AI-tell vocabulary, em dashes, cited JSON or CSV numbers, and optional live GitHub issue or pull request state. With `--thread`, it uses `gh` to verify the thread is open and checks whether an existing comment already makes substantially the same claim. An explicit thread with no outbound artifact is an evaluation error.
 
 ## Build
 

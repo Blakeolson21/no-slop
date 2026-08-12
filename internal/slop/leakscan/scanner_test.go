@@ -10,7 +10,7 @@ import (
 func TestScanFindsSecretShapeWithoutEchoingSecret(t *testing.T) {
 	t.Parallel()
 
-	secret := "ghp_" + "abcdefghijklmnopqrstuvwxyzABCDEFGHIJ"
+	secret := "ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ" // noslop:allow-leak
 	findings := leakscan.Scan([]leakscan.File{{
 		Path:    "config/example.env",
 		Content: "PUBLIC=true\nTOKEN=" + secret + "\n",
@@ -52,10 +52,10 @@ func TestScanRecognizesCommonCredentialShapes(t *testing.T) {
 		name    string
 		content string
 	}{
-		{"AWS access key", "AWS_ACCESS_KEY_ID=AKIA" + "IOSFODNN7EXAMPLE"},
-		{"Slack token", "SLACK_TOKEN=xoxb-123456789012-" + "123456789012-abcdefghijklmnopqrstuvwx"},
-		{"private key", "-----BEGIN PRIVATE" + " KEY-----"},
-		{"generic assignment", "api_token: \"abcdefghijklmnopqrstuvwxyz" + "0123456789ABCDEFGH\""},
+		{"AWS access key", "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"},                           // noslop:allow-leak
+		{"Slack token", "SLACK_TOKEN=xoxb-XXXXXXXXXXXX-XXXXXXXXXXXX-XXXXXXXXXXXXXXXXXXXXXXXX"}, // noslop:allow-leak
+		{"private key", "-----BEGIN PRIVATE KEY-----"},                                         // noslop:allow-leak
+		{"generic assignment", "api_token: \"abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH\""},  // noslop:allow-leak
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -71,12 +71,25 @@ func TestScanRecognizesCommonCredentialShapes(t *testing.T) {
 func TestScanFindsPersonalHomePathsWithoutEchoingIdentity(t *testing.T) {
 	t.Parallel()
 
-	privatePath := "/" + "Users/example-person/project"
+	privatePath := "/Users/example-person/project" // noslop:allow-leak
 	findings := leakscan.Scan([]leakscan.File{{Path: "report.md", Content: "artifact: " + privatePath}}, leakscan.Options{})
 	if len(findings) != 1 || findings[0].Kind != leakscan.Identity {
 		t.Fatalf("findings = %+v, want one identity finding", findings)
 	}
 	if strings.Contains(findings[0].Description, "example-person") {
 		t.Fatal("identity finding echoed the home directory owner")
+	}
+}
+
+func TestScanHonorsExplicitInlineExemptionOnOneLine(t *testing.T) {
+	t.Parallel()
+
+	findings := leakscan.Scan([]leakscan.File{{
+		Path: "fixtures/tokens.txt",
+		Content: "TOKEN=ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ # noslop:allow-leak\n" + // noslop:allow-leak
+			"TOKEN=ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ\n", // noslop:allow-leak
+	}}, leakscan.Options{})
+	if len(findings) != 1 || findings[0].Line != 2 {
+		t.Fatalf("findings = %+v, want only the unexempted second line", findings)
 	}
 }

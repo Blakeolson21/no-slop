@@ -87,13 +87,19 @@ Task:
 %s
 %s`, request.Branch, request.BaseRef, request.HeadRef, request.Tier, request.Round, roundTask, prior, request.Prompt)
 
+	var narration strings.Builder
+	var capture func(string)
+	if r.onChunk != nil {
+		capture = func(chunk string) { narration.WriteString(chunk) }
+	}
 	result, err := r.ag.Run(ctx, agent.RunOpts{
 		Prompt:     prompt,
 		CWD:        request.WorkDir,
 		JSONSchema: slopReviewSchema(),
-		OnChunk:    r.onChunk,
+		OnChunk:    capture,
 		Purpose:    "noslop-review",
 	})
+	r.flushNarration(narration.String())
 	if err != nil {
 		return nil, err
 	}
@@ -120,6 +126,18 @@ Task:
 		})
 	}
 	return findings, nil
+}
+
+func (r *AgentReviewer) flushNarration(narration string) {
+	if r.onChunk == nil || narration == "" {
+		return
+	}
+	r.onChunk("reviewer stream: begin\n")
+	r.onChunk(narration)
+	if !strings.HasSuffix(narration, "\n") {
+		r.onChunk("\n")
+	}
+	r.onChunk("reviewer stream: end\n")
 }
 
 func formatPriorFindings(findings []Finding) string {

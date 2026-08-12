@@ -93,11 +93,42 @@ func TestCheckBindsClaimsToNearestCitationAndNamedOperation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if countKind(findings, prose.EvidenceMismatch) != 1 {
-		t.Fatalf("findings = %+v, want only unsupported direct 900 claim", findings)
+	if countKind(findings, prose.EvidenceMismatch) != 2 {
+		t.Fatalf("findings = %+v, want direct and unnamed-percent 900 claims rejected", findings)
 	}
-	if findings[len(findings)-1].Line != 2 {
-		t.Fatalf("mismatch line = %d, want 2", findings[len(findings)-1].Line)
+	if findings[len(findings)-1].Line != 3 {
+		t.Fatalf("last mismatch line = %d, want 3", findings[len(findings)-1].Line)
+	}
+}
+
+func TestCheckRatesRequireNamedEvidenceFields(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "evidence"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "evidence", "counts.json"), []byte(`{"passed":18,"failed":2,"skipped":4,"duration":36}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	findings, err := prose.Check(context.Background(), []prose.Artifact{{
+		Path: "outbound/report.md",
+		Content: "evidence/counts.json reports a 900 percent failure rate.\n" +
+			"evidence/counts.json reports a 50 percent skip rate.\n" +
+			"evidence/counts.json reports 4 shipped fixes.\n" +
+			"evidence/counts.json reports a 90 percent pass rate.",
+	}}, prose.Options{OutboundPaths: []string{"outbound/**"}, EvidenceRoot: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countKind(findings, prose.EvidenceMismatch) != 3 {
+		t.Fatalf("findings = %+v, want three false claims rejected and the 90 percent pass rate accepted", findings)
+	}
+	for _, finding := range findings {
+		if finding.Line == 4 {
+			t.Fatalf("true pass-rate claim was rejected: %+v", finding)
+		}
 	}
 }
 
@@ -172,6 +203,22 @@ func TestCheckFailsClosedWhenLiveThreadCannotBeRead(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected unreadable live thread to fail closed")
+	}
+}
+
+func TestCheckFailsClosedWhenThreadHasNoOutboundArtifact(t *testing.T) {
+	t.Parallel()
+
+	_, err := prose.Check(context.Background(), []prose.Artifact{{
+		Path:    "PR_BODY.md",
+		Content: "A draft that is not configured as outbound.",
+	}}, prose.Options{
+		OutboundPaths: []string{"outbound/**"},
+		ThreadURL:     "https://github.com/example/project/issues/42",
+		ThreadReader:  stubThreadReader{thread: prose.Thread{Open: true}},
+	})
+	if err == nil {
+		t.Fatal("expected explicit thread with no outbound artifact to fail closed")
 	}
 }
 

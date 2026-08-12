@@ -27,6 +27,10 @@ type Options struct {
 	Blocklist []string
 }
 
+// InlineExemption marks a source line whose credential-shaped or private-name
+// literal is an intentional fixture. The exemption applies only to that line.
+const InlineExemption = "noslop:allow-leak"
+
 // Finding identifies a leak without retaining the matched value.
 type Finding struct {
 	Kind        Kind
@@ -53,9 +57,9 @@ var identityPatterns = []secretPattern{
 }
 
 var defaultBlocklist = []string{
-	"internal" + "-host",
-	"private" + "-codename",
-	"secret" + "-project",
+	"internal-host",    // noslop:allow-leak
+	"private-codename", // noslop:allow-leak
+	"secret-project",   // noslop:allow-leak
 }
 
 // DefaultBlocklist returns generic examples that catch placeholder private
@@ -84,6 +88,9 @@ func Scan(files []File, opts Options) []Finding {
 	blocklist := append(DefaultBlocklist(), opts.Blocklist...)
 	for _, file := range files {
 		for index, line := range strings.Split(file.Content, "\n") {
+			if strings.Contains(strings.ToLower(line), InlineExemption) {
+				continue
+			}
 			for _, pattern := range secretPatterns {
 				if pattern.re.MatchString(line) {
 					findings = append(findings, Finding{

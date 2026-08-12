@@ -35,6 +35,9 @@ func (a *reviewerAgent) Name() string { return "test" }
 func (a *reviewerAgent) Close() error { return nil }
 func (a *reviewerAgent) Run(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
 	a.opts = opts
+	if opts.OnChunk != nil {
+		opts.OnChunk("review narrative without newline")
+	}
 	return &agent.Result{Output: json.RawMessage(`{"findings":[{"lens":"fail-open-default","severity":"error","file":"policy.go","line":12,"description":"unknown becomes allow"}]}`)}, nil
 }
 
@@ -94,5 +97,28 @@ func TestAgentReviewerPromptsAdversarialRoundWithPriorFindings(t *testing.T) {
 		if !strings.Contains(ag.opts.Prompt, want) {
 			t.Errorf("adversarial prompt missing %q:\n%s", want, ag.opts.Prompt)
 		}
+	}
+}
+
+func TestAgentReviewerFramesBufferedNarration(t *testing.T) {
+	t.Parallel()
+
+	ag := &reviewerAgent{}
+	var stream strings.Builder
+	reviewer := engine.NewAgentReviewer(ag, func(chunk string) { stream.WriteString(chunk) })
+	_, err := reviewer.Review(context.Background(), engine.ReviewRequest{
+		WorkDir: "/repo",
+		Branch:  "feature/policy",
+		BaseRef: "base-sha",
+		HeadRef: "head-sha",
+		Tier:    risk.TierSingleReview,
+		Prompt:  "[fail-open-default] inspect permissive defaults",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "reviewer stream: begin\nreview narrative without newline\nreviewer stream: end\n"
+	if stream.String() != want {
+		t.Fatalf("reviewer stream = %q, want %q", stream.String(), want)
 	}
 }

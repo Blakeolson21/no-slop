@@ -75,7 +75,8 @@ func Classify(change ChangeSet, cfg Config) (Decision, error) {
 	if len(change.Files) == 0 {
 		return Decision{}, fmt.Errorf("classify change: no changed files")
 	}
-	if markdownOnly(change.Files) {
+	highRisk := anyPath(change.Files, func(name string) bool { return highRiskPath(name, cfg.HighRiskPaths) })
+	if markdownOnly(change.Files) && !highRisk {
 		reversibility := "content-only change is straightforward to revert"
 		if change.DefaultBranch != "" && change.Branch == change.DefaultBranch {
 			reversibility = "content-only change remains straightforward to revert on the default branch"
@@ -89,9 +90,13 @@ func Classify(change ChangeSet, cfg Config) (Decision, error) {
 		return applyOverride(decision, cfg.OverrideTier)
 	}
 
+	novelty := classifyNovelty(change.Files)
+	if markdownOnly(change.Files) && highRisk {
+		novelty = Axis{Score: 2, Reason: "high-risk instructions or content behavior changed"}
+	}
 	decision := Decision{
 		BlastRadius:   classifyBlastRadius(change.Files, cfg.HighRiskPaths),
-		Novelty:       classifyNovelty(change.Files),
+		Novelty:       novelty,
 		Reversibility: classifyReversibility(change, cfg.HighRiskPaths),
 	}
 	singleThreshold, fullThreshold := thresholds(cfg)
@@ -113,6 +118,9 @@ func applyOverride(decision Decision, override Tier) (Decision, error) {
 	}
 	switch override {
 	case TierLeakScanOnly, TierSingleReview, TierFullAdversarial:
+		if override == decision.Tier {
+			return decision, nil
+		}
 		decision.OriginalTier = decision.Tier
 		decision.Tier = override
 		decision.Overridden = true
@@ -141,7 +149,21 @@ func classifyBlastRadius(files []FileChange, configured []string) Axis {
 	if allPaths(files, isTestOrDocsPath) {
 		return Axis{Score: 1, Reason: "change is limited to tests, documentation, or examples"}
 	}
+	if substantialSourceAddition(files) {
+		return Axis{Score: 3, Reason: "substantial new source has broad integration reach"}
+	}
 	return Axis{Score: 2, Reason: "source code can affect runtime behavior"}
+}
+
+func substantialSourceAddition(files []FileChange) bool {
+	const substantialSourceLines = 500
+	added := 0
+	for _, file := range files {
+		if file.Status == Added && sourcePath(file.Path) && !isTestOrDocsPath(file.Path) {
+			added += file.Added
+		}
+	}
+	return added >= substantialSourceLines
 }
 
 func classifyNovelty(files []FileChange) Axis {
@@ -179,6 +201,12 @@ func mechanicallyEquivalent(file FileChange) bool {
 	if len(baseline) != len(current) {
 		return false
 	}
+	baselineIdentifiers := make(map[string]struct{})
+	for _, token := range baseline {
+		if token.kind == 'i' {
+			baselineIdentifiers[token.text] = struct{}{}
+		}
+	}
 	forward := make(map[string]string)
 	reverse := make(map[string]string)
 	changed := false
@@ -191,6 +219,12 @@ func mechanicallyEquivalent(file FileChange) bool {
 		if left.kind != 'i' || right.kind != 'i' || sourceKeyword(left.text) || sourceKeyword(right.text) {
 			return false
 		}
+		if _, collision := baselineIdentifiers[right.text]; collision {
+			return false
+		}
+		if identifierControlsCallTarget(baseline, current, index) {
+			return false
+		}
 		if mapped, ok := forward[left.text]; ok && mapped != right.text {
 			return false
 		}
@@ -201,6 +235,16 @@ func mechanicallyEquivalent(file FileChange) bool {
 		reverse[right.text] = left.text
 	}
 	return changed || file.BaselineContent != file.CurrentContent
+}
+
+func identifierControlsCallTarget(baseline, current []sourceToken, index int) bool {
+	if index > 0 && (baseline[index-1].text == "." || current[index-1].text == ".") {
+		return true
+	}
+	if index+1 >= len(baseline) || baseline[index+1].text != "(" || current[index+1].text != "(" {
+		return false
+	}
+	return index == 0 || (baseline[index-1].text != "func" && current[index-1].text != "func")
 }
 
 func sourceTokens(content string) []sourceToken {
