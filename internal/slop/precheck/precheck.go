@@ -5,6 +5,8 @@ package precheck
 
 import (
 	"fmt"
+	"go/scanner"
+	"go/token"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -41,82 +43,9 @@ var (
 	versionPathPattern  = regexp.MustCompile(`["']/v([0-9]+)/([^"']+)["']`)
 	durableReference    = regexp.MustCompile(`(?i)(https?://|#[0-9]+\b|\b[A-Z][A-Z0-9]+-[0-9]+\b|\b(?:issue|ticket|approval)\s+(?:id|ref(?:erence)?)\s*[:#]?\s*[A-Za-z0-9-]+)`)
 	errorContextPattern = regexp.MustCompile(`(?i)\berr(?:or)?s?\b|deadlineexceeded|timeout|unreadable|notexist`)
-	declarationPattern  = regexp.MustCompile(`^(?:func|function|def)\s+([A-Za-z_][A-Za-z0-9_]*)\b`)
-	typeDeclaration     = regexp.MustCompile(`^(?:class|type)\b`)
+	declarationPattern  = regexp.MustCompile(`^func\s+(?:\([^)]*\)\s*)?([A-Za-z_][A-Za-z0-9_]*)\b`)
+	typeDeclaration     = regexp.MustCompile(`^type\b`)
 )
-
-var (
-	cLikeSyntax = sourceSyntax{
-		lineMarkers: []string{"//"}, blockStart: "/*", blockEnd: "*/",
-		strings: []stringDelimiter{{token: `"`, escapes: true}, {token: `'`, escapes: true}},
-	}
-	goSyntax = sourceSyntax{
-		lineMarkers: []string{"//"}, blockStart: "/*", blockEnd: "*/",
-		strings: []stringDelimiter{{token: "`", persistent: true}, {token: `"`, escapes: true}, {token: `'`, escapes: true}},
-	}
-	jsSyntax = sourceSyntax{
-		lineMarkers: []string{"//"}, blockStart: "/*", blockEnd: "*/",
-		strings: []stringDelimiter{{token: "`", persistent: true, escapes: true}, {token: `"`, escapes: true}, {token: `'`, escapes: true}},
-	}
-	tripleQuoteSyntax = sourceSyntax{
-		lineMarkers: []string{"//"}, blockStart: "/*", blockEnd: "*/",
-		strings: []stringDelimiter{{token: `"""`, persistent: true, escapes: true}, {token: `"`, escapes: true}, {token: `'`, escapes: true}},
-	}
-	hashSyntax = sourceSyntax{
-		lineMarkers: []string{"#"},
-		strings:     []stringDelimiter{{token: `"`, persistent: true, escapes: true}, {token: `'`, persistent: true, escapes: true}},
-	}
-	pythonSyntax = sourceSyntax{
-		lineMarkers: []string{"#"},
-		strings:     []stringDelimiter{{token: `"""`, persistent: true, escapes: true}, {token: `'''`, persistent: true, escapes: true}, {token: `"`, escapes: true}, {token: `'`, escapes: true}},
-	}
-	sqlSyntax = sourceSyntax{
-		lineMarkers: []string{"--"}, blockStart: "/*", blockEnd: "*/",
-		strings: []stringDelimiter{{token: `"`, persistent: true}, {token: `'`, persistent: true}},
-	}
-	luaSyntax = sourceSyntax{
-		lineMarkers: []string{"--"}, blockStart: "--[[", blockEnd: "]]",
-		strings: []stringDelimiter{{token: "[[", persistent: true}, {token: `"`, escapes: true}, {token: `'`, escapes: true}},
-	}
-	haskellSyntax = sourceSyntax{
-		lineMarkers: []string{"--"}, blockStart: "{-", blockEnd: "-}",
-		strings: []stringDelimiter{{token: `"`, escapes: true}, {token: `'`, escapes: true}},
-	}
-)
-
-var sourceSyntaxes = map[string]sourceSyntax{
-	".c": cLikeSyntax, ".cc": cLikeSyntax, ".cpp": cLikeSyntax, ".cxx": cLikeSyntax,
-	".h": cLikeSyntax, ".hpp": cLikeSyntax, ".cs": cLikeSyntax, ".java": cLikeSyntax,
-	".rs": cLikeSyntax, ".scala": cLikeSyntax, ".php": cLikeSyntax, ".dart": cLikeSyntax,
-	".m": cLikeSyntax, ".mm": cLikeSyntax,
-
-	".go": goSyntax,
-
-	".js": jsSyntax, ".jsx": jsSyntax, ".mjs": jsSyntax, ".cjs": jsSyntax,
-	".ts": jsSyntax, ".tsx": jsSyntax,
-
-	".kt": tripleQuoteSyntax, ".kts": tripleQuoteSyntax, ".swift": tripleQuoteSyntax,
-
-	".py": pythonSyntax,
-
-	".rb": hashSyntax, ".sh": hashSyntax, ".bash": hashSyntax, ".zsh": hashSyntax,
-	".pl": hashSyntax, ".pm": hashSyntax, ".ex": hashSyntax, ".exs": hashSyntax, ".cr": hashSyntax,
-
-	".sql": sqlSyntax, ".lua": luaSyntax, ".hs": haskellSyntax, ".elm": haskellSyntax,
-}
-
-type sourceSyntax struct {
-	lineMarkers []string
-	blockStart  string
-	blockEnd    string
-	strings     []stringDelimiter
-}
-
-type stringDelimiter struct {
-	token      string
-	persistent bool
-	escapes    bool
-}
 
 type lexedSourceLine struct {
 	comment bool
@@ -360,137 +289,54 @@ func meaningfulWords(value string) []string {
 
 func lexSource(path string, lines []string) []lexedSourceLine {
 	result := make([]lexedSourceLine, len(lines))
-	syntax, known := sourceSyntaxes[strings.ToLower(filepath.Ext(path))]
-	if !known {
+	if !strings.EqualFold(filepath.Ext(path), ".go") {
 		return result
 	}
-	state := lexicalState{}
-	for index, line := range lines {
-		result[index] = lexLine(line, syntax, &state)
+	content := strings.Join(lines, "\n")
+	files := token.NewFileSet()
+	file := files.AddFile(path, -1, len(content))
+	var lexer scanner.Scanner
+	lexer.Init(file, []byte(content), nil, scanner.ScanComments)
+	for {
+		position, kind, literal := lexer.Scan()
+		if kind == token.EOF {
+			break
+		}
+		if kind != token.COMMENT {
+			continue
+		}
+		start := files.Position(position)
+		if start.Line < 1 || start.Line > len(lines) || start.Column < 1 || start.Column > len(lines[start.Line-1])+1 {
+			continue
+		}
+		if strings.TrimSpace(lines[start.Line-1][:start.Column-1]) != "" {
+			continue
+		}
+		parts := strings.Split(literal, "\n")
+		for offset, part := range parts {
+			line := start.Line + offset
+			if line > len(result) {
+				break
+			}
+			if strings.HasPrefix(part, "//") {
+				part = strings.TrimPrefix(part, "//")
+			} else {
+				if offset == 0 {
+					part = strings.TrimPrefix(part, "/*")
+				}
+				if offset == len(parts)-1 {
+					part = strings.TrimSuffix(part, "*/")
+				}
+			}
+			result[line-1] = lexedSourceLine{comment: true, body: blockBody(part)}
+		}
 	}
 	return result
-}
-
-type lexicalState struct {
-	inBlock bool
-	string  stringDelimiter
-}
-
-func lexLine(line string, syntax sourceSyntax, state *lexicalState) lexedSourceLine {
-	if state.inBlock {
-		body, remainder, closed := consumeBlockComment(line, syntax.blockEnd)
-		state.inBlock = !closed
-		if closed {
-			scanCode(remainder, syntax, state)
-		}
-		return lexedSourceLine{comment: true, body: blockBody(body)}
-	}
-	if state.string.token != "" {
-		end := stringEnd(line, state.string, 0)
-		if end < 0 {
-			return lexedSourceLine{}
-		}
-		state.string = stringDelimiter{}
-		scanCode(line[end:], syntax, state)
-		return lexedSourceLine{}
-	}
-
-	trimmed := strings.TrimLeftFunc(line, unicode.IsSpace)
-	if syntax.blockStart != "" && strings.HasPrefix(trimmed, syntax.blockStart) {
-		body, _, closed := consumeBlockComment(strings.TrimPrefix(trimmed, syntax.blockStart), syntax.blockEnd)
-		state.inBlock = !closed
-		return lexedSourceLine{comment: true, body: body}
-	}
-	for _, marker := range syntax.lineMarkers {
-		if strings.HasPrefix(trimmed, marker) {
-			return lexedSourceLine{comment: true, body: strings.TrimPrefix(trimmed, marker)}
-		}
-	}
-	scanCode(line, syntax, state)
-	return lexedSourceLine{}
-}
-
-func scanCode(line string, syntax sourceSyntax, state *lexicalState) {
-	for offset := 0; offset < len(line); {
-		remaining := line[offset:]
-		if hasAnyPrefix(remaining, syntax.lineMarkers) {
-			return
-		}
-		if syntax.blockStart != "" && strings.HasPrefix(remaining, syntax.blockStart) {
-			end := strings.Index(remaining[len(syntax.blockStart):], syntax.blockEnd)
-			if end < 0 {
-				state.inBlock = true
-				return
-			}
-			offset += len(syntax.blockStart) + end + len(syntax.blockEnd)
-			continue
-		}
-		delimiter, found := matchingDelimiter(remaining, syntax.strings)
-		if !found {
-			offset++
-			continue
-		}
-		end := stringEnd(remaining, delimiter, len(delimiter.token))
-		if end < 0 {
-			if delimiter.persistent {
-				state.string = delimiter
-			}
-			return
-		}
-		offset += end
-	}
-}
-
-func matchingDelimiter(value string, delimiters []stringDelimiter) (stringDelimiter, bool) {
-	for _, delimiter := range delimiters {
-		if strings.HasPrefix(value, delimiter.token) {
-			return delimiter, true
-		}
-	}
-	return stringDelimiter{}, false
-}
-
-func stringEnd(value string, delimiter stringDelimiter, start int) int {
-	for offset := start; offset+len(delimiter.token) <= len(value); offset++ {
-		if !strings.HasPrefix(value[offset:], delimiter.token) {
-			continue
-		}
-		if delimiter.escapes && escapedAt(value, offset) {
-			continue
-		}
-		return offset + len(delimiter.token)
-	}
-	return -1
-}
-
-func escapedAt(value string, offset int) bool {
-	backslashes := 0
-	for index := offset - 1; index >= 0 && value[index] == '\\'; index-- {
-		backslashes++
-	}
-	return backslashes%2 == 1
-}
-
-func consumeBlockComment(value, endMarker string) (string, string, bool) {
-	end := strings.Index(value, endMarker)
-	if end < 0 {
-		return value, "", false
-	}
-	return value[:end], value[end+len(endMarker):], true
 }
 
 func blockBody(value string) string {
 	trimmed := strings.TrimLeftFunc(value, unicode.IsSpace)
 	return strings.TrimPrefix(trimmed, "*")
-}
-
-func hasAnyPrefix(value string, prefixes []string) bool {
-	for _, prefix := range prefixes {
-		if strings.HasPrefix(value, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 // isCodeSample reports an indented line inside a comment, which is how Go doc

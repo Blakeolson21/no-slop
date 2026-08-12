@@ -280,6 +280,16 @@ func TestScanRedundantCommentAcquitsConventionalDocumentation(t *testing.T) {
 			},
 		},
 		{
+			name: "raw string after a closed block comment",
+			file: precheck.File{
+				Path:         "fixture.go",
+				AddedContent: "\n// normalize key before lookup; normalize key before lookup\n\n",
+				CurrentContent: "/* fixture */ var fixture = `\n" +
+					"// normalize key before lookup; normalize key before lookup\n" +
+					"`\n",
+			},
+		},
+		{
 			name: "comment-shaped lines inside a triple-quoted string",
 			file: precheck.File{
 				Path:         "fixture.py",
@@ -288,6 +298,36 @@ func TestScanRedundantCommentAcquitsConventionalDocumentation(t *testing.T) {
 					"# increment i\n" +
 					"i += 1\n" +
 					"\"\"\"\n",
+			},
+		},
+		{
+			name: "unsupported Rust raw string",
+			file: precheck.File{
+				Path:         "fixture.rs",
+				AddedContent: "\n// normalize key before lookup; normalize key before lookup\n\n\n",
+				CurrentContent: "const FIXTURE: &str = r#\"\n" +
+					"// normalize key before lookup; normalize key before lookup\n" +
+					"\"#;\n",
+			},
+		},
+		{
+			name: "unsupported shell heredoc",
+			file: precheck.File{
+				Path:         "fixture.sh",
+				AddedContent: "\n# normalize key before lookup; normalize key before lookup\n\n\n",
+				CurrentContent: "cat <<'TEXT'\n" +
+					"# normalize key before lookup; normalize key before lookup\n" +
+					"TEXT\n",
+			},
+		},
+		{
+			name: "unsupported SQL dollar-quoted string",
+			file: precheck.File{
+				Path:         "fixture.sql",
+				AddedContent: "\n-- normalize key before lookup; normalize key before lookup\n\n\n",
+				CurrentContent: "SELECT $body$\n" +
+					"-- normalize key before lookup; normalize key before lookup\n" +
+					"$body$;\n",
 			},
 		},
 	}
@@ -350,6 +390,19 @@ func TestScanFlagsRedundantCommentShapes(t *testing.T) {
 			},
 			line:        2,
 			description: "comment restates the adjacent code",
+		},
+		{
+			name: "method doc comment adding nothing beyond the method name",
+			file: precheck.File{
+				Path:         "reader.go",
+				AddedContent: "// Close handles the Close case.\n\n\n",
+				CurrentContent: "// Close handles the Close case.\n" +
+					"func (r *Reader) Close() error {\n" +
+					"\treturn nil\n" +
+					"}\n",
+			},
+			line:        1,
+			description: "doc comment repeats the declaration name verbatim",
 		},
 	}
 
