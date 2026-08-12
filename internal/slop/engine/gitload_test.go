@@ -137,7 +137,7 @@ func TestLoadGitChangesPreservesCommentLineageBelowRenameThreshold(t *testing.T)
 	gitRun(t, dir, "config", "user.email", "test@example.com")
 	gitRun(t, dir, "config", "user.name", "Test")
 	var baseline strings.Builder
-	baseline.WriteString("package sample\n\n// normalize key before lookup; normalize key before lookup.\n")
+	baseline.WriteString("package sample\n\ntype retainedIdentity struct{}\nfunc retainedOperation() {}\n\n// normalize key before lookup; normalize key before lookup.\n")
 	for index := 0; index < 40; index++ {
 		baseline.WriteString("const old")
 		baseline.WriteString(strconv.Itoa(index))
@@ -152,7 +152,7 @@ func TestLoadGitChangesPreservesCommentLineageBelowRenameThreshold(t *testing.T)
 
 	gitRun(t, dir, "mv", "old.go", "new.go")
 	var current strings.Builder
-	current.WriteString("package sample\n\n// normalize key before lookup; normalize key before lookup.\n")
+	current.WriteString("package sample\n\ntype retainedIdentity struct{}\nfunc retainedOperation() {}\n\n// normalize key before lookup; normalize key before lookup.\n")
 	for index := 0; index < 520; index++ {
 		current.WriteString("var replacement")
 		current.WriteString(strconv.Itoa(index))
@@ -175,6 +175,7 @@ func TestLoadGitChangesPreservesCommentLineageBelowRenameThreshold(t *testing.T)
 		t.Fatalf("changes = %+v, want deletion and two additions", changes)
 	}
 	var added *engine.Change
+	var unrelated *engine.Change
 	var precheckFiles []precheck.File
 	var riskFiles []risk.FileChange
 	for index := range changes {
@@ -189,6 +190,9 @@ func TestLoadGitChangesPreservesCommentLineageBelowRenameThreshold(t *testing.T)
 		if change.Status == risk.Added && change.Path == "new.go" {
 			added = change
 		}
+		if change.Status == risk.Added && change.Path == "unrelated.go" {
+			unrelated = change
+		}
 		precheckFiles = append(precheckFiles, precheck.File{
 			Path:                   change.Path,
 			CommentBaselinePath:    change.CommentBaselinePath,
@@ -201,6 +205,9 @@ func TestLoadGitChangesPreservesCommentLineageBelowRenameThreshold(t *testing.T)
 	if added == nil || added.Path != "new.go" || added.BaselinePath != "" || added.CommentBaselinePath != "old.go" || added.Added < 500 {
 		t.Fatalf("changes = %+v, want semantic addition with comment-only lineage", changes)
 	}
+	if unrelated == nil || unrelated.CommentBaselinePath != "" {
+		t.Fatalf("changes = %+v, want unrelated addition without comment lineage", changes)
+	}
 	decision, err := risk.Classify(risk.ChangeSet{Branch: "feature/rewrite", DefaultBranch: "main", Files: riskFiles}, risk.Config{})
 	if err != nil {
 		t.Fatal(err)
@@ -209,7 +216,7 @@ func TestLoadGitChangesPreservesCommentLineageBelowRenameThreshold(t *testing.T)
 		t.Fatalf("decision = %+v, want substantial addition routed full", decision)
 	}
 	findings := precheck.Scan(precheckFiles, "")
-	if len(findings) != 1 || findings[0].Lens != "redundant-comment" {
+	if len(findings) != 1 || findings[0].Lens != "redundant-comment" || findings[0].Path != "unrelated.go" {
 		t.Fatalf("findings = %+v, want one unmatched added comment", findings)
 	}
 }

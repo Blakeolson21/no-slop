@@ -3,6 +3,9 @@ package engine
 import (
 	"context"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -82,31 +85,97 @@ func LoadGitChanges(ctx context.Context, workDir, baseRef, headRef string) ([]Ch
 }
 
 func attachDeletedCommentBaselines(changes []Change) {
-	var deleted strings.Builder
-	baselinePath := ""
-	for _, change := range changes {
-		if change.Status != risk.Deleted || !strings.EqualFold(filepath.Ext(change.Path), ".go") {
+	type candidate struct {
+		deleted int
+		added   int
+		score   int
+	}
+	var candidates []candidate
+	for deleted := range changes {
+		if changes[deleted].Status != risk.Deleted || filepath.Ext(changes[deleted].Path) != ".go" {
 			continue
 		}
-		if baselinePath == "" {
-			baselinePath = change.Path
+		for added := range changes {
+			if changes[added].Status != risk.Added || filepath.Ext(changes[added].Path) != ".go" {
+				continue
+			}
+			score := goLineageScore(changes[deleted].BaselineContent, changes[added].CurrentContent)
+			if score >= 2 {
+				candidates = append(candidates, candidate{deleted: deleted, added: added, score: score})
+			}
 		}
-		deleted.WriteString(change.BaselineContent)
-		deleted.WriteByte('\n')
 	}
-	if deleted.Len() == 0 {
-		return
+	bestDeleted := make(map[int]candidate)
+	ambiguousDeleted := make(map[int]bool)
+	bestAdded := make(map[int]candidate)
+	ambiguousAdded := make(map[int]bool)
+	for _, match := range candidates {
+		if best, ok := bestDeleted[match.deleted]; !ok || match.score > best.score {
+			bestDeleted[match.deleted] = match
+			ambiguousDeleted[match.deleted] = false
+		} else if match.score == best.score {
+			ambiguousDeleted[match.deleted] = true
+		}
+		if best, ok := bestAdded[match.added]; !ok || match.score > best.score {
+			bestAdded[match.added] = match
+			ambiguousAdded[match.added] = false
+		} else if match.score == best.score {
+			ambiguousAdded[match.added] = true
+		}
 	}
-	baseline := deleted.String()
-	for index := range changes {
-		change := &changes[index]
-		if change.Status != risk.Added || !strings.EqualFold(filepath.Ext(change.Path), ".go") {
+	for added, match := range bestAdded {
+		if ambiguousAdded[added] || ambiguousDeleted[match.deleted] || bestDeleted[match.deleted].added != added {
 			continue
 		}
-		change.CommentBaselinePath = baselinePath
-		change.CommentBaselineContent = baseline
-		change.CommentAddedContent = change.AddedContent
+		changes[added].CommentBaselinePath = changes[match.deleted].Path
+		changes[added].CommentBaselineContent = changes[match.deleted].BaselineContent
+		changes[added].CommentAddedContent = changes[added].AddedContent
 	}
+}
+
+func goLineageScore(baseline, current string) int {
+	baselinePackage, baselineNames := goFileIdentity(baseline)
+	currentPackage, currentNames := goFileIdentity(current)
+	if baselinePackage == "" || baselinePackage != currentPackage {
+		return 0
+	}
+	score := 0
+	for name := range baselineNames {
+		if currentNames[name] {
+			score++
+		}
+	}
+	return score
+}
+
+func goFileIdentity(content string) (string, map[string]bool) {
+	parsed, err := parser.ParseFile(token.NewFileSet(), "", content, parser.SkipObjectResolution)
+	if err != nil {
+		return "", nil
+	}
+	names := make(map[string]bool)
+	for _, declaration := range parsed.Decls {
+		switch value := declaration.(type) {
+		case *ast.FuncDecl:
+			if value.Name.Name != "init" {
+				names[value.Name.Name] = true
+			}
+		case *ast.GenDecl:
+			for _, spec := range value.Specs {
+				switch item := spec.(type) {
+				case *ast.TypeSpec:
+					names[item.Name.Name] = true
+				case *ast.ValueSpec:
+					for _, name := range item.Names {
+						if name.Name != "_" {
+							names[name.Name] = true
+						}
+					}
+				}
+			}
+		}
+	}
+	return parsed.Name.Name, names
 }
 
 func loadBaselineSiblingContent(ctx context.Context, workDir, baseRef, path string) (string, error) {
