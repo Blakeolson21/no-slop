@@ -20,6 +20,6 @@ Allowed lens values:
 - `asserted-followup-without-artifact`: claims that work was filed, tracked, assigned, scheduled, or approved require an inspectable URL, issue number, ticket ID, or approval reference.
 - `fail-open-default`: follow error, not-found, timeout, and parse-failure branches. Catch `nil, nil`, true, allow, healthy, empty findings, or privileged objects returned when the state could not be determined.
 - `rule-applied-in-one-place-not-sibling`: compare explicit/configured paths, transports, providers, platforms, and versioned routes. Catch a strict branch beside an equivalent permissive or unvalidated sibling.
-- `redundant-comment`: a comment should state only what the code cannot. Catch internally repeated phrases, restatements of the next code line, and doc comments that add no information beyond the adjacent declaration name. Naming the declaration is conventional and is not by itself redundant.
+- `redundant-comment`: a comment should state only what the code cannot. Catch internally repeated phrases, restatements of the next code line, and doc comments that add no information beyond the adjacent declaration name. Naming the declaration is conventional and is not by itself redundant. Preserve repeated wording when it distinguishes genuine constraints, contrasts, rationale, invariants, qualifications, or external requirements.
 
 Do not report leak or outbound-prose findings. Deterministic checks own those cases.

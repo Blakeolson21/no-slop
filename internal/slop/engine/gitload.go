@@ -12,7 +12,10 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/slop/risk"
 )
 
-const renameDetection = "--find-renames=1%"
+const (
+	renameDetection        = "--find-renames"
+	commentRenameDetection = "--find-renames=1%"
+)
 
 // LoadGitChanges materializes the committed change between two refs. Git
 // invocations inherit the repository's bounded subprocess policy.
@@ -20,9 +23,17 @@ func LoadGitChanges(ctx context.Context, workDir, baseRef, headRef string) ([]Ch
 	if baseRef == "" || headRef == "" {
 		return nil, fmt.Errorf("load git changes: base and head refs are required")
 	}
-	statusOutput, err := git.Run(ctx, workDir, "diff", "--name-status", "-z", renameDetection, baseRef, headRef, "--")
+	statusOutput, err := git.Output(ctx, workDir, "diff", "--name-status", "-z", renameDetection, baseRef, headRef, "--")
 	if err != nil {
 		return nil, fmt.Errorf("load changed paths: %w", err)
+	}
+	commentStatusOutput, err := git.Output(ctx, workDir, "diff", "--name-status", "-z", commentRenameDetection, baseRef, headRef, "--")
+	if err != nil {
+		return nil, fmt.Errorf("load comment lineage: %w", err)
+	}
+	commentRenames, err := renamedDestinations(commentStatusOutput)
+	if err != nil {
+		return nil, fmt.Errorf("load comment lineage: %w", err)
 	}
 	entries := splitNUL(statusOutput)
 	changes := make([]Change, 0, len(entries)/2)
@@ -69,13 +80,49 @@ func LoadGitChanges(ctx context.Context, workDir, baseRef, headRef string) ([]Ch
 				return nil, fmt.Errorf("load current %q: %w", path, err)
 			}
 		}
-		change.AddedContent, change.Added, change.Deleted, err = loadAddedContent(ctx, workDir, baseRef, headRef, baselinePath, path, isRename)
+		change.AddedContent, change.Added, change.Deleted, err = loadAddedContent(ctx, workDir, baseRef, headRef, baselinePath, path, isRename, renameDetection)
 		if err != nil {
 			return nil, err
+		}
+		if status == risk.Added {
+			if commentBaselinePath := commentRenames[path]; commentBaselinePath != "" {
+				change.CommentBaselinePath = commentBaselinePath
+				change.CommentBaselineContent, err = showGitFile(ctx, workDir, baseRef, commentBaselinePath)
+				if err != nil {
+					return nil, fmt.Errorf("load comment baseline %q: %w", path, err)
+				}
+				change.CommentAddedContent, _, _, err = loadAddedContent(ctx, workDir, baseRef, headRef, commentBaselinePath, path, true, commentRenameDetection)
+				if err != nil {
+					return nil, err
+				}
+			}
 		}
 		changes = append(changes, change)
 	}
 	return changes, nil
+}
+
+func renamedDestinations(output string) (map[string]string, error) {
+	entries := splitNUL(output)
+	result := make(map[string]string)
+	for index := 0; index < len(entries); {
+		status := entries[index]
+		index++
+		if index >= len(entries) {
+			return nil, fmt.Errorf("unexpected git name-status output")
+		}
+		baselinePath := entries[index]
+		index++
+		if !strings.HasPrefix(status, "R") {
+			continue
+		}
+		if index >= len(entries) {
+			return nil, fmt.Errorf("rename is missing its destination")
+		}
+		result[entries[index]] = baselinePath
+		index++
+	}
+	return result, nil
 }
 
 func loadBaselineSiblingContent(ctx context.Context, workDir, baseRef, path string) (string, error) {
@@ -129,20 +176,13 @@ func parseChangeStatus(raw string) risk.ChangeStatus {
 }
 
 func showGitFile(ctx context.Context, workDir, ref, path string) (string, error) {
-	content, err := git.Run(ctx, workDir, "show", ref+":"+path)
-	if err != nil {
-		return "", err
-	}
-	if content != "" {
-		content += "\n"
-	}
-	return content, nil
+	return git.Output(ctx, workDir, "show", ref+":"+path)
 }
 
-func loadAddedContent(ctx context.Context, workDir, baseRef, headRef, baselinePath, path string, rename bool) (string, int, int, error) {
+func loadAddedContent(ctx context.Context, workDir, baseRef, headRef, baselinePath, path string, rename bool, detection string) (string, int, int, error) {
 	args := []string{"diff", "--unified=0", "--no-color", "--no-ext-diff"}
 	if rename {
-		args = append(args, renameDetection)
+		args = append(args, detection)
 	} else {
 		args = append(args, "--no-renames")
 	}
@@ -150,7 +190,7 @@ func loadAddedContent(ctx context.Context, workDir, baseRef, headRef, baselinePa
 	if path != baselinePath {
 		args = append(args, path)
 	}
-	diff, err := git.Run(ctx, workDir, args...)
+	diff, err := git.Output(ctx, workDir, args...)
 	if err != nil {
 		return "", 0, 0, fmt.Errorf("load added lines for %q: %w", path, err)
 	}

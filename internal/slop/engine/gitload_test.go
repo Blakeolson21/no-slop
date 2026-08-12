@@ -138,6 +138,11 @@ func TestLoadGitChangesPreservesLowSimilarityRenameIdentity(t *testing.T) {
 	gitRun(t, dir, "config", "user.name", "Test")
 	var baseline strings.Builder
 	baseline.WriteString("package sample\n\n// normalize key before lookup; normalize key before lookup.\n")
+	for index := 0; index < 10; index++ {
+		baseline.WriteString("const shared")
+		baseline.WriteString(strconv.Itoa(index))
+		baseline.WriteString(" = true\n")
+	}
 	for index := 0; index < 40; index++ {
 		baseline.WriteString("const old")
 		baseline.WriteString(strconv.Itoa(index))
@@ -153,7 +158,12 @@ func TestLoadGitChangesPreservesLowSimilarityRenameIdentity(t *testing.T) {
 	gitRun(t, dir, "mv", "old.go", "new.go")
 	var current strings.Builder
 	current.WriteString("package sample\n\n// normalize key before lookup; normalize key before lookup.\n")
-	for index := 0; index < 40; index++ {
+	for index := 0; index < 10; index++ {
+		current.WriteString("const shared")
+		current.WriteString(strconv.Itoa(index))
+		current.WriteString(" = true\n")
+	}
+	for index := 0; index < 520; index++ {
 		current.WriteString("var replacement")
 		current.WriteString(strconv.Itoa(index))
 		current.WriteString(" = []byte{1, 2, 3, ")
@@ -169,21 +179,78 @@ func TestLoadGitChangesPreservesLowSimilarityRenameIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(changes) != 1 || changes[0].Path != "new.go" || changes[0].BaselinePath != "old.go" || changes[0].Status != risk.Modified {
-		t.Fatalf("changes = %+v, want one low-similarity modified rename", changes)
+	if len(changes) != 2 {
+		t.Fatalf("changes = %+v, want distinct deletion and addition", changes)
 	}
-	change := changes[0]
-	if strings.Contains(change.AddedContent, "normalize key before lookup") {
-		t.Fatalf("unchanged comment was treated as added: %q", change.AddedContent)
+	var added *engine.Change
+	var riskFiles []risk.FileChange
+	for index := range changes {
+		change := &changes[index]
+		riskFiles = append(riskFiles, risk.FileChange{
+			Path:         change.Path,
+			BaselinePath: change.BaselinePath,
+			Status:       change.Status,
+			Added:        change.Added,
+			Deleted:      change.Deleted,
+		})
+		if change.Status == risk.Added {
+			added = change
+		}
+	}
+	if added == nil || added.Path != "new.go" || added.BaselinePath != "" || added.CommentBaselinePath != "old.go" || added.Added < 500 {
+		t.Fatalf("changes = %+v, want semantic addition with comment-only lineage", changes)
+	}
+	decision, err := risk.Classify(risk.ChangeSet{Branch: "feature/rewrite", DefaultBranch: "main", Files: riskFiles}, risk.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Tier != risk.TierFullAdversarial || decision.Novelty.Score != 3 {
+		t.Fatalf("decision = %+v, want substantial addition routed full", decision)
 	}
 	if findings := precheck.Scan([]precheck.File{{
-		Path:            change.Path,
-		BaselinePath:    change.BaselinePath,
-		AddedContent:    change.AddedContent,
-		BaselineContent: change.BaselineContent,
-		CurrentContent:  change.CurrentContent,
+		Path:                   added.Path,
+		CommentBaselinePath:    added.CommentBaselinePath,
+		AddedContent:           added.AddedContent,
+		CommentAddedContent:    added.CommentAddedContent,
+		CommentBaselineContent: added.CommentBaselineContent,
+		CurrentContent:         added.CurrentContent,
 	}}, ""); len(findings) != 0 {
 		t.Fatalf("low-similarity rename rescanned existing comment: %+v", findings)
+	}
+}
+
+func TestLoadGitChangesPreservesLeadingBlankLineCoordinates(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-b", "main")
+	gitRun(t, dir, "config", "user.email", "test@example.com")
+	gitRun(t, dir, "config", "user.name", "Test")
+	writeFixture(t, dir, "sample.go", "\n\npackage sample\nfunc normalizeKey(value string) string { return value }\n")
+	gitRun(t, dir, "add", "sample.go")
+	gitRun(t, dir, "commit", "-m", "base")
+	base := gitRun(t, dir, "rev-parse", "HEAD")
+
+	writeFixture(t, dir, "sample.go", "\n\npackage sample\n// normalizeKey removes ASCII padding before lookup; removes ASCII padding before lookup.\nfunc normalizeKey(value string) string { return value }\n")
+	gitRun(t, dir, "add", "sample.go")
+	gitRun(t, dir, "commit", "-m", "comment")
+	head := gitRun(t, dir, "rev-parse", "HEAD")
+
+	changes, err := engine.LoadGitChanges(context.Background(), dir, base, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 1 || !strings.HasPrefix(changes[0].CurrentContent, "\n\npackage sample") {
+		t.Fatalf("current content lost leading blank lines: %+v", changes)
+	}
+	findings := precheck.Scan([]precheck.File{{
+		Path:            changes[0].Path,
+		AddedContent:    changes[0].AddedContent,
+		BaselineContent: changes[0].BaselineContent,
+		CurrentContent:  changes[0].CurrentContent,
+	}}, "")
+	if len(findings) != 1 || findings[0].Lens != "redundant-comment" || findings[0].Line != 4 {
+		t.Fatalf("findings = %+v, want redundant comment on physical line 4", findings)
 	}
 }
 

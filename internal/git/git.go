@@ -34,8 +34,14 @@ func IsZeroSHA(sha string) bool {
 // and hardened CI inject that setting, so gate operations must never depend
 // on discovering a bare repo from the working directory (issue #362).
 func Run(ctx context.Context, dir string, args ...string) (string, error) {
+	out, err := Output(ctx, dir, args...)
+	return strings.TrimSpace(out), err
+}
+
+// Output executes a git command and returns stdout without trimming it.
+func Output(ctx context.Context, dir string, args ...string) (string, error) {
 	if isBareGitDir(dir) {
-		return RunBare(ctx, dir, args...)
+		return OutputBare(ctx, dir, args...)
 	}
 	return runInDir(ctx, dir, args...)
 }
@@ -45,6 +51,12 @@ func Run(ctx context.Context, dir string, args ...string) (string, error) {
 // recovery uses this after structural validation so an invalid directory under
 // NM_HOME cannot discover or mutate an ancestor worktree.
 func RunBare(ctx context.Context, bareDir string, args ...string) (string, error) {
+	out, err := OutputBare(ctx, bareDir, args...)
+	return strings.TrimSpace(out), err
+}
+
+// OutputBare executes Git against exactly bareDir without trimming stdout.
+func OutputBare(ctx context.Context, bareDir string, args ...string) (string, error) {
 	if bareDir == "" {
 		return "", fmt.Errorf("bare git directory is empty")
 	}
@@ -322,7 +334,7 @@ func (c *boundedCommand) combinedOutput() ([]byte, error) {
 	return out, c.explain(err)
 }
 
-// runInDir executes git and returns trimmed stdout.
+// runInDir executes git and returns stdout.
 func runInDir(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := newCommand(ctx, args...)
 	defer cmd.close()
@@ -337,7 +349,7 @@ func runInDir(ctx context.Context, dir string, args ...string) (string, error) {
 		}
 		return "", fmt.Errorf("git %s: %w: %s", safeurl.RedactText(strings.Join(args, " ")), err, safeurl.RedactText(stderr))
 	}
-	return strings.TrimSpace(string(out)), nil
+	return string(out), nil
 }
 
 // ValidateBareRepository verifies both the filesystem shape and Git's own bare

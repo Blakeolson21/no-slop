@@ -21,11 +21,14 @@ import (
 // AddedContent preserves new-revision line numbers by leaving unchanged lines
 // blank, matching the representation used by the leak scanner.
 type File struct {
-	Path            string
-	BaselinePath    string
-	AddedContent    string
-	BaselineContent string
-	CurrentContent  string
+	Path                   string
+	BaselinePath           string
+	CommentBaselinePath    string
+	AddedContent           string
+	CommentAddedContent    string
+	BaselineContent        string
+	CommentBaselineContent string
+	CurrentContent         string
 }
 
 // Finding is one source-backed deterministic lens match.
@@ -102,12 +105,19 @@ func detectRedundantComment(file File) []Finding {
 	var findings []Finding
 	current := splitLines(file.CurrentContent)
 	lexed, declarations := lexSource(file.Path, current)
-	baselinePath := file.BaselinePath
+	baselinePath := file.CommentBaselinePath
+	baselineContent := file.CommentBaselineContent
+	addedContent := file.CommentAddedContent
 	if baselinePath == "" {
-		baselinePath = file.Path
+		baselinePath = file.BaselinePath
+		if baselinePath == "" {
+			baselinePath = file.Path
+		}
+		baselineContent = file.BaselineContent
+		addedContent = file.AddedContent
 	}
-	baseline, _ := lexSource(baselinePath, splitLines(file.BaselineContent))
-	for _, block := range commentBlocks(file, lexed, baseline) {
+	baseline, _ := lexSource(baselinePath, splitLines(baselineContent))
+	for _, block := range commentBlocks(addedContent, lexed, baseline) {
 		description := ""
 		switch {
 		case hasRepeatedPhrase(block.text, declarations[block.lastLine]):
@@ -142,9 +152,9 @@ type commentBlock struct {
 // are sentence fragments that never document the code beneath the block. Only
 // blocks the change actually touched are returned, reported at their first
 // added line.
-func commentBlocks(file File, lines, baseline []lexedSourceLine) []commentBlock {
+func commentBlocks(addedContent string, lines, baseline []lexedSourceLine) []commentBlock {
 	added := make(map[int]bool)
-	for _, line := range addedLines(file) {
+	for _, line := range addedContentLines(addedContent) {
 		added[line.number] = true
 	}
 	baselineInline := make(map[string]int)
@@ -177,6 +187,10 @@ func commentBlocks(file File, lines, baseline []lexedSourceLine) []commentBlock 
 		}
 	}
 	return blocks
+}
+
+func addedContentLines(content string) []sourceLine {
+	return addedLines(File{AddedContent: content})
 }
 
 func firstAddedLine(block commentBlock, added map[int]bool) int {

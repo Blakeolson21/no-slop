@@ -361,34 +361,7 @@ func relocationPreservesCategory(file FileChange) bool {
 	if !sourcePath(file.Path) {
 		return true
 	}
-	if filepath.Ext(file.Path) != ".go" ||
-		filepath.Clean(filepath.Dir(file.Path)) != filepath.Clean(filepath.Dir(file.BaselinePath)) {
-		return false
-	}
-	return goBuildSuffix(file.Path) == goBuildSuffix(file.BaselinePath)
-}
-
-func goBuildSuffix(path string) string {
-	name := strings.TrimSuffix(filepath.Base(path), ".go")
-	ignored := ""
-	if strings.HasPrefix(name, "_") || strings.HasPrefix(name, ".") {
-		ignored = "ignored:"
-	}
-	parts := strings.Split(name, "_")
-	if len(parts) > 1 && parts[len(parts)-1] == "test" {
-		parts = parts[:len(parts)-1]
-	}
-	if len(parts) < 2 {
-		return ignored
-	}
-	last := parts[len(parts)-1]
-	if goBuildOS[last] || goBuildArch[last] {
-		if len(parts) >= 3 && goBuildOS[parts[len(parts)-2]] && goBuildArch[last] {
-			return ignored + parts[len(parts)-2] + "_" + last
-		}
-		return ignored + last
-	}
-	return ignored
+	return false
 }
 
 func sameBuildConstraints(file FileChange) bool {
@@ -417,23 +390,6 @@ func buildConstraintSignature(content string) (string, bool) {
 		expressions = append(expressions, expression.String())
 	}
 	return strings.Join(expressions, "\n"), true
-}
-
-var goBuildOS = map[string]bool{
-	"aix": true, "android": true, "darwin": true, "dragonfly": true,
-	"freebsd": true, "hurd": true, "illumos": true, "ios": true,
-	"js": true, "linux": true, "nacl": true, "netbsd": true,
-	"openbsd": true, "plan9": true, "solaris": true, "wasip1": true,
-	"windows": true, "zos": true,
-}
-
-var goBuildArch = map[string]bool{
-	"386": true, "amd64": true, "amd64p32": true, "arm": true,
-	"armbe": true, "arm64": true, "arm64be": true, "loong64": true,
-	"mips": true, "mipsle": true, "mips64": true, "mips64le": true,
-	"mips64p32": true, "mips64p32le": true, "ppc": true, "ppc64": true,
-	"ppc64le": true, "riscv": true, "riscv64": true, "s390": true,
-	"s390x": true, "sparc": true, "sparc64": true, "wasm": true,
 }
 
 func pathCategory(path string) int {

@@ -437,7 +437,7 @@ func TestClassifyChangedGoBuildConstraintRequiresReview(t *testing.T) {
 	}
 }
 
-func TestClassifySamePackageGoRenameAsMechanical(t *testing.T) {
+func TestClassifySamePackageGoRenameRequiresReview(t *testing.T) {
 	t.Parallel()
 
 	decision, err := risk.Classify(risk.ChangeSet{
@@ -452,8 +452,8 @@ func TestClassifySamePackageGoRenameAsMechanical(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Novelty.Score != 0 {
-		t.Fatalf("novelty = %+v, want same-package Go rename mechanical", decision.Novelty)
+	if decision.Novelty.Score != 2 || decision.Tier == risk.TierLeakScanOnly {
+		t.Fatalf("decision = %+v, want Go rename reviewed", decision)
 	}
 }
 
