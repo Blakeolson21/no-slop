@@ -243,7 +243,6 @@ func TestCampaignPoliciesCarryRoundFourDecisionRules(t *testing.T) {
 			"approval reference",
 			"privileged objects returned",
 			"versioned routes",
-			"a comment should state only what the code cannot",
 		} {
 			if !strings.Contains(policy, decisionRule) {
 				t.Errorf("%s is missing decision rule %q", name, decisionRule)

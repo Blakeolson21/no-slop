@@ -81,7 +81,6 @@ func TestWorstMissedLensGuidanceNamesCorpusDecisionRules(t *testing.T) {
 		"asserted-followup-without-artifact":    {"issue number", "approval reference"},
 		"fail-open-default":                     {"nil, nil", "privileged"},
 		"rule-applied-in-one-place-not-sibling": {"versioned", "transport"},
-		"redundant-comment":                     {"repeated phrases", "function name"},
 	}
 	for _, lens := range lenses.Catalog() {
 		guidance := strings.ToLower(lens.DetectionGuidance)

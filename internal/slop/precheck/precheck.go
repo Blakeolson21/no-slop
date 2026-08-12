@@ -45,30 +45,83 @@ var (
 	typeDeclaration     = regexp.MustCompile(`^(?:class|type)\b`)
 )
 
-// commentMarkers maps a source extension to the line prefixes that start a
-// comment in that language. An extension absent here is not scanned for
-// redundant comments, which keeps Markdown headings, list bullets, and other
-// prose punctuation from being read as code comments.
-var commentMarkers = map[string][]string{
-	".c": cLikeMarkers, ".cc": cLikeMarkers, ".cpp": cLikeMarkers, ".cxx": cLikeMarkers,
-	".h": cLikeMarkers, ".hpp": cLikeMarkers, ".cs": cLikeMarkers, ".java": cLikeMarkers,
-	".kt": cLikeMarkers, ".kts": cLikeMarkers, ".go": cLikeMarkers, ".rs": cLikeMarkers,
-	".swift": cLikeMarkers, ".scala": cLikeMarkers, ".php": cLikeMarkers, ".dart": cLikeMarkers,
-	".js": cLikeMarkers, ".jsx": cLikeMarkers, ".mjs": cLikeMarkers, ".cjs": cLikeMarkers,
-	".ts": cLikeMarkers, ".tsx": cLikeMarkers, ".m": cLikeMarkers, ".mm": cLikeMarkers,
+var (
+	cLikeSyntax = sourceSyntax{
+		lineMarkers: []string{"//"}, blockStart: "/*", blockEnd: "*/",
+		strings: []stringDelimiter{{token: `"`, escapes: true}, {token: `'`, escapes: true}},
+	}
+	goSyntax = sourceSyntax{
+		lineMarkers: []string{"//"}, blockStart: "/*", blockEnd: "*/",
+		strings: []stringDelimiter{{token: "`", persistent: true}, {token: `"`, escapes: true}, {token: `'`, escapes: true}},
+	}
+	jsSyntax = sourceSyntax{
+		lineMarkers: []string{"//"}, blockStart: "/*", blockEnd: "*/",
+		strings: []stringDelimiter{{token: "`", persistent: true, escapes: true}, {token: `"`, escapes: true}, {token: `'`, escapes: true}},
+	}
+	tripleQuoteSyntax = sourceSyntax{
+		lineMarkers: []string{"//"}, blockStart: "/*", blockEnd: "*/",
+		strings: []stringDelimiter{{token: `"""`, persistent: true, escapes: true}, {token: `"`, escapes: true}, {token: `'`, escapes: true}},
+	}
+	hashSyntax = sourceSyntax{
+		lineMarkers: []string{"#"},
+		strings:     []stringDelimiter{{token: `"`, persistent: true, escapes: true}, {token: `'`, persistent: true, escapes: true}},
+	}
+	pythonSyntax = sourceSyntax{
+		lineMarkers: []string{"#"},
+		strings:     []stringDelimiter{{token: `"""`, persistent: true, escapes: true}, {token: `'''`, persistent: true, escapes: true}, {token: `"`, escapes: true}, {token: `'`, escapes: true}},
+	}
+	sqlSyntax = sourceSyntax{
+		lineMarkers: []string{"--"}, blockStart: "/*", blockEnd: "*/",
+		strings: []stringDelimiter{{token: `"`, persistent: true}, {token: `'`, persistent: true}},
+	}
+	luaSyntax = sourceSyntax{
+		lineMarkers: []string{"--"}, blockStart: "--[[", blockEnd: "]]",
+		strings: []stringDelimiter{{token: "[[", persistent: true}, {token: `"`, escapes: true}, {token: `'`, escapes: true}},
+	}
+	haskellSyntax = sourceSyntax{
+		lineMarkers: []string{"--"}, blockStart: "{-", blockEnd: "-}",
+		strings: []stringDelimiter{{token: `"`, escapes: true}, {token: `'`, escapes: true}},
+	}
+)
 
-	".py": hashMarkers, ".rb": hashMarkers, ".sh": hashMarkers, ".bash": hashMarkers,
-	".zsh": hashMarkers, ".pl": hashMarkers, ".pm": hashMarkers, ".ex": hashMarkers,
-	".exs": hashMarkers, ".cr": hashMarkers,
+var sourceSyntaxes = map[string]sourceSyntax{
+	".c": cLikeSyntax, ".cc": cLikeSyntax, ".cpp": cLikeSyntax, ".cxx": cLikeSyntax,
+	".h": cLikeSyntax, ".hpp": cLikeSyntax, ".cs": cLikeSyntax, ".java": cLikeSyntax,
+	".rs": cLikeSyntax, ".scala": cLikeSyntax, ".php": cLikeSyntax, ".dart": cLikeSyntax,
+	".m": cLikeSyntax, ".mm": cLikeSyntax,
 
-	".sql": {"--", "/*"}, ".lua": dashMarkers, ".hs": dashMarkers, ".elm": dashMarkers,
+	".go": goSyntax,
+
+	".js": jsSyntax, ".jsx": jsSyntax, ".mjs": jsSyntax, ".cjs": jsSyntax,
+	".ts": jsSyntax, ".tsx": jsSyntax,
+
+	".kt": tripleQuoteSyntax, ".kts": tripleQuoteSyntax, ".swift": tripleQuoteSyntax,
+
+	".py": pythonSyntax,
+
+	".rb": hashSyntax, ".sh": hashSyntax, ".bash": hashSyntax, ".zsh": hashSyntax,
+	".pl": hashSyntax, ".pm": hashSyntax, ".ex": hashSyntax, ".exs": hashSyntax, ".cr": hashSyntax,
+
+	".sql": sqlSyntax, ".lua": luaSyntax, ".hs": haskellSyntax, ".elm": haskellSyntax,
 }
 
-var (
-	cLikeMarkers = []string{"//", "/*"}
-	hashMarkers  = []string{"#"}
-	dashMarkers  = []string{"--"}
-)
+type sourceSyntax struct {
+	lineMarkers []string
+	blockStart  string
+	blockEnd    string
+	strings     []stringDelimiter
+}
+
+type stringDelimiter struct {
+	token      string
+	persistent bool
+	escapes    bool
+}
+
+type lexedSourceLine struct {
+	comment bool
+	body    string
+}
 
 // docFillerWords carry no information beyond the declaration they document, so
 // a doc comment built only from them plus the declaration's own words restates
@@ -110,14 +163,15 @@ func Scan(files []File, intent string) []Finding {
 func detectRedundantComment(file File) []Finding {
 	var findings []Finding
 	current := splitLines(file.CurrentContent)
-	for _, block := range commentBlocks(file, current) {
+	lexed := lexSource(file.Path, current)
+	for _, block := range commentBlocks(file, lexed) {
 		description := ""
 		switch {
 		case hasRepeatedPhrase(block.text):
 			description = "comment repeats a phrase internally"
-		case docCommentRepeatsDeclarationName(block.text, current, block.lastLine):
+		case docCommentRepeatsDeclarationName(block.text, current, lexed, block.lastLine):
 			description = "doc comment repeats the declaration name verbatim"
-		case commentRestatesNextCode(block.text, current, block.lastLine):
+		case commentRestatesNextCode(block.text, current, lexed, block.lastLine):
 			description = "comment restates the adjacent code"
 		}
 		if description != "" {
@@ -144,17 +198,17 @@ type commentBlock struct {
 // are sentence fragments that never document the code beneath the block. Only
 // blocks the change actually touched are returned, reported at their first
 // added line.
-func commentBlocks(file File, current []string) []commentBlock {
+func commentBlocks(file File, lines []lexedSourceLine) []commentBlock {
 	added := make(map[int]bool)
 	for _, line := range addedLines(file) {
 		added[line.number] = true
 	}
 	var blocks []commentBlock
-	for number := 1; number <= len(current); number++ {
-		body, ok := commentBody(file.Path, current[number-1])
-		if !ok {
+	for number := 1; number <= len(lines); number++ {
+		if !lines[number-1].comment {
 			continue
 		}
+		body := lines[number-1].body
 		block := commentBlock{lastLine: number}
 		for {
 			if added[number] && block.line == 0 {
@@ -163,16 +217,15 @@ func commentBlocks(file File, current []string) []commentBlock {
 			if !isCodeSample(body) {
 				block.text += " " + strings.TrimSpace(body)
 			}
-			if number+1 > len(current) {
+			if number+1 > len(lines) {
 				break
 			}
-			next, ok := commentBody(file.Path, current[number])
-			if !ok {
+			if !lines[number].comment {
 				break
 			}
 			number++
 			block.lastLine = number
-			body = next
+			body = lines[number-1].body
 		}
 		block.text = strings.TrimSpace(block.text)
 		if block.line != 0 && block.text != "" {
@@ -186,8 +239,8 @@ func commentBlocks(file File, current []string) []commentBlock {
 // informative word is already spelled by the declaration it documents. Go's
 // convention is that a doc comment opens with the declaration name, so merely
 // naming the declaration is not the signal; adding nothing else is.
-func docCommentRepeatsDeclarationName(comment string, lines []string, after int) bool {
-	match := declarationPattern.FindStringSubmatch(adjacentCodeLine(lines, after))
+func docCommentRepeatsDeclarationName(comment string, lines []string, lexed []lexedSourceLine, after int) bool {
+	match := declarationPattern.FindStringSubmatch(adjacentCodeLine(lines, lexed, after))
 	if match == nil {
 		return false
 	}
@@ -206,8 +259,8 @@ func docCommentRepeatsDeclarationName(comment string, lines []string, after int)
 	return derived > 0 && derived == informative
 }
 
-func commentRestatesNextCode(comment string, lines []string, after int) bool {
-	code := adjacentCodeLine(lines, after)
+func commentRestatesNextCode(comment string, lines []string, lexed []lexedSourceLine, after int) bool {
+	code := adjacentCodeLine(lines, lexed, after)
 	if code == "" || isDeclaration(code) {
 		return false
 	}
@@ -239,13 +292,13 @@ func commentRestatesNextCode(comment string, lines []string, after int) bool {
 // line reached without crossing a blank line. A blank line ends the comment's
 // attachment, so a standalone note is never read as documenting whatever
 // declaration happens to appear further down the file.
-func adjacentCodeLine(lines []string, after int) string {
+func adjacentCodeLine(lines []string, lexed []lexedSourceLine, after int) string {
 	for number := after + 1; number <= len(lines); number++ {
 		candidate := strings.TrimSpace(lines[number-1])
 		if candidate == "" {
 			return ""
 		}
-		if !isComment(candidate) {
+		if !lexed[number-1].comment {
 			return candidate
 		}
 	}
@@ -305,20 +358,139 @@ func meaningfulWords(value string) []string {
 	return result
 }
 
-// commentBody returns the text following a comment marker, still carrying its
-// own indentation so callers can tell prose from an indented code sample.
-func commentBody(path, value string) (string, bool) {
-	markers, known := commentMarkers[strings.ToLower(filepath.Ext(path))]
+func lexSource(path string, lines []string) []lexedSourceLine {
+	result := make([]lexedSourceLine, len(lines))
+	syntax, known := sourceSyntaxes[strings.ToLower(filepath.Ext(path))]
 	if !known {
-		return "", false
+		return result
 	}
-	trimmed := strings.TrimSpace(value)
-	for _, marker := range markers {
+	state := lexicalState{}
+	for index, line := range lines {
+		result[index] = lexLine(line, syntax, &state)
+	}
+	return result
+}
+
+type lexicalState struct {
+	inBlock bool
+	string  stringDelimiter
+}
+
+func lexLine(line string, syntax sourceSyntax, state *lexicalState) lexedSourceLine {
+	if state.inBlock {
+		body, remainder, closed := consumeBlockComment(line, syntax.blockEnd)
+		state.inBlock = !closed
+		if closed {
+			scanCode(remainder, syntax, state)
+		}
+		return lexedSourceLine{comment: true, body: blockBody(body)}
+	}
+	if state.string.token != "" {
+		end := stringEnd(line, state.string, 0)
+		if end < 0 {
+			return lexedSourceLine{}
+		}
+		state.string = stringDelimiter{}
+		scanCode(line[end:], syntax, state)
+		return lexedSourceLine{}
+	}
+
+	trimmed := strings.TrimLeftFunc(line, unicode.IsSpace)
+	if syntax.blockStart != "" && strings.HasPrefix(trimmed, syntax.blockStart) {
+		body, _, closed := consumeBlockComment(strings.TrimPrefix(trimmed, syntax.blockStart), syntax.blockEnd)
+		state.inBlock = !closed
+		return lexedSourceLine{comment: true, body: body}
+	}
+	for _, marker := range syntax.lineMarkers {
 		if strings.HasPrefix(trimmed, marker) {
-			return strings.TrimSuffix(strings.TrimPrefix(trimmed, marker), "*/"), true
+			return lexedSourceLine{comment: true, body: strings.TrimPrefix(trimmed, marker)}
 		}
 	}
-	return "", false
+	scanCode(line, syntax, state)
+	return lexedSourceLine{}
+}
+
+func scanCode(line string, syntax sourceSyntax, state *lexicalState) {
+	for offset := 0; offset < len(line); {
+		remaining := line[offset:]
+		if hasAnyPrefix(remaining, syntax.lineMarkers) {
+			return
+		}
+		if syntax.blockStart != "" && strings.HasPrefix(remaining, syntax.blockStart) {
+			end := strings.Index(remaining[len(syntax.blockStart):], syntax.blockEnd)
+			if end < 0 {
+				state.inBlock = true
+				return
+			}
+			offset += len(syntax.blockStart) + end + len(syntax.blockEnd)
+			continue
+		}
+		delimiter, found := matchingDelimiter(remaining, syntax.strings)
+		if !found {
+			offset++
+			continue
+		}
+		end := stringEnd(remaining, delimiter, len(delimiter.token))
+		if end < 0 {
+			if delimiter.persistent {
+				state.string = delimiter
+			}
+			return
+		}
+		offset += end
+	}
+}
+
+func matchingDelimiter(value string, delimiters []stringDelimiter) (stringDelimiter, bool) {
+	for _, delimiter := range delimiters {
+		if strings.HasPrefix(value, delimiter.token) {
+			return delimiter, true
+		}
+	}
+	return stringDelimiter{}, false
+}
+
+func stringEnd(value string, delimiter stringDelimiter, start int) int {
+	for offset := start; offset+len(delimiter.token) <= len(value); offset++ {
+		if !strings.HasPrefix(value[offset:], delimiter.token) {
+			continue
+		}
+		if delimiter.escapes && escapedAt(value, offset) {
+			continue
+		}
+		return offset + len(delimiter.token)
+	}
+	return -1
+}
+
+func escapedAt(value string, offset int) bool {
+	backslashes := 0
+	for index := offset - 1; index >= 0 && value[index] == '\\'; index-- {
+		backslashes++
+	}
+	return backslashes%2 == 1
+}
+
+func consumeBlockComment(value, endMarker string) (string, string, bool) {
+	end := strings.Index(value, endMarker)
+	if end < 0 {
+		return value, "", false
+	}
+	return value[:end], value[end+len(endMarker):], true
+}
+
+func blockBody(value string) string {
+	trimmed := strings.TrimLeftFunc(value, unicode.IsSpace)
+	return strings.TrimPrefix(trimmed, "*")
+}
+
+func hasAnyPrefix(value string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(value, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // isCodeSample reports an indented line inside a comment, which is how Go doc

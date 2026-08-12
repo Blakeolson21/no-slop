@@ -254,6 +254,42 @@ func TestScanRedundantCommentAcquitsConventionalDocumentation(t *testing.T) {
 					"var Version string\n",
 			},
 		},
+		{
+			name: "block comment continuation preserves its rationale",
+			file: precheck.File{
+				Path:         "wire.go",
+				AddedContent: "\n\t/* Preserve byte order\n\t * Preserve byte order because signatures cover the wire representation.\n\t */\n\n",
+				CurrentContent: "func signedBytes(payload []byte) []byte {\n" +
+					"\t/* Preserve byte order\n" +
+					"\t * Preserve byte order because signatures cover the wire representation.\n" +
+					"\t */\n" +
+					"\treturn payload\n" +
+					"}\n",
+			},
+		},
+		{
+			name: "comment-shaped lines inside a raw string",
+			file: precheck.File{
+				Path:         "fixture.go",
+				AddedContent: "\n// increment i\ni += 1\n\n\n",
+				CurrentContent: "var fixture = `\n" +
+					"// increment i\n" +
+					"i += 1\n" +
+					"`\n" +
+					"func advance(i int) int { return i + 1 }\n",
+			},
+		},
+		{
+			name: "comment-shaped lines inside a triple-quoted string",
+			file: precheck.File{
+				Path:         "fixture.py",
+				AddedContent: "\n# increment i\ni += 1\n\n",
+				CurrentContent: "fixture = \"\"\"\n" +
+					"# increment i\n" +
+					"i += 1\n" +
+					"\"\"\"\n",
+			},
+		},
 	}
 
 	for _, testCase := range testCases {
