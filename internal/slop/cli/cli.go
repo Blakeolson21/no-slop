@@ -91,7 +91,11 @@ func runEvaluate(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	fmt.Fprintf(stdout, "corpus: synthetic replay cases from %s\n", *corpusRoot)
+	fmt.Fprintln(stdout, "results: replayed captures, not produced by this run")
+	fmt.Fprintf(stdout, "unconditioned policy %q from %s\n", unconditioned.Policy, *unconditionedPath)
 	fmt.Fprintf(stdout, "unconditioned: found %d, missed %d, false-positive %d\n", comparison.Unconditioned.Found, comparison.Unconditioned.Missed, comparison.Unconditioned.FalsePositive)
+	fmt.Fprintf(stdout, "conditioned policy %q from %s\n", conditioned.Policy, *conditionedPath)
 	fmt.Fprintf(stdout, "conditioned: found %d, missed %d, false-positive %d\n", comparison.Conditioned.Found, comparison.Conditioned.Missed, comparison.Conditioned.FalsePositive)
 	fmt.Fprintf(stdout, "delta: found %+d, missed %+d, false-positive %+d\n",
 		comparison.Conditioned.Found-comparison.Unconditioned.Found,
@@ -112,6 +116,7 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 	base := flags.String("base", "", "base revision, default is merge-base with the default branch")
 	head := flags.String("head", "HEAD", "head revision")
 	tier := flags.String("tier", "auto", "validation tier: auto, leak-scan-only, single-review, full-adversarial")
+	forceTier := flags.Bool("force-tier", false, "allow --tier to lower a provenance-escalated tier")
 	thread := flags.String("thread", "", "GitHub issue or pull request URL for outbound text")
 	blocklist := flags.String("blocklist", "", "private-name blocklist file override")
 	provider := flags.String("provider", "", "generating agent provider")
@@ -165,13 +170,16 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 	}
 
 	blocklistPath := strings.TrimSpace(*blocklist)
+	blocklistConfigured := blocklistPath != ""
 	if blocklistPath == "" {
 		blocklistPath = cfg.Slop.LeakScan.BlocklistFile
+		blocklistConfigured = strings.TrimSpace(repoCfg.Slop.LeakScan.BlocklistFile) != ""
 	}
-	blocklistEntries, err := loadBlocklist(workDir, blocklistPath)
+	blocklistEntries, blocklistState, err := loadBlocklist(workDir, blocklistPath, blocklistConfigured)
 	if err != nil {
 		return err
 	}
+	fmt.Fprintln(stdout, blocklistState)
 	tierOverride := risk.Tier(*tier)
 	if tierOverride == "auto" {
 		tierOverride = ""
@@ -195,14 +203,16 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 				AgentLaneID:           strings.TrimSpace(*laneID),
 				Model:                 strings.TrimSpace(*model),
 			},
-			Blocklist:      blocklistEntries,
-			OutboundPaths:  cfg.Slop.Prose.OutboundPaths,
-			AITellWords:    cfg.Slop.Prose.AITellWords,
-			TestCountFloor: cfg.Slop.TestCountFloor,
-			TestCommand:    cfg.Slop.TestCommand,
-			TierOverride:   tierOverride,
-			ThreadURL:      strings.TrimSpace(*thread),
-			EvidenceRoot:   workDir,
+			Blocklist:            blocklistEntries,
+			RefuseLeakExemptions: !cfg.Slop.LeakScan.AllowExemptions,
+			OutboundPaths:        cfg.Slop.Prose.OutboundPaths,
+			AITellWords:          cfg.Slop.Prose.AITellWords,
+			TestCountFloor:       cfg.Slop.TestCountFloor,
+			TestCommand:          cfg.Slop.TestCommand,
+			TierOverride:         tierOverride,
+			ForceTier:            *forceTier,
+			ThreadURL:            strings.TrimSpace(*thread),
+			EvidenceRoot:         workDir,
 		},
 	}
 
@@ -229,6 +239,11 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 			selectedDecision = decision
 			fmt.Fprintln(stdout, decision.String())
 		},
+		OnLeakExemptions: func(exemptions []leakscan.Exemption) {
+			for _, exemption := range exemptions {
+				fmt.Fprintf(stdout, "leak exemption: %s:%d: %s\n", exemption.Path, exemption.Line, exemption.Marker)
+			}
+		},
 	})
 	if reviewerCloser != nil {
 		defer reviewerCloser.Close()
@@ -253,6 +268,7 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 	if result.Passed {
 		outcome = "pass"
 	}
+	printResult(stdout, result)
 	if err := opts.ProvenanceStore.Append(provenanceRecord(provenanceInput{
 		Provider:        *provider,
 		Model:           *model,
@@ -263,7 +279,6 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 	}, result.Decision, result, outcome)); err != nil {
 		return fmt.Errorf("record provenance: %w", err)
 	}
-	printResult(stdout, result)
 	if !result.Passed {
 		return &gateVerdictError{}
 	}
@@ -370,9 +385,9 @@ func defaultReviewerFactory(ctx context.Context, cfg *config.Config, stderr io.W
 	return engine.NewAgentReviewer(ag, func(text string) { fmt.Fprint(stderr, text) }), ag, nil
 }
 
-func loadBlocklist(workDir, configured string) ([]string, error) {
+func loadBlocklist(workDir, configured string, explicitlyConfigured bool) ([]string, string, error) {
 	if configured == "" {
-		return nil, nil
+		return nil, "leak scan: no private-name blocklist configured", nil
 	}
 	path := configured
 	if !filepath.IsAbs(path) {
@@ -380,9 +395,20 @@ func loadBlocklist(workDir, configured string) ([]string, error) {
 	}
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read private-name blocklist: %w", err)
+		if errors.Is(err, os.ErrNotExist) && !explicitlyConfigured {
+			return nil, fmt.Sprintf("leak scan: no private-name blocklist (default path %s not present)", configured), nil
+		}
+		state := "default"
+		if explicitlyConfigured {
+			state = "configured"
+		}
+		return nil, "", fmt.Errorf("read private-name blocklist (%s path %s): %w", state, configured, err)
 	}
-	return leakscan.ParseBlocklist(string(content)), nil
+	state := "default"
+	if explicitlyConfigured {
+		state = "configured"
+	}
+	return leakscan.ParseBlocklist(string(content)), fmt.Sprintf("leak scan: loaded %s private-name blocklist from %s", state, configured), nil
 }
 
 func detectDefaultBranch(ctx context.Context, workDir string) string {
@@ -411,6 +437,13 @@ func defaultBaseRef(ctx context.Context, workDir, defaultBranch, head string) (s
 }
 
 func printResult(stdout io.Writer, result engine.Result) {
+	for _, check := range result.MandatoryChecks {
+		if check.Enabled {
+			fmt.Fprintf(stdout, "mandatory check: %s completed (%d findings)\n", check.Name, check.Findings)
+		} else {
+			fmt.Fprintf(stdout, "mandatory check: %s disabled\n", check.Name)
+		}
+	}
 	if result.ReviewRan {
 		fmt.Fprintf(stdout, "review: completed (%d rounds)\n", result.ReviewRounds)
 	} else {
@@ -434,6 +467,13 @@ func printResult(stdout io.Writer, result engine.Result) {
 			fmt.Fprintf(stdout, "finding: [%s] %s\n", finding.Lens, finding.Description)
 		}
 	}
+	if count := len(result.LeakExemptions); count > 0 {
+		label := "leak exemptions"
+		if count == 1 {
+			label = "leak exemption"
+		}
+		fmt.Fprintf(stdout, "leak scan: %d %s honored\n", count, label)
+	}
 	if result.Passed {
 		fmt.Fprintln(stdout, "verdict: pass")
 	} else {
@@ -443,6 +483,6 @@ func printResult(stdout io.Writer, result engine.Result) {
 
 func writeUsage(output io.Writer) {
 	fmt.Fprintln(output, "NoSlop is the reviewer that knows the author is an AI.")
-	fmt.Fprintln(output, "usage: noslop gate [--repo DIR] [--base REF] [--head REF] [--tier TIER] [--thread URL] [--blocklist FILE] [--provider NAME] [--model NAME] [--reasoning-effort LEVEL] [--lane-id ID] [--change-class CLASS]")
+	fmt.Fprintln(output, "usage: noslop gate [--repo DIR] [--base REF] [--head REF] [--tier TIER] [--force-tier] [--thread URL] [--blocklist FILE] [--provider NAME] [--model NAME] [--reasoning-effort LEVEL] [--lane-id ID] [--change-class CLASS]")
 	fmt.Fprintln(output, "       noslop evaluate --corpus DIR --unconditioned-results FILE --conditioned-results FILE")
 }

@@ -24,7 +24,8 @@ type File struct {
 
 // Options configures private-name matching.
 type Options struct {
-	Blocklist []string
+	Blocklist        []string
+	RefuseExemptions bool
 }
 
 // InlineExemption marks a source line whose credential-shaped or private-name
@@ -37,6 +38,19 @@ type Finding struct {
 	Path        string
 	Line        int
 	Description string
+}
+
+// Exemption identifies an inline marker honored by the scanner.
+type Exemption struct {
+	Path   string
+	Line   int
+	Marker string
+}
+
+// Result contains leak findings and every honored inline exemption.
+type Result struct {
+	Findings   []Finding
+	Exemptions []Exemption
 }
 
 type secretPattern struct {
@@ -83,17 +97,27 @@ func ParseBlocklist(content string) []string {
 }
 
 // Scan checks text for secret shapes and private identity markers.
-func Scan(files []File, opts Options) []Finding {
-	var findings []Finding
+func Scan(files []File, opts Options) Result {
+	var result Result
 	blocklist := append(DefaultBlocklist(), opts.Blocklist...)
 	for _, file := range files {
 		for index, line := range strings.Split(file.Content, "\n") {
 			if strings.Contains(strings.ToLower(line), InlineExemption) {
-				continue
+				if opts.RefuseExemptions {
+					result.Findings = append(result.Findings, Finding{
+						Kind:        Secret,
+						Path:        file.Path,
+						Line:        index + 1,
+						Description: fmt.Sprintf("inline leak exemption %s is disabled by configuration", InlineExemption),
+					})
+				} else {
+					result.Exemptions = append(result.Exemptions, Exemption{Path: file.Path, Line: index + 1, Marker: InlineExemption})
+					continue
+				}
 			}
 			for _, pattern := range secretPatterns {
 				if pattern.re.MatchString(line) {
-					findings = append(findings, Finding{
+					result.Findings = append(result.Findings, Finding{
 						Kind:        Secret,
 						Path:        file.Path,
 						Line:        index + 1,
@@ -103,7 +127,7 @@ func Scan(files []File, opts Options) []Finding {
 			}
 			for _, pattern := range identityPatterns {
 				if pattern.re.MatchString(line) {
-					findings = append(findings, Finding{
+					result.Findings = append(result.Findings, Finding{
 						Kind:        Identity,
 						Path:        file.Path,
 						Line:        index + 1,
@@ -114,7 +138,7 @@ func Scan(files []File, opts Options) []Finding {
 			lower := strings.ToLower(line)
 			for _, entry := range blocklist {
 				if entry != "" && strings.Contains(lower, strings.ToLower(entry)) {
-					findings = append(findings, Finding{
+					result.Findings = append(result.Findings, Finding{
 						Kind:        Identity,
 						Path:        file.Path,
 						Line:        index + 1,
@@ -124,5 +148,5 @@ func Scan(files []File, opts Options) []Finding {
 			}
 		}
 	}
-	return findings
+	return result
 }

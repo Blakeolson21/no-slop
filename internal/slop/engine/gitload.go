@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -56,6 +57,12 @@ func LoadGitChanges(ctx context.Context, workDir, baseRef, headRef string) ([]Ch
 				return nil, fmt.Errorf("load baseline %q: %w", path, err)
 			}
 		}
+		if status == risk.Modified {
+			change.BaselineContext, err = loadBaselineSiblingContent(ctx, workDir, baseRef, baselinePath)
+			if err != nil {
+				return nil, fmt.Errorf("load baseline sibling context for %q: %w", path, err)
+			}
+		}
 		if status != risk.Deleted {
 			change.CurrentContent, err = showGitFile(ctx, workDir, headRef, path)
 			if err != nil {
@@ -69,6 +76,35 @@ func LoadGitChanges(ctx context.Context, workDir, baseRef, headRef string) ([]Ch
 		changes = append(changes, change)
 	}
 	return changes, nil
+}
+
+func loadBaselineSiblingContent(ctx context.Context, workDir, baseRef, path string) (string, error) {
+	dir := filepath.ToSlash(filepath.Dir(path))
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext == "" {
+		return "", nil
+	}
+	scope := dir
+	if scope == "." {
+		scope = ":(top)"
+	}
+	output, err := git.Run(ctx, workDir, "ls-tree", "-r", "--name-only", "-z", baseRef, "--", scope)
+	if err != nil {
+		return "", err
+	}
+	var context strings.Builder
+	for _, sibling := range splitNUL(output) {
+		if sibling == path || filepath.ToSlash(filepath.Dir(sibling)) != dir || strings.ToLower(filepath.Ext(sibling)) != ext {
+			continue
+		}
+		content, err := showGitFile(ctx, workDir, baseRef, sibling)
+		if err != nil {
+			return "", err
+		}
+		context.WriteString(content)
+		context.WriteByte('\n')
+	}
+	return context.String(), nil
 }
 
 type numStat struct {

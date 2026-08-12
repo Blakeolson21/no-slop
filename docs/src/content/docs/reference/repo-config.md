@@ -93,6 +93,7 @@ slop:
       - ".github/workflows/**"
   leak_scan:
     blocklist_file: ".noslop-blocklist"
+    allow_exemptions: true
   prose:
     outbound_paths:
       - "outbound/**"
@@ -105,7 +106,7 @@ slop:
 
 ### slop
 
-Configure the `noslop gate` front stage. The classifier always prints its tier and reasons before continuing. Command-line `--tier` overrides the configured classifier result and prints the original and final tiers. The full-adversarial tier runs a lens review, a second adversarial challenge round, and the configured tests.
+Configure the `noslop gate` front stage. The classifier always prints its tier and reasons before continuing. Command-line `--tier` overrides the configured classifier result and prints the original and final tiers. A provenance-driven escalation refuses a lower override unless `--force-tier` is present, and either outcome prints both signals. The full-adversarial tier runs a lens review, a second adversarial challenge round, and the configured tests.
 
 | Field | Type | Default | Purpose |
 | --- | --- | --- | --- |
@@ -114,6 +115,7 @@ Configure the `noslop gate` front stage. The classifier always prints its tier a
 | `slop.risk.full_adversarial_threshold` | `int` | `6` | Minimum sum for `full-adversarial`; must be greater than the single-review threshold |
 | `slop.risk.high_risk_paths` | `string[]` | Empty | Extra glob patterns treated as high-reach paths, including Markdown instruction files |
 | `slop.leak_scan.blocklist_file` | `string` | `.noslop-blocklist` | Repository-relative or absolute private-name file |
+| `slop.leak_scan.allow_exemptions` | `bool` | `true` | Honor and report inline `noslop:allow-leak` markers; set false to reject them |
 | `slop.prose.outbound_paths` | `string[]` | `outbound/**` | Paths whose changed Markdown is intended for publication |
 | `slop.prose.ai_tell_words` | `string[]` | Empty | Additional case-insensitive vocabulary to flag |
 | `slop.test_count_floor` | `bool` | `true` | Block when recognizable tests in changed files fall below the base revision |
@@ -125,11 +127,13 @@ Each completed `noslop gate` appends a schema-versioned JSON Lines record under 
 
 For a known lane and model, the classifier reads the last 10 matching changes. Three net accepted findings for one lens raise the selected tier by one level, move repeated lenses to the front of the review prompt, and enable an available deterministic probe. `test-capitulation` enables `test-count-floor`. No matching history keeps the v1 route. Unreadable or malformed configured history selects `full-adversarial`. The selected rationale, lens priority, and probes print with the normal axis decision.
 
+Because the caller supplies `--lane-id` and `--model`, provenance conditioning is advisory until a trusted external system supplies and enforces those values. Omitting either value or choosing a new value prevents prior lane history from matching.
+
 Provenance writes are append-only and serialized across concurrent gate processes. Keep the default local data directory out of version control. A later run reads only records whose agent lane identifier and model match exactly.
 
-The private-name file accepts one literal entry per line. Blank lines and lines beginning with `#` are ignored. Matching is case-insensitive. Keep real hostnames, codenames, project names, and other private identities out of the repository. The default filename is ignored in this repository. A configured file that is missing or unreadable stops the gate with an evaluation error.
+The private-name file accepts one literal entry per line. Blank lines and lines beginning with `#` are ignored. Matching is case-insensitive. Keep real hostnames, codenames, project names, and other private identities out of the repository. If the built-in default `.noslop-blocklist` is absent, the gate prints that it is scanning without a private-name list and continues with built-in credential patterns. A path selected in repository config or with `--blocklist` is an operator commitment, so a missing configured path stops the gate. An unreadable file at either the default or configured path also stops the gate.
 
-Use `noslop:allow-leak` on the same source line as an intentional credential-shaped or private-name fixture. The exemption applies only to that line and stays visible in review.
+Use `noslop:allow-leak` on the same source line as an intentional credential-shaped or private-name fixture. Every honored marker prints as `file:line` and is counted in the verdict summary. Set `slop.leak_scan.allow_exemptions: false` for CI jobs that must reject every marker instead of honoring it.
 
 Markdown can opt into the prose oracle without a matching path by adding front matter:
 

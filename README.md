@@ -47,7 +47,7 @@ Every finding carries its lens name. [The taxonomy](docs/src/content/docs/refere
 
 ### Artifact-class oracles
 
-Secrets and private identity markers are scanned at every tier. The scanner recognizes common credential shapes, personal home paths, and private names from a local blocklist. A configured blocklist that cannot be read stops evaluation. Findings identify the file and line without copying the matched value. Intentional fixture literals can use `noslop:allow-leak` on the same source line.
+Secrets and private identity markers are scanned at every tier. The scanner recognizes common credential shapes, personal home paths, and private names from a local blocklist. A missing built-in default blocklist means no private-name list; an explicitly configured missing file and any unreadable file stop evaluation. Findings identify the file and line without copying the matched value. Every honored `noslop:allow-leak` marker prints its file and line and counts in the verdict. Set `slop.leak_scan.allow_exemptions: false` when CI must reject all inline exemptions.
 
 Outbound text can be selected by a configured path or `outbound: true` front matter. The prose oracle checks AI-tell vocabulary, em dashes, cited JSON or CSV numbers, and optional live GitHub issue or pull request state. With `--thread`, it uses `gh` to verify the thread is open and checks whether an existing comment already makes substantially the same claim. An explicit thread with no outbound artifact is an evaluation error.
 
@@ -87,6 +87,8 @@ Override validation depth:
 ./bin/noslop gate --base origin/main --tier full-adversarial
 ```
 
+If provenance raises the tier, a lower `--tier` is refused unless `--force-tier` is also present. The output prints both the provenance signal and the forced override.
+
 Check outbound text against a live GitHub thread:
 
 ```sh
@@ -104,6 +106,8 @@ Capture generating-agent provenance for conditioning and later evaluation:
   --change-class source
 ```
 
+Because the caller supplies `--lane-id` and `--model`, provenance conditioning is advisory until a trusted external system supplies and enforces those values.
+
 Use a different private-name blocklist:
 
 ```sh
@@ -120,7 +124,7 @@ NoSlop uses the existing `.no-mistakes.yaml` repository config shape:
 slop:
   data_dir: ".noslop-data"
   leak_scan:
-    blocklist_file: ".noslop-blocklist"
+    allow_exemptions: false
   test_command: "go test -race ./..."
 ```
 
@@ -135,7 +139,7 @@ Replay captured policy findings against the seed corpus:
   --conditioned-results results/conditioned.json
 ```
 
-The [corpus format](docs/src/content/docs/reference/evaluation-corpus.md) records diffs and independent expected findings. The runner reports found, missed, and false-positive counts without inventing reviewer output.
+The [corpus format](docs/src/content/docs/reference/evaluation-corpus.md) records diffs and independent expected findings. The runner labels the seed corpus and result files as replayed inputs, then reports found, missed, and false-positive counts without inventing reviewer output.
 
 ## Development
 

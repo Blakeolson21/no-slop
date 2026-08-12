@@ -37,6 +37,7 @@ type FileChange struct {
 	Added           int
 	Deleted         int
 	BaselineContent string
+	BaselineContext string
 	CurrentContent  string
 }
 
@@ -53,6 +54,7 @@ type Config struct {
 	FullReviewThreshold   int
 	HighRiskPaths         []string
 	OverrideTier          Tier
+	ForceTier             bool
 	ProvenanceStore       provenance.Reader
 	AgentLaneID           string
 	Model                 string
@@ -71,8 +73,12 @@ type Decision struct {
 	Novelty             Axis
 	Reversibility       Axis
 	Overridden          bool
+	OverrideRefused     bool
+	OverrideForced      bool
 	OriginalTier        Tier
+	RequestedTier       Tier
 	Rationale           string
+	ProvenanceEscalated bool
 	PriorityLenses      []string
 	DeterministicProbes []string
 }
@@ -122,7 +128,7 @@ func Classify(change ChangeSet, cfg Config) (Decision, error) {
 
 func finalizeDecision(decision Decision, cfg Config) (Decision, error) {
 	decision = conditionOnProvenance(decision, cfg)
-	return applyOverride(decision, cfg.OverrideTier)
+	return applyOverride(decision, cfg.OverrideTier, cfg.ForceTier)
 }
 
 func conditionOnProvenance(decision Decision, cfg Config) Decision {
@@ -139,6 +145,7 @@ func conditionOnProvenance(decision Decision, cfg Config) Decision {
 	history, err := cfg.ProvenanceStore.Recent(laneID, model, 10)
 	if err != nil {
 		decision.Tier = TierFullAdversarial
+		decision.ProvenanceEscalated = true
 		decision.Rationale = fmt.Sprintf("history could not be read for lane %s and model %s; escalating to full-adversarial", laneID, model)
 		return decision
 	}
@@ -173,6 +180,7 @@ func conditionOnProvenance(decision Decision, cfg Config) Decision {
 
 	primary := decision.PriorityLenses[0]
 	decision.Tier = raiseTier(decision.Tier)
+	decision.ProvenanceEscalated = true
 	decision.Rationale = fmt.Sprintf("lane %s: %d %s findings in last %d changes, escalating", laneID, scores[primary], primary, len(history))
 	for _, lens := range decision.PriorityLenses {
 		if lens == "test-capitulation" {
@@ -193,7 +201,7 @@ func raiseTier(tier Tier) Tier {
 	}
 }
 
-func applyOverride(decision Decision, override Tier) (Decision, error) {
+func applyOverride(decision Decision, override Tier, force bool) (Decision, error) {
 	if override == "" || override == "auto" {
 		return decision, nil
 	}
@@ -202,12 +210,33 @@ func applyOverride(decision Decision, override Tier) (Decision, error) {
 		if override == decision.Tier {
 			return decision, nil
 		}
+		if decision.ProvenanceEscalated && tierRank(override) < tierRank(decision.Tier) && !force {
+			decision.OverrideRefused = true
+			decision.OriginalTier = decision.Tier
+			decision.RequestedTier = override
+			return decision, fmt.Errorf("classify change: --tier %s contradicts provenance-driven escalation to %s; use --force-tier to accept the lower tier", override, decision.Tier)
+		}
 		decision.OriginalTier = decision.Tier
+		decision.RequestedTier = override
 		decision.Tier = override
 		decision.Overridden = true
+		decision.OverrideForced = force && decision.ProvenanceEscalated && tierRank(override) < tierRank(decision.OriginalTier)
 		return decision, nil
 	default:
 		return Decision{}, fmt.Errorf("classify change: invalid tier override %q", override)
+	}
+}
+
+func tierRank(tier Tier) int {
+	switch tier {
+	case TierLeakScanOnly:
+		return 1
+	case TierSingleReview:
+		return 2
+	case TierFullAdversarial:
+		return 3
+	default:
+		return 0
 	}
 }
 
@@ -260,7 +289,7 @@ func classifyNovelty(files []FileChange) Axis {
 		return Axis{Score: 0, Reason: "change is a mechanical rename"}
 	}
 	if allChanges(files, mechanicallyEquivalent) {
-		return Axis{Score: 0, Reason: "source edits are formatting-only or consistent identifier renames"}
+		return Axis{Score: 0, Reason: "source token stream contains only consistent identifier substitutions"}
 	}
 	return Axis{Score: 2, Reason: "existing source logic changed"}
 }
@@ -283,7 +312,7 @@ func mechanicallyEquivalent(file FileChange) bool {
 		return false
 	}
 	baselineIdentifiers := make(map[string]struct{})
-	for _, token := range baseline {
+	for _, token := range sourceTokens(file.BaselineContent + "\n" + file.BaselineContext) {
 		if token.kind == 'i' {
 			baselineIdentifiers[token.text] = struct{}{}
 		}
@@ -521,7 +550,11 @@ func (d Decision) String() string {
 		d.Reversibility.Score,
 		d.Reversibility.Reason,
 	)
-	if d.Overridden {
+	if d.OverrideRefused {
+		printed += fmt.Sprintf("\noverride refused: %s -> %s", d.OriginalTier, d.RequestedTier)
+	} else if d.OverrideForced {
+		printed += fmt.Sprintf("\noverride forced: %s -> %s", d.OriginalTier, d.Tier)
+	} else if d.Overridden {
 		printed += fmt.Sprintf("\noverride: %s -> %s", d.OriginalTier, d.Tier)
 	}
 	printed += "\nprovenance: " + d.Rationale

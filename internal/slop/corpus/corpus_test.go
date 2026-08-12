@@ -3,6 +3,7 @@ package corpus_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/slop/corpus"
@@ -40,7 +41,23 @@ func TestCompareScoresConditionedAndUnconditionedFindings(t *testing.T) {
 	}
 }
 
-func TestLoadRequiresRecordedDiffAndKnownExpectedLens(t *testing.T) {
+func TestLoadRequiresRecordedDiff(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	caseDir := filepath.Join(root, "case-a")
+	if err := os.MkdirAll(caseDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(caseDir, "case.json"), []byte(`{"schema_version":1,"id":"case-a","expected_findings":[{"lens":"fail-open-default","path":"policy.go","line":1}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := corpus.Load(root); err == nil || !strings.Contains(err.Error(), "read recorded diff") {
+		t.Fatalf("missing diff error = %v, want recorded-diff branch", err)
+	}
+}
+
+func TestLoadRejectsUnknownExpectedLens(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -51,8 +68,11 @@ func TestLoadRequiresRecordedDiffAndKnownExpectedLens(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(caseDir, "case.json"), []byte(`{"schema_version":1,"id":"case-a","expected_findings":[{"lens":"not-a-lens","path":"policy.go","line":1}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := corpus.Load(root); err == nil {
-		t.Fatal("expected missing diff and unknown lens to fail corpus loading")
+	if err := os.WriteFile(filepath.Join(caseDir, "change.diff"), []byte("--- a/policy.go\n+++ b/policy.go\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := corpus.Load(root); err == nil || !strings.Contains(err.Error(), `unknown expected lens "not-a-lens"`) {
+		t.Fatalf("unknown lens error = %v, want lens-validation branch", err)
 	}
 }
 

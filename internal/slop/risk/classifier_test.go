@@ -222,8 +222,34 @@ func TestClassifyConsistentIdentifierRenameAsMechanical(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Novelty.Score != 0 || !strings.Contains(decision.Novelty.Reason, "identifier renames") {
+	if decision.Novelty.Score != 0 || !strings.Contains(decision.Novelty.Reason, "identifier substitutions") {
 		t.Fatalf("novelty = %+v, want mechanical source edit", decision.Novelty)
+	}
+}
+
+func TestClassifyMechanicalReasonDescribesEvidenceWithoutAssertingRenameIntent(t *testing.T) {
+	t.Parallel()
+
+	decision, err := risk.Classify(risk.ChangeSet{
+		Branch:        "refactor/cache-name",
+		DefaultBranch: "main",
+		Files: []risk.FileChange{{
+			Path:            "internal/cache/key.go",
+			Status:          risk.Modified,
+			Added:           1,
+			Deleted:         1,
+			BaselineContent: "package cache\nfunc key(input string) string { return input }\n",
+			CurrentContent:  "package cache\nfunc cacheKey(input string) string { return input }\n",
+		}},
+	}, risk.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Novelty.Reason != "source token stream contains only consistent identifier substitutions" {
+		t.Fatalf("novelty reason = %q, want evidence-only wording", decision.Novelty.Reason)
+	}
+	if strings.Contains(strings.ToLower(decision.Novelty.Reason), "rename") {
+		t.Fatalf("novelty reason asserts rename intent: %q", decision.Novelty.Reason)
 	}
 }
 

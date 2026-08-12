@@ -159,6 +159,7 @@ func TestLoadRepo_SlopEngineConfig(t *testing.T) {
       - "platform/**"
   leak_scan:
     blocklist_file: ".noslop-private"
+    allow_exemptions: false
   prose:
     outbound_paths:
       - "outbound/**"
@@ -175,6 +176,9 @@ func TestLoadRepo_SlopEngineConfig(t *testing.T) {
 	}
 	if cfg.Slop.LeakScan.BlocklistFile != ".noslop-private" {
 		t.Fatalf("blocklist file = %q", cfg.Slop.LeakScan.BlocklistFile)
+	}
+	if cfg.Slop.LeakScan.AllowExemptions == nil || *cfg.Slop.LeakScan.AllowExemptions {
+		t.Fatalf("allow exemptions = %v, want explicit false", cfg.Slop.LeakScan.AllowExemptions)
 	}
 	if cfg.Slop.DataDir != ".review-history" {
 		t.Fatalf("data dir = %q", cfg.Slop.DataDir)

@@ -21,19 +21,22 @@ type Change struct {
 	AddedContent    string
 	CurrentContent  string
 	BaselineContent string
+	BaselineContext string
 }
 
 // Config controls classification and mandatory artifact checks.
 type Config struct {
-	Risk           risk.Config
-	Blocklist      []string
-	OutboundPaths  []string
-	AITellWords    []string
-	TestCountFloor bool
-	TestCommand    string
-	TierOverride   risk.Tier
-	ThreadURL      string
-	EvidenceRoot   string
+	Risk                 risk.Config
+	Blocklist            []string
+	RefuseLeakExemptions bool
+	OutboundPaths        []string
+	AITellWords          []string
+	TestCountFloor       bool
+	TestCommand          string
+	TierOverride         risk.Tier
+	ForceTier            bool
+	ThreadURL            string
+	EvidenceRoot         string
 }
 
 // Input is the complete gate request.
@@ -88,6 +91,14 @@ type TestResult struct {
 	Output   string
 }
 
+// MandatoryCheck records whether a tier-independent check ran and how many
+// findings it produced.
+type MandatoryCheck struct {
+	Name     string
+	Enabled  bool
+	Findings int
+}
+
 // TestRunner executes the configured full-tier test command.
 type TestRunner interface {
 	Run(context.Context, string, string) (TestResult, error)
@@ -95,21 +106,24 @@ type TestRunner interface {
 
 // Dependencies are adapters at the engine's external seams.
 type Dependencies struct {
-	Reviewer        Reviewer
-	ReviewerFactory func(context.Context) (Reviewer, error)
-	Tests           TestRunner
-	ThreadReader    prose.ThreadReader
-	OnDecision      func(risk.Decision)
+	Reviewer         Reviewer
+	ReviewerFactory  func(context.Context) (Reviewer, error)
+	Tests            TestRunner
+	ThreadReader     prose.ThreadReader
+	OnDecision       func(risk.Decision)
+	OnLeakExemptions func([]leakscan.Exemption)
 }
 
 // Result contains the visible route and every named finding.
 type Result struct {
-	Decision     risk.Decision
-	Findings     []Finding
-	Tests        []TestResult
-	ReviewRan    bool
-	ReviewRounds int
-	Passed       bool
+	Decision        risk.Decision
+	Findings        []Finding
+	LeakExemptions  []leakscan.Exemption
+	MandatoryChecks []MandatoryCheck
+	Tests           []TestResult
+	ReviewRan       bool
+	ReviewRounds    int
+	Passed          bool
 }
 
 // Run classifies first, runs mandatory checks, then spends only the work the
@@ -123,17 +137,22 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 			Added:           file.Added,
 			Deleted:         file.Deleted,
 			BaselineContent: file.BaselineContent,
+			BaselineContext: file.BaselineContext,
 			CurrentContent:  file.CurrentContent,
 		})
 	}
 	riskConfig := input.Config.Risk
 	riskConfig.OverrideTier = input.Config.TierOverride
+	riskConfig.ForceTier = input.Config.ForceTier
 	decision, err := risk.Classify(risk.ChangeSet{
 		Branch:        input.Branch,
 		DefaultBranch: input.DefaultBranch,
 		Files:         riskFiles,
 	}, riskConfig)
 	if err != nil {
+		if decision.Tier != "" && deps.OnDecision != nil {
+			deps.OnDecision(decision)
+		}
 		return Result{}, err
 	}
 	if deps.OnDecision != nil {
@@ -141,15 +160,26 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 	}
 	result := Result{Decision: decision}
 
-	result.Findings = append(result.Findings, runLeakScan(input.Files, input.Config.Blocklist)...)
-	if input.Config.TestCountFloor || containsProbe(decision.DeterministicProbes, "test-count-floor") {
-		result.Findings = append(result.Findings, runTestFloor(input.Files)...)
+	leakFindings, exemptions := runLeakScan(input.Files, input.Config.Blocklist, input.Config.RefuseLeakExemptions)
+	result.Findings = append(result.Findings, leakFindings...)
+	result.LeakExemptions = exemptions
+	if deps.OnLeakExemptions != nil {
+		deps.OnLeakExemptions(exemptions)
 	}
+	result.MandatoryChecks = append(result.MandatoryChecks, MandatoryCheck{Name: "leak scan", Enabled: true, Findings: len(leakFindings)})
+	testFloorEnabled := input.Config.TestCountFloor || containsProbe(decision.DeterministicProbes, "test-count-floor")
+	testFloorFindings := []Finding(nil)
+	if testFloorEnabled {
+		testFloorFindings = runTestFloor(input.Files)
+		result.Findings = append(result.Findings, testFloorFindings...)
+	}
+	result.MandatoryChecks = append(result.MandatoryChecks, MandatoryCheck{Name: "test-count floor", Enabled: testFloorEnabled, Findings: len(testFloorFindings)})
 	proseFindings, err := runProseOracle(ctx, input, deps.ThreadReader)
 	if err != nil {
 		return Result{}, err
 	}
 	result.Findings = append(result.Findings, proseFindings...)
+	result.MandatoryChecks = append(result.MandatoryChecks, MandatoryCheck{Name: "prose oracle", Enabled: true, Findings: len(proseFindings)})
 
 	if decision.Tier == risk.TierSingleReview || decision.Tier == risk.TierFullAdversarial {
 		reviewer := deps.Reviewer
@@ -252,14 +282,14 @@ func appendUniqueFindings(existing []Finding, additions ...Finding) []Finding {
 	return existing
 }
 
-func runLeakScan(files []Change, blocklist []string) []Finding {
+func runLeakScan(files []Change, blocklist []string, refuseExemptions bool) ([]Finding, []leakscan.Exemption) {
 	input := make([]leakscan.File, 0, len(files))
 	for _, file := range files {
 		input = append(input, leakscan.File{Path: file.Path, Content: file.AddedContent})
 	}
-	findings := leakscan.Scan(input, leakscan.Options{Blocklist: blocklist})
-	result := make([]Finding, 0, len(findings))
-	for _, finding := range findings {
+	scan := leakscan.Scan(input, leakscan.Options{Blocklist: blocklist, RefuseExemptions: refuseExemptions})
+	result := make([]Finding, 0, len(scan.Findings))
+	for _, finding := range scan.Findings {
 		result = append(result, Finding{
 			Lens:        "leak-identity-scan",
 			Severity:    "error",
@@ -268,7 +298,7 @@ func runLeakScan(files []Change, blocklist []string) []Finding {
 			Description: finding.Description,
 		})
 	}
-	return result
+	return result, scan.Exemptions
 }
 
 func runTestFloor(files []Change) []Finding {

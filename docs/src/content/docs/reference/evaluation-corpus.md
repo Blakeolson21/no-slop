@@ -41,4 +41,4 @@ noslop evaluate \
   --conditioned-results results/conditioned.json
 ```
 
-The scorer reports found, missed, and false-positive counts. It refuses missing cases, unknown expected lenses, missing diffs, malformed formats, and duplicate results. It does not launch a reviewer or invent policy output. Capturing live policy output, latency, and cost is a later integration.
+The scorer labels the corpus as synthetic replay cases, prints each policy name and result-file path, and states that the captures were not produced by the current run. It then reports found, missed, and false-positive counts. It refuses missing cases, unknown expected lenses, missing diffs, malformed formats, and duplicate results. It does not launch a reviewer or invent policy output. Capturing live policy output, latency, and cost is a later integration.

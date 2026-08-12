@@ -91,9 +91,11 @@ Mechanical pre-check: None in v1.
 
 The leak and identity scan is an artifact-wide mechanical check, not a reviewer-only lens. It runs at every tier before any optional reviewer or test command.
 
-The scanner checks common credential shapes, private key headers, personal home paths, and user-configured identity markers. Findings never reproduce the matched value. Private names come from `.noslop-blocklist` by default, with one entry per line. Keep the real blocklist outside version control and add the names that are private in your own environment.
+The scanner checks common credential shapes, private key headers, personal home paths, and user-configured identity markers. Findings never reproduce the matched value. Private names come from `.noslop-blocklist` by default, with one entry per line. Keep the real blocklist outside version control and add the names that are private in your own environment. When the built-in default file is absent, the scanner says that no private-name list is active and continues with its built-in credential patterns.
 
-A configured blocklist that cannot be read stops evaluation. Intentional fixture literals can carry `noslop:allow-leak` on the same source line. The exemption applies only to that line.
+A configured missing blocklist and an unreadable blocklist stop evaluation. Intentional fixture literals can carry `noslop:allow-leak` on the same source line. Every honored marker prints its file and line and counts in the verdict summary. Repositories can set `slop.leak_scan.allow_exemptions: false` to turn every marker into a blocking finding.
+
+Every completed verdict reports the status and finding count for the leak scan, test-count floor, and prose oracle. A disabled test-count floor is stated explicitly.
 
 NoSlop ships generic placeholder entries only. It does not ship any operator's actual hostnames, codenames, project names, or identity data.
 
@@ -101,4 +103,4 @@ NoSlop ships generic placeholder entries only. It does not ship any operator's a
 
 Provenance history does not add a ninth lens. It changes the policy applied to the same catalog. When one generating lane and model accumulates three net accepted findings for a lens in its last 10 changes, NoSlop raises the tier by one level and reviews repeated lenses first. A lens with a mechanical pre-check can also enable that probe even when the static repository setting is off.
 
-No matching history preserves the unconditioned v1 route and prints that default. Unreadable or malformed history selects `full-adversarial` because the policy could not establish that a lighter tier is safe.
+No matching history preserves the unconditioned v1 route and prints that default. Unreadable or malformed history selects `full-adversarial` because the policy could not establish that a lighter tier is safe. A lower `--tier` that contradicts provenance is refused unless the operator also supplies `--force-tier`; the output prints both the escalation and any forced override.

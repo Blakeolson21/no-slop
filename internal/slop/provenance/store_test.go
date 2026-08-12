@@ -79,7 +79,7 @@ func TestFileStoreSerializesConcurrentAppends(t *testing.T) {
 	}
 }
 
-func TestFileStoreRejectsMalformedOrUnknownHistory(t *testing.T) {
+func TestFileStoreRejectsMalformedHistory(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -88,6 +88,19 @@ func TestFileStoreRejectsMalformedOrUnknownHistory(t *testing.T) {
 	}
 	if _, err := provenance.NewFileStore(dir).Recent("lane-a", "model-a", 10); err == nil {
 		t.Fatal("expected malformed history to fail closed")
+	}
+}
+
+func TestFileStoreRejectsUnknownSchemaVersionHistory(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, provenance.FileName), []byte("{\"schema_version\":2}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := provenance.NewFileStore(dir).Recent("lane-a", "model-a", 10)
+	if err == nil || !strings.Contains(err.Error(), "unsupported schema version 2") {
+		t.Fatalf("unknown-version error = %v, want schema validation", err)
 	}
 }
 

@@ -58,3 +58,18 @@ func TestNoSlopTaxonomyLivesInPublishedDocsSite(t *testing.T) {
 		t.Fatalf("repo config reference does not link to the published taxonomy")
 	}
 }
+
+func TestNoSlopProvenanceDocsStateAdvisoryTrustBoundary(t *testing.T) {
+	t.Parallel()
+
+	want := "provenance conditioning is advisory until a trusted external system"
+	for _, path := range []string{"README.md", "docs/src/content/docs/reference/repo-config.md"} {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if !strings.Contains(strings.ToLower(string(content)), want) {
+			t.Errorf("%s does not state the caller-controlled provenance trust boundary", path)
+		}
+	}
+}

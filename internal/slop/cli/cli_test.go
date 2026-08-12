@@ -3,6 +3,7 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -23,6 +24,16 @@ func (r *emptyReviewer) Review(context.Context, engine.ReviewRequest) ([]engine.
 	return nil, nil
 }
 
+type failingProvenanceStore struct{}
+
+func (failingProvenanceStore) Recent(string, string, int) ([]provenance.Record, error) {
+	return nil, nil
+}
+
+func (failingProvenanceStore) Append(provenance.Record) error {
+	return errors.New("write denied")
+}
+
 func TestRunGatePrintsMarkdownTierAndReasons(t *testing.T) {
 	t.Parallel()
 
@@ -41,7 +52,7 @@ func TestRunGatePrintsMarkdownTierAndReasons(t *testing.T) {
 	runGit(t, dir, "commit", "-m", "docs")
 
 	var stdout, stderr bytes.Buffer
-	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base}, &stdout, &stderr, slopcli.Options{})
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base, "--tier", "leak-scan-only"}, &stdout, &stderr, slopcli.Options{})
 	if exitCode != 0 {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
 	}
@@ -53,6 +64,38 @@ func TestRunGatePrintsMarkdownTierAndReasons(t *testing.T) {
 		"review: skipped",
 		"tests: skipped",
 		"verdict: pass",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("output missing %q:\n%s", want, stdout.String())
+		}
+	}
+}
+
+func TestRunGatePrintsMandatoryCheckStatus(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	writeFile(t, dir, "README.md", "# Project\n")
+	runGit(t, dir, "add", "README.md")
+	runGit(t, dir, "commit", "-m", "initial")
+	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	runGit(t, dir, "switch", "-c", "docs/readme")
+	writeFile(t, dir, "README.md", "# Project\n\nPlain update.\n")
+	runGit(t, dir, "add", "README.md")
+	runGit(t, dir, "commit", "-m", "docs")
+
+	var stdout, stderr bytes.Buffer
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base}, &stdout, &stderr, slopcli.Options{})
+	if exitCode != 0 {
+		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
+	}
+	for _, want := range []string{
+		"mandatory check: leak scan completed (0 findings)",
+		"mandatory check: test-count floor completed (0 findings)",
+		"mandatory check: prose oracle completed (0 findings)",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("output missing %q:\n%s", want, stdout.String())
@@ -91,6 +134,126 @@ func TestRunGatePrintsOverrideAndStillBlocksLeak(t *testing.T) {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("output missing %q:\n%s", want, stdout.String())
 		}
+	}
+}
+
+func TestRunGateUsesNoBlocklistWhenDefaultFileIsMissing(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	writeFile(t, dir, "README.md", "# Project\n")
+	runGit(t, dir, "add", "README.md")
+	runGit(t, dir, "commit", "-m", "initial")
+	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	runGit(t, dir, "switch", "-c", "docs/readme")
+	writeFile(t, dir, "README.md", "# Project\n\nPlain update.\n")
+	runGit(t, dir, "add", "README.md")
+	runGit(t, dir, "commit", "-m", "docs")
+
+	var stdout, stderr bytes.Buffer
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base}, &stdout, &stderr, slopcli.Options{})
+	if exitCode != 0 {
+		t.Fatalf("exit = %d, want clean gate without a default blocklist\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
+	}
+	if want := "leak scan: no private-name blocklist (default path .noslop-blocklist not present)"; !strings.Contains(stdout.String(), want) {
+		t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+	}
+}
+
+func TestRunGateReportsEveryHonoredLeakExemption(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	writeFile(t, dir, "README.md", "# Project\n")
+	runGit(t, dir, "add", "README.md")
+	runGit(t, dir, "commit", "-m", "initial")
+	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	runGit(t, dir, "switch", "-c", "test/leak-fixtures")
+	writeFile(t, dir, "fixtures/tokens.txt", "TOKEN=ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ # noslop:allow-leak\nAWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE # noslop:allow-leak\n") // noslop:allow-leak
+	runGit(t, dir, "add", "fixtures/tokens.txt")
+	runGit(t, dir, "commit", "-m", "add fixtures")
+
+	var stdout, stderr bytes.Buffer
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base, "--tier", "leak-scan-only"}, &stdout, &stderr, slopcli.Options{})
+	if exitCode != 0 {
+		t.Fatalf("exit = %d, want exemptions honored\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
+	}
+	for _, want := range []string{
+		"leak exemption: fixtures/tokens.txt:1: noslop:allow-leak",
+		"leak exemption: fixtures/tokens.txt:2: noslop:allow-leak",
+		"leak scan: 2 leak exemptions honored",
+		"verdict: pass",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+}
+
+func TestRunGateReportsLeakExemptionBeforeLaterReviewerError(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	writeFile(t, dir, "README.md", "# Project\n")
+	runGit(t, dir, "add", "README.md")
+	runGit(t, dir, "commit", "-m", "initial")
+	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	runGit(t, dir, "switch", "-c", "test/leak-fixture")
+	writeFile(t, dir, "fixtures/token.txt", "TOKEN=ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ # noslop:allow-leak\n") // noslop:allow-leak
+	runGit(t, dir, "add", "fixtures/token.txt")
+	runGit(t, dir, "commit", "-m", "add fixture")
+
+	var stdout, stderr bytes.Buffer
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base}, &stdout, &stderr, slopcli.Options{
+		ReviewerFactory: func(context.Context, *config.Config, io.Writer) (engine.Reviewer, io.Closer, error) {
+			return nil, nil, errors.New("review unavailable")
+		},
+	})
+	if exitCode != 2 {
+		t.Fatalf("exit = %d, want later reviewer error\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
+	}
+	if want := "leak exemption: fixtures/token.txt:1: noslop:allow-leak"; !strings.Contains(stdout.String(), want) {
+		t.Fatalf("stdout missing exemption audit before error %q:\n%s", want, stdout.String())
+	}
+}
+
+func TestRunGateCanRefuseInlineLeakExemptions(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	writeFile(t, dir, ".no-mistakes.yaml", "slop:\n  leak_scan:\n    allow_exemptions: false\n")
+	writeFile(t, dir, "README.md", "# Project\n")
+	runGit(t, dir, "add", ".no-mistakes.yaml", "README.md")
+	runGit(t, dir, "commit", "-m", "initial")
+	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	runGit(t, dir, "switch", "-c", "test/leak-fixtures")
+	writeFile(t, dir, "fixtures/tokens.txt", "TOKEN=ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ # noslop:allow-leak\n") // noslop:allow-leak
+	runGit(t, dir, "add", "fixtures/tokens.txt")
+	runGit(t, dir, "commit", "-m", "add fixture")
+
+	var stdout, stderr bytes.Buffer
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base, "--tier", "leak-scan-only"}, &stdout, &stderr, slopcli.Options{})
+	if exitCode != 1 {
+		t.Fatalf("exit = %d, want refused exemption to fail the gate\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
+	}
+	want := "finding: [leak-identity-scan] fixtures/tokens.txt:1: inline leak exemption noslop:allow-leak is disabled by configuration"
+	if !strings.Contains(stdout.String(), want) {
+		t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+	}
+	if strings.Contains(stdout.String(), "leak exemptions honored") {
+		t.Fatalf("refused exemption was reported as honored:\n%s", stdout.String())
 	}
 }
 
@@ -144,6 +307,53 @@ func TestRunGateFailsClosedWhenConfiguredBlocklistIsMissing(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "read private-name blocklist") {
 		t.Fatalf("stderr does not name configured blocklist failure: %s", stderr.String())
+	}
+}
+
+func TestRunGateFailsClosedWhenDefaultOrConfiguredBlocklistIsUnreadable(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name      string
+		config    string
+		blocklist string
+		wantState string
+	}{
+		{name: "default", blocklist: ".noslop-blocklist", wantState: "default path .noslop-blocklist"},
+		{name: "configured", config: "slop:\n  leak_scan:\n    blocklist_file: private-names\n", blocklist: "private-names", wantState: "configured path private-names"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			runGit(t, dir, "init", "-b", "main")
+			runGit(t, dir, "config", "user.email", "test@example.com")
+			runGit(t, dir, "config", "user.name", "Test")
+			if tc.config != "" {
+				writeFile(t, dir, ".no-mistakes.yaml", tc.config)
+			}
+			if err := os.Mkdir(filepath.Join(dir, tc.blocklist), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, dir, "README.md", "# Project\n")
+			runGit(t, dir, "add", "README.md")
+			if tc.config != "" {
+				runGit(t, dir, "add", ".no-mistakes.yaml")
+			}
+			runGit(t, dir, "commit", "-m", "initial")
+			base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+			runGit(t, dir, "switch", "-c", "docs/readme")
+			writeFile(t, dir, "README.md", "# Project\n\nPlain update.\n")
+			runGit(t, dir, "add", "README.md")
+			runGit(t, dir, "commit", "-m", "docs")
+
+			var stdout, stderr bytes.Buffer
+			exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base}, &stdout, &stderr, slopcli.Options{})
+			if exitCode != 2 {
+				t.Fatalf("exit = %d, want unreadable blocklist failure\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
+			}
+			if !strings.Contains(stderr.String(), tc.wantState) {
+				t.Fatalf("stderr missing state %q:\n%s", tc.wantState, stderr.String())
+			}
+		})
 	}
 }
 
@@ -260,6 +470,146 @@ func TestRunGateConditionsDecisionOnConfiguredProvenanceStore(t *testing.T) {
 	}
 }
 
+func TestRunGateRefusesTierOverrideThatContradictsProvenanceUnlessForced(t *testing.T) {
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	writeFile(t, dir, "README.md", "# Project\n")
+	runGit(t, dir, "add", "README.md")
+	runGit(t, dir, "commit", "-m", "initial")
+	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	runGit(t, dir, "switch", "-c", "docs/readme")
+	writeFile(t, dir, "README.md", "# Project\n\nPlain update.\n")
+	runGit(t, dir, "add", "README.md")
+	runGit(t, dir, "commit", "-m", "docs")
+
+	store := provenance.NewFileStore(filepath.Join(dir, ".review-history"))
+	for index := 0; index < 3; index++ {
+		if err := store.Append(provenance.Record{
+			Provider:        "provider-a",
+			Model:           "model-a",
+			ReasoningEffort: "high",
+			AgentLaneID:     "lane-a",
+			ChangeClass:     "documentation",
+			SelectedTier:    "single-review",
+			FindingsByLens: map[string]provenance.LensFindings{
+				"test-capitulation": {Accepted: []provenance.Finding{{Description: "test weakened"}}},
+			},
+			Rounds:  1,
+			Outcome: "fail",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	baseArgs := []string{
+		"gate", "--repo", dir, "--base", base, "--tier", "leak-scan-only",
+		"--provider", "provider-a", "--model", "model-a", "--lane-id", "lane-a",
+	}
+	var refusedOut, refusedErr bytes.Buffer
+	exitCode := slopcli.Run(context.Background(), baseArgs, &refusedOut, &refusedErr, slopcli.Options{ProvenanceStore: store})
+	if exitCode != 2 {
+		t.Fatalf("exit = %d, want contradictory override refused\nstdout:\n%s\nstderr:\n%s", exitCode, refusedOut.String(), refusedErr.String())
+	}
+	for _, want := range []string{
+		"tier: single-review",
+		"provenance: lane lane-a: 3 test-capitulation findings in last 3 changes, escalating",
+		"override refused: single-review -> leak-scan-only",
+	} {
+		if !strings.Contains(refusedOut.String(), want) {
+			t.Errorf("refusal output missing %q:\n%s", want, refusedOut.String())
+		}
+	}
+	if !strings.Contains(refusedErr.String(), "use --force-tier to accept the lower tier") {
+		t.Fatalf("refusal error does not explain force flag:\n%s", refusedErr.String())
+	}
+
+	var forcedOut, forcedErr bytes.Buffer
+	forcedArgs := append(append([]string(nil), baseArgs...), "--force-tier")
+	exitCode = slopcli.Run(context.Background(), forcedArgs, &forcedOut, &forcedErr, slopcli.Options{ProvenanceStore: store})
+	if exitCode != 0 {
+		t.Fatalf("forced exit = %d, want explicit lower tier accepted\nstdout:\n%s\nstderr:\n%s", exitCode, forcedOut.String(), forcedErr.String())
+	}
+	for _, want := range []string{
+		"tier: leak-scan-only",
+		"provenance: lane lane-a: 3 test-capitulation findings",
+		"override forced: single-review -> leak-scan-only",
+	} {
+		if !strings.Contains(forcedOut.String(), want) {
+			t.Errorf("forced output missing %q:\n%s", want, forcedOut.String())
+		}
+	}
+}
+
+func TestRunGateTreatsSiblingSymbolSubstitutionAsChangedLogic(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	writeFile(t, dir, "flags.go", "package policy\n\nconst strictMode = true\nconst permissiveMode = false\n")
+	writeFile(t, dir, "policy.go", "package policy\n\nfunc allowed(isAdmin bool) bool { return isAdmin && strictMode }\n")
+	runGit(t, dir, "add", "flags.go", "policy.go")
+	runGit(t, dir, "commit", "-m", "initial")
+	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	runGit(t, dir, "switch", "-c", "feature/policy")
+	writeFile(t, dir, "policy.go", "package policy\n\nfunc allowed(isAdmin bool) bool { return isAdmin && permissiveMode }\n")
+	runGit(t, dir, "add", "policy.go")
+	runGit(t, dir, "commit", "-m", "change policy")
+
+	reviewer := &emptyReviewer{}
+	var stdout, stderr bytes.Buffer
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base}, &stdout, &stderr, slopcli.Options{
+		ReviewerFactory: func(context.Context, *config.Config, io.Writer) (engine.Reviewer, io.Closer, error) {
+			return reviewer, nil, nil
+		},
+	})
+	if exitCode != 0 {
+		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
+	}
+	if reviewer.calls != 1 {
+		t.Fatalf("reviewer calls = %d, want sibling substitution reviewed\n%s", reviewer.calls, stdout.String())
+	}
+	for _, want := range []string{"tier: single-review", "novelty: 2, existing source logic changed"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("output missing %q:\n%s", want, stdout.String())
+		}
+	}
+}
+
+func TestRunGatePrintsVerdictBeforeReportingProvenanceAppendFailure(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	writeFile(t, dir, "calc_test.go", "package calc\nfunc TestPositive(t *testing.T) {}\nfunc TestNegative(t *testing.T) {}\n")
+	runGit(t, dir, "add", "calc_test.go")
+	runGit(t, dir, "commit", "-m", "initial")
+	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	runGit(t, dir, "switch", "-c", "test/remove-case")
+	writeFile(t, dir, "calc_test.go", "package calc\nfunc TestPositive(t *testing.T) {}\n")
+	runGit(t, dir, "add", "calc_test.go")
+	runGit(t, dir, "commit", "-m", "remove test")
+
+	var stdout, stderr bytes.Buffer
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base, "--tier", "leak-scan-only"}, &stdout, &stderr, slopcli.Options{ProvenanceStore: failingProvenanceStore{}})
+	if exitCode != 2 {
+		t.Fatalf("exit = %d, want bookkeeping failure\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
+	}
+	for _, want := range []string{"finding: [test-capitulation]", "verdict: fail"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("stdout missing completed result %q:\n%s", want, stdout.String())
+		}
+	}
+	if !strings.Contains(stderr.String(), "record provenance: write denied") {
+		t.Fatalf("stderr does not report append failure:\n%s", stderr.String())
+	}
+}
+
 func TestRunEvaluateComparesCapturedPolicyResults(t *testing.T) {
 	t.Parallel()
 
@@ -283,6 +633,39 @@ func TestRunEvaluateComparesCapturedPolicyResults(t *testing.T) {
 		"unconditioned: found 0, missed 1, false-positive 0",
 		"conditioned: found 1, missed 0, false-positive 0",
 		"delta: found +1, missed -1, false-positive +0",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("output missing %q:\n%s", want, stdout.String())
+		}
+	}
+}
+
+func TestRunEvaluateAttributesReplayedResultSources(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	unconditionedPath := filepath.Join(root, "unconditioned.json")
+	conditionedPath := filepath.Join(root, "conditioned.json")
+	writeFile(t, root, "case-a/case.json", `{"schema_version":1,"id":"case-a","description":"fail-open","expected_findings":[{"lens":"fail-open-default","path":"policy.go","line":8}]}`)
+	writeFile(t, root, "case-a/change.diff", "--- a/policy.go\n+++ b/policy.go\n@@ -8 +8 @@\n-return false\n+return true\n")
+	writeFile(t, root, "unconditioned.json", `{"schema_version":1,"policy":"baseline-policy","cases":[{"case_id":"case-a","findings":[]}]}`)
+	writeFile(t, root, "conditioned.json", `{"schema_version":1,"policy":"history-policy","cases":[{"case_id":"case-a","findings":[{"lens":"fail-open-default","path":"policy.go","line":8}]}]}`)
+
+	var stdout, stderr bytes.Buffer
+	exitCode := slopcli.Run(context.Background(), []string{
+		"evaluate",
+		"--corpus", root,
+		"--unconditioned-results", unconditionedPath,
+		"--conditioned-results", conditionedPath,
+	}, &stdout, &stderr, slopcli.Options{})
+	if exitCode != 0 {
+		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
+	}
+	for _, want := range []string{
+		"corpus: synthetic replay cases from " + root,
+		"results: replayed captures, not produced by this run",
+		`unconditioned policy "baseline-policy" from ` + unconditionedPath,
+		`conditioned policy "history-policy" from ` + conditionedPath,
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("output missing %q:\n%s", want, stdout.String())

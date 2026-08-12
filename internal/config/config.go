@@ -186,7 +186,8 @@ type SlopRiskRaw struct {
 
 // SlopLeakScanRaw controls the optional private-name blocklist file.
 type SlopLeakScanRaw struct {
-	BlocklistFile string `yaml:"blocklist_file"`
+	BlocklistFile   string `yaml:"blocklist_file"`
+	AllowExemptions *bool  `yaml:"allow_exemptions"`
 }
 
 // SlopProseRaw controls outbound artifact recognition and vocabulary checks.
@@ -478,7 +479,8 @@ type SlopRisk struct {
 }
 
 type SlopLeakScan struct {
-	BlocklistFile string
+	BlocklistFile   string
+	AllowExemptions bool
 }
 
 type SlopProse struct {
@@ -1818,7 +1820,7 @@ func resolveSlop(raw SlopRaw) Slop {
 			SingleReviewThreshold:    3,
 			FullAdversarialThreshold: 6,
 		},
-		LeakScan: SlopLeakScan{BlocklistFile: ".noslop-blocklist"},
+		LeakScan: SlopLeakScan{BlocklistFile: ".noslop-blocklist", AllowExemptions: true},
 		Prose: SlopProse{
 			OutboundPaths: []string{"outbound/**"},
 		},
@@ -1836,6 +1838,9 @@ func resolveSlop(raw SlopRaw) Slop {
 	resolved.Risk.HighRiskPaths = append([]string(nil), raw.Risk.HighRiskPaths...)
 	if value := strings.TrimSpace(raw.LeakScan.BlocklistFile); value != "" {
 		resolved.LeakScan.BlocklistFile = value
+	}
+	if raw.LeakScan.AllowExemptions != nil {
+		resolved.LeakScan.AllowExemptions = *raw.LeakScan.AllowExemptions
 	}
 	if len(raw.Prose.OutboundPaths) > 0 {
 		resolved.Prose.OutboundPaths = append([]string(nil), raw.Prose.OutboundPaths...)

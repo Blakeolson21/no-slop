@@ -22,8 +22,6 @@ slop:
       - "internal/security/**"
       - ".github/workflows/**"
       - "migrations/**"
-  leak_scan:
-    blocklist_file: ".noslop-blocklist"
   prose:
     outbound_paths:
       - "outbound/**"
