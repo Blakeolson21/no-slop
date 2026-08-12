@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "asserted-followup-ticket-without-id",
+  "description": "A TODO says a migration ticket was filed but names no inspectable ticket.",
+  "expected_findings": [
+    {
+      "lens": "asserted-followup-without-artifact",
+      "path": "session.go",
+      "line": 55,
+      "description": "a todo says a migration ticket was filed but names no inspectable ticket."
+    }
+  ]
+}

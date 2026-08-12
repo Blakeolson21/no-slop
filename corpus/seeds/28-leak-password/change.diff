@@ -1,0 +1,7 @@
+diff --git a/deploy/sample.env b/deploy/sample.env
+new file mode 100644
+index 0000000..2222222
+--- /dev/null
++++ b/deploy/sample.env
+@@ -0,0 +1 @@
++password="EXAMPLE_NOT_A_REAL_PASSWORD_12345"

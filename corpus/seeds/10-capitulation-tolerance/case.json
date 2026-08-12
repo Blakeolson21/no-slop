@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "test-capitulation-widened-tolerance",
+  "description": "A regression test widens its tolerance enough to accept the incorrect rounding behavior.",
+  "expected_findings": [
+    {
+      "lens": "test-capitulation",
+      "path": "money_test.go",
+      "line": 27,
+      "description": "a regression test widens its tolerance enough to accept the incorrect rounding behavior."
+    }
+  ]
+}

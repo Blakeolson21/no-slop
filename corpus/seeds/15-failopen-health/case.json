@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "fail-open-default-timeout-healthy",
+  "description": "A timed-out dependency health check is converted into a healthy result.",
+  "expected_findings": [
+    {
+      "lens": "fail-open-default",
+      "path": "health.go",
+      "line": 29,
+      "description": "a timed-out dependency health check is converted into a healthy result."
+    }
+  ]
+}

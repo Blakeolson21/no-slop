@@ -1,0 +1,9 @@
+diff --git a/internal/auth/token.go b/internal/auth/token.go
+index 1111111..2222222 100644
+--- a/internal/auth/token.go
++++ b/internal/auth/token.go
+@@ -64,7 +64,7 @@ func validToken(token string, storedHash []byte) bool {
+ 	tokenHash := hash(token)
+-	return subtle.ConstantTimeCompare(tokenHash, storedHash) == 1
++	return subtle.ConstantTimeCompare(tokenHash, tokenHash) == 1
+ }

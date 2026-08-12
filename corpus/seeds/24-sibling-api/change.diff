@@ -1,0 +1,15 @@
+diff --git a/internal/security/routes.go b/internal/security/routes.go
+index 1111111..2222222 100644
+--- a/internal/security/routes.go
++++ b/internal/security/routes.go
+@@ -80,10 +80,13 @@ func registerRoutes(r *Router) {
+ 	r.Post("/v1/import", func(req Request) Response {
++		if !validImport(req.Body) {
++			return BadRequest()
++		}
+ 		return importData(req.Body)
+ 	})
+ 	r.Post("/v2/import", func(req Request) Response {
+ 		return importData(req.Body)
+ 	})
+ }

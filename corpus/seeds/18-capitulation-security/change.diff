@@ -1,0 +1,15 @@
+diff --git a/internal/auth/nonce_test.go b/internal/auth/nonce_test.go
+index 1111111..2222222 100644
+--- a/internal/auth/nonce_test.go
++++ b/internal/auth/nonce_test.go
+@@ -44,12 +43,0 @@
+-func TestConsumeRejectsReplayedNonce(t *testing.T) {
+-	store := NewNonceStore()
+-	if err := store.Consume("nonce-a"); err != nil {
+-		t.Fatal(err)
+-	}
+-	if err := store.Consume("nonce-a"); err == nil {
+-		t.Fatal("replayed nonce accepted")
+-	}
+-}
+-

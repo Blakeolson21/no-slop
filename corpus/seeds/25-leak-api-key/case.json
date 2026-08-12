@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "leak-credential-assignment-api-key",
+  "description": "A committed example configuration contains a credential-shaped API key assignment.",
+  "expected_findings": [
+    {
+      "lens": "leak-identity-scan",
+      "path": "examples/client.conf",
+      "line": 2,
+      "description": "a committed example configuration contains a credential-shaped api key assignment."
+    }
+  ]
+}

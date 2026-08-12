@@ -1,6 +1,7 @@
 package corpus_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/slop/corpus"
 	"github.com/kunchenguid/no-mistakes/internal/slop/lenses"
+	"github.com/kunchenguid/no-mistakes/internal/slop/prose"
 )
 
 func TestCompareScoresConditionedAndUnconditionedFindings(t *testing.T) {
@@ -76,6 +78,62 @@ func TestLoadRejectsUnknownExpectedLens(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsMandatoryFindingKindsAndPathlessThreadState(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	for _, testCase := range []struct {
+		dir     string
+		finding string
+		path    string
+	}{
+		{dir: "leak", finding: "leak-identity-scan", path: "sample.env"},
+		{dir: "thread", finding: "thread-closed"},
+		{dir: "duplicate", finding: "duplicate-claim", path: "outbound/comment.md"},
+	} {
+		caseDir := filepath.Join(root, testCase.dir)
+		if err := os.MkdirAll(caseDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		encoded := `{"schema_version":1,"id":"` + testCase.dir + `","expected_findings":[{"lens":"` + testCase.finding + `","path":"` + testCase.path + `","line":0}]}`
+		if err := os.WriteFile(filepath.Join(caseDir, "case.json"), []byte(encoded), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(caseDir, "change.diff"), []byte("--- a/file\n+++ b/file\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := corpus.Load(root); err != nil {
+		t.Fatalf("load mandatory finding cases: %v", err)
+	}
+}
+
+func TestReplayMandatoryChecksUsesDiffAndThreadFixtureWithoutExpectations(t *testing.T) {
+	t.Parallel()
+
+	diff := []byte("diff --git a/sample.env b/sample.env\nnew file mode 100644\n--- /dev/null\n+++ b/sample.env\n@@ -0,0 +1 @@\n+api_key=\"EXAMPLE_NOT_A_REAL_KEY_123456789\"\n" +
+		"diff --git a/outbound/comment.md b/outbound/comment.md\nnew file mode 100644\n--- /dev/null\n+++ b/outbound/comment.md\n@@ -0,0 +1 @@\n+Please review the timeout fallback.\n" +
+		"diff --git a/calc_test.go b/calc_test.go\n--- a/calc_test.go\n+++ b/calc_test.go\n@@ -12,3 +11,0 @@\n-func TestNegative(t *testing.T) {\n-\tt.Fatal(\"negative\")\n-}\n")
+	findings, err := corpus.ReplayMandatory(context.Background(), diff, &prose.Thread{Open: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := make(map[string]corpus.Finding)
+	for _, finding := range findings {
+		seen[finding.Lens] = finding
+	}
+	if finding := seen["leak-identity-scan"]; finding.Path != "sample.env" || finding.Line != 1 {
+		t.Fatalf("leak finding = %+v", finding)
+	}
+	if finding := seen["thread-closed"]; finding.Path != "" || finding.Line != 0 {
+		t.Fatalf("thread finding = %+v", finding)
+	}
+	if finding := seen["test-capitulation"]; finding.Path != "calc_test.go" || finding.Line != 12 {
+		t.Fatalf("test-count finding = %+v", finding)
+	}
+}
+
 func TestSeedCorpusCoversEachTaxonomyLens(t *testing.T) {
 	t.Parallel()
 
@@ -84,6 +142,9 @@ func TestSeedCorpusCoversEachTaxonomyLens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(cases) < 30 {
+		t.Fatalf("corpus has %d cases, want at least 30", len(cases))
+	}
 	seen := make(map[string]int)
 	for _, testCase := range cases {
 		for _, finding := range testCase.ExpectedFindings {
@@ -91,8 +152,17 @@ func TestSeedCorpusCoversEachTaxonomyLens(t *testing.T) {
 		}
 	}
 	for _, lens := range lenses.Names() {
-		if seen[lens] != 1 {
-			t.Errorf("lens %q has %d seed cases, want 1", lens, seen[lens])
+		if seen[lens] < 3 {
+			t.Errorf("lens %q has %d corpus cases, want at least 3", lens, seen[lens])
+		}
+	}
+	for finding, minimum := range map[string]int{
+		"leak-identity-scan": 4,
+		"thread-closed":      2,
+		"duplicate-claim":    2,
+	} {
+		if seen[finding] < minimum {
+			t.Errorf("finding class %q has %d corpus cases, want at least %d", finding, seen[finding], minimum)
 		}
 	}
 }

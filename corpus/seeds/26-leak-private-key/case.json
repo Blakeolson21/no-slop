@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "leak-private-key-header",
+  "description": "A committed fixture contains a private-key header.",
+  "expected_findings": [
+    {
+      "lens": "leak-identity-scan",
+      "path": "fixtures/key.txt",
+      "line": 1,
+      "description": "a committed fixture contains a private-key header."
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "comment-defended-workaround-tls-bypass",
+  "description": "A delivery-path comment justifies disabling certificate verification.",
+  "expected_findings": [
+    {
+      "lens": "comment-defended-workaround",
+      "path": ".github/scripts/publish.go",
+      "line": 21,
+      "description": "a delivery-path comment justifies disabling certificate verification."
+    }
+  ]
+}

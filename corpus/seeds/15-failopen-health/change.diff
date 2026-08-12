@@ -1,0 +1,15 @@
+diff --git a/health.go b/health.go
+index 1111111..2222222 100644
+--- a/health.go
++++ b/health.go
+@@ -25,7 +25,10 @@ func dependencyHealthy(ctx context.Context) bool {
+ 	ok, err := probe(ctx)
+ 	if err != nil {
+-		return false
++		if errors.Is(err, context.DeadlineExceeded) {
++			return true
++		}
++		return false
+ 	}
+ 	return ok
+ }

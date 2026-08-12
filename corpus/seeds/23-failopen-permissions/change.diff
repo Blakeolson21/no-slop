@@ -1,0 +1,12 @@
+diff --git a/internal/auth/permissions.go b/internal/auth/permissions.go
+index 1111111..2222222 100644
+--- a/internal/auth/permissions.go
++++ b/internal/auth/permissions.go
+@@ -36,7 +36,7 @@ func permissions(ctx context.Context, userID string) Permissions {
+ 	value, err := store.Read(ctx, userID)
+ 	if err != nil {
+-		return Permissions{}
++		return AllPermissions()
+ 	}
+ 	return value
+ }

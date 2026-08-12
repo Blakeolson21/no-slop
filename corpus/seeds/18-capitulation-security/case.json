@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "test-capitulation-removed-replay-case",
+  "description": "A high-risk authentication change removes the test that rejects replayed nonces.",
+  "expected_findings": [
+    {
+      "lens": "test-capitulation",
+      "path": "internal/auth/nonce_test.go",
+      "line": 44,
+      "description": "a high-risk authentication change removes the test that rejects replayed nonces."
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+diff --git a/http/headers.go b/http/headers.go
+index 1111111..2222222 100644
+--- a/http/headers.go
++++ b/http/headers.go
+@@ -8,6 +8,7 @@ func applyHeaders(w http.ResponseWriter) {
+ 	w.Header().Set("X-Content-Type-Options", "nosniff")
++	w.Header().Set("Cache-Control", "no-store")
+ }
+diff --git a/metrics/server.go b/metrics/server.go
+new file mode 100644
+index 0000000..2222222
+--- /dev/null
++++ b/metrics/server.go
+@@ -0,0 +1,9 @@
++package metrics
++
++import "net/http"
++
++func Start() {
++	go func() {
++		_ = http.ListenAndServe(":9090", nil)
++	}()
++}

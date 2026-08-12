@@ -1,0 +1,13 @@
+diff --git a/cache.go b/cache.go
+index 1111111..2222222 100644
+--- a/cache.go
++++ b/cache.go
+@@ -30,7 +30,8 @@ func (c *Cache) replace(next Value) {
+-	previousGeneration := c.generation
+ 	c.value = next
+ 	c.generation++
++	previousGeneration := c.generation
++	// Detect another writer racing this replacement.
+ 	if c.generation != previousGeneration {
+ 		c.invalidate()
+ 	}

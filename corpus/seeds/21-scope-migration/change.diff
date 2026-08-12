@@ -1,0 +1,19 @@
+diff --git a/internal/auth/permissions.go b/internal/auth/permissions.go
+index 1111111..2222222 100644
+--- a/internal/auth/permissions.go
++++ b/internal/auth/permissions.go
+@@ -18,6 +18,7 @@ func CanDelete(role Role) bool {
+-	return role == Admin || role == Editor
++	return role == Admin
+ }
+diff --git a/migrations/042_audit_events.sql b/migrations/042_audit_events.sql
+new file mode 100644
+index 0000000..2222222
+--- /dev/null
++++ b/migrations/042_audit_events.sql
+@@ -0,0 +1,5 @@
++CREATE TABLE audit_events (
++    id BIGINT PRIMARY KEY,
++    actor_id BIGINT NOT NULL,
++    payload TEXT NOT NULL
++);

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "prose-stale-closed-pull-request",
+  "description": "A review draft requests changes on a pull request whose replay fixture says it is closed.",
+  "expected_findings": [
+    {
+      "lens": "thread-closed",
+      "path": "",
+      "line": 0,
+      "description": "a review draft requests changes on a pull request whose replay fixture says it is closed."
+    }
+  ]
+}

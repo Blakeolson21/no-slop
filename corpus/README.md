@@ -7,7 +7,9 @@ Each directory under `seeds/` contains:
 - `change.diff`: the recorded change presented to a review policy.
 - `case.json`: schema version 1 metadata and independently expected findings.
 
-Each seed exercises one NoSlop taxonomy lens. Expected findings match on lens, path, and line. An expected line of `0` matches any line in that path.
+The campaign contains 32 synthetic cases: three per reviewer lens, four leak cases, and four stale outbound-prose cases. Expected findings match on lens, path, and line. An expected line of `0` matches any line in that path.
+
+`campaign.json` fixes each case's alias, intent, tier, conditioning input, and optional thread fixture. `policies/` contains the frozen conditioned, unconditioned, and challenge policies. `results/2026-08-12/` contains scorer inputs plus raw invocation and latency captures. [The measured report](../docs/evaluation.md) publishes the protocol, full result table, failures, and limitations.
 
 Policy result files use this shape:
 
@@ -31,13 +33,20 @@ Policy result files use this shape:
 }
 ```
 
-Capture one results file from each policy, then compare them:
+Capture fresh results from each policy:
+
+```sh
+./scripts/capture-noslop-corpus.sh unconditioned corpus/results/replay/unconditioned.json
+./scripts/capture-noslop-corpus.sh conditioned corpus/results/replay/conditioned.json
+```
+
+Then compare them:
 
 ```sh
 noslop evaluate \
   --corpus corpus/seeds \
-  --unconditioned-results results/unconditioned.json \
-  --conditioned-results results/conditioned.json
+  --unconditioned-results corpus/results/replay/unconditioned.json \
+  --conditioned-results corpus/results/replay/conditioned.json
 ```
 
-The scorer reports found, missed, and false-positive counts. It does not launch a reviewer or invent policy output. Capturing live policy output, latency, and cost is a later integration.
+The capture script runs deterministic checks from recorded inputs, invokes the selected reviewer policy without reading expectations, applies a fixed per-invocation timeout, and keeps raw run metadata. The scorer reports found, missed, and false-positive counts. It does not launch a reviewer or invent policy output.

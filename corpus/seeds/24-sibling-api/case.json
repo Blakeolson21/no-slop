@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "sibling-rule-api-v2-unvalidated",
+  "description": "Input validation is added only to the version-one security handler, leaving version two exposed.",
+  "expected_findings": [
+    {
+      "lens": "rule-applied-in-one-place-not-sibling",
+      "path": "internal/security/routes.go",
+      "line": 88,
+      "description": "input validation is added only to the version-one security handler, leaving version two exposed."
+    }
+  ]
+}

@@ -141,6 +141,8 @@ Replay captured policy findings against the seed corpus:
 
 The [corpus format](docs/src/content/docs/reference/evaluation-corpus.md) records diffs and independent expected findings. The runner labels the seed corpus and result files as replayed inputs, then reports found, missed, and false-positive counts without inventing reviewer output.
 
+The first [measured 32-case campaign](docs/evaluation.md) found 10 expectations, missed 22, and emitted no unmatched findings under both policies. All model-backed reviewer invocations timed out, so the result does not support a superiority claim. Raw captures and latency records are checked in for replay and inspection.
+
 ## Development
 
 ```sh

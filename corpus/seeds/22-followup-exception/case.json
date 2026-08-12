@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "asserted-followup-security-exception-without-reference",
+  "description": "A security exception says formal approval exists without an approval reference.",
+  "expected_findings": [
+    {
+      "lens": "asserted-followup-without-artifact",
+      "path": "internal/security/headers.go",
+      "line": 76,
+      "description": "a security exception says formal approval exists without an approval reference."
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "scope-expansion-unrequested-metrics-server",
+  "description": "A small response-header task also adds a process-wide metrics server.",
+  "expected_findings": [
+    {
+      "lens": "scope-expansion",
+      "path": "metrics/server.go",
+      "line": 1,
+      "description": "a small response-header task also adds a process-wide metrics server."
+    }
+  ]
+}
