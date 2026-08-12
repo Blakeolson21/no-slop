@@ -43,8 +43,8 @@ var (
 	versionPathPattern  = regexp.MustCompile(`["']/v([0-9]+)/([^"']+)["']`)
 	durableReference    = regexp.MustCompile(`(?i)(https?://|#[0-9]+\b|\b[A-Z][A-Z0-9]+-[0-9]+\b|\b(?:issue|ticket|approval)\s+(?:id|ref(?:erence)?)\s*[:#]?\s*[A-Za-z0-9-]+)`)
 	errorContextPattern = regexp.MustCompile(`(?i)\berr(?:or)?s?\b|deadlineexceeded|timeout|unreadable|notexist`)
-	declarationPattern  = regexp.MustCompile(`^func\s+(?:\([^)]*\)\s*)?([A-Za-z_][A-Za-z0-9_]*)\b`)
-	typeDeclaration     = regexp.MustCompile(`^type\b`)
+	declarationPattern  = regexp.MustCompile(`^(?:func\s+(?:\([^)]*\)\s*)?|type\s+|(?:var|const)\s+)([A-Za-z_][A-Za-z0-9_]*)\b`)
+	declarationBlock    = regexp.MustCompile(`^(?:type|var|const)\s*\($`)
 )
 
 type lexedSourceLine struct {
@@ -236,7 +236,7 @@ func adjacentCodeLine(lines []string, lexed []lexedSourceLine, after int) string
 
 func isDeclaration(value string) bool {
 	trimmed := strings.TrimSpace(value)
-	return declarationPattern.MatchString(trimmed) || typeDeclaration.MatchString(trimmed)
+	return declarationPattern.MatchString(trimmed) || declarationBlock.MatchString(trimmed)
 }
 
 // identifierWords splits a declaration name into the words a doc comment could

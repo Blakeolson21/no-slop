@@ -2,7 +2,9 @@ package corpus_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,10 +51,27 @@ func TestLoadCaseSetSelectsAnExplicitHistoricalSnapshot(t *testing.T) {
 
 	root := t.TempDir()
 	path := filepath.Join(root, "round-four.json")
-	if err := os.WriteFile(path, []byte(`{"schema_version":1,"name":"round-four","case_ids":["case-a"]}`), 0o644); err != nil {
+	caseJSON := `{"schema_version":1,"id":"case-a","description":"case a","expected_findings":[]}`
+	diff := "--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n-old\n+new\n"
+	caseDir := filepath.Join(root, "case-a")
+	if err := os.MkdirAll(caseDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cases := []corpus.Case{{ID: "case-a"}, {ID: "case-b"}}
+	if err := os.WriteFile(filepath.Join(caseDir, "case.json"), []byte(caseJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(caseDir, "change.diff"), []byte(diff), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases, err := corpus.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte(caseJSON + diff))
+	manifest := fmt.Sprintf(`{"schema_version":1,"name":"round-four","content_sha256":"%x","case_ids":["case-a"]}`, digest)
+	if err := os.WriteFile(path, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	selected, err := corpus.LoadCaseSet(path, cases)
 	if err != nil {
 		t.Fatal(err)
@@ -61,11 +80,18 @@ func TestLoadCaseSetSelectsAnExplicitHistoricalSnapshot(t *testing.T) {
 		t.Fatalf("selected cases = %+v, want case-a", selected)
 	}
 
-	if err := os.WriteFile(path, []byte(`{"schema_version":1,"name":"round-four","case_ids":["missing"]}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"schema_version":1,"name":"round-four","content_sha256":"0000000000000000000000000000000000000000000000000000000000000000","case_ids":["missing"]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := corpus.LoadCaseSet(path, cases); err == nil || !strings.Contains(err.Error(), `unknown case "missing"`) {
 		t.Fatalf("unknown case error = %v", err)
+	}
+
+	if err := os.WriteFile(path, []byte(`{"schema_version":1,"name":"round-four","content_sha256":"0000000000000000000000000000000000000000000000000000000000000000","case_ids":["case-a"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := corpus.LoadCaseSet(path, cases); err == nil || !strings.Contains(err.Error(), "content SHA-256") {
+		t.Fatalf("changed content error = %v", err)
 	}
 }
 

@@ -4,6 +4,7 @@ package corpus
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -38,6 +39,7 @@ type Case struct {
 	ExpectedFindings []Finding `json:"expected_findings"`
 	Diff             []byte    `json:"-"`
 	Directory        string    `json:"-"`
+	snapshotContent  []byte
 }
 
 // CaseResult contains one policy's findings for one corpus case.
@@ -71,6 +73,7 @@ type CaseSet struct {
 	SchemaVersion int      `json:"schema_version"`
 	Name          string   `json:"name"`
 	CaseIDs       []string `json:"case_ids"`
+	ContentSHA256 string   `json:"content_sha256"`
 }
 
 // Load reads every immediate case directory in stable name order.
@@ -141,6 +144,7 @@ func Load(root string) ([]Case, error) {
 			return nil, fmt.Errorf("load corpus case %q: recorded diff is empty", entry.Name())
 		}
 		testCase.Directory = dir
+		testCase.snapshotContent = append(append([]byte(nil), encoded...), testCase.Diff...)
 		cases = append(cases, testCase)
 	}
 	if len(cases) == 0 {
@@ -191,12 +195,16 @@ func LoadCaseSet(path string, cases []Case) ([]Case, error) {
 	if len(set.CaseIDs) == 0 {
 		return nil, fmt.Errorf("load case set: case_ids is required")
 	}
+	if len(set.ContentSHA256) != sha256.Size*2 {
+		return nil, fmt.Errorf("load case set %q: content_sha256 must be a SHA-256 digest", set.Name)
+	}
 	byID := make(map[string]Case, len(cases))
 	for _, testCase := range cases {
 		byID[testCase.ID] = testCase
 	}
 	selected := make([]Case, 0, len(set.CaseIDs))
 	seen := make(map[string]bool, len(set.CaseIDs))
+	digest := sha256.New()
 	for _, id := range set.CaseIDs {
 		id = strings.TrimSpace(id)
 		if id == "" {
@@ -211,6 +219,11 @@ func LoadCaseSet(path string, cases []Case) ([]Case, error) {
 			return nil, fmt.Errorf("load case set %q: unknown case %q", set.Name, id)
 		}
 		selected = append(selected, testCase)
+		_, _ = digest.Write(testCase.snapshotContent)
+	}
+	actual := fmt.Sprintf("%x", digest.Sum(nil))
+	if !strings.EqualFold(actual, set.ContentSHA256) {
+		return nil, fmt.Errorf("load case set %q: content SHA-256 is %s, want %s", set.Name, actual, set.ContentSHA256)
 	}
 	return selected, nil
 }

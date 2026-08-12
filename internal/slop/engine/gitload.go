@@ -69,9 +69,11 @@ func LoadGitChanges(ctx context.Context, workDir, baseRef, headRef string) ([]Ch
 				return nil, fmt.Errorf("load current %q: %w", path, err)
 			}
 		}
-		change.AddedContent, err = loadAddedContent(ctx, workDir, baseRef, headRef, path)
-		if err != nil {
-			return nil, err
+		if status != risk.Renamed {
+			change.AddedContent, err = loadAddedContent(ctx, workDir, baseRef, headRef, path)
+			if err != nil {
+				return nil, err
+			}
 		}
 		changes = append(changes, change)
 	}

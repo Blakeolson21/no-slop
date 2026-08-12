@@ -201,7 +201,7 @@ Score the round 5 captures:
   --conditioned-results corpus/results/2026-08-12-r5/conditioned.json
 ```
 
-The checked-in scorer captures are under `corpus/results/2026-08-12/` for the baseline, `corpus/results/2026-08-12-r4/` for round 4, and `corpus/results/2026-08-12-r5/` for round 5. The first two use the checked-in 32-case manifest, SHA-256 `df68d74bf5b978e60c43d6a2cd2ef013f7fa569228bbb88989db7377e8119fc2`, because the live corpus later expanded to 36 cases; missing cases within that explicit snapshot still fail scoring. Their matching `.run.json` files retain policy name, model, timeout, case aliases, tier, priority lens, round, raw response, error, and elapsed milliseconds for every invocation.
+The checked-in scorer captures are under `corpus/results/2026-08-12/` for the baseline, `corpus/results/2026-08-12-r4/` for round 4, and `corpus/results/2026-08-12-r5/` for round 5. The first two use the checked-in 32-case manifest, file SHA-256 `e08936b680df883d910e31ec13fb795e44a22870295ec3df8041307b21acd22e`, because the live corpus later expanded to 36 cases. The manifest verifies the selected `case.json` and `change.diff` content against aggregate SHA-256 `8adbd6135ba1f04825f164b8b3561d6303d3a0446d94cab4867949885b6d367c`; changed or missing snapshot content fails scoring. Their matching `.run.json` files retain policy name, model, timeout, case aliases, tier, priority lens, round, raw response, error, and elapsed milliseconds for every invocation.
 
 Baseline result SHA-256 values:
 

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/slop/engine"
+	"github.com/kunchenguid/no-mistakes/internal/slop/precheck"
 	"github.com/kunchenguid/no-mistakes/internal/slop/risk"
 )
 
@@ -54,7 +55,7 @@ func TestLoadGitChangesRecognizesExactRename(t *testing.T) {
 	gitRun(t, dir, "init", "-b", "main")
 	gitRun(t, dir, "config", "user.email", "test@example.com")
 	gitRun(t, dir, "config", "user.name", "Test")
-	writeFixture(t, dir, "old.go", "package sample\n\nfunc value() int { return 1 }\n")
+	writeFixture(t, dir, "old.go", "package sample\n\nfunc increment(i int) int {\n\t// increment i\n\ti += 1\n\treturn i\n}\n")
 	gitRun(t, dir, "add", "old.go")
 	gitRun(t, dir, "commit", "-m", "base")
 	base := gitRun(t, dir, "rev-parse", "HEAD")
@@ -75,6 +76,18 @@ func TestLoadGitChangesRecognizesExactRename(t *testing.T) {
 	}
 	if change.BaselineContent != change.CurrentContent {
 		t.Fatalf("rename content differs: baseline %q current %q", change.BaselineContent, change.CurrentContent)
+	}
+	if change.AddedContent != "" {
+		t.Fatalf("rename added content = %q, want empty", change.AddedContent)
+	}
+	findings := precheck.Scan([]precheck.File{{
+		Path:            change.Path,
+		AddedContent:    change.AddedContent,
+		BaselineContent: change.BaselineContent,
+		CurrentContent:  change.CurrentContent,
+	}}, "")
+	if len(findings) != 0 {
+		t.Fatalf("exact rename produced findings: %+v", findings)
 	}
 }
 

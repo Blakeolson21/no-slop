@@ -3,7 +3,9 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -678,11 +680,14 @@ func TestRunEvaluateUsesExplicitHistoricalCaseSet(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	writeFile(t, root, "case-a/case.json", `{"schema_version":1,"id":"case-a","description":"original","expected_findings":[]}`)
-	writeFile(t, root, "case-a/change.diff", "--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n-old\n+new\n")
+	caseJSON := `{"schema_version":1,"id":"case-a","description":"original","expected_findings":[]}`
+	caseDiff := "--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n-old\n+new\n"
+	writeFile(t, root, "case-a/case.json", caseJSON)
+	writeFile(t, root, "case-a/change.diff", caseDiff)
 	writeFile(t, root, "case-b/case.json", `{"schema_version":1,"id":"case-b","description":"later","expected_findings":[]}`)
 	writeFile(t, root, "case-b/change.diff", "--- a/b.go\n+++ b/b.go\n@@ -1 +1 @@\n-old\n+new\n")
-	writeFile(t, root, "historical.json", `{"schema_version":1,"name":"historical","case_ids":["case-a"]}`)
+	digest := sha256.Sum256([]byte(caseJSON + caseDiff))
+	writeFile(t, root, "historical.json", fmt.Sprintf(`{"schema_version":1,"name":"historical","content_sha256":"%x","case_ids":["case-a"]}`, digest))
 	writeFile(t, root, "unconditioned.json", `{"schema_version":1,"policy":"unconditioned","cases":[{"case_id":"case-a","findings":[]}]}`)
 	writeFile(t, root, "conditioned.json", `{"schema_version":1,"policy":"conditioned","cases":[{"case_id":"case-a","findings":[]}]}`)
 

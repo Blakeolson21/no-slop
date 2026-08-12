@@ -417,6 +417,39 @@ func TestScanFlagsRedundantCommentShapes(t *testing.T) {
 			description: "doc comment adds no information beyond the declaration name",
 		},
 		{
+			name: "type doc comment adding nothing beyond the type name",
+			file: precheck.File{
+				Path:         "reader.go",
+				AddedContent: "// Reader handles Reader values.\n\n",
+				CurrentContent: "// Reader handles Reader values.\n" +
+					"type Reader struct{}\n",
+			},
+			line:        1,
+			description: "doc comment adds no information beyond the declaration name",
+		},
+		{
+			name: "variable doc comment adding nothing beyond the variable name",
+			file: precheck.File{
+				Path:         "state.go",
+				AddedContent: "// DefaultState is the DefaultState value.\n\n",
+				CurrentContent: "// DefaultState is the DefaultState value.\n" +
+					"var DefaultState = State{}\n",
+			},
+			line:        1,
+			description: "doc comment adds no information beyond the declaration name",
+		},
+		{
+			name: "constant doc comment adding nothing beyond the constant name",
+			file: precheck.File{
+				Path:         "limits.go",
+				AddedContent: "// MaxRetries is the MaxRetries value.\n\n",
+				CurrentContent: "// MaxRetries is the MaxRetries value.\n" +
+					"const MaxRetries = 3\n",
+			},
+			line:        1,
+			description: "doc comment adds no information beyond the declaration name",
+		},
+		{
 			name: "physical line after line directive",
 			file: precheck.File{
 				Path:         "generated.go",
