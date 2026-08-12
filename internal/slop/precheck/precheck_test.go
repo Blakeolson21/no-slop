@@ -268,6 +268,18 @@ func TestScanRedundantCommentAcquitsConventionalDocumentation(t *testing.T) {
 			},
 		},
 		{
+			name: "indented command sample inside a block comment",
+			file: precheck.File{
+				Path:         "setup.go",
+				AddedContent: "/*\n * Example:\n *     git config user name alice && git config user name bob\n */\n\n",
+				CurrentContent: "/*\n" +
+					" * Example:\n" +
+					" *     git config user name alice && git config user name bob\n" +
+					" */\n" +
+					"func configure() {}\n",
+			},
+		},
+		{
 			name: "comment-shaped lines inside a raw string",
 			file: precheck.File{
 				Path:         "fixture.go",
@@ -403,6 +415,18 @@ func TestScanFlagsRedundantCommentShapes(t *testing.T) {
 			},
 			line:        1,
 			description: "doc comment repeats the declaration name verbatim",
+		},
+		{
+			name: "physical line after line directive",
+			file: precheck.File{
+				Path:         "generated.go",
+				AddedContent: "\n// normalizeKey removes ASCII padding before lookup; removes ASCII padding before lookup.\n\n",
+				CurrentContent: "//line synthetic.go:1000\n" +
+					"// normalizeKey removes ASCII padding before lookup; removes ASCII padding before lookup.\n" +
+					"func normalizeKey(value string) string { return value }\n",
+			},
+			line:        2,
+			description: "comment repeats a phrase internally",
 		},
 	}
 

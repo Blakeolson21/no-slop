@@ -305,7 +305,7 @@ func lexSource(path string, lines []string) []lexedSourceLine {
 		if kind != token.COMMENT {
 			continue
 		}
-		start := files.Position(position)
+		start := files.PositionFor(position, false)
 		if start.Line < 1 || start.Line > len(lines) || start.Column < 1 || start.Column > len(lines[start.Line-1])+1 {
 			continue
 		}
@@ -335,8 +335,13 @@ func lexSource(path string, lines []string) []lexedSourceLine {
 }
 
 func blockBody(value string) string {
-	trimmed := strings.TrimLeftFunc(value, unicode.IsSpace)
-	return strings.TrimPrefix(trimmed, "*")
+	marker := strings.IndexFunc(value, func(letter rune) bool {
+		return !unicode.IsSpace(letter)
+	})
+	if marker >= 0 && value[marker] == '*' {
+		return value[marker+1:]
+	}
+	return value
 }
 
 // isCodeSample reports an indented line inside a comment, which is how Go doc
