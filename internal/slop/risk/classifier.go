@@ -354,7 +354,8 @@ func relocationPreservesCategory(file FileChange) bool {
 	if file.BaselinePath == "" {
 		return true
 	}
-	return pathCategory(file.Path) == pathCategory(file.BaselinePath)
+	return pathCategory(file.Path) == pathCategory(file.BaselinePath) &&
+		strings.EqualFold(filepath.Ext(file.Path), filepath.Ext(file.BaselinePath))
 }
 
 func pathCategory(path string) int {

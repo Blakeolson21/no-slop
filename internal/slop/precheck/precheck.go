@@ -22,6 +22,7 @@ import (
 // blank, matching the representation used by the leak scanner.
 type File struct {
 	Path            string
+	BaselinePath    string
 	AddedContent    string
 	BaselineContent string
 	CurrentContent  string
@@ -54,6 +55,7 @@ type lexedSourceLine struct {
 	standalone bool
 	commentID  int
 	body       string
+	code       string
 }
 
 // docFillerWords carry no information beyond the declaration they document, so
@@ -97,7 +99,11 @@ func detectRedundantComment(file File) []Finding {
 	var findings []Finding
 	current := splitLines(file.CurrentContent)
 	lexed, declarations := lexSource(file.Path, current)
-	baseline, _ := lexSource(file.Path, splitLines(file.BaselineContent))
+	baselinePath := file.BaselinePath
+	if baselinePath == "" {
+		baselinePath = file.Path
+	}
+	baseline, _ := lexSource(baselinePath, splitLines(file.BaselineContent))
 	for _, block := range commentBlocks(file, lexed, baseline) {
 		description := ""
 		switch {
@@ -277,6 +283,9 @@ func adjacentCodeLine(lines []string, lexed []lexedSourceLine, after int) string
 		if !lexed[number-1].comment {
 			return candidate
 		}
+		if lexed[number-1].code != "" {
+			return lexed[number-1].code
+		}
 	}
 	return ""
 }
@@ -360,6 +369,7 @@ func lexSource(path string, lines []string) ([]lexedSourceLine, map[int]string) 
 			continue
 		}
 		standalone := strings.TrimSpace(lines[start.Line-1][:start.Column-1]) == ""
+		code := strings.TrimSpace(lines[start.Line-1][:start.Column-1])
 		parts := strings.Split(literal, "\n")
 		for offset, part := range parts {
 			line := start.Line + offset
@@ -377,6 +387,9 @@ func lexSource(path string, lines []string) ([]lexedSourceLine, map[int]string) 
 				}
 			}
 			result[line-1] = lexedSourceLine{comment: true, standalone: standalone, commentID: commentID, body: blockBody(part)}
+			if offset == 0 {
+				result[line-1].code = code
+			}
 		}
 	}
 	declarationFiles := token.NewFileSet()
@@ -643,15 +656,22 @@ func detectScopeExpansion(files []File, intent string) []Finding {
 		return nil
 	}
 	for _, file := range files {
-		if strings.TrimSpace(file.BaselineContent) != "" || strings.TrimSpace(file.CurrentContent) == "" {
+		if strings.TrimSpace(file.CurrentContent) == "" {
 			continue
 		}
 		path := strings.ToLower(filepath.ToSlash(file.Path))
+		baselinePath := file.BaselinePath
+		if baselinePath == "" {
+			baselinePath = file.Path
+		}
+		baselinePath = strings.ToLower(filepath.ToSlash(baselinePath))
 		runtimeFile := isRuntimePath(path)
-		schemaFile := strings.Contains(path, "migration") || filepath.Ext(path) == ".sql"
-		unrequested := (strings.Contains(lowerIntent, "without adding runtime behavior") && runtimeFile) ||
-			(strings.Contains(lowerIntent, "without changing the database schema") && schemaFile) ||
-			(strings.Contains(lowerIntent, " only") && len(files) > 1 && runtimeFile && !pathNamedInIntent(path, lowerIntent))
+		schemaFile := isSchemaPath(path)
+		newRuntimeScope := runtimeFile && (strings.TrimSpace(file.BaselineContent) == "" || !isRuntimePath(baselinePath))
+		newSchemaScope := schemaFile && (strings.TrimSpace(file.BaselineContent) == "" || !isSchemaPath(baselinePath))
+		unrequested := (strings.Contains(lowerIntent, "without adding runtime behavior") && newRuntimeScope) ||
+			(strings.Contains(lowerIntent, "without changing the database schema") && newSchemaScope) ||
+			(strings.Contains(lowerIntent, " only") && len(files) > 1 && newRuntimeScope && !pathNamedInIntent(path, lowerIntent))
 		if !unrequested {
 			continue
 		}
@@ -1058,12 +1078,24 @@ func nextNonblankLine(lines []string, after int) int {
 }
 
 func isRuntimePath(path string) bool {
+	path = strings.ToLower(filepath.ToSlash(path))
+	if strings.HasPrefix(path, "docs/") || strings.HasPrefix(path, "examples/") {
+		return false
+	}
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".go", ".py", ".rb", ".java", ".kt", ".rs", ".js", ".jsx", ".ts", ".tsx", ".sql":
 		return !isTestPath(path)
 	default:
 		return false
 	}
+}
+
+func isSchemaPath(path string) bool {
+	path = strings.ToLower(filepath.ToSlash(path))
+	if strings.HasPrefix(path, "docs/") || strings.HasPrefix(path, "examples/") || isTestPath(path) {
+		return false
+	}
+	return strings.Contains(path, "migration") || filepath.Ext(path) == ".sql"
 }
 
 func pathNamedInIntent(path, intent string) bool {

@@ -329,6 +329,37 @@ func TestClassifyCrossCategoryRenamesRequireReview(t *testing.T) {
 	}
 }
 
+func TestClassifyCrossLanguageRenameRequiresReview(t *testing.T) {
+	t.Parallel()
+
+	for _, file := range []risk.FileChange{
+		{
+			Path:         "internal/worker.py",
+			BaselinePath: "internal/worker.go",
+			Status:       risk.Renamed,
+		},
+		{
+			Path:            "internal/worker.py",
+			BaselinePath:    "internal/worker.go",
+			Status:          risk.Modified,
+			BaselineContent: "func run(task string) string { return task }\n",
+			CurrentContent:  "func execute(job string) string { return job }\n",
+		},
+	} {
+		decision, err := risk.Classify(risk.ChangeSet{
+			Branch:        "refactor/worker",
+			DefaultBranch: "main",
+			Files:         []risk.FileChange{file},
+		}, risk.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.Novelty.Score != 2 || decision.Tier == risk.TierLeakScanOnly {
+			t.Fatalf("decision = %+v, want cross-language rename reviewed", decision)
+		}
+	}
+}
+
 func TestClassifyCallTargetAndArgumentSwapAsChangedLogic(t *testing.T) {
 	t.Parallel()
 

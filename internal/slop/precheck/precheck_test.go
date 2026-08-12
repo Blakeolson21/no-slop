@@ -437,6 +437,20 @@ func TestScanFlagsRedundantCommentShapes(t *testing.T) {
 			description: "comment restates the adjacent code",
 		},
 		{
+			name: "comment restating code with a trailing comment",
+			file: precheck.File{
+				Path:         "counter.go",
+				AddedContent: "\n// increment i\n\n",
+				CurrentContent: "func advance(i int) int {\n" +
+					"\t// increment i\n" +
+					"\ti += 1 // advance counter\n" +
+					"\treturn i\n" +
+					"}\n",
+			},
+			line:        2,
+			description: "comment restates the adjacent code",
+		},
+		{
 			name: "method doc comment adding nothing beyond the method name",
 			file: precheck.File{
 				Path:         "reader.go",

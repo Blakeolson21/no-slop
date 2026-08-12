@@ -278,6 +278,60 @@ func TestRunTestCountFloorStillRunsUnderLightOverride(t *testing.T) {
 	}
 }
 
+func TestRunTestCountFloorUsesBaselinePathForModifiedRename(t *testing.T) {
+	t.Parallel()
+
+	result, err := engine.Run(context.Background(), engine.Input{
+		WorkDir:       t.TempDir(),
+		Branch:        "refactor/fixtures",
+		DefaultBranch: "main",
+		Files: []engine.Change{{
+			Path:            "fixtures/widget.txt",
+			BaselinePath:    "widget_test.go",
+			Status:          risk.Modified,
+			Added:           1,
+			Deleted:         1,
+			BaselineContent: "package widget\nfunc TestWidget(t *testing.T) {}\n",
+			CurrentContent:  "widget fixture\n",
+		}},
+		Config: engine.Config{TestCountFloor: true, TierOverride: risk.TierLeakScanOnly},
+	}, engine.Dependencies{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Passed || len(result.Findings) != 1 || result.Findings[0].Lens != "test-capitulation" {
+		t.Fatalf("result = %+v, want renamed test removal detected", result)
+	}
+}
+
+func TestRunScopeExpansionDetectsDestinationEnteringRuntime(t *testing.T) {
+	t.Parallel()
+
+	result, err := engine.Run(context.Background(), engine.Input{
+		WorkDir:       t.TempDir(),
+		Branch:        "docs/server",
+		DefaultBranch: "main",
+		Intent:        "Move the example without adding runtime behavior.",
+		Files: []engine.Change{{
+			Path:            "internal/server.go",
+			BaselinePath:    "docs/server.go",
+			Status:          risk.Modified,
+			Added:           1,
+			Deleted:         1,
+			AddedContent:    "package internal\n",
+			BaselineContent: "package example\n",
+			CurrentContent:  "package internal\n",
+		}},
+		Config: engine.Config{TierOverride: risk.TierLeakScanOnly},
+	}, engine.Dependencies{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Passed || len(result.Findings) != 1 || result.Findings[0].Lens != "scope-expansion" {
+		t.Fatalf("result = %+v, want runtime scope expansion", result)
+	}
+}
+
 func TestRunConditionedDeterministicProbeRunsWhenConfiguredFloorIsOff(t *testing.T) {
 	t.Parallel()
 
