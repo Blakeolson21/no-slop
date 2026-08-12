@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // File contains the revision views needed by deterministic lens checks.
@@ -41,7 +42,48 @@ var (
 	durableReference    = regexp.MustCompile(`(?i)(https?://|#[0-9]+\b|\b[A-Z][A-Z0-9]+-[0-9]+\b|\b(?:issue|ticket|approval)\s+(?:id|ref(?:erence)?)\s*[:#]?\s*[A-Za-z0-9-]+)`)
 	errorContextPattern = regexp.MustCompile(`(?i)\berr(?:or)?s?\b|deadlineexceeded|timeout|unreadable|notexist`)
 	declarationPattern  = regexp.MustCompile(`^(?:func|function|def)\s+([A-Za-z_][A-Za-z0-9_]*)\b`)
+	typeDeclaration     = regexp.MustCompile(`^(?:class|type)\b`)
 )
+
+// commentMarkers maps a source extension to the line prefixes that start a
+// comment in that language. An extension absent here is not scanned for
+// redundant comments, which keeps Markdown headings, list bullets, and other
+// prose punctuation from being read as code comments.
+var commentMarkers = map[string][]string{
+	".c": cLikeMarkers, ".cc": cLikeMarkers, ".cpp": cLikeMarkers, ".cxx": cLikeMarkers,
+	".h": cLikeMarkers, ".hpp": cLikeMarkers, ".cs": cLikeMarkers, ".java": cLikeMarkers,
+	".kt": cLikeMarkers, ".kts": cLikeMarkers, ".go": cLikeMarkers, ".rs": cLikeMarkers,
+	".swift": cLikeMarkers, ".scala": cLikeMarkers, ".php": cLikeMarkers, ".dart": cLikeMarkers,
+	".js": cLikeMarkers, ".jsx": cLikeMarkers, ".mjs": cLikeMarkers, ".cjs": cLikeMarkers,
+	".ts": cLikeMarkers, ".tsx": cLikeMarkers, ".m": cLikeMarkers, ".mm": cLikeMarkers,
+
+	".py": hashMarkers, ".rb": hashMarkers, ".sh": hashMarkers, ".bash": hashMarkers,
+	".zsh": hashMarkers, ".pl": hashMarkers, ".pm": hashMarkers, ".ex": hashMarkers,
+	".exs": hashMarkers, ".cr": hashMarkers,
+
+	".sql": {"--", "/*"}, ".lua": dashMarkers, ".hs": dashMarkers, ".elm": dashMarkers,
+}
+
+var (
+	cLikeMarkers = []string{"//", "/*"}
+	hashMarkers  = []string{"#"}
+	dashMarkers  = []string{"--"}
+)
+
+// docFillerWords carry no information beyond the declaration they document, so
+// a doc comment built only from them plus the declaration's own words restates
+// the name rather than explaining it.
+var docFillerWords = map[string]bool{
+	"are": true, "behavior": true, "behaviour": true, "case": true, "cases": true,
+	"check": true, "checks": true, "do": true, "does": true, "ensure": true,
+	"ensures": true, "for": true, "function": true, "given": true, "handle": true,
+	"handles": true, "helper": true, "here": true, "if": true, "in": true,
+	"is": true, "it": true, "its": true, "method": true, "new": true,
+	"of": true, "on": true, "report": true, "reports": true, "return": true,
+	"returns": true, "test": true, "tests": true, "that": true, "used": true,
+	"using": true, "value": true, "values": true, "verified": true, "verifies": true,
+	"verify": true, "when": true, "whether": true, "with": true,
+}
 
 // Scan runs every conservative lens pre-check. Intent is optional; only the
 // scope-expansion check uses it, and it emits nothing when intent is absent.
@@ -66,27 +108,23 @@ func Scan(files []File, intent string) []Finding {
 }
 
 func detectRedundantComment(file File) []Finding {
-	current := splitLines(file.CurrentContent)
 	var findings []Finding
-	for _, line := range addedLines(file) {
-		comment, ok := commentText(line.text)
-		if !ok {
-			continue
-		}
+	current := splitLines(file.CurrentContent)
+	for _, block := range commentBlocks(file, current) {
 		description := ""
 		switch {
-		case hasRepeatedPhrase(comment):
+		case hasRepeatedPhrase(block.text):
 			description = "comment repeats a phrase internally"
-		case docCommentRepeatsDeclarationName(comment, current, line.number):
+		case docCommentRepeatsDeclarationName(block.text, current, block.lastLine):
 			description = "doc comment repeats the declaration name verbatim"
-		case commentRestatesNextCode(comment, current, line.number):
+		case commentRestatesNextCode(block.text, current, block.lastLine):
 			description = "comment restates the adjacent code"
 		}
 		if description != "" {
 			findings = append(findings, Finding{
 				Lens:        "redundant-comment",
 				Path:        file.Path,
-				Line:        line.number,
+				Line:        block.line,
 				Description: description,
 			})
 		}
@@ -94,17 +132,82 @@ func detectRedundantComment(file File) []Finding {
 	return findings
 }
 
+type commentBlock struct {
+	line     int
+	lastLine int
+	text     string
+}
+
+// commentBlocks groups contiguous comment lines into the single comment a
+// reader sees. Judging each line on its own misreads a wrapped doc comment: its
+// first line often holds nothing but the declaration name, and its later lines
+// are sentence fragments that never document the code beneath the block. Only
+// blocks the change actually touched are returned, reported at their first
+// added line.
+func commentBlocks(file File, current []string) []commentBlock {
+	added := make(map[int]bool)
+	for _, line := range addedLines(file) {
+		added[line.number] = true
+	}
+	var blocks []commentBlock
+	for number := 1; number <= len(current); number++ {
+		body, ok := commentBody(file.Path, current[number-1])
+		if !ok {
+			continue
+		}
+		block := commentBlock{lastLine: number}
+		for {
+			if added[number] && block.line == 0 {
+				block.line = number
+			}
+			if !isCodeSample(body) {
+				block.text += " " + strings.TrimSpace(body)
+			}
+			if number+1 > len(current) {
+				break
+			}
+			next, ok := commentBody(file.Path, current[number])
+			if !ok {
+				break
+			}
+			number++
+			block.lastLine = number
+			body = next
+		}
+		block.text = strings.TrimSpace(block.text)
+		if block.line != 0 && block.text != "" {
+			blocks = append(blocks, block)
+		}
+	}
+	return blocks
+}
+
+// docCommentRepeatsDeclarationName reports a doc comment whose every
+// informative word is already spelled by the declaration it documents. Go's
+// convention is that a doc comment opens with the declaration name, so merely
+// naming the declaration is not the signal; adding nothing else is.
 func docCommentRepeatsDeclarationName(comment string, lines []string, after int) bool {
-	declaration := nextCodeLine(lines, after)
-	match := declarationPattern.FindStringSubmatch(strings.TrimSpace(declaration))
+	match := declarationPattern.FindStringSubmatch(adjacentCodeLine(lines, after))
 	if match == nil {
 		return false
 	}
-	return regexp.MustCompile(`\b` + regexp.QuoteMeta(match[1]) + `\b`).MatchString(comment)
+	nameWords := identifierWords(match[1])
+	derived := 0
+	informative := 0
+	for _, word := range meaningfulWords(comment) {
+		if docFillerWords[word] {
+			continue
+		}
+		informative++
+		if nameWords[word] {
+			derived++
+		}
+	}
+	return derived > 0 && derived == informative
 }
 
 func commentRestatesNextCode(comment string, lines []string, after int) bool {
-	code := nextCodeLine(lines, after)
+	code := adjacentCodeLine(lines, after)
 	if code == "" || isDeclaration(code) {
 		return false
 	}
@@ -132,10 +235,17 @@ func commentRestatesNextCode(comment string, lines []string, after int) bool {
 	return float64(overlap)/float64(len(commentWords)) >= 0.75
 }
 
-func nextCodeLine(lines []string, after int) string {
+// adjacentCodeLine returns the code a comment documents: the next non-comment
+// line reached without crossing a blank line. A blank line ends the comment's
+// attachment, so a standalone note is never read as documenting whatever
+// declaration happens to appear further down the file.
+func adjacentCodeLine(lines []string, after int) string {
 	for number := after + 1; number <= len(lines); number++ {
 		candidate := strings.TrimSpace(lines[number-1])
-		if candidate != "" && !isComment(candidate) {
+		if candidate == "" {
+			return ""
+		}
+		if !isComment(candidate) {
 			return candidate
 		}
 	}
@@ -144,7 +254,41 @@ func nextCodeLine(lines []string, after int) string {
 
 func isDeclaration(value string) bool {
 	trimmed := strings.TrimSpace(value)
-	return declarationPattern.MatchString(trimmed) || regexp.MustCompile(`^(?:class|type)\b`).MatchString(trimmed)
+	return declarationPattern.MatchString(trimmed) || typeDeclaration.MatchString(trimmed)
+}
+
+// identifierWords splits a declaration name into the words a doc comment could
+// legitimately reuse: the whole lowercased name plus its camelCase, snake_case,
+// and acronym parts, so "TestRejectsEmptyInput" also spells "empty" and "input".
+func identifierWords(name string) map[string]bool {
+	words := map[string]bool{strings.ToLower(name): true}
+	var current []rune
+	flush := func() {
+		if len(current) > 0 {
+			words[strings.ToLower(string(current))] = true
+			current = nil
+		}
+	}
+	runes := []rune(name)
+	for index, letter := range runes {
+		switch {
+		case letter == '_':
+			flush()
+			continue
+		case unicode.IsUpper(letter) && index > 0:
+			previous := runes[index-1]
+			next := rune(0)
+			if index+1 < len(runes) {
+				next = runes[index+1]
+			}
+			if !unicode.IsUpper(previous) || unicode.IsLower(next) {
+				flush()
+			}
+		}
+		current = append(current, letter)
+	}
+	flush()
+	return words
 }
 
 func meaningfulWords(value string) []string {
@@ -161,27 +305,44 @@ func meaningfulWords(value string) []string {
 	return result
 }
 
-func commentText(value string) (string, bool) {
+// commentBody returns the text following a comment marker, still carrying its
+// own indentation so callers can tell prose from an indented code sample.
+func commentBody(path, value string) (string, bool) {
+	markers, known := commentMarkers[strings.ToLower(filepath.Ext(path))]
+	if !known {
+		return "", false
+	}
 	trimmed := strings.TrimSpace(value)
-	for _, prefix := range []string{"//", "#", "--", "/*", "*"} {
-		if strings.HasPrefix(trimmed, prefix) {
-			comment := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, prefix), "*/"))
-			return comment, comment != ""
+	for _, marker := range markers {
+		if strings.HasPrefix(trimmed, marker) {
+			return strings.TrimSuffix(strings.TrimPrefix(trimmed, marker), "*/"), true
 		}
 	}
 	return "", false
 }
 
+// isCodeSample reports an indented line inside a comment, which is how Go doc
+// comments and Markdown-style comments mark an embedded command or code block.
+// Its repeated tokens are the sample's own syntax, not restated prose.
+func isCodeSample(body string) bool {
+	return strings.HasPrefix(body, "\t") || strings.HasPrefix(body, "    ")
+}
+
+// hasRepeatedPhrase looks for a run of four or more content words restated
+// almost immediately, which is the stutter shape. Shorter windows match ordinary
+// English connective tissue such as "the fix" or a run of identical digits, and
+// an unbounded window matches any long comment that returns to its own subject;
+// neither is a source shape specific enough to block on.
 func hasRepeatedPhrase(comment string) bool {
-	words := wordTokens(comment)
-	for width := 2; width <= 6 && width*2 <= len(words); width++ {
-		seen := make(map[string]bool)
+	words := meaningfulWords(comment)
+	for width := 4; width <= 6 && width*2 <= len(words); width++ {
+		seen := make(map[string]int)
 		for start := 0; start+width <= len(words); start++ {
 			phrase := strings.Join(words[start:start+width], " ")
-			if seen[phrase] {
+			if previous, repeated := seen[phrase]; repeated && start-previous <= 2*width {
 				return true
 			}
-			seen[phrase] = true
+			seen[phrase] = start
 		}
 	}
 	return false

@@ -173,3 +173,160 @@ func TestScanUsesTheMoreSpecificLensForOverlappingPermissivePatterns(t *testing.
 		t.Fatalf("specific lens selection = %+v", findings)
 	}
 }
+
+func TestScanRedundantCommentAcquitsConventionalDocumentation(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name string
+		file precheck.File
+	}{
+		{
+			name: "doc comment that adds information beyond the name",
+			file: precheck.File{
+				Path:         "scan.go",
+				AddedContent: "// Scan runs every conservative lens pre-check.\n\n\n\n",
+				CurrentContent: "// Scan runs every conservative lens pre-check.\n" +
+					"func Scan(files []File) []Finding {\n" +
+					"\treturn nil\n" +
+					"}\n",
+			},
+		},
+		{
+			name: "markdown heading above a matching term",
+			file: precheck.File{
+				Path:           "docs/slop-taxonomy.md",
+				AddedContent:   "## Redundant comment\n\nName: `redundant-comment`\n",
+				CurrentContent: "## Redundant comment\n\nName: `redundant-comment`\n",
+			},
+		},
+		{
+			name: "pointer dereference is not a comment",
+			file: precheck.File{
+				Path:         "store.go",
+				AddedContent: "\n*out = value\n\n\n",
+				CurrentContent: "func store(out *int, value int) {\n" +
+					"\t*out = value\n" +
+					"\tlog(out, value)\n" +
+					"}\n",
+			},
+		},
+		{
+			name: "note separated from the declaration by a blank line",
+			file: precheck.File{
+				Path:         "header.go",
+				AddedContent: "// parseHeader\n\n\n\n\n",
+				CurrentContent: "// parseHeader\n" +
+					"\n" +
+					"func parseHeader(data []byte) Header {\n" +
+					"\treturn Header{}\n" +
+					"}\n",
+			},
+		},
+		{
+			name: "wrapped doc comment opening on the name alone",
+			file: precheck.File{
+				Path:         "adopt.go",
+				AddedContent: "// adoptBranchRef\n// refuses to move the ref off a commit the run never observed.\n\n\n",
+				CurrentContent: "// adoptBranchRef\n" +
+					"// refuses to move the ref off a commit the run never observed.\n" +
+					"func adoptBranchRef(gate string) error {\n" +
+					"\treturn nil\n" +
+					"}\n",
+			},
+		},
+		{
+			name: "repeated stop-word pairing",
+			file: precheck.File{
+				Path:           "notes.go",
+				AddedContent:   "// After the fix, the fix round runs again.\n\n",
+				CurrentContent: "// After the fix, the fix round runs again.\nfunc rerun() {}\n",
+			},
+		},
+		{
+			name: "indented command sample inside a doc comment",
+			file: precheck.File{
+				Path: "version.go",
+				AddedContent: "// Set via ldflags at build time:\n//\n" +
+					"//\t-X internal/buildinfo.Version=v1.0.0 -X internal/buildinfo.Commit=abc\n\n",
+				CurrentContent: "// Set via ldflags at build time:\n//\n" +
+					"//\t-X internal/buildinfo.Version=v1.0.0 -X internal/buildinfo.Commit=abc\n" +
+					"var Version string\n",
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if findings := precheck.Scan([]precheck.File{testCase.file}, ""); len(findings) != 0 {
+				t.Fatalf("conventional comment produced findings: %+v", findings)
+			}
+		})
+	}
+}
+
+func TestScanFlagsRedundantCommentShapes(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name        string
+		file        precheck.File
+		line        int
+		description string
+	}{
+		{
+			name: "doc comment adding nothing beyond the declaration name",
+			file: precheck.File{
+				Path:         "parser_test.go",
+				AddedContent: "// TestRejectsEmptyInput verifies the empty-input behavior.\n\n\n\n",
+				CurrentContent: "// TestRejectsEmptyInput verifies the empty-input behavior.\n" +
+					"func TestRejectsEmptyInput(t *testing.T) {\n" +
+					"\tt.Fatal(\"fixture\")\n" +
+					"}\n",
+			},
+			line:        1,
+			description: "doc comment repeats the declaration name verbatim",
+		},
+		{
+			name: "phrase restated immediately within one comment",
+			file: precheck.File{
+				Path:         "cache.go",
+				AddedContent: "// normalizeKey removes ASCII padding before lookup; removes ASCII padding before lookup.\n\n\n\n",
+				CurrentContent: "// normalizeKey removes ASCII padding before lookup; removes ASCII padding before lookup.\n" +
+					"func normalizeKey(value string) string {\n" +
+					"\treturn value\n" +
+					"}\n",
+			},
+			line:        1,
+			description: "comment repeats a phrase internally",
+		},
+		{
+			name: "comment restating the statement below it",
+			file: precheck.File{
+				Path:         "counter.go",
+				AddedContent: "\n// increment i\n\n\n\n",
+				CurrentContent: "func advance(i int) int {\n" +
+					"\t// increment i\n" +
+					"\ti += 1\n" +
+					"\treturn i\n" +
+					"}\n",
+			},
+			line:        2,
+			description: "comment restates the adjacent code",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			findings := precheck.Scan([]precheck.File{testCase.file}, "")
+			if len(findings) != 1 {
+				t.Fatalf("findings = %+v, want exactly one", findings)
+			}
+			if findings[0].Lens != "redundant-comment" || findings[0].Line != testCase.line || findings[0].Description != testCase.description {
+				t.Fatalf("finding = %+v, want redundant-comment at line %d describing %q", findings[0], testCase.line, testCase.description)
+			}
+		})
+	}
+}
