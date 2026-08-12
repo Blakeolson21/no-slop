@@ -137,7 +137,7 @@ func TestLoadGitChangesPreservesCommentLineageBelowRenameThreshold(t *testing.T)
 	gitRun(t, dir, "config", "user.email", "test@example.com")
 	gitRun(t, dir, "config", "user.name", "Test")
 	var baseline strings.Builder
-	baseline.WriteString("package sample\n\ntype retainedIdentity struct{}\nfunc retainedOperation() {}\n\n// normalize key before lookup; normalize key before lookup.\n")
+	baseline.WriteString("package sample\n\nfunc New(value string) string {\n\tif value == \"\" { return \"default\" }\n\treturn value\n}\n\n// normalize key before lookup; normalize key before lookup.\n")
 	for index := 0; index < 40; index++ {
 		baseline.WriteString("const old")
 		baseline.WriteString(strconv.Itoa(index))
@@ -152,7 +152,7 @@ func TestLoadGitChangesPreservesCommentLineageBelowRenameThreshold(t *testing.T)
 
 	gitRun(t, dir, "mv", "old.go", "new.go")
 	var current strings.Builder
-	current.WriteString("package sample\n\ntype retainedIdentity struct{}\nfunc retainedOperation() {}\n\n// normalize key before lookup; normalize key before lookup.\n")
+	current.WriteString("package sample\n\nfunc New(value string) string {\n\tif value == \"\" { return \"default\" }\n\treturn value\n}\n\n// normalize key before lookup; normalize key before lookup.\n")
 	for index := 0; index < 520; index++ {
 		current.WriteString("var replacement")
 		current.WriteString(strconv.Itoa(index))
@@ -161,7 +161,7 @@ func TestLoadGitChangesPreservesCommentLineageBelowRenameThreshold(t *testing.T)
 		current.WriteString("}\n")
 	}
 	writeFixture(t, dir, "new.go", current.String())
-	writeFixture(t, dir, "unrelated.go", "package sample\n\n// normalize key before lookup; normalize key before lookup.\nvar unrelated = true\n")
+	writeFixture(t, dir, "unrelated.go", "package sample\n\nfunc New(value int) int { return value + 1 }\n\n// normalize key before lookup; normalize key before lookup.\nvar unrelated = true\n")
 	gitRun(t, dir, "add", "new.go")
 	gitRun(t, dir, "add", "unrelated.go")
 	gitRun(t, dir, "commit", "-m", "rewrite and rename")
@@ -218,6 +218,53 @@ func TestLoadGitChangesPreservesCommentLineageBelowRenameThreshold(t *testing.T)
 	findings := precheck.Scan(precheckFiles, "")
 	if len(findings) != 1 || findings[0].Lens != "redundant-comment" || findings[0].Path != "unrelated.go" {
 		t.Fatalf("findings = %+v, want one unmatched added comment", findings)
+	}
+}
+
+func TestLoadGitChangesCountsAddedPrefixOperators(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-b", "main")
+	gitRun(t, dir, "config", "user.email", "test@example.com")
+	gitRun(t, dir, "config", "user.name", "Test")
+	writeFixture(t, dir, "README.md", "base\n")
+	gitRun(t, dir, "add", "README.md")
+	gitRun(t, dir, "commit", "-m", "base")
+	base := gitRun(t, dir, "rev-parse", "HEAD")
+
+	var source strings.Builder
+	source.WriteString("let counter = 0;\n")
+	for index := 0; index < 500; index++ {
+		source.WriteString("++counter;\n")
+	}
+	writeFixture(t, dir, "counter.js", source.String())
+	gitRun(t, dir, "add", "counter.js")
+	gitRun(t, dir, "commit", "-m", "add counter")
+	head := gitRun(t, dir, "rev-parse", "HEAD")
+
+	changes, err := engine.LoadGitChanges(context.Background(), dir, base, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 1 || changes[0].Added != 501 {
+		t.Fatalf("changes = %+v, want all prefix-operator lines counted", changes)
+	}
+	decision, err := risk.Classify(risk.ChangeSet{
+		Branch:        "feature/counter",
+		DefaultBranch: "main",
+		Files: []risk.FileChange{{
+			Path:    changes[0].Path,
+			Status:  changes[0].Status,
+			Added:   changes[0].Added,
+			Deleted: changes[0].Deleted,
+		}},
+	}, risk.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Tier != risk.TierFullAdversarial {
+		t.Fatalf("decision = %+v, want substantial source addition routed full", decision)
 	}
 }
 
