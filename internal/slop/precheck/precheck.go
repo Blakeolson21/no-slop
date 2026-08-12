@@ -107,7 +107,7 @@ func detectRedundantComment(file File) []Finding {
 	for _, block := range commentBlocks(file, lexed, baseline) {
 		description := ""
 		switch {
-		case hasRepeatedPhrase(block.text):
+		case hasRepeatedPhrase(block.text, declarations[block.lastLine]):
 			description = "comment repeats a phrase internally"
 		case docCommentRepeatsDeclarationName(block.text, declarations[block.lastLine]):
 			description = "doc comment adds no information beyond the declaration name"
@@ -368,9 +368,20 @@ func lexSource(path string, lines []string) ([]lexedSourceLine, map[int]string) 
 		if start.Line < 1 || start.Line > len(lines) || start.Column < 1 || start.Column > len(lines[start.Line-1])+1 {
 			continue
 		}
-		standalone := strings.TrimSpace(lines[start.Line-1][:start.Column-1]) == ""
-		code := strings.TrimSpace(lines[start.Line-1][:start.Column-1])
+		prefix := strings.TrimSpace(lines[start.Line-1][:start.Column-1])
 		parts := strings.Split(literal, "\n")
+		lastLine := start.Line + len(parts) - 1
+		suffix := ""
+		if strings.HasPrefix(literal, "/*") && lastLine <= len(lines) {
+			end := len(parts[len(parts)-1])
+			if len(parts) == 1 {
+				end += start.Column - 1
+			}
+			if end <= len(lines[lastLine-1]) {
+				suffix = strings.TrimSpace(lines[lastLine-1][end:])
+			}
+		}
+		standalone := prefix == "" && suffix == ""
 		for offset, part := range parts {
 			line := start.Line + offset
 			if line > len(result) {
@@ -388,7 +399,10 @@ func lexSource(path string, lines []string) ([]lexedSourceLine, map[int]string) 
 			}
 			result[line-1] = lexedSourceLine{comment: true, standalone: standalone, commentID: commentID, body: blockBody(part)}
 			if offset == 0 {
-				result[line-1].code = code
+				result[line-1].code = prefix
+			}
+			if offset == len(parts)-1 && suffix != "" {
+				result[line-1].code = strings.TrimSpace(result[line-1].code + " " + suffix)
 			}
 		}
 	}
@@ -462,7 +476,7 @@ func isCodeSample(body string) bool {
 // hasRepeatedPhrase looks for a substantive clause restated at the end of the
 // next clause. Shorter windows and phrases embedded in different qualifications
 // are not a source shape specific enough to block on.
-func hasRepeatedPhrase(comment string) bool {
+func hasRepeatedPhrase(comment, declarationName string) bool {
 	var clauses [][]string
 	for _, clause := range strings.FieldsFunc(comment, func(letter rune) bool {
 		return letter == ';' || letter == '.' || letter == '!' || letter == '?' || letter == '\n'
@@ -474,7 +488,8 @@ func hasRepeatedPhrase(comment string) bool {
 	}
 	for index := 1; index < len(clauses); index++ {
 		previous, current := clauses[index-1], clauses[index]
-		if equalWords(previous, current) || len(previous) == len(current)+1 && equalWords(previous[1:], current) {
+		declarationWords := identifierWords(declarationName)
+		if equalWords(previous, current) || len(previous) == len(current)+1 && declarationWords[previous[0]] && equalWords(previous[1:], current) {
 			return true
 		}
 	}

@@ -260,6 +260,14 @@ func TestScanRedundantCommentAcquitsConventionalDocumentation(t *testing.T) {
 			},
 		},
 		{
+			name: "repeated phrase preceded by negation",
+			file: precheck.File{
+				Path:           "process.go",
+				AddedContent:   "// Never call Close before Wait. Call Close before Wait.\n",
+				CurrentContent: "// Never call Close before Wait. Call Close before Wait.\nfunc stop() {}\n",
+			},
+		},
+		{
 			name: "inline comment is not attached to following code",
 			file: precheck.File{
 				Path:           "counter.go",
@@ -444,6 +452,20 @@ func TestScanFlagsRedundantCommentShapes(t *testing.T) {
 				CurrentContent: "func advance(i int) int {\n" +
 					"\t// increment i\n" +
 					"\ti += 1 // advance counter\n" +
+					"\treturn i\n" +
+					"}\n",
+			},
+			line:        2,
+			description: "comment restates the adjacent code",
+		},
+		{
+			name: "comment restating code after a block comment",
+			file: precheck.File{
+				Path:         "counter.go",
+				AddedContent: "\n// increment i\n\n",
+				CurrentContent: "func advance(i int) int {\n" +
+					"\t// increment i\n" +
+					"\t/* preserve ordering */ i += 1\n" +
 					"\treturn i\n" +
 					"}\n",
 			},

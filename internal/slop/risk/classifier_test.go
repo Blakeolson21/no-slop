@@ -360,6 +360,72 @@ func TestClassifyCrossLanguageRenameRequiresReview(t *testing.T) {
 	}
 }
 
+func TestClassifyGoRenameRequiresPreservedPackageAndBuildSelection(t *testing.T) {
+	t.Parallel()
+
+	for _, file := range []risk.FileChange{
+		{
+			Path:         "internal/archive/worker.go",
+			BaselinePath: "internal/worker.go",
+			Status:       risk.Renamed,
+		},
+		{
+			Path:         "internal/worker_windows.go",
+			BaselinePath: "internal/worker.go",
+			Status:       risk.Renamed,
+		},
+		{
+			Path:         "internal/worker_windows_test.go",
+			BaselinePath: "internal/worker_test.go",
+			Status:       risk.Renamed,
+		},
+		{
+			Path:         "internal/_worker.go",
+			BaselinePath: "internal/worker.go",
+			Status:       risk.Renamed,
+		},
+		{
+			Path:            "internal/archive/worker.go",
+			BaselinePath:    "internal/worker.go",
+			Status:          risk.Modified,
+			BaselineContent: "package worker\nfunc run(task string) string { return task }\n",
+			CurrentContent:  "package worker\nfunc execute(job string) string { return job }\n",
+		},
+	} {
+		decision, err := risk.Classify(risk.ChangeSet{
+			Branch:        "refactor/worker",
+			DefaultBranch: "main",
+			Files:         []risk.FileChange{file},
+		}, risk.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.Novelty.Score != 2 || decision.Tier == risk.TierLeakScanOnly {
+			t.Fatalf("decision = %+v, want build-participation change reviewed", decision)
+		}
+	}
+}
+
+func TestClassifySamePackageGoRenameAsMechanical(t *testing.T) {
+	t.Parallel()
+
+	decision, err := risk.Classify(risk.ChangeSet{
+		Branch:        "refactor/worker",
+		DefaultBranch: "main",
+		Files: []risk.FileChange{{
+			Path:         "internal/runner.go",
+			BaselinePath: "internal/worker.go",
+			Status:       risk.Renamed,
+		}},
+	}, risk.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Novelty.Score != 0 {
+		t.Fatalf("novelty = %+v, want same-package Go rename mechanical", decision.Novelty)
+	}
+}
+
 func TestClassifyCallTargetAndArgumentSwapAsChangedLogic(t *testing.T) {
 	t.Parallel()
 
