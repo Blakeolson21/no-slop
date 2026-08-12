@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/slop/risk"
@@ -117,12 +118,29 @@ func goCommentTexts(content string) map[string]bool {
 	}
 	comments := make(map[string]bool, len(parsed.Comments))
 	for _, group := range parsed.Comments {
-		text := strings.TrimSpace(group.Text())
-		if text != "" {
-			comments[text] = true
+		identity := normalizedCommentIdentity(group.Text())
+		if identity != "" {
+			comments[identity] = true
 		}
 	}
 	return comments
+}
+
+func normalizedCommentIdentity(comment string) string {
+	words := strings.FieldsFunc(strings.ToLower(comment), func(letter rune) bool {
+		return !unicode.IsLetter(letter) && !unicode.IsDigit(letter)
+	})
+	if len(words) < 8 {
+		return ""
+	}
+	distinct := make(map[string]bool, len(words))
+	for _, word := range words {
+		distinct[word] = true
+	}
+	if len(distinct) < 4 {
+		return ""
+	}
+	return strings.Join(words, " ")
 }
 
 func loadBaselineSiblingContent(ctx context.Context, workDir, baseRef, path string) (string, error) {

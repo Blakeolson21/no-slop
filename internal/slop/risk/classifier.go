@@ -130,7 +130,7 @@ func Classify(change ChangeSet, cfg Config) (Decision, error) {
 	if anyAmbiguousCommentIdentity(change.Files) {
 		decision.Tier = raiseTier(decision.Tier)
 		decision.TierEscalated = true
-		decision.EscalationReason = "matching comments across deleted and added Go files require reviewer judgment"
+		decision.EscalationReason = "distinctive matching comments across deleted and added Go files require reviewer judgment"
 	}
 	return finalizeDecision(decision, cfg)
 }

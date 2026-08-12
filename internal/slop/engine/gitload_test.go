@@ -145,6 +145,7 @@ func TestLoadGitChangesMarksAmbiguousCommentIdentityWithoutSuppressingAddedComme
 		baseline.WriteString(strconv.Itoa(index))
 		baseline.WriteString("\"\n")
 	}
+	baseline.WriteString("\n// ok\n")
 	writeFixture(t, dir, "legacy/old.go", baseline.String())
 	gitRun(t, dir, "add", "legacy/old.go")
 	gitRun(t, dir, "commit", "-m", "base")
@@ -161,8 +162,8 @@ func TestLoadGitChangesMarksAmbiguousCommentIdentityWithoutSuppressingAddedComme
 		current.WriteString("}\n")
 	}
 	writeFixture(t, dir, "modern/new.go", current.String())
-	writeFixture(t, dir, "aaa.go", "package sample\n\nfunc f(value int) int { return value + 1 }\n\n// normalize key before lookup; normalize key before lookup.\nvar unrelated = true\n")
-	writeFixture(t, dir, "plain.go", "package sample\n\nvar plain = true\n")
+	writeFixture(t, dir, "aaa.go", "package sample\n\nfunc f(value int) int { return value + 1 }\n\n// Normalize key before lookup; normalize key before lookup!\nvar unrelated = true\n")
+	writeFixture(t, dir, "plain.go", "package sample\n\n// ok\nvar plain = true\n")
 	gitRun(t, dir, "add", "modern/new.go")
 	gitRun(t, dir, "add", "aaa.go")
 	gitRun(t, dir, "add", "plain.go")
@@ -204,7 +205,7 @@ func TestLoadGitChangesMarksAmbiguousCommentIdentityWithoutSuppressingAddedComme
 		t.Fatalf("changes = %+v, want exact matching comments marked as ambiguous", changes)
 	}
 	if plain == nil || plain.CommentIdentityAmbiguous {
-		t.Fatalf("changes = %+v, want comment-free addition left unambiguous", changes)
+		t.Fatalf("changes = %+v, want trivial matching comment left unambiguous", changes)
 	}
 	findings := precheck.Scan(precheckFiles, "")
 	if len(findings) != 2 || findings[0].Lens != "redundant-comment" || findings[0].Path != "aaa.go" || findings[1].Path != "modern/new.go" {

@@ -94,7 +94,7 @@ Override validation depth:
 ./bin/noslop gate --base origin/main --tier full-adversarial
 ```
 
-If provenance raises the tier, a lower `--tier` is refused unless `--force-tier` is also present. The output prints both the provenance signal and the forced override.
+If policy raises the tier, a lower `--tier` is refused unless `--force-tier` is also present. The output prints both the escalation signal and the forced override.
 
 Check outbound text against a live GitHub thread:
 

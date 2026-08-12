@@ -100,7 +100,7 @@ func TestClassifyAmbiguousCommentIdentityRaisesTierAndGuardsOverride(t *testing.
 	if ordinary.Tier != risk.TierSingleReview || escalated.Tier != risk.TierFullAdversarial || !escalated.TierEscalated {
 		t.Fatalf("ordinary = %+v, escalated = %+v, want one-tier escalation", ordinary, escalated)
 	}
-	if !strings.Contains(escalated.String(), "matching comments across deleted and added Go files require reviewer judgment") {
+	if !strings.Contains(escalated.String(), "distinctive matching comments across deleted and added Go files require reviewer judgment") {
 		t.Fatalf("decision does not disclose comment ambiguity:\n%s", escalated.String())
 	}
 

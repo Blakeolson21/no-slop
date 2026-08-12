@@ -106,7 +106,7 @@ slop:
 
 ### slop
 
-Configure the `noslop gate` front stage. The classifier always prints its tier and reasons before continuing. Command-line `--tier` overrides the configured classifier result and prints the original and final tiers. A provenance-driven escalation refuses a lower override unless `--force-tier` is present, and either outcome prints both signals. The full-adversarial tier runs a lens review, a second adversarial challenge round, and the configured tests. Pass `--intent` when the deterministic scope pre-check and reviewer should compare the change with a stated request; without it, the scope pre-check emits no finding.
+Configure the `noslop gate` front stage. The classifier always prints its tier and reasons before continuing. Command-line `--tier` overrides the configured classifier result and prints the original and final tiers. A policy-driven escalation from provenance history or distinctive deleted/added comment identity refuses a lower override unless `--force-tier` is present, and either outcome prints both signals. The full-adversarial tier runs a lens review, a second adversarial challenge round, and the configured tests. Pass `--intent` when the deterministic scope pre-check and reviewer should compare the change with a stated request; without it, the scope pre-check emits no finding.
 
 | Field | Type | Default | Purpose |
 | --- | --- | --- | --- |
