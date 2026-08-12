@@ -47,3 +47,28 @@ noslop evaluate \
 ```
 
 The capture script keeps raw reviewer responses, timeouts, and elapsed milliseconds in matching `.run.json` files. It replays deterministic checks from the diff, campaign intent, and optional thread fixture without reading case expectations, then merges reviewer findings by lens, path, and line. The scorer labels the corpus as synthetic replay cases, prints each policy name and result-file path, and states that the captures were not produced by the current run. It then reports found, missed, and false-positive counts. It refuses missing cases, unknown expected finding classes, missing diffs, malformed formats, and duplicate results. It does not launch a reviewer or invent policy output.
+
+## Historical case sets
+
+The public corpus grows between campaigns, so a capture recorded against an earlier corpus is scored against the cases it actually ran. A manifest under `corpus/case-sets/` pins that membership:
+
+```json
+{
+  "schema_version": 1,
+  "name": "rounds-1-through-4",
+  "case_ids": ["asserted-followup-ticket-without-id", "fail-open-default-missing-blocklist"],
+  "content_sha256": "<aggregate digest of the selected case content>"
+}
+```
+
+Pass it with `--case-set`:
+
+```sh
+noslop evaluate \
+  --corpus corpus/seeds \
+  --case-set corpus/case-sets/rounds-1-through-4.json \
+  --unconditioned-results corpus/results/2026-08-12-r4/unconditioned.json \
+  --conditioned-results corpus/results/2026-08-12-r4/conditioned.json
+```
+
+`case_ids` selects those cases from the loaded corpus in manifest order, and `content_sha256` covers the selected `case.json` and `change.diff` content. An unsupported schema version, a missing name, an empty, duplicate, or unknown case id, and edited or removed snapshot content all fail scoring rather than silently rescoring a capture against a corpus it never saw. A capture of the current corpus needs no manifest.

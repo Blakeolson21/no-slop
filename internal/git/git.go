@@ -26,19 +26,22 @@ func IsZeroSHA(sha string) bool {
 }
 
 // Run executes a git command in the given directory and returns trimmed stdout.
-// Returns an error that includes the command and stderr on failure.
+// Returns an error that includes the command and stderr on failure. It is Output
+// plus that trim, so it carries the same bare-repository handling.
+func Run(ctx context.Context, dir string, args ...string) (string, error) {
+	out, err := Output(ctx, dir, args...)
+	return strings.TrimSpace(out), err
+}
+
+// Output executes a git command and returns stdout without trimming it, for
+// callers whose stdout is NUL-delimited or is blob content, where trailing
+// whitespace is data rather than formatting.
 //
 // When dir is itself a bare repository (a gate repo), the repo is named
 // explicitly via --git-dir instead of relying on cwd-based discovery, which
 // safe.bareRepository=explicit forbids. Agent harnesses (e.g. Claude Code)
 // and hardened CI inject that setting, so gate operations must never depend
 // on discovering a bare repo from the working directory (issue #362).
-func Run(ctx context.Context, dir string, args ...string) (string, error) {
-	out, err := Output(ctx, dir, args...)
-	return strings.TrimSpace(out), err
-}
-
-// Output executes a git command and returns stdout without trimming it.
 func Output(ctx context.Context, dir string, args ...string) (string, error) {
 	if isBareGitDir(dir) {
 		return OutputBare(ctx, dir, args...)
@@ -55,7 +58,7 @@ func RunBare(ctx context.Context, bareDir string, args ...string) (string, error
 	return strings.TrimSpace(out), err
 }
 
-// OutputBare executes Git against exactly bareDir without trimming stdout.
+// OutputBare is RunBare without the trim, and keeps its exact-directory rule.
 func OutputBare(ctx context.Context, bareDir string, args ...string) (string, error) {
 	if bareDir == "" {
 		return "", fmt.Errorf("bare git directory is empty")

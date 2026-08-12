@@ -44,9 +44,9 @@ Safest local verification sequence after non-trivial changes:
 **NoSlop Front Stage**
 
 - `cmd/noslop` runs the standalone front stage through `internal/slop/engine`: classify first, publish the decision through `OnDecision`, then run mandatory leak and artifact checks before tier-specific review or tests. A tier override that changes the selected tier must remain visible in `risk.Decision.String`; a lower tier cannot supersede provenance escalation without `--force-tier`. Leak scanning and the configured test-count floor are never tier-skippable, and completed verdicts print every mandatory-check status.
-- `internal/slop/lenses` owns the reviewer prompt catalog and `docs/src/content/docs/reference/slop-taxonomy.md` owns the public explanation. Keep the names and guidance aligned. Mechanical checks live in `internal/slop/leakscan` and `internal/slop/testfloor` rather than in reviewer prose.
+- `internal/slop/lenses` owns the reviewer prompt catalog and `docs/src/content/docs/reference/slop-taxonomy.md` owns the public explanation. Keep the names and guidance aligned. Mechanical checks live in `internal/slop/leakscan`, `internal/slop/testfloor`, and the per-lens pre-checks in `internal/slop/precheck` rather than in reviewer prose.
 - `.noslop-blocklist` is local private data and ignored. A missing built-in default means no private-name list, while a configured missing path and any unreadable path fail closed. Findings may name a file and line but must never reproduce the matched credential or private identity. Every honored inline exemption is reported and counted; `slop.leak_scan.allow_exemptions: false` rejects markers.
-- `internal/slop/provenance` owns append-only generating-lane history and `internal/slop/corpus` owns replay scoring. Conditioning may only raise the classifier tier, reorder the complete lens catalog, or enable a named deterministic probe. Missing history keeps the v1 route; unreadable history selects `full-adversarial`.
+- `internal/slop/provenance` owns append-only generating-lane history and `internal/slop/corpus` owns replay scoring, including the pinned case-set manifests that keep a historical capture scored against the corpus it ran. Conditioning may only raise the classifier tier, reorder the complete lens catalog, or enable a named deterministic probe. Missing history keeps the v1 route; unreadable history selects `full-adversarial`.
 
 **Agent-Guidance Surfaces**
 
@@ -85,7 +85,7 @@ Safest local verification sequence after non-trivial changes:
 
 **Git on Bare Gate Repos (`safe.bareRepository`)**
 
-- Agent harnesses and hardened CI inject `safe.bareRepository=explicit`, which forbids cwd-based discovery of bare repositories. Route every gate git call through `git.Run`, which detects a bare git dir and prepends `--git-dir=<dir>`; never shell out to git in a bare gate repo relying on `cmd.Dir` or `-C` discovery (issue #362).
+- Agent harnesses and hardened CI inject `safe.bareRepository=explicit`, which forbids cwd-based discovery of bare repositories. Route every gate git call through `git.Run`, or `git.Output` when trailing whitespace is data (NUL-delimited `--name-status`, blob content), since both detect a bare git dir and prepend `--git-dir=<dir>`; never shell out to git in a bare gate repo relying on `cmd.Dir` or `-C` discovery (issue #362).
 - Startup gate migration is DB-authoritative with a strict validated `<id>.git` legacy fallback; it must reject non-gates before hook or Git mutation and use `git.RunBare` so a malformed directory cannot discover an ancestor worktree. Completed migrations carry the content-versioned gate-config stamp and normal restarts must stay filesystem-only for current gates. Regressions: `TestMigrateGateConfigsRejectsInvalidDirectoriesAndSkipsCurrentGates`, `TestColdDetachedStartupProductionGateCardinality`.
 - Regressions: `TestRunOnBareRepoUnderSafeBareRepositoryExplicit`, `TestWorktreeAddRemoveOnBareRepoUnderSafeBareRepositoryExplicit`, `TestInitUnderSafeBareRepositoryExplicit`.
 

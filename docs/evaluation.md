@@ -87,7 +87,7 @@ The split is important: deterministic checks found all 10 cases they can evaluat
 | Conditioned | 10 | 22 | 0 | 31.25% | 32 / 32 | 961.122 s |
 | Conditioned minus unconditioned | 0 | 0 | 0 | 0 points | +8 | +240.199 s |
 
-`False-positive` means an emitted finding that did not match an expectation by lens, path, and line. The corpus has no clean negative-control cases, so zero unmatched findings is not a false-positive rate and should not be presented as one.
+`False-positive` means an emitted finding that did not match an expectation by lens, path, and line. The 32-case corpus scored here had no clean negative-control case, so zero unmatched findings is not a false-positive rate and should not be presented as one.
 
 ## Corpus and protocol
 
@@ -149,7 +149,7 @@ Times below are summed invocation wall time. Packets group cases by lens, so the
 
 ## Failures and limitations
 
-- All 56 reviewer invocations in the baseline and all 56 in round 4 timed out. These campaigns measure the complete configured policy, including endpoint availability, but cannot separate model quality from provider availability. The reviewer-guidance improvement is therefore unmeasured.
+- All 56 reviewer invocations in the baseline and all 56 in round 4 timed out on the 30-second timeout. Round 5 deliberately used a one-second timeout for a deterministic change, so all 56 of its invocations timed out as well. These campaigns measure the complete configured policy, including endpoint availability, but cannot separate model quality from provider availability. The reviewer-guidance improvement is therefore unmeasured, and no round scores a live reviewer response.
 - The corpus is synthetic. It is replayable and expectation-first, but it does not establish performance on naturally occurring pull requests.
 - Round 5's 100% recall is a regression-suite result for conservative syntax patterns. It does not show that the pre-checks cover every semantic form of the nine lenses.
 - There is one expected finding per case. Multi-defect recall is unmeasured.
