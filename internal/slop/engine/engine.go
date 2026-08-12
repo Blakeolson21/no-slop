@@ -15,18 +15,19 @@ import (
 
 // Change contains the revision content each mechanical check needs.
 type Change struct {
-	Path                   string
-	BaselinePath           string
-	CommentBaselinePath    string
-	Status                 risk.ChangeStatus
-	Added                  int
-	Deleted                int
-	AddedContent           string
-	CommentAddedContent    string
-	CurrentContent         string
-	BaselineContent        string
-	CommentBaselineContent string
-	BaselineContext        string
+	Path                    string
+	BaselinePath            string
+	CommentBaselinePath     string
+	Status                  risk.ChangeStatus
+	Added                   int
+	Deleted                 int
+	AddedContent            string
+	CommentAddedContent     string
+	CurrentContent          string
+	BaselineContent         string
+	CommentBaselineContent  string
+	CommentLineageAmbiguous bool
+	BaselineContext         string
 }
 
 // Config controls classification and mandatory artifact checks.
@@ -139,14 +140,15 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 	riskFiles := make([]risk.FileChange, 0, len(input.Files))
 	for _, file := range input.Files {
 		riskFiles = append(riskFiles, risk.FileChange{
-			Path:            file.Path,
-			BaselinePath:    file.BaselinePath,
-			Status:          file.Status,
-			Added:           file.Added,
-			Deleted:         file.Deleted,
-			BaselineContent: file.BaselineContent,
-			BaselineContext: file.BaselineContext,
-			CurrentContent:  file.CurrentContent,
+			Path:             file.Path,
+			BaselinePath:     file.BaselinePath,
+			Status:           file.Status,
+			Added:            file.Added,
+			Deleted:          file.Deleted,
+			BaselineContent:  file.BaselineContent,
+			BaselineContext:  file.BaselineContext,
+			CurrentContent:   file.CurrentContent,
+			AmbiguousLineage: file.CommentLineageAmbiguous,
 		})
 	}
 	riskConfig := input.Config.Risk

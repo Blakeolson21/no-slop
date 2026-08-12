@@ -546,6 +546,17 @@ func TestScanFlagsRedundantCommentShapes(t *testing.T) {
 			description: "doc comment adds no information beyond the declaration name",
 		},
 		{
+			name: "multi-name variable doc comment",
+			file: precheck.File{
+				Path:         "limits.go",
+				AddedContent: "// Min and Max are Min and Max values.\n\n",
+				CurrentContent: "// Min and Max are Min and Max values.\n" +
+					"var Min, Max = 1, 10\n",
+			},
+			line:        1,
+			description: "doc comment adds no information beyond the declaration name",
+		},
+		{
 			name: "physical line after line directive",
 			file: precheck.File{
 				Path:         "generated.go",

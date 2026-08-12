@@ -494,9 +494,7 @@ func lexSource(path string, lines []string) ([]lexedSourceLine, map[int]string) 
 			case *ast.TypeSpec:
 				addDeclaration(declarations, declarationFiles, declaration.Doc, declaration.Name.Name, lineOffset)
 			case *ast.ValueSpec:
-				if len(declaration.Names) == 1 {
-					addDeclaration(declarations, declarationFiles, declaration.Doc, declaration.Names[0].Name, lineOffset)
-				}
+				addDeclaration(declarations, declarationFiles, declaration.Doc, valueSpecName(declaration), lineOffset)
 			}
 			return true
 		})
@@ -517,11 +515,19 @@ func specName(spec ast.Spec) string {
 	case *ast.TypeSpec:
 		return declaration.Name.Name
 	case *ast.ValueSpec:
-		if len(declaration.Names) == 1 {
-			return declaration.Names[0].Name
-		}
+		return valueSpecName(declaration)
 	}
 	return ""
+}
+
+func valueSpecName(declaration *ast.ValueSpec) string {
+	names := make([]string, 0, len(declaration.Names))
+	for _, name := range declaration.Names {
+		if name.Name != "_" {
+			names = append(names, name.Name)
+		}
+	}
+	return strings.Join(names, "_")
 }
 
 func blockBody(value string) string {

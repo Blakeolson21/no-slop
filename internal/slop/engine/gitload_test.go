@@ -181,11 +181,12 @@ func TestLoadGitChangesPreservesCommentLineageBelowRenameThreshold(t *testing.T)
 	for index := range changes {
 		change := &changes[index]
 		riskFiles = append(riskFiles, risk.FileChange{
-			Path:         change.Path,
-			BaselinePath: change.BaselinePath,
-			Status:       change.Status,
-			Added:        change.Added,
-			Deleted:      change.Deleted,
+			Path:             change.Path,
+			BaselinePath:     change.BaselinePath,
+			Status:           change.Status,
+			Added:            change.Added,
+			Deleted:          change.Deleted,
+			AmbiguousLineage: change.CommentLineageAmbiguous,
 		})
 		if change.Status == risk.Added && change.Path == "new.go" {
 			added = change
@@ -205,14 +206,14 @@ func TestLoadGitChangesPreservesCommentLineageBelowRenameThreshold(t *testing.T)
 	if added == nil || added.Path != "new.go" || added.BaselinePath != "" || added.CommentBaselinePath != "old.go" || added.Added < 500 {
 		t.Fatalf("changes = %+v, want semantic addition with comment-only lineage", changes)
 	}
-	if unrelated == nil || unrelated.CommentBaselinePath != "" {
-		t.Fatalf("changes = %+v, want unrelated addition without comment lineage", changes)
+	if unrelated == nil || !added.CommentLineageAmbiguous || !unrelated.CommentLineageAmbiguous {
+		t.Fatalf("changes = %+v, want both additions marked as ambiguous", changes)
 	}
 	decision, err := risk.Classify(risk.ChangeSet{Branch: "feature/rewrite", DefaultBranch: "main", Files: riskFiles}, risk.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Tier != risk.TierFullAdversarial || decision.Novelty.Score != 3 {
+	if decision.Tier != risk.TierFullAdversarial || decision.Novelty.Reason != "deleted and added source identity requires reviewer judgment" {
 		t.Fatalf("decision = %+v, want substantial addition routed full", decision)
 	}
 	findings := precheck.Scan(precheckFiles, "")

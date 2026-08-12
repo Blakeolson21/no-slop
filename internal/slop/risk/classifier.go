@@ -33,14 +33,15 @@ const (
 
 // FileChange is the classifier's path-level input.
 type FileChange struct {
-	Path            string
-	BaselinePath    string
-	Status          ChangeStatus
-	Added           int
-	Deleted         int
-	BaselineContent string
-	BaselineContext string
-	CurrentContent  string
+	Path             string
+	BaselinePath     string
+	Status           ChangeStatus
+	Added            int
+	Deleted          int
+	BaselineContent  string
+	BaselineContext  string
+	CurrentContent   string
+	AmbiguousLineage bool
 }
 
 // ChangeSet describes the complete diff and where it will land.
@@ -115,6 +116,11 @@ func Classify(change ChangeSet, cfg Config) (Decision, error) {
 		Novelty:       novelty,
 		Reversibility: classifyReversibility(change, cfg.HighRiskPaths),
 	}
+	if anyAmbiguousLineage(change.Files) {
+		decision.Novelty = Axis{Score: 3, Reason: "deleted and added source identity requires reviewer judgment"}
+		decision.Tier = TierFullAdversarial
+		return finalizeDecision(decision, cfg)
+	}
 	singleThreshold, fullThreshold := thresholds(cfg)
 	total := decision.BlastRadius.Score + decision.Novelty.Score + decision.Reversibility.Score
 	switch {
@@ -126,6 +132,15 @@ func Classify(change ChangeSet, cfg Config) (Decision, error) {
 		decision.Tier = TierLeakScanOnly
 	}
 	return finalizeDecision(decision, cfg)
+}
+
+func anyAmbiguousLineage(files []FileChange) bool {
+	for _, file := range files {
+		if file.AmbiguousLineage {
+			return true
+		}
+	}
+	return false
 }
 
 func finalizeDecision(decision Decision, cfg Config) (Decision, error) {

@@ -3,8 +3,6 @@ package engine
 import (
 	"context"
 	"fmt"
-	"go/parser"
-	"go/token"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -84,120 +82,38 @@ func LoadGitChanges(ctx context.Context, workDir, baseRef, headRef string) ([]Ch
 }
 
 func attachDeletedCommentBaselines(changes []Change) {
-	type candidate struct {
-		deleted int
-		added   int
-		score   int
+	type baseline struct {
+		path    string
+		content strings.Builder
 	}
-	identities := make(map[int]goFileIdentity)
+	byDirectory := make(map[string]*baseline)
+	for _, change := range changes {
+		if change.Status != risk.Deleted || filepath.Ext(change.Path) != ".go" {
+			continue
+		}
+		directory := filepath.Dir(change.Path)
+		group := byDirectory[directory]
+		if group == nil {
+			group = &baseline{path: change.Path}
+			byDirectory[directory] = group
+		}
+		group.content.WriteString(change.BaselineContent)
+		group.content.WriteByte('\n')
+	}
 	for index := range changes {
-		if (changes[index].Status == risk.Deleted || changes[index].Status == risk.Added) && filepath.Ext(changes[index].Path) == ".go" {
-			content := changes[index].CurrentContent
-			if changes[index].Status == risk.Deleted {
-				content = changes[index].BaselineContent
-			}
-			identities[index] = parseGoFileIdentity(content)
-		}
-	}
-	var candidates []candidate
-	for deleted := range changes {
-		baseline, ok := identities[deleted]
-		if !ok || changes[deleted].Status != risk.Deleted {
+		change := &changes[index]
+		if change.Status != risk.Added || filepath.Ext(change.Path) != ".go" {
 			continue
 		}
-		for added := range changes {
-			current, ok := identities[added]
-			if !ok || changes[added].Status != risk.Added || filepath.Dir(changes[deleted].Path) != filepath.Dir(changes[added].Path) {
-				continue
-			}
-			score := goLineageScore(baseline, current)
-			if score > 0 {
-				candidates = append(candidates, candidate{deleted: deleted, added: added, score: score})
-			}
-		}
-	}
-	bestDeleted := make(map[int]candidate)
-	ambiguousDeleted := make(map[int]bool)
-	bestAdded := make(map[int]candidate)
-	ambiguousAdded := make(map[int]bool)
-	for _, match := range candidates {
-		if best, ok := bestDeleted[match.deleted]; !ok || match.score > best.score {
-			bestDeleted[match.deleted] = match
-			ambiguousDeleted[match.deleted] = false
-		} else if match.score == best.score {
-			ambiguousDeleted[match.deleted] = true
-		}
-		if best, ok := bestAdded[match.added]; !ok || match.score > best.score {
-			bestAdded[match.added] = match
-			ambiguousAdded[match.added] = false
-		} else if match.score == best.score {
-			ambiguousAdded[match.added] = true
-		}
-	}
-	for added, match := range bestAdded {
-		if ambiguousAdded[added] || ambiguousDeleted[match.deleted] || bestDeleted[match.deleted].added != added {
+		group := byDirectory[filepath.Dir(change.Path)]
+		if group == nil {
 			continue
 		}
-		changes[added].CommentBaselinePath = changes[match.deleted].Path
-		changes[added].CommentBaselineContent = changes[match.deleted].BaselineContent
-		changes[added].CommentAddedContent = changes[added].AddedContent
+		change.CommentBaselinePath = group.path
+		change.CommentBaselineContent = group.content.String()
+		change.CommentAddedContent = change.AddedContent
+		change.CommentLineageAmbiguous = true
 	}
-}
-
-type goFileIdentity struct {
-	packageName  string
-	declarations map[string]int
-	comments     map[string]bool
-}
-
-func goLineageScore(baseline, current goFileIdentity) int {
-	if baseline.packageName == "" || baseline.packageName != current.packageName || !sharesStringKey(baseline.comments, current.comments) {
-		return 0
-	}
-	score := 0
-	for declaration, size := range baseline.declarations {
-		if current.declarations[declaration] > 0 {
-			score += size
-		}
-	}
-	return score
-}
-
-func parseGoFileIdentity(content string) goFileIdentity {
-	files := token.NewFileSet()
-	parsed, err := parser.ParseFile(files, "", content, parser.SkipObjectResolution|parser.ParseComments)
-	if err != nil {
-		return goFileIdentity{}
-	}
-	identity := goFileIdentity{
-		packageName:  parsed.Name.Name,
-		declarations: make(map[string]int),
-		comments:     make(map[string]bool),
-	}
-	source := []byte(content)
-	for _, declaration := range parsed.Decls {
-		start := files.PositionFor(declaration.Pos(), false).Offset
-		end := files.PositionFor(declaration.End(), false).Offset
-		if start >= 0 && end > start && end <= len(source) {
-			text := string(source[start:end])
-			identity.declarations[text] = len(text)
-		}
-	}
-	for _, group := range parsed.Comments {
-		if text := strings.TrimSpace(group.Text()); text != "" {
-			identity.comments[text] = true
-		}
-	}
-	return identity
-}
-
-func sharesStringKey(left, right map[string]bool) bool {
-	for value := range left {
-		if right[value] {
-			return true
-		}
-	}
-	return false
 }
 
 func loadBaselineSiblingContent(ctx context.Context, workDir, baseRef, path string) (string, error) {
