@@ -5,6 +5,8 @@ package precheck
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
 	"go/scanner"
 	"go/token"
 	"path/filepath"
@@ -48,8 +50,10 @@ var (
 )
 
 type lexedSourceLine struct {
-	comment bool
-	body    string
+	comment    bool
+	standalone bool
+	commentID  int
+	body       string
 }
 
 // docFillerWords carry no information beyond the declaration they document, so
@@ -92,15 +96,15 @@ func Scan(files []File, intent string) []Finding {
 func detectRedundantComment(file File) []Finding {
 	var findings []Finding
 	current := splitLines(file.CurrentContent)
-	lexed := lexSource(file.Path, current)
+	lexed, declarations := lexSource(file.Path, current)
 	for _, block := range commentBlocks(file, lexed) {
 		description := ""
 		switch {
 		case hasRepeatedPhrase(block.text):
 			description = "comment repeats a phrase internally"
-		case docCommentRepeatsDeclarationName(block.text, current, lexed, block.lastLine):
+		case docCommentRepeatsDeclarationName(block.text, declarations[block.lastLine]):
 			description = "doc comment adds no information beyond the declaration name"
-		case commentRestatesNextCode(block.text, current, lexed, block.lastLine):
+		case block.standalone && commentRestatesNextCode(block.text, current, lexed, block.lastLine):
 			description = "comment restates the adjacent code"
 		}
 		if description != "" {
@@ -116,9 +120,10 @@ func detectRedundantComment(file File) []Finding {
 }
 
 type commentBlock struct {
-	line     int
-	lastLine int
-	text     string
+	line       int
+	lastLine   int
+	text       string
+	standalone bool
 }
 
 // commentBlocks groups contiguous comment lines into the single comment a
@@ -138,7 +143,7 @@ func commentBlocks(file File, lines []lexedSourceLine) []commentBlock {
 			continue
 		}
 		body := lines[number-1].body
-		block := commentBlock{lastLine: number}
+		block := commentBlock{lastLine: number, standalone: lines[number-1].standalone}
 		for {
 			if added[number] && block.line == 0 {
 				block.line = number
@@ -149,7 +154,7 @@ func commentBlocks(file File, lines []lexedSourceLine) []commentBlock {
 			if number+1 > len(lines) {
 				break
 			}
-			if !lines[number].comment {
+			if !lines[number].comment || lines[number].standalone != block.standalone || !block.standalone && lines[number].commentID != lines[number-1].commentID {
 				break
 			}
 			number++
@@ -168,12 +173,11 @@ func commentBlocks(file File, lines []lexedSourceLine) []commentBlock {
 // informative word is already spelled by the declaration it documents. Go's
 // convention is that a doc comment opens with the declaration name, so merely
 // naming the declaration is not the signal; adding nothing else is.
-func docCommentRepeatsDeclarationName(comment string, lines []string, lexed []lexedSourceLine, after int) bool {
-	match := declarationPattern.FindStringSubmatch(adjacentCodeLine(lines, lexed, after))
-	if match == nil {
+func docCommentRepeatsDeclarationName(comment, declarationName string) bool {
+	if declarationName == "" {
 		return false
 	}
-	nameWords := identifierWords(match[1])
+	nameWords := identifierWords(declarationName)
 	derived := 0
 	informative := 0
 	for _, word := range meaningfulWords(comment) {
@@ -287,16 +291,18 @@ func meaningfulWords(value string) []string {
 	return result
 }
 
-func lexSource(path string, lines []string) []lexedSourceLine {
+func lexSource(path string, lines []string) ([]lexedSourceLine, map[int]string) {
 	result := make([]lexedSourceLine, len(lines))
+	declarations := make(map[int]string)
 	if !strings.EqualFold(filepath.Ext(path), ".go") {
-		return result
+		return result, declarations
 	}
 	content := strings.Join(lines, "\n")
 	files := token.NewFileSet()
 	file := files.AddFile(path, -1, len(content))
 	var lexer scanner.Scanner
 	lexer.Init(file, []byte(content), nil, scanner.ScanComments)
+	commentID := 0
 	for {
 		position, kind, literal := lexer.Scan()
 		if kind == token.EOF {
@@ -305,13 +311,12 @@ func lexSource(path string, lines []string) []lexedSourceLine {
 		if kind != token.COMMENT {
 			continue
 		}
+		commentID++
 		start := files.PositionFor(position, false)
 		if start.Line < 1 || start.Line > len(lines) || start.Column < 1 || start.Column > len(lines[start.Line-1])+1 {
 			continue
 		}
-		if strings.TrimSpace(lines[start.Line-1][:start.Column-1]) != "" {
-			continue
-		}
+		standalone := strings.TrimSpace(lines[start.Line-1][:start.Column-1]) == ""
 		parts := strings.Split(literal, "\n")
 		for offset, part := range parts {
 			line := start.Line + offset
@@ -328,10 +333,57 @@ func lexSource(path string, lines []string) []lexedSourceLine {
 					part = strings.TrimSuffix(part, "*/")
 				}
 			}
-			result[line-1] = lexedSourceLine{comment: true, body: blockBody(part)}
+			result[line-1] = lexedSourceLine{comment: true, standalone: standalone, commentID: commentID, body: blockBody(part)}
 		}
 	}
-	return result
+	declarationFiles := token.NewFileSet()
+	parsed, err := parser.ParseFile(declarationFiles, path, content, parser.ParseComments)
+	lineOffset := 0
+	if err != nil {
+		declarationFiles = token.NewFileSet()
+		parsed, err = parser.ParseFile(declarationFiles, path, "package precheck\n"+content, parser.ParseComments)
+		lineOffset = 1
+	}
+	if err == nil {
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			switch declaration := node.(type) {
+			case *ast.FuncDecl:
+				addDeclaration(declarations, declarationFiles, declaration.Doc, declaration.Name.Name, lineOffset)
+			case *ast.GenDecl:
+				if len(declaration.Specs) == 1 {
+					addDeclaration(declarations, declarationFiles, declaration.Doc, specName(declaration.Specs[0]), lineOffset)
+				}
+			case *ast.TypeSpec:
+				addDeclaration(declarations, declarationFiles, declaration.Doc, declaration.Name.Name, lineOffset)
+			case *ast.ValueSpec:
+				if len(declaration.Names) == 1 {
+					addDeclaration(declarations, declarationFiles, declaration.Doc, declaration.Names[0].Name, lineOffset)
+				}
+			}
+			return true
+		})
+	}
+	return result, declarations
+}
+
+func addDeclaration(declarations map[int]string, files *token.FileSet, comment *ast.CommentGroup, name string, lineOffset int) {
+	if comment == nil || name == "" {
+		return
+	}
+	line := files.PositionFor(comment.End(), false).Line - lineOffset
+	declarations[line] = name
+}
+
+func specName(spec ast.Spec) string {
+	switch declaration := spec.(type) {
+	case *ast.TypeSpec:
+		return declaration.Name.Name
+	case *ast.ValueSpec:
+		if len(declaration.Names) == 1 {
+			return declaration.Names[0].Name
+		}
+	}
+	return ""
 }
 
 func blockBody(value string) string {

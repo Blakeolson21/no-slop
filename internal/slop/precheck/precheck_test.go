@@ -244,6 +244,14 @@ func TestScanRedundantCommentAcquitsConventionalDocumentation(t *testing.T) {
 			},
 		},
 		{
+			name: "inline comment is not attached to following code",
+			file: precheck.File{
+				Path:           "counter.go",
+				AddedContent:   "i += 1 // increment i\nreturn i\n",
+				CurrentContent: "i += 1 // increment i\nreturn i\n",
+			},
+		},
+		{
 			name: "indented command sample inside a doc comment",
 			file: precheck.File{
 				Path: "version.go",
@@ -459,6 +467,55 @@ func TestScanFlagsRedundantCommentShapes(t *testing.T) {
 					"func normalizeKey(value string) string { return value }\n",
 			},
 			line:        2,
+			description: "comment repeats a phrase internally",
+		},
+		{
+			name: "grouped type doc comment",
+			file: precheck.File{
+				Path:         "reader.go",
+				AddedContent: "\n// Reader handles Reader values.\n\n\n",
+				CurrentContent: "type (\n" +
+					"\t// Reader handles Reader values.\n" +
+					"\tReader struct{}\n" +
+					")\n",
+			},
+			line:        2,
+			description: "doc comment adds no information beyond the declaration name",
+		},
+		{
+			name: "grouped variable doc comment",
+			file: precheck.File{
+				Path:         "state.go",
+				AddedContent: "\n// DefaultState is the DefaultState value.\n\n\n",
+				CurrentContent: "var (\n" +
+					"\t// DefaultState is the DefaultState value.\n" +
+					"\tDefaultState = State{}\n" +
+					")\n",
+			},
+			line:        2,
+			description: "doc comment adds no information beyond the declaration name",
+		},
+		{
+			name: "grouped constant doc comment",
+			file: precheck.File{
+				Path:         "limits.go",
+				AddedContent: "\n// MaxRetries is the MaxRetries value.\n\n\n",
+				CurrentContent: "const (\n" +
+					"\t// MaxRetries is the MaxRetries value.\n" +
+					"\tMaxRetries = 3\n" +
+					")\n",
+			},
+			line:        2,
+			description: "doc comment adds no information beyond the declaration name",
+		},
+		{
+			name: "inline comment repeats a phrase internally",
+			file: precheck.File{
+				Path:           "cache.go",
+				AddedContent:   "value := cache[key] // normalize key before lookup; normalize key before lookup.\n",
+				CurrentContent: "value := cache[key] // normalize key before lookup; normalize key before lookup.\n",
+			},
+			line:        1,
 			description: "comment repeats a phrase internally",
 		},
 	}
