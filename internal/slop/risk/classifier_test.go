@@ -280,6 +280,55 @@ func TestClassifyModifiedRenameIncludesBaselinePathRisk(t *testing.T) {
 	}
 }
 
+func TestClassifyCrossCategoryRenamesRequireReview(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name string
+		file risk.FileChange
+	}{
+		{
+			name: "exact rename",
+			file: risk.FileChange{
+				Path:         "docs/worker.md",
+				BaselinePath: "internal/worker.go",
+				Status:       risk.Renamed,
+			},
+		},
+		{
+			name: "identifier-equivalent modified rename",
+			file: risk.FileChange{
+				Path:            "docs/worker.md",
+				BaselinePath:    "internal/worker.go",
+				Status:          risk.Modified,
+				Added:           1,
+				Deleted:         1,
+				BaselineContent: "package worker\nfunc run(task string) string { return task }\n",
+				CurrentContent:  "package worker\nfunc execute(job string) string { return job }\n",
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			decision, err := risk.Classify(risk.ChangeSet{
+				Branch:        "docs/worker",
+				DefaultBranch: "main",
+				Files:         []risk.FileChange{testCase.file},
+			}, risk.Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Novelty.Score != 2 {
+				t.Fatalf("novelty = %+v, want cross-category change", decision.Novelty)
+			}
+			if decision.Tier == risk.TierLeakScanOnly {
+				t.Fatalf("tier = %q, want reviewer tier: %+v", decision.Tier, decision)
+			}
+		})
+	}
+}
+
 func TestClassifyCallTargetAndArgumentSwapAsChangedLogic(t *testing.T) {
 	t.Parallel()
 

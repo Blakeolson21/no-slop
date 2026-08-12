@@ -189,7 +189,10 @@ func allCommentBlocks(lines []lexedSourceLine) []commentBlock {
 		block := commentBlock{line: number, lastLine: number, standalone: lines[number-1].standalone}
 		for {
 			if !isCodeSample(body) {
-				block.text += " " + strings.TrimSpace(body)
+				if block.text != "" {
+					block.text += "\n"
+				}
+				block.text += strings.TrimSpace(body)
 			}
 			if number+1 > len(lines) {
 				break
@@ -443,36 +446,38 @@ func isCodeSample(body string) bool {
 	return strings.HasPrefix(body, "\t") || strings.HasPrefix(body, "    ")
 }
 
-// hasRepeatedPhrase looks for a run of four or more content words restated
-// almost immediately, which is the stutter shape. Shorter windows match ordinary
-// English connective tissue such as "the fix" or a run of identical digits, and
-// an unbounded window matches any long comment that returns to its own subject;
-// neither is a source shape specific enough to block on.
+// hasRepeatedPhrase looks for a substantive clause restated at the end of the
+// next clause. Shorter windows and phrases embedded in different qualifications
+// are not a source shape specific enough to block on.
 func hasRepeatedPhrase(comment string) bool {
-	words := meaningfulWords(comment)
-	for width := 4; width <= 6 && width*2 <= len(words); width++ {
-		seen := make(map[string]int)
-		for start := 0; start+width <= len(words); start++ {
-			phrase := strings.Join(words[start:start+width], " ")
-			if previous, repeated := seen[phrase]; repeated && start-previous <= 2*width {
-				if !containsQualifier(words[previous+width : start]) {
-					return true
-				}
-			}
-			seen[phrase] = start
+	var clauses [][]string
+	for _, clause := range strings.FieldsFunc(comment, func(letter rune) bool {
+		return letter == ';' || letter == '.' || letter == '!' || letter == '?' || letter == '\n'
+	}) {
+		words := meaningfulWords(clause)
+		if len(words) >= 4 {
+			clauses = append(clauses, words)
+		}
+	}
+	for index := 1; index < len(clauses); index++ {
+		previous, current := clauses[index-1], clauses[index]
+		if equalWords(previous, current) || len(previous) == len(current)+1 && equalWords(previous[1:], current) {
+			return true
 		}
 	}
 	return false
 }
 
-func containsQualifier(words []string) bool {
-	for _, word := range words {
-		switch word {
-		case "because", "but", "except", "instead", "never", "not", "only", "otherwise", "unless", "until", "when", "while", "without":
-			return true
+func equalWords(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 func wordTokens(value string) []string {

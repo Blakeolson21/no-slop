@@ -286,7 +286,9 @@ func classifyNovelty(files []FileChange) Axis {
 	if allPaths(files, func(name string) bool { return !sourcePath(name) }) {
 		return Axis{Score: 1, Reason: "change adjusts non-runtime artifacts"}
 	}
-	if allChanges(files, func(file FileChange) bool { return file.Status == Renamed }) {
+	if allChanges(files, func(file FileChange) bool {
+		return file.Status == Renamed && relocationPreservesCategory(file)
+	}) {
 		return Axis{Score: 0, Reason: "change is a mechanical rename"}
 	}
 	if allChanges(files, mechanicallyEquivalent) {
@@ -302,9 +304,9 @@ type sourceToken struct {
 
 func mechanicallyEquivalent(file FileChange) bool {
 	if file.Status == Renamed {
-		return true
+		return relocationPreservesCategory(file)
 	}
-	if file.Status != Modified || !fileMatchesPath(file, sourcePath) || file.BaselineContent == "" || file.CurrentContent == "" {
+	if file.Status != Modified || !relocationPreservesCategory(file) || !fileMatchesPath(file, sourcePath) || file.BaselineContent == "" || file.CurrentContent == "" {
 		return false
 	}
 	baseline := sourceTokens(file.BaselineContent)
@@ -346,6 +348,24 @@ func mechanicallyEquivalent(file FileChange) bool {
 		reverse[right.text] = left.text
 	}
 	return changed || file.BaselineContent != file.CurrentContent
+}
+
+func relocationPreservesCategory(file FileChange) bool {
+	if file.BaselinePath == "" {
+		return true
+	}
+	return pathCategory(file.Path) == pathCategory(file.BaselinePath)
+}
+
+func pathCategory(path string) int {
+	switch {
+	case isTestOrDocsPath(path):
+		return 1
+	case sourcePath(path):
+		return 2
+	default:
+		return 0
+	}
 }
 
 func identifierControlsCallTarget(baseline, current []sourceToken, index int) bool {
