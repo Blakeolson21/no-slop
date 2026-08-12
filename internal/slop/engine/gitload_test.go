@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -125,6 +126,64 @@ func TestLoadGitChangesPreservesModifiedRenameIdentity(t *testing.T) {
 	}
 	if findings := precheck.Scan([]precheck.File{{Path: change.Path, AddedContent: change.AddedContent, BaselineContent: change.BaselineContent, CurrentContent: change.CurrentContent}}, ""); len(findings) != 0 {
 		t.Fatalf("modified rename produced findings: %+v", findings)
+	}
+}
+
+func TestLoadGitChangesPreservesLowSimilarityRenameIdentity(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-b", "main")
+	gitRun(t, dir, "config", "user.email", "test@example.com")
+	gitRun(t, dir, "config", "user.name", "Test")
+	var baseline strings.Builder
+	baseline.WriteString("package sample\n\n// normalize key before lookup; normalize key before lookup.\n")
+	for index := 0; index < 40; index++ {
+		baseline.WriteString("const old")
+		baseline.WriteString(strconv.Itoa(index))
+		baseline.WriteString(" = \"old value ")
+		baseline.WriteString(strconv.Itoa(index))
+		baseline.WriteString("\"\n")
+	}
+	writeFixture(t, dir, "old.go", baseline.String())
+	gitRun(t, dir, "add", "old.go")
+	gitRun(t, dir, "commit", "-m", "base")
+	base := gitRun(t, dir, "rev-parse", "HEAD")
+
+	gitRun(t, dir, "mv", "old.go", "new.go")
+	var current strings.Builder
+	current.WriteString("package sample\n\n// normalize key before lookup; normalize key before lookup.\n")
+	for index := 0; index < 40; index++ {
+		current.WriteString("var replacement")
+		current.WriteString(strconv.Itoa(index))
+		current.WriteString(" = []byte{1, 2, 3, ")
+		current.WriteString(strconv.Itoa(index))
+		current.WriteString("}\n")
+	}
+	writeFixture(t, dir, "new.go", current.String())
+	gitRun(t, dir, "add", "new.go")
+	gitRun(t, dir, "commit", "-m", "rewrite and rename")
+	head := gitRun(t, dir, "rev-parse", "HEAD")
+
+	changes, err := engine.LoadGitChanges(context.Background(), dir, base, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 1 || changes[0].Path != "new.go" || changes[0].BaselinePath != "old.go" || changes[0].Status != risk.Modified {
+		t.Fatalf("changes = %+v, want one low-similarity modified rename", changes)
+	}
+	change := changes[0]
+	if strings.Contains(change.AddedContent, "normalize key before lookup") {
+		t.Fatalf("unchanged comment was treated as added: %q", change.AddedContent)
+	}
+	if findings := precheck.Scan([]precheck.File{{
+		Path:            change.Path,
+		BaselinePath:    change.BaselinePath,
+		AddedContent:    change.AddedContent,
+		BaselineContent: change.BaselineContent,
+		CurrentContent:  change.CurrentContent,
+	}}, ""); len(findings) != 0 {
+		t.Fatalf("low-similarity rename rescanned existing comment: %+v", findings)
 	}
 }
 

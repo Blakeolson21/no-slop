@@ -12,13 +12,15 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/slop/risk"
 )
 
+const renameDetection = "--find-renames=1%"
+
 // LoadGitChanges materializes the committed change between two refs. Git
 // invocations inherit the repository's bounded subprocess policy.
 func LoadGitChanges(ctx context.Context, workDir, baseRef, headRef string) ([]Change, error) {
 	if baseRef == "" || headRef == "" {
 		return nil, fmt.Errorf("load git changes: base and head refs are required")
 	}
-	statusOutput, err := git.Run(ctx, workDir, "diff", "--name-status", "-z", "--find-renames", baseRef, headRef, "--")
+	statusOutput, err := git.Run(ctx, workDir, "diff", "--name-status", "-z", renameDetection, baseRef, headRef, "--")
 	if err != nil {
 		return nil, fmt.Errorf("load changed paths: %w", err)
 	}
@@ -140,7 +142,7 @@ func showGitFile(ctx context.Context, workDir, ref, path string) (string, error)
 func loadAddedContent(ctx context.Context, workDir, baseRef, headRef, baselinePath, path string, rename bool) (string, int, int, error) {
 	args := []string{"diff", "--unified=0", "--no-color", "--no-ext-diff"}
 	if rename {
-		args = append(args, "--find-renames")
+		args = append(args, renameDetection)
 	} else {
 		args = append(args, "--no-renames")
 	}

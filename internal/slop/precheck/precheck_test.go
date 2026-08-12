@@ -580,6 +580,16 @@ func TestScanFlagsRedundantCommentShapes(t *testing.T) {
 			description: "comment repeats a phrase internally",
 		},
 		{
+			name: "first of multiple inline comments repeats a phrase",
+			file: precheck.File{
+				Path:           "cache.go",
+				AddedContent:   "/* normalize key before lookup; normalize key before lookup. */ value := 1 /* rationale */\n",
+				CurrentContent: "/* normalize key before lookup; normalize key before lookup. */ value := 1 /* rationale */\n",
+			},
+			line:        1,
+			description: "comment repeats a phrase internally",
+		},
+		{
 			name: "new duplicate inline comment beside existing copy",
 			file: precheck.File{
 				Path:            "cache.go",

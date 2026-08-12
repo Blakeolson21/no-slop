@@ -3,6 +3,7 @@ package risk
 
 import (
 	"fmt"
+	"go/build/constraint"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -306,7 +307,7 @@ func mechanicallyEquivalent(file FileChange) bool {
 	if file.Status == Renamed {
 		return relocationPreservesCategory(file)
 	}
-	if file.Status != Modified || !relocationPreservesCategory(file) || !fileMatchesPath(file, sourcePath) || file.BaselineContent == "" || file.CurrentContent == "" {
+	if file.Status != Modified || !relocationPreservesCategory(file) || !fileMatchesPath(file, sourcePath) || file.BaselineContent == "" || file.CurrentContent == "" || !sameBuildConstraints(file) {
 		return false
 	}
 	baseline := sourceTokens(file.BaselineContent)
@@ -354,14 +355,13 @@ func relocationPreservesCategory(file FileChange) bool {
 	if file.BaselinePath == "" {
 		return true
 	}
-	if pathCategory(file.Path) != pathCategory(file.BaselinePath) ||
-		!strings.EqualFold(filepath.Ext(file.Path), filepath.Ext(file.BaselinePath)) {
+	if pathCategory(file.Path) != pathCategory(file.BaselinePath) || filepath.Ext(file.Path) != filepath.Ext(file.BaselinePath) {
 		return false
 	}
 	if !sourcePath(file.Path) {
 		return true
 	}
-	if !strings.EqualFold(filepath.Ext(file.Path), ".go") ||
+	if filepath.Ext(file.Path) != ".go" ||
 		filepath.Clean(filepath.Dir(file.Path)) != filepath.Clean(filepath.Dir(file.BaselinePath)) {
 		return false
 	}
@@ -369,7 +369,7 @@ func relocationPreservesCategory(file FileChange) bool {
 }
 
 func goBuildSuffix(path string) string {
-	name := strings.TrimSuffix(strings.ToLower(filepath.Base(path)), ".go")
+	name := strings.TrimSuffix(filepath.Base(path), ".go")
 	ignored := ""
 	if strings.HasPrefix(name, "_") || strings.HasPrefix(name, ".") {
 		ignored = "ignored:"
@@ -389,6 +389,34 @@ func goBuildSuffix(path string) string {
 		return ignored + last
 	}
 	return ignored
+}
+
+func sameBuildConstraints(file FileChange) bool {
+	if filepath.Ext(file.Path) != ".go" || filepath.Ext(file.BaselinePath) != ".go" && file.BaselinePath != "" {
+		return true
+	}
+	baseline, baselineOK := buildConstraintSignature(file.BaselineContent)
+	current, currentOK := buildConstraintSignature(file.CurrentContent)
+	return baselineOK && currentOK && baseline == current
+}
+
+func buildConstraintSignature(content string) (string, bool) {
+	var expressions []string
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "package ") {
+			break
+		}
+		if !constraint.IsGoBuild(line) && !constraint.IsPlusBuild(line) {
+			continue
+		}
+		expression, err := constraint.Parse(line)
+		if err != nil {
+			return "", false
+		}
+		expressions = append(expressions, expression.String())
+	}
+	return strings.Join(expressions, "\n"), true
 }
 
 var goBuildOS = map[string]bool{

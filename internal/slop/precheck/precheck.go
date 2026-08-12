@@ -51,11 +51,14 @@ var (
 )
 
 type lexedSourceLine struct {
-	comment    bool
+	comments []lexedComment
+	code     string
+}
+
+type lexedComment struct {
 	standalone bool
 	commentID  int
 	body       string
-	code       string
 }
 
 // docFillerWords carry no information beyond the declaration they document, so
@@ -186,29 +189,37 @@ func firstAddedLine(block commentBlock, added map[int]bool) int {
 }
 
 func allCommentBlocks(lines []lexedSourceLine) []commentBlock {
-	var blocks []commentBlock
-	for number := 1; number <= len(lines); number++ {
-		if !lines[number-1].comment {
-			continue
+	type fragment struct {
+		line int
+		lexedComment
+	}
+	var fragments []fragment
+	for index, line := range lines {
+		for _, comment := range line.comments {
+			fragments = append(fragments, fragment{line: index + 1, lexedComment: comment})
 		}
-		body := lines[number-1].body
-		block := commentBlock{line: number, lastLine: number, standalone: lines[number-1].standalone}
+	}
+	var blocks []commentBlock
+	for index := 0; index < len(fragments); index++ {
+		current := fragments[index]
+		block := commentBlock{line: current.line, lastLine: current.line, standalone: current.standalone}
 		for {
-			if !isCodeSample(body) {
+			if !isCodeSample(current.body) {
 				if block.text != "" {
 					block.text += "\n"
 				}
-				block.text += strings.TrimSpace(body)
+				block.text += strings.TrimSpace(current.body)
 			}
-			if number+1 > len(lines) {
+			if index+1 >= len(fragments) {
 				break
 			}
-			if !lines[number].comment || lines[number].standalone != block.standalone || !block.standalone && lines[number].commentID != lines[number-1].commentID {
+			next := fragments[index+1]
+			if next.standalone != block.standalone || block.standalone && next.line != current.line+1 || !block.standalone && next.commentID != current.commentID {
 				break
 			}
-			number++
-			block.lastLine = number
-			body = lines[number-1].body
+			index++
+			current = next
+			block.lastLine = current.line
 		}
 		block.text = strings.TrimSpace(block.text)
 		if block.text != "" {
@@ -280,7 +291,7 @@ func adjacentCodeLine(lines []string, lexed []lexedSourceLine, after int) string
 		if candidate == "" {
 			return ""
 		}
-		if !lexed[number-1].comment {
+		if len(lexed[number-1].comments) == 0 {
 			return candidate
 		}
 		if lexed[number-1].code != "" {
@@ -354,6 +365,11 @@ func lexSource(path string, lines []string) ([]lexedSourceLine, map[int]string) 
 	file := files.AddFile(path, -1, len(content))
 	var lexer scanner.Scanner
 	lexer.Init(file, []byte(content), nil, scanner.ScanComments)
+	type commentRange struct {
+		start int
+		end   int
+	}
+	ranges := make([][]commentRange, len(lines))
 	commentID := 0
 	for {
 		position, kind, literal := lexer.Scan()
@@ -368,20 +384,7 @@ func lexSource(path string, lines []string) ([]lexedSourceLine, map[int]string) 
 		if start.Line < 1 || start.Line > len(lines) || start.Column < 1 || start.Column > len(lines[start.Line-1])+1 {
 			continue
 		}
-		prefix := strings.TrimSpace(lines[start.Line-1][:start.Column-1])
 		parts := strings.Split(literal, "\n")
-		lastLine := start.Line + len(parts) - 1
-		suffix := ""
-		if strings.HasPrefix(literal, "/*") && lastLine <= len(lines) {
-			end := len(parts[len(parts)-1])
-			if len(parts) == 1 {
-				end += start.Column - 1
-			}
-			if end <= len(lines[lastLine-1]) {
-				suffix = strings.TrimSpace(lines[lastLine-1][end:])
-			}
-		}
-		standalone := prefix == "" && suffix == ""
 		for offset, part := range parts {
 			line := start.Line + offset
 			if line > len(result) {
@@ -397,13 +400,44 @@ func lexSource(path string, lines []string) ([]lexedSourceLine, map[int]string) 
 					part = strings.TrimSuffix(part, "*/")
 				}
 			}
-			result[line-1] = lexedSourceLine{comment: true, standalone: standalone, commentID: commentID, body: blockBody(part)}
+			rangeStart := 0
 			if offset == 0 {
-				result[line-1].code = prefix
+				rangeStart = start.Column - 1
 			}
-			if offset == len(parts)-1 && suffix != "" {
-				result[line-1].code = strings.TrimSpace(result[line-1].code + " " + suffix)
+			rangeEnd := len(lines[line-1])
+			if offset == len(parts)-1 {
+				rangeEnd = rangeStart + len(parts[offset])
 			}
+			ranges[line-1] = append(ranges[line-1], commentRange{start: rangeStart, end: rangeEnd})
+			result[line-1].comments = append(result[line-1].comments, lexedComment{commentID: commentID, body: blockBody(part)})
+		}
+	}
+	for index, source := range lines {
+		var code strings.Builder
+		cursor := 0
+		for _, span := range ranges[index] {
+			if span.start > cursor {
+				code.WriteString(source[cursor:span.start])
+			}
+			if span.end > cursor {
+				cursor = span.end
+			}
+		}
+		code.WriteString(source[cursor:])
+		result[index].code = strings.TrimSpace(code.String())
+	}
+	inline := make(map[int]bool)
+	for _, line := range result {
+		if line.code == "" {
+			continue
+		}
+		for _, comment := range line.comments {
+			inline[comment.commentID] = true
+		}
+	}
+	for line := range result {
+		for index := range result[line].comments {
+			result[line].comments[index].standalone = !inline[result[line].comments[index].commentID]
 		}
 	}
 	declarationFiles := token.NewFileSet()

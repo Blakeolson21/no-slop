@@ -385,6 +385,16 @@ func TestClassifyGoRenameRequiresPreservedPackageAndBuildSelection(t *testing.T)
 			Status:       risk.Renamed,
 		},
 		{
+			Path:         "internal/worker.GO",
+			BaselinePath: "internal/worker.go",
+			Status:       risk.Renamed,
+		},
+		{
+			Path:         "internal/worker_Windows.go",
+			BaselinePath: "internal/worker_windows.go",
+			Status:       risk.Renamed,
+		},
+		{
 			Path:            "internal/archive/worker.go",
 			BaselinePath:    "internal/worker.go",
 			Status:          risk.Modified,
@@ -403,6 +413,27 @@ func TestClassifyGoRenameRequiresPreservedPackageAndBuildSelection(t *testing.T)
 		if decision.Novelty.Score != 2 || decision.Tier == risk.TierLeakScanOnly {
 			t.Fatalf("decision = %+v, want build-participation change reviewed", decision)
 		}
+	}
+}
+
+func TestClassifyChangedGoBuildConstraintRequiresReview(t *testing.T) {
+	t.Parallel()
+
+	decision, err := risk.Classify(risk.ChangeSet{
+		Branch:        "refactor/worker",
+		DefaultBranch: "main",
+		Files: []risk.FileChange{{
+			Path:            "internal/worker.go",
+			Status:          risk.Modified,
+			BaselineContent: "//go:build linux\n\npackage worker\nfunc run(task string) string { return task }\n",
+			CurrentContent:  "//go:build darwin\n\npackage worker\nfunc run(task string) string { return task }\n",
+		}},
+	}, risk.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Novelty.Score != 2 || decision.Tier == risk.TierLeakScanOnly {
+		t.Fatalf("decision = %+v, want build-constraint change reviewed", decision)
 	}
 }
 
