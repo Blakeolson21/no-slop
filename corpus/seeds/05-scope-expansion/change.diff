@@ -1,0 +1,11 @@
+diff --git a/deploy/dashboard.go b/deploy/dashboard.go
+new file mode 100644
+index 0000000..2222222
+--- /dev/null
++++ b/deploy/dashboard.go
+@@ -0,0 +1,4 @@
++package deploy
++
++func Dashboard() string {
++	return "all systems ready"
++}

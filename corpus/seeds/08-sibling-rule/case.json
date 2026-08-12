@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "sibling-rule-explicit-only",
+  "description": "An explicit policy path fails closed while its configured sibling fails open.",
+  "expected_findings": [
+    {
+      "lens": "rule-applied-in-one-place-not-sibling",
+      "path": "loader.go",
+      "line": 41,
+      "description": "configured and explicit policy paths enforce different missing-file rules"
+    }
+  ]
+}

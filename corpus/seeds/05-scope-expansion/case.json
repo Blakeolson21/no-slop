@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "scope-expansion-unrequested-dashboard",
+  "description": "A wording-only task also adds an unrelated deployment dashboard.",
+  "expected_findings": [
+    {
+      "lens": "scope-expansion",
+      "path": "deploy/dashboard.go",
+      "line": 1,
+      "description": "the dashboard is unrelated to the requested wording update"
+    }
+  ]
+}

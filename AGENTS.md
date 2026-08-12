@@ -41,6 +41,13 @@ Safest local verification sequence after non-trivial changes:
 - One owner per fact: `docs/src/content/docs/reference/global-config.md` and `docs/src/content/docs/reference/repo-config.md` own configuration keys, `docs/src/content/docs/reference/environment.md` owns environment variables and the telemetry local/remote split, `docs/src/content/docs/concepts/daemon.md` owns the daemon lifecycle model, and guides pages explain purpose and link to those owners instead of restating tables and examples.
 - The `document.instructions` block in `.no-mistakes.yaml` states this ownership map for the pipeline's document step; update it when ownership moves.
 
+**NoSlop Front Stage**
+
+- `cmd/noslop` runs the standalone front stage through `internal/slop/engine`: classify first, publish the decision through `OnDecision`, then run mandatory leak and artifact checks before tier-specific review or tests. A tier override that changes the selected tier must remain visible in `risk.Decision.String`; a lower tier cannot supersede provenance escalation without `--force-tier`. Leak scanning and the configured test-count floor are never tier-skippable, and completed verdicts print every mandatory-check status.
+- `internal/slop/lenses` owns the reviewer prompt catalog and `docs/src/content/docs/reference/slop-taxonomy.md` owns the public explanation. Keep the names and guidance aligned. Mechanical checks live in `internal/slop/leakscan` and `internal/slop/testfloor` rather than in reviewer prose.
+- `.noslop-blocklist` is local private data and ignored. A missing built-in default means no private-name list, while a configured missing path and any unreadable path fail closed. Findings may name a file and line but must never reproduce the matched credential or private identity. Every honored inline exemption is reported and counted; `slop.leak_scan.allow_exemptions: false` rejects markers.
+- `internal/slop/provenance` owns append-only generating-lane history and `internal/slop/corpus` owns replay scoring. Conditioning may only raise the classifier tier, reorder the complete lens catalog, or enable a named deterministic probe. Missing history keeps the v1 route; unreadable history selects `full-adversarial`.
+
 **Agent-Guidance Surfaces**
 
 - `skills/no-mistakes/SKILL.md` is **generated**: the source of truth is the `body` constant in `internal/skill/skill.go`. Edit the body, then `make skill`; `make lint` fails CI on drift. Never edit `SKILL.md` directly. `no-mistakes init` ships this rendering to agents at user level.

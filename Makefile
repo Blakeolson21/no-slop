@@ -20,6 +20,7 @@ INSTALL_BIN := $(shell go env GOPATH)/bin/no-mistakes
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/no-mistakes ./cmd/no-mistakes
+	go build -o bin/noslop ./cmd/noslop
 
 dist:
 	rm -rf $(DIST_DIR)

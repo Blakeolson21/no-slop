@@ -75,6 +75,30 @@ func TestMerge_RepoDoesNotOverrideWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestMerge_SlopDefaults(t *testing.T) {
+	t.Parallel()
+
+	cfg := Merge(DefaultGlobalConfig(), &RepoConfig{})
+	if cfg.Slop.Risk.SingleReviewThreshold != 3 || cfg.Slop.Risk.FullAdversarialThreshold != 6 {
+		t.Fatalf("risk defaults = %+v", cfg.Slop.Risk)
+	}
+	if cfg.Slop.LeakScan.BlocklistFile != ".noslop-blocklist" {
+		t.Fatalf("blocklist default = %q", cfg.Slop.LeakScan.BlocklistFile)
+	}
+	if !cfg.Slop.LeakScan.AllowExemptions {
+		t.Fatal("inline leak exemptions should default on")
+	}
+	if cfg.Slop.DataDir != ".noslop-data" {
+		t.Fatalf("NoSlop data dir default = %q", cfg.Slop.DataDir)
+	}
+	if !cfg.Slop.TestCountFloor {
+		t.Fatal("test count floor should default on")
+	}
+	if len(cfg.Slop.Prose.OutboundPaths) != 1 || cfg.Slop.Prose.OutboundPaths[0] != "outbound/**" {
+		t.Fatalf("outbound path defaults = %v", cfg.Slop.Prose.OutboundPaths)
+	}
+}
+
 func TestMerge_AutoFixDefaults(t *testing.T) {
 	global := &GlobalConfig{Agent: types.AgentClaude, CITimeout: 4 * time.Hour, LogLevel: "info"}
 	repo := &RepoConfig{}

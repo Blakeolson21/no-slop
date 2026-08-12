@@ -1,0 +1,9 @@
+diff --git a/calc_test.go b/calc_test.go
+index 1111111..2222222 100644
+--- a/calc_test.go
++++ b/calc_test.go
+@@ -12,4 +11,0 @@
+-func TestNegative(t *testing.T) {
+-	if Add(-2, -3) != -5 { t.Fatal("wrong sum") }
+-}
+-

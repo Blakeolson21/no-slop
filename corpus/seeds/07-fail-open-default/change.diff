@@ -1,0 +1,10 @@
+diff --git a/blocklist.go b/blocklist.go
+index 1111111..2222222 100644
+--- a/blocklist.go
++++ b/blocklist.go
+@@ -24,1 +24,4 @@
+-	return nil, err
++	if errors.Is(err, os.ErrNotExist) {
++		return nil, nil
++	}
++	return nil, err

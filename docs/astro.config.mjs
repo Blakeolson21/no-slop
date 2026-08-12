@@ -49,6 +49,8 @@ export default defineConfig({
           items: [
             { label: "CLI Commands", slug: "reference/cli" },
             { label: "Pipeline Steps", slug: "reference/pipeline-steps" },
+            { label: "NoSlop Taxonomy", slug: "reference/slop-taxonomy" },
+            { label: "NoSlop Evaluation Corpus", slug: "reference/evaluation-corpus" },
             { label: "Global Config", slug: "reference/global-config" },
             { label: "Repo Config", slug: "reference/repo-config" },
             { label: "Environment Variables", slug: "reference/environment" },

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "fail-open-default-missing-blocklist",
+  "description": "A configured but missing policy file silently becomes an empty policy.",
+  "expected_findings": [
+    {
+      "lens": "fail-open-default",
+      "path": "blocklist.go",
+      "line": 24,
+      "description": "a missing configured blocklist becomes permission to continue"
+    }
+  ]
+}

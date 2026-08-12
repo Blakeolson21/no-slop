@@ -1,0 +1,8 @@
+diff --git a/handler.go b/handler.go
+index 1111111..2222222 100644
+--- a/handler.go
++++ b/handler.go
+@@ -19,1 +19,2 @@
+-	return legacy(request)
++	// TODO: The permanent repair is filed and tracked for a follow-up.
++	return legacy(request)

@@ -161,6 +161,39 @@ type RepoConfig struct {
 	// registered pending or failing check. No inference from workflow files,
 	// prior history, branch names, or grace-period expiry.
 	NoCI bool `yaml:"no_ci"`
+	// Slop configures the NoSlop front-stage classifier and artifact oracles.
+	// It controls validation depth, so EffectiveRepoConfig treats it as
+	// trusted-only when the daemon evaluates a pushed branch.
+	Slop SlopRaw `yaml:"slop"`
+}
+
+// SlopRaw is the YAML representation of NoSlop front-stage settings.
+type SlopRaw struct {
+	DataDir        string          `yaml:"data_dir"`
+	Risk           SlopRiskRaw     `yaml:"risk"`
+	LeakScan       SlopLeakScanRaw `yaml:"leak_scan"`
+	Prose          SlopProseRaw    `yaml:"prose"`
+	TestCountFloor *bool           `yaml:"test_count_floor"`
+	TestCommand    string          `yaml:"test_command"`
+}
+
+// SlopRiskRaw controls the risk classifier's numeric cutoffs and path hints.
+type SlopRiskRaw struct {
+	SingleReviewThreshold    int      `yaml:"single_review_threshold"`
+	FullAdversarialThreshold int      `yaml:"full_adversarial_threshold"`
+	HighRiskPaths            []string `yaml:"high_risk_paths"`
+}
+
+// SlopLeakScanRaw controls the optional private-name blocklist file.
+type SlopLeakScanRaw struct {
+	BlocklistFile   string `yaml:"blocklist_file"`
+	AllowExemptions *bool  `yaml:"allow_exemptions"`
+}
+
+// SlopProseRaw controls outbound artifact recognition and vocabulary checks.
+type SlopProseRaw struct {
+	OutboundPaths []string `yaml:"outbound_paths"`
+	AITellWords   []string `yaml:"ai_tell_words"`
 }
 
 // DocumentRaw is the YAML representation of document-step settings.
@@ -324,6 +357,7 @@ func (c *RepoConfig) UnmarshalYAML(value *yaml.Node) error {
 		Test                   TestRaw     `yaml:"test"`
 		Document               DocumentRaw `yaml:"document"`
 		Review                 ReviewRaw   `yaml:"review"`
+		Slop                   SlopRaw     `yaml:"slop"`
 		DisableProjectSettings bool        `yaml:"disable_project_settings"`
 		NoCI                   bool        `yaml:"no_ci"`
 	}
@@ -343,6 +377,7 @@ func (c *RepoConfig) UnmarshalYAML(value *yaml.Node) error {
 	c.Test = raw.Test
 	c.Document = raw.Document
 	c.Review = raw.Review
+	c.Slop = raw.Slop
 	c.DisableProjectSettings = raw.DisableProjectSettings
 	c.NoCI = raw.NoCI
 	return nil
@@ -415,6 +450,7 @@ type Config struct {
 	Test                 Test
 	Document             Document
 	Review               Review
+	Slop                 Slop
 	// DisableProjectSettings is the resolved, trusted-only opt-out (see the
 	// RepoConfig field). When true, gate agents are launched with their
 	// project-level settings/instructions suppressed; the daemon fails the run
@@ -424,6 +460,32 @@ type Config struct {
 	// intentionally has no CI (see the RepoConfig field). When true and the
 	// forge reports zero checks, the CI monitor treats that as all-checks-passed.
 	NoCI bool
+}
+
+// Slop is the resolved NoSlop front-stage configuration.
+type Slop struct {
+	DataDir        string
+	Risk           SlopRisk
+	LeakScan       SlopLeakScan
+	Prose          SlopProse
+	TestCountFloor bool
+	TestCommand    string
+}
+
+type SlopRisk struct {
+	SingleReviewThreshold    int
+	FullAdversarialThreshold int
+	HighRiskPaths            []string
+}
+
+type SlopLeakScan struct {
+	BlocklistFile   string
+	AllowExemptions bool
+}
+
+type SlopProse struct {
+	OutboundPaths []string
+	AITellWords   []string
 }
 
 // Document is the resolved document-step config. Instructions come from the
@@ -1308,11 +1370,48 @@ func parseRepoConfig(data []byte) (*RepoConfig, error) {
 	if err := validateReviewRaw(cfg.Review); err != nil {
 		return nil, fmt.Errorf("parse repo config: %w", err)
 	}
+	if err := validateSlopRaw(cfg.Slop); err != nil {
+		return nil, fmt.Errorf("parse repo config: %w", err)
+	}
 	if cfg.AutoFix.CI == nil {
 		cfg.AutoFix.CI = cfg.AutoFix.Babysit
 	}
 
 	return cfg, nil
+}
+
+func validateSlopRaw(slop SlopRaw) error {
+	single := slop.Risk.SingleReviewThreshold
+	full := slop.Risk.FullAdversarialThreshold
+	if single < 0 || full < 0 {
+		return fmt.Errorf("slop.risk thresholds must not be negative")
+	}
+	if single == 0 {
+		single = 3
+	}
+	if full == 0 {
+		full = 6
+	}
+	if full <= single {
+		return fmt.Errorf("slop.risk.full_adversarial_threshold must be greater than single_review_threshold")
+	}
+	for _, field := range []struct {
+		name     string
+		patterns []string
+	}{
+		{name: "high_risk_paths", patterns: slop.Risk.HighRiskPaths},
+		{name: "outbound_paths", patterns: slop.Prose.OutboundPaths},
+	} {
+		for i, pattern := range field.patterns {
+			if strings.TrimSpace(pattern) == "" {
+				return fmt.Errorf("slop.%s[%d] must not be empty", field.name, i)
+			}
+			if err := validatePathInstructionGlob(pattern); err != nil {
+				return fmt.Errorf("slop.%s[%d] invalid glob %q: %w", field.name, i, pattern, err)
+			}
+		}
+	}
+	return nil
 }
 
 // validateReviewRaw fails the config closed on a review.path_instructions list
@@ -1445,6 +1544,9 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 	effective := *pushed
 	if trusted != nil {
 		effective.Document = trusted.Document
+		// Slop selects validation depth and private-name policy. A pushed branch
+		// must not lower its own tier or suppress an outbound or leak check.
+		effective.Slop = trusted.Slop
 		// review.path_instructions steers the gate agent that reviews the pushed
 		// branch, so it is trusted-only exactly like document.instructions and
 		// regardless of allow_repo_commands: a contributor must not be able to
@@ -1469,6 +1571,7 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		effective.CI = trusted.CI
 	} else {
 		effective.Document = DocumentRaw{}
+		effective.Slop = SlopRaw{}
 		effective.Review = ReviewRaw{}
 		effective.DisableProjectSettings = false
 		effective.NoCI = false
@@ -1667,6 +1770,8 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		commit.FixMessage = *repo.Commit.FixMessage
 	}
 
+	slop := resolveSlop(repo.Slop)
+
 	cfg := &Config{
 		Agent:                global.Agent,
 		Agents:               copyAgents(global.Agents),
@@ -1690,6 +1795,7 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 			PathInstructions: resolvePathInstructions(repo.Review.PathInstructions),
 			Convergence:      resolveConvergence(repo.Review.Convergence),
 		},
+		Slop: slop,
 		// repo is the EffectiveRepoConfig result, so this value is already
 		// trusted-only (EffectiveRepoConfig sourced it from the trusted copy).
 		DisableProjectSettings: repo.DisableProjectSettings,
@@ -1705,4 +1811,44 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 	}
 
 	return cfg
+}
+
+func resolveSlop(raw SlopRaw) Slop {
+	resolved := Slop{
+		DataDir: ".noslop-data",
+		Risk: SlopRisk{
+			SingleReviewThreshold:    3,
+			FullAdversarialThreshold: 6,
+		},
+		LeakScan: SlopLeakScan{BlocklistFile: ".noslop-blocklist", AllowExemptions: true},
+		Prose: SlopProse{
+			OutboundPaths: []string{"outbound/**"},
+		},
+		TestCountFloor: true,
+	}
+	if value := strings.TrimSpace(raw.DataDir); value != "" {
+		resolved.DataDir = value
+	}
+	if raw.Risk.SingleReviewThreshold > 0 {
+		resolved.Risk.SingleReviewThreshold = raw.Risk.SingleReviewThreshold
+	}
+	if raw.Risk.FullAdversarialThreshold > 0 {
+		resolved.Risk.FullAdversarialThreshold = raw.Risk.FullAdversarialThreshold
+	}
+	resolved.Risk.HighRiskPaths = append([]string(nil), raw.Risk.HighRiskPaths...)
+	if value := strings.TrimSpace(raw.LeakScan.BlocklistFile); value != "" {
+		resolved.LeakScan.BlocklistFile = value
+	}
+	if raw.LeakScan.AllowExemptions != nil {
+		resolved.LeakScan.AllowExemptions = *raw.LeakScan.AllowExemptions
+	}
+	if len(raw.Prose.OutboundPaths) > 0 {
+		resolved.Prose.OutboundPaths = append([]string(nil), raw.Prose.OutboundPaths...)
+	}
+	resolved.Prose.AITellWords = append([]string(nil), raw.Prose.AITellWords...)
+	if raw.TestCountFloor != nil {
+		resolved.TestCountFloor = *raw.TestCountFloor
+	}
+	resolved.TestCommand = strings.TrimSpace(raw.TestCommand)
+	return resolved
 }

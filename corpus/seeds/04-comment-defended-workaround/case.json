@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "comment-defended-workaround-permissive-fallback",
+  "description": "A comment defends a permissive fallback instead of containing its risk.",
+  "expected_findings": [
+    {
+      "lens": "comment-defended-workaround",
+      "path": "policy.go",
+      "line": 14,
+      "description": "the comment does not make the allow fallback safe"
+    }
+  ]
+}

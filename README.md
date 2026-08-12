@@ -1,142 +1,156 @@
-<h1 align="center"><code>git push no-mistakes</code></h1>
-<p align="center">
-  <a href="https://github.com/Blakeolson21/no-slop/actions/workflows/release.yml"
-    ><img
-      alt="Release"
-      src="https://img.shields.io/github/actions/workflow/status/Blakeolson21/no-slop/release.yml?style=flat-square&label=release"
-  /></a>
-  <a href="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue?style=flat-square"
-    ><img
-      alt="Platform"
-      src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue?style=flat-square"
-  /></a>
-  <a href="https://github.com/Blakeolson21/no-slop/blob/main/LICENSE"
-    ><img
-      alt="License"
-      src="https://img.shields.io/badge/license-MIT-green?style=flat-square"
-  /></a>
-</p>
+# NoSlop
 
-<h3 align="center">Kill all the slop. Raise clean PR.</h3>
+NoSlop is the reviewer that knows the author is an AI.
 
-<p align="center"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a></p>
+Most review tools evaluate a diff as if a person wrote it. AI-authored changes have additional failure modes: checks that prove nothing, tests weakened to fit an implementation, expected values copied from production logic, permissive defaults after an unknown result, and fixes applied to one path but not its siblings.
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Blakeolson21/no-slop/main/demo.gif" alt="no-slop demo" width="800" />
-</p>
+NoSlop makes those patterns a first-class review contract. It classifies the change before spending reviewer time, applies named AI-authorship lenses, and uses artifact-specific checks for code and outbound prose.
 
-`no-mistakes` puts a local git proxy in front of your real remote.
-Push to `no-mistakes` instead of `origin`, and it spins up a disposable worktree, runs an AI-driven validation pipeline, forwards the branch to the configured push target only after every check passes, and opens a clean PR automatically.
+When generating-agent provenance is supplied, NoSlop also conditions the policy on the last 10 changes from that lane and model. Repeated accepted findings can raise the tier, move affected lenses first, and enable mapped deterministic probes. Every decision prints the history rationale. Missing history keeps the v1 route and says so; unreadable history selects `full-adversarial`.
 
-- **Non-blocking** - the pipeline runs in an isolated worktree without disrupting your work.
-- **Agent-agnostic** - `claude`, `codex`, `rovodev`, `opencode`, `pi`, `copilot`, or `cursor` / `acp:<target>` via `acpx`, with ordered fallbacks; every gate requires a runnable configured pipeline agent.
-- **Agent-native** - `/no-mistakes` lets your coding agent do a task and gate it, or gate existing committed work: it runs the pipeline, has the pipeline apply safe fixes, and escalates the rest to you.
-- **Human stays in charge** - auto-fix or review findings, your call.
-- **Clean PRs by default** - push, open PR, watch CI, and auto-fix failures in one shot.
+This repository is an MIT-licensed fork of [kunchenguid/no-mistakes](https://github.com/kunchenguid/no-mistakes). The inherited `no-mistakes` gate remains available. The new `noslop gate` command is a front stage that can run before it or on its own.
 
-Full documentation: <https://kunchenguid.github.io/no-mistakes/>
+## Three pillars
 
-## How it works
+### Risk-proportional depth
 
-```
-        your branch
-            │  git push no-mistakes
-            ▼
-   ┌────────────────────────────────────────────────┐
-   │  disposable worktree — your work stays put     │
-   │  review → test → docs → lint → push → PR → CI  │
-   └────────────────────────────────────────────────┘
-            │  every check green
-            ▼
-        clean PR, opened for you
-```
+Every gate starts by scoring:
 
-Each step either passes on its own or stops with a **finding** for you to act on.
-Safe, mechanical fixes are applied automatically; anything that touches your intent is escalated for you to **approve**, **fix**, or **skip**.
-Nothing reaches the configured push target until every check is green.
+- Blast radius: what the changed files can reach at runtime.
+- Novelty: new logic, changed logic, mechanical work, or documentation.
+- Reversibility: whether a revert is enough to contain the result.
 
-## Install
+The selected tier and all three reasons print before validation continues. Use `--tier` to override the result. When the override changes the tier, the output records both the original and overridden tier.
+
+| Tier | Work |
+| --- | --- |
+| `leak-scan-only` | Mandatory leak and identity checks, the configured test-count floor, plus any applicable artifact oracle |
+| `single-review` | Mandatory checks and one reviewer pass through every slop lens |
+| `full-adversarial` | Mandatory checks, a lens review, an adversarial challenge round, the test-count floor, and the configured test command |
+
+A Markdown-only diff routes to `leak-scan-only` unless it matches a configured high-risk path or the operator overrides it. Substantial new source additions also reach the full tier even on a feature branch.
+
+### AI-slop lenses
+
+The reviewer receives eight named lenses:
+
+- `vacuous-check`
+- `test-capitulation`
+- `self-consistent-oracle`
+- `comment-defended-workaround`
+- `scope-expansion`
+- `asserted-followup-without-artifact`
+- `fail-open-default`
+- `rule-applied-in-one-place-not-sibling`
+
+Every finding carries its lens name. [The taxonomy](docs/src/content/docs/reference/slop-taxonomy.md) defines the failure, reviewer guidance, and available mechanical pre-check for each lens.
+
+### Artifact-class oracles
+
+Secrets and private identity markers are scanned at every tier. The scanner recognizes common credential shapes, personal home paths, and private names from a local blocklist. A missing built-in default blocklist means no private-name list; an explicitly configured missing file and any unreadable file stop evaluation. Findings identify the file and line without copying the matched value. Every honored `noslop:allow-leak` marker prints its file and line and counts in the verdict. Set `slop.leak_scan.allow_exemptions: false` when CI must reject all inline exemptions.
+
+Outbound text can be selected by a configured path or `outbound: true` front matter. The prose oracle checks AI-tell vocabulary, em dashes, cited JSON or CSV numbers, and optional live GitHub issue or pull request state. With `--thread`, it uses `gh` to verify the thread is open and checks whether an existing comment already makes substantially the same claim. An explicit thread with no outbound artifact is an evaluation error.
+
+## Build
+
+NoSlop requires Go 1.25 or newer.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh
+git clone https://github.com/Blakeolson21/no-slop.git
+cd no-slop
+go build -o ./bin/noslop ./cmd/noslop
 ```
 
-**That installer delivers the upstream `kunchenguid/no-mistakes` build.** It does not carry this fork's local patches, and self-update is disabled here so `no-mistakes update` cannot replace them either. To keep the patches, build from a `Blakeolson21/no-slop` checkout and replace the installed binary:
+The inherited gate can still be built separately:
 
 ```sh
-go build -o ~/.no-mistakes/bin/no-mistakes.new ./cmd/no-mistakes
-mv ~/.no-mistakes/bin/no-mistakes.new ~/.no-mistakes/bin/no-mistakes
-no-mistakes daemon restart
+go build -o ./bin/no-mistakes ./cmd/no-mistakes
 ```
 
-The install directory comes from `NO_MISTAKES_INSTALL_DIR` and defaults to `~/.no-mistakes/bin`; `docs/src/content/docs/start-here/installation.md` in this repository carries the full notes.
+## Run
 
-Windows, Go install, and build-from-source instructions are in the [installation guide](https://kunchenguid.github.io/no-mistakes/start-here/installation/).
-
-## Quick Start
+Review committed changes against the merge base of the default branch:
 
 ```sh
-$ no-mistakes init
-  ✓ Gate initialized
-
-    repo  /Users/you/src/my-repo
-    gate  no-mistakes → /Users/you/.no-mistakes/repos/abc123def456.git
-  remote  git@github.com:you/my-repo.git
-   skill  /no-mistakes installed for agents at user level
-
-  Push through the gate with:
-  git push no-mistakes <branch>
-
-$ git checkout my-branch
-
-# do some work in the branch...
-
-$ git push no-mistakes
-  * Pipeline started
-
-  Run no-mistakes to review.
-
-$ no-mistakes
-# opens the TUI for the active run
+./bin/noslop gate
 ```
 
-For GitHub fork contributions, keep `origin` pointed at the parent repository and initialize with `no-mistakes init --fork-url <your-fork-url>`.
+Name the comparison explicitly:
 
-From the TUI you act on each **finding**: **auto-fix** ones are applied for you (or approve to let them), **ask-user** ones are a judgement call you approve, fix, or skip.
-Once every check is green, the gate forwards your branch to the configured push target and opens the PR for you, so there is no manual `git push origin` and no hand-written PR body.
-Prefer to let your coding agent drive the same flow headlessly?
-Use `/no-mistakes` (see below).
+```sh
+./bin/noslop gate --base origin/main --head HEAD
+```
 
-## Three ways to trigger the gate
+Override validation depth:
 
-Every change runs through the same pipeline. Pick the entry point that fits how you're working when the change is ready:
+```sh
+./bin/noslop gate --base origin/main --tier full-adversarial
+```
 
-- **`git push no-mistakes`** - the explicit Git path. Push a committed branch to the gate remote instead of `origin`.
-- **`no-mistakes`** - the TUI. Run it after making changes (no commit needed) and a wizard walks you through creating a branch, committing, and pushing through the gate, then attaches to the run. `no-mistakes -y` does all of that automatically.
-- **`/no-mistakes`** - the agent skill. Tell the coding agent to do a task and gate it with `/no-mistakes <task>`, or use bare `/no-mistakes` to gate existing committed work. It runs the pipeline, has the pipeline apply safe fixes, and stops to ask you about anything that needs a human call.
+If provenance raises the tier, a lower `--tier` is refused unless `--force-tier` is also present. The output prints both the provenance signal and the forced override.
 
-`no-mistakes init` installs the `/no-mistakes` skill for Claude Code and other agents. Under the hood the skill drives `no-mistakes axi`, a non-interactive TOON interface to the same approval flow.
+Check outbound text against a live GitHub thread:
 
-See the [quick start](https://kunchenguid.github.io/no-mistakes/start-here/quick-start/) for the full first-run walkthrough.
+```sh
+./bin/noslop gate --base origin/main --thread https://github.com/owner/repo/issues/123
+```
+
+Capture generating-agent provenance for conditioning and later evaluation:
+
+```sh
+./bin/noslop gate --base origin/main \
+  --provider example-provider \
+  --model example-model \
+  --reasoning-effort high \
+  --lane-id review-lane-1 \
+  --change-class source
+```
+
+Because the caller supplies `--lane-id` and `--model`, provenance conditioning is advisory until a trusted external system supplies and enforces those values.
+
+Use a different private-name blocklist:
+
+```sh
+./bin/noslop gate --base origin/main --blocklist .private-names
+```
+
+Exit code `0` means pass, `1` means findings blocked the gate, and `2` means the gate could not evaluate the change.
+
+## Configure
+
+NoSlop uses the existing `.no-mistakes.yaml` repository config shape:
+
+```yaml
+slop:
+  data_dir: ".noslop-data"
+  leak_scan:
+    allow_exemptions: false
+  test_command: "go test -race ./..."
+```
+
+Keep the real blocklist private and uncommitted. The [repository config reference](docs/src/content/docs/reference/repo-config.md#slop) owns all fields, defaults, outbound selection, and blocklist details.
+
+Replay captured policy findings against the seed corpus:
+
+```sh
+./bin/noslop evaluate \
+  --corpus corpus/seeds \
+  --unconditioned-results results/unconditioned.json \
+  --conditioned-results results/conditioned.json
+```
+
+The [corpus format](docs/src/content/docs/reference/evaluation-corpus.md) records diffs and independent expected findings. The runner labels the seed corpus and result files as replayed inputs, then reports found, missed, and false-positive counts without inventing reviewer output.
 
 ## Development
 
 ```sh
-make build   # Build bin/no-mistakes with version info
-make test    # Run go test -race ./... (excludes the e2e suite)
-make e2e     # Run the tagged end-to-end agent journey suite
-make e2e-record # Re-record e2e fixtures when agent wire formats change
-make lint    # Check generated skill drift and run go vet ./...
-make skill   # Regenerate committed no-mistakes skill files
-make fmt     # Run gofmt -w .
-make demo    # Regenerate demo.gif and demo.mp4 (needs vhs and ffmpeg)
-make docs    # Build the Astro docs site in docs/dist
+make build
+go test ./internal/slop/...
+go test -race ./...
+make lint
+go build -o ./bin/noslop ./cmd/noslop
 ```
 
-See `Makefile` for the full target list.
+## License and credit
 
-`make e2e-record` overwrites `internal/e2e/fixtures/` from the real `claude`, `codex`, and `opencode` CLIs, spends real API quota, and should be reviewed before committing.
-
-## Credits
-
-Derived from [kunchenguid/no-mistakes](https://github.com/kunchenguid/no-mistakes) by Kun Chen, used under the MIT License.
+MIT licensed. The gate foundation is derived from [no-mistakes](https://github.com/kunchenguid/no-mistakes) by Kun Chen.

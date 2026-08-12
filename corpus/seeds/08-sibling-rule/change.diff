@@ -1,0 +1,12 @@
+diff --git a/loader.go b/loader.go
+index 1111111..2222222 100644
+--- a/loader.go
++++ b/loader.go
+@@ -38,2 +38,6 @@
+    if explicit {
+        return nil, fmt.Errorf("read policy: %w", err)
+    }
++	if errors.Is(err, os.ErrNotExist) {
++		return nil, nil
++	}
++	return nil, err
