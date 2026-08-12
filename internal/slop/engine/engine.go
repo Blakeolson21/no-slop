@@ -16,6 +16,7 @@ import (
 // Change contains the revision content each mechanical check needs.
 type Change struct {
 	Path            string
+	BaselinePath    string
 	Status          risk.ChangeStatus
 	Added           int
 	Deleted         int
@@ -136,6 +137,7 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 	for _, file := range input.Files {
 		riskFiles = append(riskFiles, risk.FileChange{
 			Path:            file.Path,
+			BaselinePath:    file.BaselinePath,
 			Status:          file.Status,
 			Added:           file.Added,
 			Deleted:         file.Deleted,

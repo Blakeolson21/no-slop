@@ -455,9 +455,21 @@ func hasRepeatedPhrase(comment string) bool {
 		for start := 0; start+width <= len(words); start++ {
 			phrase := strings.Join(words[start:start+width], " ")
 			if previous, repeated := seen[phrase]; repeated && start-previous <= 2*width {
-				return true
+				if !containsQualifier(words[previous+width : start]) {
+					return true
+				}
 			}
 			seen[phrase] = start
+		}
+	}
+	return false
+}
+
+func containsQualifier(words []string) bool {
+	for _, word := range words {
+		switch word {
+		case "because", "but", "except", "instead", "never", "not", "only", "otherwise", "unless", "until", "when", "while", "without":
+			return true
 		}
 	}
 	return false

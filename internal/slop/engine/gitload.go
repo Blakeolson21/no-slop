@@ -46,6 +46,9 @@ func LoadGitChanges(ctx context.Context, workDir, baseRef, headRef string) ([]Ch
 			}
 		}
 		change := Change{Path: path, Status: status}
+		if isRename {
+			change.BaselinePath = baselinePath
+		}
 		if status != risk.Added {
 			change.BaselineContent, err = showGitFile(ctx, workDir, baseRef, baselinePath)
 			if err != nil {

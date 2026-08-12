@@ -117,7 +117,7 @@ func TestLoadGitChangesPreservesModifiedRenameIdentity(t *testing.T) {
 		t.Fatalf("changes = %+v, want one modified rename", changes)
 	}
 	change := changes[0]
-	if change.Status != risk.Modified || change.Path != "new.go" || change.Added != 1 || change.Deleted != 1 {
+	if change.Status != risk.Modified || change.Path != "new.go" || change.BaselinePath != "old.go" || change.Added != 1 || change.Deleted != 1 {
 		t.Fatalf("change = %+v, want one-line modified rename", change)
 	}
 	if strings.Contains(change.AddedContent, "increment i") {

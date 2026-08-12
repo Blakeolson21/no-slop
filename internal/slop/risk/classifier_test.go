@@ -253,6 +253,33 @@ func TestClassifyMechanicalReasonDescribesEvidenceWithoutAssertingRenameIntent(t
 	}
 }
 
+func TestClassifyModifiedRenameIncludesBaselinePathRisk(t *testing.T) {
+	t.Parallel()
+
+	decision, err := risk.Classify(risk.ChangeSet{
+		Branch:        "docs/policy",
+		DefaultBranch: "main",
+		Files: []risk.FileChange{{
+			Path:            "docs/policy.md",
+			BaselinePath:    "internal/auth/policy.go",
+			Status:          risk.Modified,
+			Added:           1,
+			Deleted:         1,
+			BaselineContent: "package auth\nfunc Allow() bool { return false }\n",
+			CurrentContent:  "# Authentication policy\n",
+		}},
+	}, risk.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Tier == risk.TierLeakScanOnly {
+		t.Fatalf("tier = %q, want review for source-to-docs modified rename: %+v", decision.Tier, decision)
+	}
+	if decision.BlastRadius.Score != 3 {
+		t.Fatalf("blast radius = %+v, want high-reach authentication source", decision.BlastRadius)
+	}
+}
+
 func TestClassifyCallTargetAndArgumentSwapAsChangedLogic(t *testing.T) {
 	t.Parallel()
 

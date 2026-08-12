@@ -33,6 +33,7 @@ const (
 // FileChange is the classifier's path-level input.
 type FileChange struct {
 	Path            string
+	BaselinePath    string
 	Status          ChangeStatus
 	Added           int
 	Deleted         int
@@ -303,7 +304,7 @@ func mechanicallyEquivalent(file FileChange) bool {
 	if file.Status == Renamed {
 		return true
 	}
-	if file.Status != Modified || !sourcePath(file.Path) || file.BaselineContent == "" || file.CurrentContent == "" {
+	if file.Status != Modified || !fileMatchesPath(file, sourcePath) || file.BaselineContent == "" || file.CurrentContent == "" {
 		return false
 	}
 	baseline := sourceTokens(file.BaselineContent)
@@ -447,7 +448,7 @@ func classifyReversibility(change ChangeSet, configured []string) Axis {
 
 func anyPath(files []FileChange, predicate func(string) bool) bool {
 	for _, file := range files {
-		if predicate(file.Path) {
+		if fileMatchesPath(file, predicate) {
 			return true
 		}
 	}
@@ -456,11 +457,15 @@ func anyPath(files []FileChange, predicate func(string) bool) bool {
 
 func allPaths(files []FileChange, predicate func(string) bool) bool {
 	for _, file := range files {
-		if !predicate(file.Path) {
+		if !predicate(file.Path) || file.BaselinePath != "" && !predicate(file.BaselinePath) {
 			return false
 		}
 	}
 	return true
+}
+
+func fileMatchesPath(file FileChange, predicate func(string) bool) bool {
+	return predicate(file.Path) || file.BaselinePath != "" && predicate(file.BaselinePath)
 }
 
 func allChanges(files []FileChange, predicate func(FileChange) bool) bool {
@@ -528,13 +533,13 @@ func dependencyPath(lower string) bool {
 }
 
 func markdownOnly(files []FileChange) bool {
-	for _, file := range files {
-		ext := strings.ToLower(filepath.Ext(file.Path))
+	return allPaths(files, func(path string) bool {
+		ext := strings.ToLower(filepath.Ext(path))
 		if ext != ".md" && ext != ".mdx" {
 			return false
 		}
-	}
-	return true
+		return true
+	})
 }
 
 // String renders the tier and all axis reasons. The decision is intentionally

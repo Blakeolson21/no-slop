@@ -244,6 +244,14 @@ func TestScanRedundantCommentAcquitsConventionalDocumentation(t *testing.T) {
 			},
 		},
 		{
+			name: "repeated phrase qualified by a constraint",
+			file: precheck.File{
+				Path:           "process.go",
+				AddedContent:   "// Call Close before Wait; never call Close before Wait from the callback.\n",
+				CurrentContent: "// Call Close before Wait; never call Close before Wait from the callback.\nfunc stop() {}\n",
+			},
+		},
+		{
 			name: "inline comment is not attached to following code",
 			file: precheck.File{
 				Path:           "counter.go",
