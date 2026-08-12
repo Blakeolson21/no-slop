@@ -41,6 +41,12 @@ Safest local verification sequence after non-trivial changes:
 - One owner per fact: `docs/src/content/docs/reference/global-config.md` and `docs/src/content/docs/reference/repo-config.md` own configuration keys, `docs/src/content/docs/reference/environment.md` owns environment variables and the telemetry local/remote split, `docs/src/content/docs/concepts/daemon.md` owns the daemon lifecycle model, and guides pages explain purpose and link to those owners instead of restating tables and examples.
 - The `document.instructions` block in `.no-mistakes.yaml` states this ownership map for the pipeline's document step; update it when ownership moves.
 
+**NoSlop Front Stage**
+
+- `cmd/noslop` runs the standalone front stage through `internal/slop/engine`: classify first, publish the decision through `OnDecision`, then run mandatory leak and artifact checks before tier-specific review or tests. A tier override must remain visible in `risk.Decision.String`; leak scanning is never tier-skippable.
+- `internal/slop/lenses` owns the reviewer prompt catalog and `docs/taxonomy.md` owns the public explanation. Keep the names and guidance aligned. Mechanical checks live in `internal/slop/leakscan` and `internal/slop/testfloor` rather than in reviewer prose.
+- `.noslop-blocklist` is local private data and ignored. Findings may name a file and line but must never reproduce the matched credential or private identity.
+
 **Agent-Guidance Surfaces**
 
 - `skills/no-mistakes/SKILL.md` is **generated**: the source of truth is the `body` constant in `internal/skill/skill.go`. Edit the body, then `make skill`; `make lint` fails CI on drift. Never edit `SKILL.md` directly. `no-mistakes init` ships this rendering to agents at user level.

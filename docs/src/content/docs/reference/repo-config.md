@@ -81,9 +81,59 @@ test:
   evidence:
     store_in_repo: true
     dir: .no-mistakes/evidence
+
+# NoSlop front-stage settings.
+slop:
+  risk:
+    single_review_threshold: 3
+    full_adversarial_threshold: 6
+    high_risk_paths:
+      - "internal/auth/**"
+      - ".github/workflows/**"
+  leak_scan:
+    blocklist_file: ".noslop-blocklist"
+  prose:
+    outbound_paths:
+      - "outbound/**"
+    ai_tell_words: []
+  test_count_floor: true
+  test_command: "go test -race ./..."
 ```
 
 ## Fields
+
+### slop
+
+Configure the `noslop gate` front stage. The classifier always prints its tier and reasons before continuing. Command-line `--tier` overrides the configured classifier result and prints the original and final tiers.
+
+| Field | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `slop.risk.single_review_threshold` | `int` | `3` | Minimum sum of the three risk axes for `single-review` |
+| `slop.risk.full_adversarial_threshold` | `int` | `6` | Minimum sum for `full-adversarial`; must be greater than the single-review threshold |
+| `slop.risk.high_risk_paths` | `string[]` | Empty | Extra glob patterns treated as high-reach paths |
+| `slop.leak_scan.blocklist_file` | `string` | `.noslop-blocklist` | Repository-relative or absolute private-name file |
+| `slop.prose.outbound_paths` | `string[]` | `outbound/**` | Paths whose changed Markdown is intended for publication |
+| `slop.prose.ai_tell_words` | `string[]` | Empty | Additional case-insensitive vocabulary to flag |
+| `slop.test_count_floor` | `bool` | `true` | Block when recognizable tests in changed files fall below the base revision |
+| `slop.test_command` | `string` | Empty | Test command required by the `full-adversarial` tier |
+
+`slop.test_command` is deliberately separate from `commands.test`. The inherited pipeline uses `commands.test` for focused local validation. NoSlop's full tier uses `slop.test_command` as the explicit adversarial test gate.
+
+The private-name file accepts one literal entry per line. Blank lines and lines beginning with `#` are ignored. Matching is case-insensitive. Keep real hostnames, codenames, project names, and other private identities out of the repository. The default filename is ignored in this repository.
+
+Markdown can opt into the prose oracle without a matching path by adding front matter:
+
+```yaml
+---
+outbound: true
+---
+```
+
+When `noslop gate --thread <url>` is provided and at least one outbound artifact changed, NoSlop calls `gh` to confirm that the target GitHub issue or pull request is open and to compare the draft with existing comments. An unavailable or unreadable live thread fails the command closed.
+
+When an outbound line cites a repository-relative `.json` or `.csv` file and states a number, NoSlop checks that the number appears in or can be derived from the file's numeric values. Supported derivations include totals, counts, averages, minima, maxima, ratios, and percentages.
+
+The complete lens definitions are in [`docs/taxonomy.md`](../../../../taxonomy.md).
 
 ### agent
 

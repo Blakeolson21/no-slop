@@ -147,6 +147,59 @@ func TestLoadRepo_PartialCommands(t *testing.T) {
 	}
 }
 
+func TestLoadRepo_SlopEngineConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := LoadRepoFromBytes([]byte(`slop:
+  risk:
+    single_review_threshold: 4
+    full_adversarial_threshold: 8
+    high_risk_paths:
+      - "platform/**"
+  leak_scan:
+    blocklist_file: ".noslop-private"
+  prose:
+    outbound_paths:
+      - "outbound/**"
+    ai_tell_words:
+      - "paradigm shift"
+  test_count_floor: false
+  test_command: "go test ./..."
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Slop.Risk.SingleReviewThreshold != 4 || cfg.Slop.Risk.FullAdversarialThreshold != 8 {
+		t.Fatalf("risk config = %+v", cfg.Slop.Risk)
+	}
+	if cfg.Slop.LeakScan.BlocklistFile != ".noslop-private" {
+		t.Fatalf("blocklist file = %q", cfg.Slop.LeakScan.BlocklistFile)
+	}
+	if len(cfg.Slop.Prose.OutboundPaths) != 1 || cfg.Slop.Prose.OutboundPaths[0] != "outbound/**" {
+		t.Fatalf("outbound paths = %v", cfg.Slop.Prose.OutboundPaths)
+	}
+	if cfg.Slop.TestCountFloor == nil || *cfg.Slop.TestCountFloor {
+		t.Fatalf("test_count_floor = %v, want explicit false", cfg.Slop.TestCountFloor)
+	}
+	if cfg.Slop.TestCommand != "go test ./..." {
+		t.Fatalf("test command = %q", cfg.Slop.TestCommand)
+	}
+}
+
+func TestLoadRepo_RejectsInvalidSlopThresholds(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{
+		"slop:\n  risk:\n    single_review_threshold: 7\n    full_adversarial_threshold: 3\n",
+		"slop:\n  risk:\n    single_review_threshold: 7\n",
+		"slop:\n  risk:\n    full_adversarial_threshold: 2\n",
+	} {
+		if _, err := LoadRepoFromBytes([]byte(raw)); err == nil {
+			t.Fatalf("expected invalid risk thresholds to fail config parsing:\n%s", raw)
+		}
+	}
+}
+
 func TestLoadRepo_InvalidYAML(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".no-mistakes.yaml")

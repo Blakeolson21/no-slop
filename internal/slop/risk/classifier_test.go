@@ -1,0 +1,127 @@
+package risk_test
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/kunchenguid/no-mistakes/internal/slop/risk"
+)
+
+func TestClassifyMarkdownOnlyChangeUsesLeakScanOnlyTier(t *testing.T) {
+	t.Parallel()
+
+	decision, err := risk.Classify(risk.ChangeSet{
+		Branch:        "docs/readme-refresh",
+		DefaultBranch: "main",
+		Files: []risk.FileChange{{
+			Path:    "docs/guide.md",
+			Status:  risk.Modified,
+			Added:   8,
+			Deleted: 3,
+		}},
+	}, risk.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Tier != risk.TierLeakScanOnly {
+		t.Fatalf("tier = %q, want %q", decision.Tier, risk.TierLeakScanOnly)
+	}
+
+	printed := decision.String()
+	for _, want := range []string{
+		"tier: leak-scan-only",
+		"blast radius:",
+		"novelty:",
+		"reversibility:",
+		"Markdown-only",
+	} {
+		if !strings.Contains(printed, want) {
+			t.Errorf("printed decision missing %q:\n%s", want, printed)
+		}
+	}
+}
+
+func TestClassifyOrdinarySourceChangeUsesSingleReviewTier(t *testing.T) {
+	t.Parallel()
+
+	decision, err := risk.Classify(risk.ChangeSet{
+		Branch:        "feature/cache-key",
+		DefaultBranch: "main",
+		Files: []risk.FileChange{{
+			Path:    "internal/cache/key.go",
+			Status:  risk.Modified,
+			Added:   18,
+			Deleted: 7,
+		}},
+	}, risk.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Tier != risk.TierSingleReview {
+		t.Fatalf("tier = %q, want %q", decision.Tier, risk.TierSingleReview)
+	}
+	if decision.BlastRadius.Score == 0 || decision.Novelty.Score == 0 {
+		t.Fatalf("ordinary source change received zero reach or novelty: %+v", decision)
+	}
+}
+
+func TestClassifyHighReachNewLogicUsesFullAdversarialTier(t *testing.T) {
+	t.Parallel()
+
+	decision, err := risk.Classify(risk.ChangeSet{
+		Branch:        "feature/session-policy",
+		DefaultBranch: "main",
+		Files: []risk.FileChange{{
+			Path:   "internal/auth/policy.go",
+			Status: risk.Added,
+			Added:  140,
+		}},
+	}, risk.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Tier != risk.TierFullAdversarial {
+		t.Fatalf("tier = %q, want %q", decision.Tier, risk.TierFullAdversarial)
+	}
+	if decision.BlastRadius.Score < 3 {
+		t.Fatalf("blast radius = %+v, want high reach", decision.BlastRadius)
+	}
+	if decision.Novelty.Score < 3 {
+		t.Fatalf("novelty = %+v, want new logic", decision.Novelty)
+	}
+}
+
+func TestClassifyPrintsExplicitTierOverride(t *testing.T) {
+	t.Parallel()
+
+	decision, err := risk.Classify(risk.ChangeSet{
+		Branch:        "docs/wording",
+		DefaultBranch: "main",
+		Files:         []risk.FileChange{{Path: "README.md", Status: risk.Modified, Added: 1, Deleted: 1}},
+	}, risk.Config{OverrideTier: risk.TierFullAdversarial})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Tier != risk.TierFullAdversarial || !decision.Overridden {
+		t.Fatalf("decision = %+v, want explicit full override", decision)
+	}
+	if !strings.Contains(decision.String(), "override: leak-scan-only -> full-adversarial") {
+		t.Fatalf("printed decision does not disclose override:\n%s", decision.String())
+	}
+}
+
+func TestClassifyTreatsConfiguredSubtreeAsHighRisk(t *testing.T) {
+	t.Parallel()
+
+	decision, err := risk.Classify(risk.ChangeSet{
+		Branch:        "feature/worker",
+		DefaultBranch: "main",
+		Files:         []risk.FileChange{{Path: "platform/workers/queue.go", Status: risk.Modified, Added: 5, Deleted: 2}},
+	}, risk.Config{HighRiskPaths: []string{"platform/**"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.BlastRadius.Score != 3 || decision.Tier != risk.TierFullAdversarial {
+		t.Fatalf("decision = %+v, want configured subtree to route full", decision)
+	}
+}

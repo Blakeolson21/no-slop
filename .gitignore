@@ -31,3 +31,6 @@ demo_raw.gif
 # Environment
 .env
 .env.local
+
+# Local NoSlop identity data
+.noslop-blocklist
