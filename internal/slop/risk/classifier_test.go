@@ -125,3 +125,54 @@ func TestClassifyTreatsConfiguredSubtreeAsHighRisk(t *testing.T) {
 		t.Fatalf("decision = %+v, want configured subtree to route full", decision)
 	}
 }
+
+func TestClassifyConsistentIdentifierRenameAsMechanical(t *testing.T) {
+	t.Parallel()
+
+	decision, err := risk.Classify(risk.ChangeSet{
+		Branch:        "refactor/cache-name",
+		DefaultBranch: "main",
+		Files: []risk.FileChange{{
+			Path:            "internal/cache/key.go",
+			Status:          risk.Modified,
+			Added:           2,
+			Deleted:         2,
+			BaselineContent: "package cache\nfunc key(input string) string { return input }\n",
+			CurrentContent:  "package cache\nfunc cacheKey(value string) string { return value }\n",
+		}},
+	}, risk.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Novelty.Score != 0 || !strings.Contains(decision.Novelty.Reason, "identifier renames") {
+		t.Fatalf("novelty = %+v, want mechanical source edit", decision.Novelty)
+	}
+}
+
+func TestClassifyLiteralOrOperatorChangeAsLogic(t *testing.T) {
+	t.Parallel()
+
+	for _, current := range []string{
+		"package cache\nfunc key(input int) int { return input - 1 }\n",
+		"package cache\nfunc key(input int) int { return input + 2 }\n",
+	} {
+		decision, err := risk.Classify(risk.ChangeSet{
+			Branch:        "feature/cache-key",
+			DefaultBranch: "main",
+			Files: []risk.FileChange{{
+				Path:            "internal/cache/key.go",
+				Status:          risk.Modified,
+				Added:           1,
+				Deleted:         1,
+				BaselineContent: "package cache\nfunc key(input int) int { return input + 1 }\n",
+				CurrentContent:  current,
+			}},
+		}, risk.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.Novelty.Score != 2 {
+			t.Fatalf("novelty = %+v for %q, want changed logic", decision.Novelty, current)
+		}
+	}
+}

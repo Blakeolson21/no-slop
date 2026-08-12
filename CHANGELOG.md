@@ -1,11 +1,5 @@
 # Changelog
 
-## Unreleased
-
-### Features
-
-* **noslop:** add risk-proportional review, AI-authorship lenses, mandatory leak checks, a test-count floor, and outbound prose oracles
-
 ## [1.45.3](https://github.com/kunchenguid/no-mistakes/compare/v1.45.2...v1.45.3) (2026-08-03)
 
 

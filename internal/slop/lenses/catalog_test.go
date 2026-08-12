@@ -21,6 +21,7 @@ func TestCatalogDefinesEveryV1LensForReviewerPrompts(t *testing.T) {
 		"rule-applied-in-one-place-not-sibling",
 	}
 	catalog := lenses.Catalog()
+	names := lenses.Names()
 	if len(catalog) != len(want) {
 		t.Fatalf("catalog has %d lenses, want %d", len(catalog), len(want))
 	}
@@ -30,6 +31,9 @@ func TestCatalogDefinesEveryV1LensForReviewerPrompts(t *testing.T) {
 		lens := catalog[i]
 		if lens.Name != name {
 			t.Errorf("lens %d name = %q, want %q", i, lens.Name, name)
+		}
+		if names[i] != name {
+			t.Errorf("schema lens %d = %q, want %q", i, names[i], name)
 		}
 		if strings.TrimSpace(lens.Description) == "" || strings.TrimSpace(lens.DetectionGuidance) == "" {
 			t.Errorf("lens %q is missing description or detection guidance", name)

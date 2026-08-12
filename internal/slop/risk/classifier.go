@@ -3,9 +3,10 @@ package risk
 
 import (
 	"fmt"
-	"path"
 	"path/filepath"
 	"strings"
+
+	"github.com/kunchenguid/no-mistakes/internal/slop/pathmatch"
 )
 
 // Tier names the validation depth selected for a change.
@@ -29,10 +30,12 @@ const (
 
 // FileChange is the classifier's path-level input.
 type FileChange struct {
-	Path    string
-	Status  ChangeStatus
-	Added   int
-	Deleted int
+	Path            string
+	Status          ChangeStatus
+	Added           int
+	Deleted         int
+	BaselineContent string
+	CurrentContent  string
 }
 
 // ChangeSet describes the complete diff and where it will land.
@@ -153,7 +156,126 @@ func classifyNovelty(files []FileChange) Axis {
 	if allChanges(files, func(file FileChange) bool { return file.Status == Renamed }) {
 		return Axis{Score: 0, Reason: "change is a mechanical rename"}
 	}
+	if allChanges(files, mechanicallyEquivalent) {
+		return Axis{Score: 0, Reason: "source edits are formatting-only or consistent identifier renames"}
+	}
 	return Axis{Score: 2, Reason: "existing source logic changed"}
+}
+
+type sourceToken struct {
+	kind byte
+	text string
+}
+
+func mechanicallyEquivalent(file FileChange) bool {
+	if file.Status == Renamed {
+		return true
+	}
+	if file.Status != Modified || !sourcePath(file.Path) || file.BaselineContent == "" || file.CurrentContent == "" {
+		return false
+	}
+	baseline := sourceTokens(file.BaselineContent)
+	current := sourceTokens(file.CurrentContent)
+	if len(baseline) != len(current) {
+		return false
+	}
+	forward := make(map[string]string)
+	reverse := make(map[string]string)
+	changed := false
+	for index := range baseline {
+		left, right := baseline[index], current[index]
+		if left.text == right.text {
+			continue
+		}
+		changed = true
+		if left.kind != 'i' || right.kind != 'i' || sourceKeyword(left.text) || sourceKeyword(right.text) {
+			return false
+		}
+		if mapped, ok := forward[left.text]; ok && mapped != right.text {
+			return false
+		}
+		if mapped, ok := reverse[right.text]; ok && mapped != left.text {
+			return false
+		}
+		forward[left.text] = right.text
+		reverse[right.text] = left.text
+	}
+	return changed || file.BaselineContent != file.CurrentContent
+}
+
+func sourceTokens(content string) []sourceToken {
+	var tokens []sourceToken
+	for index := 0; index < len(content); {
+		current := content[index]
+		switch {
+		case isSpace(current):
+			index++
+		case isIdentifierStart(current):
+			end := index + 1
+			for end < len(content) && isIdentifierPart(content[end]) {
+				end++
+			}
+			tokens = append(tokens, sourceToken{kind: 'i', text: content[index:end]})
+			index = end
+		case current == '"' || current == '\'' || current == '`':
+			end := quotedTokenEnd(content, index, current)
+			tokens = append(tokens, sourceToken{kind: 'l', text: content[index:end]})
+			index = end
+		case current >= '0' && current <= '9':
+			end := index + 1
+			for end < len(content) && (isIdentifierPart(content[end]) || content[end] == '.') {
+				end++
+			}
+			tokens = append(tokens, sourceToken{kind: 'l', text: content[index:end]})
+			index = end
+		default:
+			tokens = append(tokens, sourceToken{kind: 'p', text: content[index : index+1]})
+			index++
+		}
+	}
+	return tokens
+}
+
+func quotedTokenEnd(content string, start int, quote byte) int {
+	for index := start + 1; index < len(content); index++ {
+		if quote != '`' && content[index] == '\\' {
+			index++
+			continue
+		}
+		if content[index] == quote {
+			return index + 1
+		}
+	}
+	return len(content)
+}
+
+func isSpace(value byte) bool {
+	return value == ' ' || value == '\t' || value == '\r' || value == '\n'
+}
+
+func isIdentifierStart(value byte) bool {
+	return value == '_' || value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z'
+}
+
+func isIdentifierPart(value byte) bool {
+	return isIdentifierStart(value) || value >= '0' && value <= '9'
+}
+
+func sourceKeyword(value string) bool {
+	_, ok := sourceKeywords[strings.ToLower(value)]
+	return ok
+}
+
+var sourceKeywords = map[string]struct{}{
+	"and": {}, "as": {}, "async": {}, "await": {}, "break": {}, "case": {}, "catch": {},
+	"class": {}, "const": {}, "continue": {}, "def": {}, "default": {}, "defer": {}, "do": {},
+	"else": {}, "enum": {}, "except": {}, "export": {}, "extends": {}, "false": {}, "finally": {},
+	"fn": {}, "for": {}, "from": {}, "func": {}, "function": {}, "go": {}, "if": {}, "implements": {},
+	"import": {}, "in": {}, "interface": {}, "is": {}, "let": {}, "map": {}, "match": {}, "new": {},
+	"nil": {}, "none": {}, "not": {}, "null": {}, "or": {}, "package": {}, "pass": {}, "private": {},
+	"protected": {}, "public": {}, "return": {}, "select": {}, "static": {}, "struct": {}, "super": {},
+	"switch": {}, "this": {}, "throw": {}, "trait": {}, "true": {}, "try": {}, "type": {}, "var": {},
+	"while": {}, "with": {}, "yield": {},
 }
 
 func classifyReversibility(change ChangeSet, configured []string) Axis {
@@ -229,7 +351,7 @@ func highRiskPath(name string, configured []string) bool {
 		}
 	}
 	for _, pattern := range configured {
-		if matchConfiguredPath(lower, pattern) {
+		if pathmatch.Match(lower, pattern) {
 			return true
 		}
 	}
@@ -239,15 +361,6 @@ func highRiskPath(name string, configured []string) bool {
 func hardToReversePath(name string) bool {
 	lower := strings.ToLower(filepath.ToSlash(name))
 	return dependencyPath(lower) || strings.Contains(lower, "migration") || strings.HasPrefix(lower, ".github/workflows/") || strings.HasPrefix(lower, "deploy/") || strings.HasPrefix(lower, "infra/") || strings.HasPrefix(lower, "terraform/")
-}
-
-func matchConfiguredPath(name, pattern string) bool {
-	pattern = strings.ToLower(filepath.ToSlash(strings.TrimSpace(pattern)))
-	if prefix, ok := strings.CutSuffix(pattern, "/**"); ok {
-		return name == prefix || strings.HasPrefix(name, prefix+"/")
-	}
-	matched, _ := path.Match(pattern, name)
-	return matched
 }
 
 func dependencyPath(lower string) bool {

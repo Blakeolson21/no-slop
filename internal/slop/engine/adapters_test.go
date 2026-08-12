@@ -9,6 +9,7 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/slop/engine"
+	"github.com/kunchenguid/no-mistakes/internal/slop/lenses"
 	"github.com/kunchenguid/no-mistakes/internal/slop/risk"
 )
 
@@ -58,5 +59,40 @@ func TestAgentReviewerReturnsNamedStructuredFindings(t *testing.T) {
 	}
 	if ag.opts.CWD != "/repo" || len(ag.opts.JSONSchema) == 0 {
 		t.Fatalf("agent options = %+v", ag.opts)
+	}
+	for _, name := range lenses.Names() {
+		if !strings.Contains(string(ag.opts.JSONSchema), name) {
+			t.Errorf("review schema is missing catalog lens %q", name)
+		}
+	}
+}
+
+func TestAgentReviewerPromptsAdversarialRoundWithPriorFindings(t *testing.T) {
+	t.Parallel()
+
+	ag := &reviewerAgent{}
+	reviewer := engine.NewAgentReviewer(ag, nil)
+	_, err := reviewer.Review(context.Background(), engine.ReviewRequest{
+		WorkDir: "/repo",
+		Branch:  "feature/policy",
+		BaseRef: "base-sha",
+		HeadRef: "head-sha",
+		Tier:    risk.TierFullAdversarial,
+		Round:   engine.ReviewRoundAdversarialChallenge,
+		PriorFindings: []engine.Finding{{
+			Lens:        "fail-open-default",
+			Path:        "policy.go",
+			Line:        12,
+			Description: "unknown becomes allow",
+		}},
+		Prompt: "[fail-open-default] inspect permissive defaults",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"adversarial challenge round", "claim to falsify", "unknown becomes allow"} {
+		if !strings.Contains(ag.opts.Prompt, want) {
+			t.Errorf("adversarial prompt missing %q:\n%s", want, ag.opts.Prompt)
+		}
 	}
 }

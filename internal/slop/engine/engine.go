@@ -58,13 +58,23 @@ type Finding struct {
 
 // ReviewRequest is the narrow reviewer seam.
 type ReviewRequest struct {
-	WorkDir string
-	Branch  string
-	BaseRef string
-	HeadRef string
-	Tier    risk.Tier
-	Prompt  string
+	WorkDir       string
+	Branch        string
+	BaseRef       string
+	HeadRef       string
+	Tier          risk.Tier
+	Round         ReviewRound
+	PriorFindings []Finding
+	Prompt        string
 }
+
+// ReviewRound identifies one pass in a tier's reviewer protocol.
+type ReviewRound string
+
+const (
+	ReviewRoundLensReview           ReviewRound = "lens-review"
+	ReviewRoundAdversarialChallenge ReviewRound = "adversarial-challenge"
+)
 
 // Reviewer runs the AI-authorship lens pass.
 type Reviewer interface {
@@ -94,11 +104,12 @@ type Dependencies struct {
 
 // Result contains the visible route and every named finding.
 type Result struct {
-	Decision  risk.Decision
-	Findings  []Finding
-	Tests     []TestResult
-	ReviewRan bool
-	Passed    bool
+	Decision     risk.Decision
+	Findings     []Finding
+	Tests        []TestResult
+	ReviewRan    bool
+	ReviewRounds int
+	Passed       bool
 }
 
 // Run classifies first, runs mandatory checks, then spends only the work the
@@ -107,10 +118,12 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 	riskFiles := make([]risk.FileChange, 0, len(input.Files))
 	for _, file := range input.Files {
 		riskFiles = append(riskFiles, risk.FileChange{
-			Path:    file.Path,
-			Status:  file.Status,
-			Added:   file.Added,
-			Deleted: file.Deleted,
+			Path:            file.Path,
+			Status:          file.Status,
+			Added:           file.Added,
+			Deleted:         file.Deleted,
+			BaselineContent: file.BaselineContent,
+			CurrentContent:  file.CurrentContent,
 		})
 	}
 	riskConfig := input.Config.Risk
@@ -129,7 +142,7 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 	result := Result{Decision: decision}
 
 	result.Findings = append(result.Findings, runLeakScan(input.Files, input.Config.Blocklist)...)
-	if input.Config.TestCountFloor {
+	if input.Config.TestCountFloor && decision.Tier != risk.TierLeakScanOnly {
 		result.Findings = append(result.Findings, runTestFloor(input.Files)...)
 	}
 	proseFindings, err := runProseOracle(ctx, input, deps.ThreadReader)
@@ -153,19 +166,30 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 				Description: "selected tier requires a reviewer, but none is configured",
 			})
 		} else {
-			result.ReviewRan = true
-			findings, reviewErr := reviewer.Review(ctx, ReviewRequest{
-				WorkDir: input.WorkDir,
-				Branch:  input.Branch,
-				BaseRef: input.BaseRef,
-				HeadRef: input.HeadRef,
-				Tier:    decision.Tier,
-				Prompt:  lenses.ReviewerPrompt(),
-			})
-			if reviewErr != nil {
-				return Result{}, fmt.Errorf("run slop reviewer: %w", reviewErr)
+			rounds := []ReviewRound{ReviewRoundLensReview}
+			if decision.Tier == risk.TierFullAdversarial {
+				rounds = append(rounds, ReviewRoundAdversarialChallenge)
 			}
-			result.Findings = append(result.Findings, findings...)
+			var priorFindings []Finding
+			for _, round := range rounds {
+				findings, reviewErr := reviewer.Review(ctx, ReviewRequest{
+					WorkDir:       input.WorkDir,
+					Branch:        input.Branch,
+					BaseRef:       input.BaseRef,
+					HeadRef:       input.HeadRef,
+					Tier:          decision.Tier,
+					Round:         round,
+					PriorFindings: append([]Finding(nil), priorFindings...),
+					Prompt:        lenses.ReviewerPrompt(),
+				})
+				if reviewErr != nil {
+					return Result{}, fmt.Errorf("run slop reviewer round %q: %w", round, reviewErr)
+				}
+				result.ReviewRan = true
+				result.ReviewRounds++
+				result.Findings = appendUniqueFindings(result.Findings, findings...)
+				priorFindings = append(priorFindings, findings...)
+			}
 		}
 	}
 
@@ -201,6 +225,22 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 
 	result.Passed = len(result.Findings) == 0
 	return result, nil
+}
+
+func appendUniqueFindings(existing []Finding, additions ...Finding) []Finding {
+	for _, addition := range additions {
+		duplicate := false
+		for _, current := range existing {
+			if addition.Lens == current.Lens && addition.Path == current.Path && addition.Line == current.Line && addition.Description == current.Description {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			existing = append(existing, addition)
+		}
+	}
+	return existing
 }
 
 func runLeakScan(files []Change, blocklist []string) []Finding {

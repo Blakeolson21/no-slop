@@ -15,6 +15,7 @@ func TestCheckScansOnlyOutboundArtifactsForVoiceAndDashTells(t *testing.T) {
 	artifacts := []prose.Artifact{
 		{Path: "notes/private.md", Content: "A crucial note \u2014 keep private."},
 		{Path: "outbound/announcement.md", Content: "This crucial launch \u2014 changes review."},
+		{Path: "outbound/data.json", Content: `{"note":"A crucial value \u2014 is data"}`},
 		{Path: "draft.md", Content: "---\noutbound: true\n---\nA seamless workflow."},
 	}
 	findings, err := prose.Check(context.Background(), artifacts, prose.Options{
@@ -69,6 +70,37 @@ func TestCheckRecomputesNumbersFromCitedJSONAndCSV(t *testing.T) {
 	}
 }
 
+func TestCheckBindsClaimsToNearestCitationAndNamedOperation(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "evidence"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "evidence", "counts.json"), []byte(`[18,2]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "evidence", "timings.csv"), []byte("seconds\n4\n6\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	findings, err := prose.Check(context.Background(), []prose.Artifact{{
+		Path: "outbound/report.md",
+		Content: "evidence/counts.json reports 20 total checks; evidence/timings.csv reports a 5 average.\n" +
+			"evidence/counts.json reports 900 without an operation.\n" +
+			"evidence/counts.json reports a 900 percent rate.",
+	}}, prose.Options{OutboundPaths: []string{"outbound/**"}, EvidenceRoot: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countKind(findings, prose.EvidenceMismatch) != 1 {
+		t.Fatalf("findings = %+v, want only unsupported direct 900 claim", findings)
+	}
+	if findings[len(findings)-1].Line != 2 {
+		t.Fatalf("mismatch line = %d, want 2", findings[len(findings)-1].Line)
+	}
+}
+
 type stubThreadReader struct {
 	thread prose.Thread
 	err    error
@@ -100,6 +132,30 @@ func TestCheckFailsClosedForClosedThreadAndDuplicateClaim(t *testing.T) {
 	}
 	if countKind(findings, prose.DuplicateClaim) != 1 {
 		t.Fatalf("findings = %+v, want duplicate-claim finding", findings)
+	}
+}
+
+func TestCheckFindsDuplicateParagraphInsideMultiPointDraft(t *testing.T) {
+	t.Parallel()
+
+	findings, err := prose.Check(context.Background(), []prose.Artifact{{
+		Path: "outbound/comment.md",
+		Content: "The build now emits a compact summary for each package.\n\n" +
+			"The retry path converts an unknown provider state into success.\n\n" +
+			"The documentation includes a separate migration example.",
+	}}, prose.Options{
+		OutboundPaths: []string{"outbound/**"},
+		ThreadURL:     "https://github.com/example/project/issues/42",
+		ThreadReader: stubThreadReader{thread: prose.Thread{
+			Open:     true,
+			Comments: []string{"An unknown provider state is converted into success by the retry path."},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countKind(findings, prose.DuplicateClaim) != 1 {
+		t.Fatalf("findings = %+v, want duplicate claim for one paragraph", findings)
 	}
 }
 

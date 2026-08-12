@@ -104,7 +104,7 @@ slop:
 
 ### slop
 
-Configure the `noslop gate` front stage. The classifier always prints its tier and reasons before continuing. Command-line `--tier` overrides the configured classifier result and prints the original and final tiers.
+Configure the `noslop gate` front stage. The classifier always prints its tier and reasons before continuing. Command-line `--tier` overrides the configured classifier result and prints the original and final tiers. The full-adversarial tier runs a lens review, a second adversarial challenge round, and the configured tests.
 
 | Field | Type | Default | Purpose |
 | --- | --- | --- | --- |

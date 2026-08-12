@@ -47,6 +47,37 @@ func TestLoadGitChangesReturnsBaselineCurrentAndAddedContent(t *testing.T) {
 	}
 }
 
+func TestLoadGitChangesRecognizesExactRename(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-b", "main")
+	gitRun(t, dir, "config", "user.email", "test@example.com")
+	gitRun(t, dir, "config", "user.name", "Test")
+	writeFixture(t, dir, "old.go", "package sample\n\nfunc value() int { return 1 }\n")
+	gitRun(t, dir, "add", "old.go")
+	gitRun(t, dir, "commit", "-m", "base")
+	base := gitRun(t, dir, "rev-parse", "HEAD")
+	gitRun(t, dir, "mv", "old.go", "new.go")
+	gitRun(t, dir, "commit", "-m", "rename")
+	head := gitRun(t, dir, "rev-parse", "HEAD")
+
+	changes, err := engine.LoadGitChanges(context.Background(), dir, base, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 1 {
+		t.Fatalf("changes = %+v, want one rename", changes)
+	}
+	change := changes[0]
+	if change.Status != risk.Renamed || change.Path != "new.go" {
+		t.Fatalf("change = %+v, want exact rename to new.go", change)
+	}
+	if change.BaselineContent != change.CurrentContent {
+		t.Fatalf("rename content differs: baseline %q current %q", change.BaselineContent, change.CurrentContent)
+	}
+}
+
 func gitRun(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)

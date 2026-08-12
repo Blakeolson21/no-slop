@@ -17,30 +17,41 @@ func LoadGitChanges(ctx context.Context, workDir, baseRef, headRef string) ([]Ch
 	if baseRef == "" || headRef == "" {
 		return nil, fmt.Errorf("load git changes: base and head refs are required")
 	}
-	statusOutput, err := git.Run(ctx, workDir, "diff", "--name-status", "-z", "--no-renames", baseRef, headRef, "--")
+	statusOutput, err := git.Run(ctx, workDir, "diff", "--name-status", "-z", "--find-renames=100%", baseRef, headRef, "--")
 	if err != nil {
 		return nil, fmt.Errorf("load changed paths: %w", err)
 	}
 	entries := splitNUL(statusOutput)
-	if len(entries)%2 != 0 {
-		return nil, fmt.Errorf("load changed paths: unexpected git name-status output")
-	}
 	stats, err := loadNumStats(ctx, workDir, baseRef, headRef)
 	if err != nil {
 		return nil, err
 	}
 
 	changes := make([]Change, 0, len(entries)/2)
-	for i := 0; i < len(entries); i += 2 {
-		status := parseChangeStatus(entries[i])
-		path := entries[i+1]
+	for index := 0; index < len(entries); {
+		rawStatus := entries[index]
+		index++
+		if index >= len(entries) {
+			return nil, fmt.Errorf("load changed paths: unexpected git name-status output")
+		}
+		baselinePath := entries[index]
+		path := baselinePath
+		index++
+		status := parseChangeStatus(rawStatus)
+		if status == risk.Renamed {
+			if index >= len(entries) {
+				return nil, fmt.Errorf("load changed paths: rename is missing its destination")
+			}
+			path = entries[index]
+			index++
+		}
 		change := Change{Path: path, Status: status}
-		if stat, ok := stats[path]; ok {
+		if stat, ok := stats[path]; ok && status != risk.Renamed {
 			change.Added = stat.added
 			change.Deleted = stat.deleted
 		}
 		if status != risk.Added {
-			change.BaselineContent, err = showGitFile(ctx, workDir, baseRef, path)
+			change.BaselineContent, err = showGitFile(ctx, workDir, baseRef, baselinePath)
 			if err != nil {
 				return nil, fmt.Errorf("load baseline %q: %w", path, err)
 			}
@@ -92,11 +103,13 @@ func splitNUL(output string) []string {
 }
 
 func parseChangeStatus(raw string) risk.ChangeStatus {
-	switch raw {
-	case "A":
+	switch {
+	case raw == "A":
 		return risk.Added
-	case "D":
+	case raw == "D":
 		return risk.Deleted
+	case strings.HasPrefix(raw, "R"):
+		return risk.Renamed
 	default:
 		return risk.Modified
 	}

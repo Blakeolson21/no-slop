@@ -256,7 +256,7 @@ func defaultBaseRef(ctx context.Context, workDir, defaultBranch, head string) (s
 
 func printResult(stdout io.Writer, result engine.Result) {
 	if result.ReviewRan {
-		fmt.Fprintln(stdout, "review: completed")
+		fmt.Fprintf(stdout, "review: completed (%d rounds)\n", result.ReviewRounds)
 	} else {
 		fmt.Fprintln(stdout, "review: skipped")
 	}

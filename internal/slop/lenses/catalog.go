@@ -61,6 +61,16 @@ func Catalog() []Lens {
 	}
 }
 
+// Names returns the stable lens names for structured reviewer output.
+func Names() []string {
+	catalog := Catalog()
+	names := make([]string, 0, len(catalog))
+	for _, lens := range catalog {
+		names = append(names, lens.Name)
+	}
+	return names
+}
+
 // ReviewerPrompt renders the taxonomy as explicit finding labels and checks.
 func ReviewerPrompt() string {
 	var prompt strings.Builder

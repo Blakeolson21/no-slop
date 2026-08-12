@@ -8,11 +8,12 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/kunchenguid/no-mistakes/internal/slop/pathmatch"
 )
 
 // Kind identifies a prose-oracle finding class.
@@ -127,7 +128,7 @@ func Check(ctx context.Context, artifacts []Artifact, opts Options) ([]Finding, 
 		}
 		for _, artifact := range outbound {
 			for _, comment := range thread.Comments {
-				if sameClaim(artifact.Content, comment) {
+				if samePoint(artifact.Content, comment) {
 					findings = append(findings, Finding{
 						Kind:        DuplicateClaim,
 						Path:        artifact.Path,
@@ -158,8 +159,13 @@ func checkEvidenceLine(artifactPath string, lineNumber int, line, root string) [
 	}
 
 	var findings []Finding
-	for _, match := range pathMatches {
+	assignments := assignClaimsToCitations(pathMatches, claims)
+	for citationIndex, match := range pathMatches {
 		citation := line[match[2]:match[3]]
+		assigned := assignments[citationIndex]
+		if len(assigned) == 0 {
+			continue
+		}
 		values, err := evidenceValues(root, citation)
 		if err != nil {
 			findings = append(findings, Finding{
@@ -170,9 +176,9 @@ func checkEvidenceLine(artifactPath string, lineNumber int, line, root string) [
 			})
 			continue
 		}
-		derived := deriveNumbers(values)
-		for _, claim := range claims {
-			if !containsNumber(derived, claim) {
+		for _, claim := range assigned {
+			supported := numbersForOperation(values, detectOperation(line, claim))
+			if !containsNumber(supported, claim.value) {
 				findings = append(findings, Finding{
 					Kind:        EvidenceMismatch,
 					Path:        artifactPath,
@@ -185,8 +191,14 @@ func checkEvidenceLine(artifactPath string, lineNumber int, line, root string) [
 	return findings
 }
 
-func claimedNumbers(line string, paths [][]int) []float64 {
-	var claims []float64
+type numericClaim struct {
+	value float64
+	start int
+	end   int
+}
+
+func claimedNumbers(line string, paths [][]int) []numericClaim {
+	var claims []numericClaim
 	for _, match := range numberPattern.FindAllStringIndex(line, -1) {
 		overlapsPath := false
 		for _, pathMatch := range paths {
@@ -200,10 +212,37 @@ func claimedNumbers(line string, paths [][]int) []float64 {
 		}
 		value, err := strconv.ParseFloat(line[match[0]:match[1]], 64)
 		if err == nil {
-			claims = append(claims, value)
+			claims = append(claims, numericClaim{value: value, start: match[0], end: match[1]})
 		}
 	}
 	return claims
+}
+
+func assignClaimsToCitations(paths [][]int, claims []numericClaim) map[int][]numericClaim {
+	assignments := make(map[int][]numericClaim)
+	for _, claim := range claims {
+		closestIndex := 0
+		closestDistance := spanDistance(claim.start, claim.end, paths[0][2], paths[0][3])
+		for index := 1; index < len(paths); index++ {
+			distance := spanDistance(claim.start, claim.end, paths[index][2], paths[index][3])
+			if distance < closestDistance {
+				closestIndex = index
+				closestDistance = distance
+			}
+		}
+		assignments[closestIndex] = append(assignments[closestIndex], claim)
+	}
+	return assignments
+}
+
+func spanDistance(leftStart, leftEnd, rightStart, rightEnd int) int {
+	if leftEnd <= rightStart {
+		return rightStart - leftEnd
+	}
+	if rightEnd <= leftStart {
+		return leftStart - rightEnd
+	}
+	return 0
 }
 
 func evidenceValues(root, citation string) ([]float64, error) {
@@ -263,7 +302,54 @@ func collectJSONNumbers(value any, numbers *[]float64) {
 	}
 }
 
-func deriveNumbers(values []float64) []float64 {
+type evidenceOperation string
+
+const (
+	operationDirect  evidenceOperation = "direct"
+	operationSum     evidenceOperation = "sum"
+	operationCount   evidenceOperation = "count"
+	operationAverage evidenceOperation = "average"
+	operationMinimum evidenceOperation = "minimum"
+	operationMaximum evidenceOperation = "maximum"
+	operationRatio   evidenceOperation = "ratio"
+	operationPercent evidenceOperation = "percent"
+)
+
+var evidenceOperations = []struct {
+	kind    evidenceOperation
+	pattern *regexp.Regexp
+}{
+	{operationSum, regexp.MustCompile(`(?i)\b(?:total|sum|combined)\b`)},
+	{operationCount, regexp.MustCompile(`(?i)\b(?:count|rows?|records?|entries|items|values)\b`)},
+	{operationAverage, regexp.MustCompile(`(?i)\b(?:average|averages|averaged|avg|mean)\b`)},
+	{operationMinimum, regexp.MustCompile(`(?i)\b(?:minimum|min|lowest|smallest)\b`)},
+	{operationMaximum, regexp.MustCompile(`(?i)\b(?:maximum|max|highest|largest)\b`)},
+	{operationRatio, regexp.MustCompile(`(?i)\b(?:ratio|quotient)\b`)},
+	{operationPercent, regexp.MustCompile(`(?i)\b(?:percent|percentage|rate)\b|%`)},
+}
+
+func detectOperation(line string, claim numericClaim) evidenceOperation {
+	scrubbed := []byte(line)
+	for _, match := range evidencePathPattern.FindAllStringSubmatchIndex(line, -1) {
+		for index := match[2]; index < match[3]; index++ {
+			scrubbed[index] = ' '
+		}
+	}
+	closestKind := operationDirect
+	closestDistance := len(line) + 1
+	for _, operation := range evidenceOperations {
+		for _, match := range operation.pattern.FindAllIndex(scrubbed, -1) {
+			distance := spanDistance(claim.start, claim.end, match[0], match[1])
+			if distance < closestDistance {
+				closestKind = operation.kind
+				closestDistance = distance
+			}
+		}
+	}
+	return closestKind
+}
+
+func numbersForOperation(values []float64, operation evidenceOperation) []float64 {
 	if len(values) == 0 {
 		return nil
 	}
@@ -275,11 +361,28 @@ func deriveNumbers(values []float64) []float64 {
 		minimum = math.Min(minimum, value)
 		maximum = math.Max(maximum, value)
 	}
-	derived = append(derived, sum, float64(len(values)), sum/float64(len(values)), minimum, maximum)
-	for _, numerator := range values {
-		for _, denominator := range values {
-			if denominator != 0 {
-				derived = append(derived, numerator/denominator, numerator/denominator*100)
+	switch operation {
+	case operationSum:
+		derived = append(derived, sum)
+	case operationCount:
+		derived = append(derived, float64(len(values)))
+	case operationAverage:
+		derived = append(derived, sum/float64(len(values)))
+	case operationMinimum:
+		derived = append(derived, minimum)
+	case operationMaximum:
+		derived = append(derived, maximum)
+	case operationRatio, operationPercent:
+		for _, numerator := range values {
+			for _, denominator := range values {
+				if denominator == 0 {
+					continue
+				}
+				ratio := numerator / denominator
+				if operation == operationPercent {
+					ratio *= 100
+				}
+				derived = append(derived, ratio)
 			}
 		}
 	}
@@ -321,6 +424,58 @@ func sameClaim(left, right string) bool {
 	return union > 0 && float64(intersection)/float64(union) >= 0.7
 }
 
+func samePoint(left, right string) bool {
+	for _, leftClaim := range claimSegments(left) {
+		for _, rightClaim := range claimSegments(right) {
+			if sameClaim(leftClaim, rightClaim) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func claimSegments(value string) []string {
+	var paragraphs []string
+	var paragraph strings.Builder
+	flush := func() {
+		if paragraph.Len() == 0 {
+			return
+		}
+		paragraphs = append(paragraphs, paragraph.String())
+		paragraph.Reset()
+	}
+	for _, line := range strings.Split(value, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			flush()
+			continue
+		}
+		if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* ") {
+			flush()
+			paragraphs = append(paragraphs, strings.TrimSpace(trimmed[2:]))
+			continue
+		}
+		if paragraph.Len() > 0 {
+			paragraph.WriteByte(' ')
+		}
+		paragraph.WriteString(trimmed)
+	}
+	flush()
+
+	var claims []string
+	for _, paragraph := range paragraphs {
+		for _, claim := range strings.FieldsFunc(paragraph, func(r rune) bool {
+			return r == '.' || r == '!' || r == '?'
+		}) {
+			if claim = strings.TrimSpace(claim); claim != "" {
+				claims = append(claims, claim)
+			}
+		}
+	}
+	return claims
+}
+
 func meaningfulTokens(value string) map[string]bool {
 	tokens := make(map[string]bool)
 	for _, token := range claimToken.FindAllString(strings.ToLower(value), -1) {
@@ -332,19 +487,15 @@ func meaningfulTokens(value string) map[string]bool {
 }
 
 func isOutbound(artifact Artifact, patterns []string) bool {
+	extension := strings.ToLower(filepath.Ext(artifact.Path))
+	if extension != ".md" && extension != ".mdx" {
+		return false
+	}
 	if outboundFrontMatter.MatchString(frontMatter(artifact.Content)) {
 		return true
 	}
 	for _, pattern := range patterns {
-		if strings.HasSuffix(pattern, "/**") {
-			prefix := strings.TrimSuffix(pattern, "/**")
-			if artifact.Path == prefix || strings.HasPrefix(artifact.Path, prefix+"/") {
-				return true
-			}
-			continue
-		}
-		matched, _ := path.Match(pattern, artifact.Path)
-		if matched {
+		if pathmatch.Match(artifact.Path, pattern) {
 			return true
 		}
 	}

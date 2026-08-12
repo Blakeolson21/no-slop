@@ -23,8 +23,8 @@ The selected tier and all three reasons print before validation continues. Use `
 | Tier | Work |
 | --- | --- |
 | `leak-scan-only` | Mandatory leak and identity checks, plus any applicable artifact oracle |
-| `single-review` | Mandatory checks plus one reviewer pass through every slop lens |
-| `full-adversarial` | Mandatory checks, the lens reviewer, the test-count floor, and the configured test command |
+| `single-review` | Mandatory checks, the test-count floor, and one reviewer pass through every slop lens |
+| `full-adversarial` | Mandatory checks, a lens review, an adversarial challenge round, the test-count floor, and the configured test command |
 
 A Markdown-only diff always routes to `leak-scan-only` unless the operator overrides it.
 
@@ -105,25 +105,12 @@ NoSlop uses the existing `.no-mistakes.yaml` repository config shape:
 
 ```yaml
 slop:
-  risk:
-    single_review_threshold: 3
-    full_adversarial_threshold: 6
-    high_risk_paths:
-      - "internal/auth/**"
-      - ".github/workflows/**"
   leak_scan:
     blocklist_file: ".noslop-blocklist"
-  prose:
-    outbound_paths:
-      - "outbound/**"
-    ai_tell_words: []
-  test_count_floor: true
   test_command: "go test -race ./..."
 ```
 
-`.noslop-blocklist` contains one private hostname, codename, project name, or other identity marker per line. Keep the real file private and uncommitted. The repository ignores that filename by default. Add the names that are private in your environment. NoSlop ships only generic placeholder defaults.
-
-The full field reference is in [repo config documentation](docs/src/content/docs/reference/repo-config.md#slop).
+Keep the real blocklist private and uncommitted. The [repository config reference](docs/src/content/docs/reference/repo-config.md#slop) owns all fields, defaults, outbound selection, and blocklist details.
 
 ## Development
 

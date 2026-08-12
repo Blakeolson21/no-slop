@@ -8,10 +8,17 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/slop/risk"
 )
 
-type countingReviewer struct{ calls int }
+type countingReviewer struct {
+	calls    int
+	requests []engine.ReviewRequest
+}
 
-func (r *countingReviewer) Review(context.Context, engine.ReviewRequest) ([]engine.Finding, error) {
+func (r *countingReviewer) Review(_ context.Context, request engine.ReviewRequest) ([]engine.Finding, error) {
 	r.calls++
+	r.requests = append(r.requests, request)
+	if r.calls == 1 {
+		return []engine.Finding{{Lens: "fail-open-default", Path: "policy.go", Line: 8, Description: "unknown becomes allow"}}, nil
+	}
 	return nil, nil
 }
 
@@ -77,7 +84,7 @@ func TestRunRoutesOrdinarySourceToSingleReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Decision.Tier != risk.TierSingleReview || reviewer.calls != 1 || tests.calls != 0 {
+	if result.Decision.Tier != risk.TierSingleReview || reviewer.calls != 1 || result.ReviewRounds != 1 || tests.calls != 0 {
 		t.Fatalf("result = %+v, review calls = %d, test calls = %d", result, reviewer.calls, tests.calls)
 	}
 }
@@ -103,8 +110,14 @@ func TestRunFullTierRequiresReviewAndRunsConfiguredTests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Decision.Tier != risk.TierFullAdversarial || reviewer.calls != 1 || tests.calls != 1 {
+	if result.Decision.Tier != risk.TierFullAdversarial || reviewer.calls != 2 || result.ReviewRounds != 2 || tests.calls != 1 {
 		t.Fatalf("result = %+v, review calls = %d, test calls = %d", result, reviewer.calls, tests.calls)
+	}
+	if reviewer.requests[0].Round != engine.ReviewRoundLensReview || reviewer.requests[1].Round != engine.ReviewRoundAdversarialChallenge {
+		t.Fatalf("review rounds = %+v", reviewer.requests)
+	}
+	if len(reviewer.requests[1].PriorFindings) != 1 || reviewer.requests[1].PriorFindings[0].Lens != "fail-open-default" {
+		t.Fatalf("second round prior findings = %+v", reviewer.requests[1].PriorFindings)
 	}
 }
 
