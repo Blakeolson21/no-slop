@@ -4,9 +4,11 @@ package risk
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/kunchenguid/no-mistakes/internal/slop/pathmatch"
+	"github.com/kunchenguid/no-mistakes/internal/slop/provenance"
 )
 
 // Tier names the validation depth selected for a change.
@@ -51,6 +53,9 @@ type Config struct {
 	FullReviewThreshold   int
 	HighRiskPaths         []string
 	OverrideTier          Tier
+	ProvenanceStore       provenance.Reader
+	AgentLaneID           string
+	Model                 string
 }
 
 // Axis records one risk score and the evidence behind it.
@@ -61,12 +66,15 @@ type Axis struct {
 
 // Decision is the printable classifier verdict.
 type Decision struct {
-	Tier          Tier
-	BlastRadius   Axis
-	Novelty       Axis
-	Reversibility Axis
-	Overridden    bool
-	OriginalTier  Tier
+	Tier                Tier
+	BlastRadius         Axis
+	Novelty             Axis
+	Reversibility       Axis
+	Overridden          bool
+	OriginalTier        Tier
+	Rationale           string
+	PriorityLenses      []string
+	DeterministicProbes []string
 }
 
 // Classify chooses a validation tier from the change's reach, novelty, and
@@ -87,7 +95,7 @@ func Classify(change ChangeSet, cfg Config) (Decision, error) {
 			Novelty:       Axis{Score: 0, Reason: "Markdown-only content change"},
 			Reversibility: Axis{Score: 0, Reason: reversibility},
 		}
-		return applyOverride(decision, cfg.OverrideTier)
+		return finalizeDecision(decision, cfg)
 	}
 
 	novelty := classifyNovelty(change.Files)
@@ -109,7 +117,80 @@ func Classify(change ChangeSet, cfg Config) (Decision, error) {
 	default:
 		decision.Tier = TierLeakScanOnly
 	}
+	return finalizeDecision(decision, cfg)
+}
+
+func finalizeDecision(decision Decision, cfg Config) (Decision, error) {
+	decision = conditionOnProvenance(decision, cfg)
 	return applyOverride(decision, cfg.OverrideTier)
+}
+
+func conditionOnProvenance(decision Decision, cfg Config) Decision {
+	laneID := strings.TrimSpace(cfg.AgentLaneID)
+	model := strings.TrimSpace(cfg.Model)
+	switch {
+	case cfg.ProvenanceStore == nil:
+		decision.Rationale = "no provenance history configured; using v1 policy"
+		return decision
+	case laneID == "" || model == "" || laneID == "unknown" || model == "unknown":
+		decision.Rationale = "no lane/model provenance key; using v1 policy"
+		return decision
+	}
+	history, err := cfg.ProvenanceStore.Recent(laneID, model, 10)
+	if err != nil {
+		decision.Tier = TierFullAdversarial
+		decision.Rationale = fmt.Sprintf("history could not be read for lane %s and model %s; escalating to full-adversarial", laneID, model)
+		return decision
+	}
+	if len(history) == 0 {
+		decision.Rationale = fmt.Sprintf("no history for lane %s and model %s; using v1 policy", laneID, model)
+		return decision
+	}
+
+	scores := make(map[string]int)
+	for _, record := range history {
+		for lens, findings := range record.FindingsByLens {
+			scores[lens] += len(findings.Accepted) - len(findings.Rejected)
+		}
+	}
+	for lens, score := range scores {
+		if score >= 3 {
+			decision.PriorityLenses = append(decision.PriorityLenses, lens)
+		}
+	}
+	sort.Slice(decision.PriorityLenses, func(left, right int) bool {
+		leftScore := scores[decision.PriorityLenses[left]]
+		rightScore := scores[decision.PriorityLenses[right]]
+		if leftScore != rightScore {
+			return leftScore > rightScore
+		}
+		return decision.PriorityLenses[left] < decision.PriorityLenses[right]
+	})
+	if len(decision.PriorityLenses) == 0 {
+		decision.Rationale = fmt.Sprintf("lane %s: no repeated lens threshold in last %d changes; keeping v1 policy", laneID, len(history))
+		return decision
+	}
+
+	primary := decision.PriorityLenses[0]
+	decision.Tier = raiseTier(decision.Tier)
+	decision.Rationale = fmt.Sprintf("lane %s: %d %s findings in last %d changes, escalating", laneID, scores[primary], primary, len(history))
+	for _, lens := range decision.PriorityLenses {
+		if lens == "test-capitulation" {
+			decision.DeterministicProbes = append(decision.DeterministicProbes, "test-count-floor")
+		}
+	}
+	return decision
+}
+
+func raiseTier(tier Tier) Tier {
+	switch tier {
+	case TierLeakScanOnly:
+		return TierSingleReview
+	case TierSingleReview, TierFullAdversarial:
+		return TierFullAdversarial
+	default:
+		return TierFullAdversarial
+	}
 }
 
 func applyOverride(decision Decision, override Tier) (Decision, error) {
@@ -442,6 +523,13 @@ func (d Decision) String() string {
 	)
 	if d.Overridden {
 		printed += fmt.Sprintf("\noverride: %s -> %s", d.OriginalTier, d.Tier)
+	}
+	printed += "\nprovenance: " + d.Rationale
+	if len(d.PriorityLenses) > 0 {
+		printed += "\nlens priority: " + strings.Join(d.PriorityLenses, ", ")
+	}
+	if len(d.DeterministicProbes) > 0 {
+		printed += "\ndeterministic probes: " + strings.Join(d.DeterministicProbes, ", ")
 	}
 	return printed
 }

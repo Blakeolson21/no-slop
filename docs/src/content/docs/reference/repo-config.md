@@ -84,6 +84,7 @@ test:
 
 # NoSlop front-stage settings.
 slop:
+  data_dir: ".noslop-data"
   risk:
     single_review_threshold: 3
     full_adversarial_threshold: 6
@@ -108,6 +109,7 @@ Configure the `noslop gate` front stage. The classifier always prints its tier a
 
 | Field | Type | Default | Purpose |
 | --- | --- | --- | --- |
+| `slop.data_dir` | `string` | `.noslop-data` | Repository-relative or absolute directory for append-only provenance history |
 | `slop.risk.single_review_threshold` | `int` | `3` | Minimum sum of the three risk axes for `single-review` |
 | `slop.risk.full_adversarial_threshold` | `int` | `6` | Minimum sum for `full-adversarial`; must be greater than the single-review threshold |
 | `slop.risk.high_risk_paths` | `string[]` | Empty | Extra glob patterns treated as high-reach paths, including Markdown instruction files |
@@ -118,6 +120,12 @@ Configure the `noslop gate` front stage. The classifier always prints its tier a
 | `slop.test_command` | `string` | Empty | Test command required by the `full-adversarial` tier |
 
 `slop.test_command` is deliberately separate from `commands.test`. The inherited pipeline uses `commands.test` for focused local validation. NoSlop's full tier uses `slop.test_command` as the explicit adversarial test gate.
+
+Each completed `noslop gate` appends a schema-versioned JSON Lines record under `slop.data_dir`. The record includes provider, model, reasoning effort, agent lane identifier, change class, selected tier, accepted and rejected findings by lens, review rounds, fix growth, and outcome. Use `--provider`, `--model`, `--reasoning-effort`, `--lane-id`, and `--change-class` to identify the generating lane. Missing values are recorded as `unknown` and do not select lane/model history.
+
+For a known lane and model, the classifier reads the last 10 matching changes. Three net accepted findings for one lens raise the selected tier by one level, move repeated lenses to the front of the review prompt, and enable an available deterministic probe. `test-capitulation` enables `test-count-floor`. No matching history keeps the v1 route. Unreadable or malformed configured history selects `full-adversarial`. The selected rationale, lens priority, and probes print with the normal axis decision.
+
+Provenance writes are append-only and serialized across concurrent gate processes. Keep the default local data directory out of version control. A later run reads only records whose agent lane identifier and model match exactly.
 
 The private-name file accepts one literal entry per line. Blank lines and lines beginning with `#` are ignored. Matching is case-insensitive. Keep real hostnames, codenames, project names, and other private identities out of the repository. The default filename is ignored in this repository. A configured file that is missing or unreadable stops the gate with an evaluation error.
 
@@ -138,6 +146,8 @@ When an outbound line cites a repository-relative `.json` or `.csv` file and sta
 The default thresholds let high-risk changes and new source additions of at least 500 lines reach `full-adversarial` on a feature branch. Smaller ordinary source changes remain eligible for `single-review`.
 
 The complete lens definitions are in the [NoSlop taxonomy](./slop-taxonomy/).
+
+The [evaluation corpus reference](./evaluation-corpus/) owns the replay format. `noslop evaluate` compares captured conditioned and unconditioned findings against the recorded expectations and reports found, missed, and false-positive counts.
 
 ### agent
 

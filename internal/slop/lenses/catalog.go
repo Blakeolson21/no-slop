@@ -73,10 +73,16 @@ func Names() []string {
 
 // ReviewerPrompt renders the taxonomy as explicit finding labels and checks.
 func ReviewerPrompt() string {
+	return ReviewerPromptWithPriority(nil)
+}
+
+// ReviewerPromptWithPriority moves history-selected lenses to the front while
+// preserving the complete catalog exactly once.
+func ReviewerPromptWithPriority(priority []string) string {
 	var prompt strings.Builder
 	prompt.WriteString("\n\nAI-authorship slop lenses:\n")
 	prompt.WriteString("Review the entire change through every lens below. Prefix a finding description with the matching [lens-name]. Do not emit a lens finding without source evidence.\n")
-	for _, lens := range Catalog() {
+	for _, lens := range catalogWithPriority(priority) {
 		fmt.Fprintf(&prompt, "- [%s] %s Detection: %s", lens.Name, lens.Description, lens.DetectionGuidance)
 		if lens.MechanicalCheck != "" {
 			fmt.Fprintf(&prompt, " Mechanical pre-check: %s.", lens.MechanicalCheck)
@@ -84,4 +90,26 @@ func ReviewerPrompt() string {
 		prompt.WriteByte('\n')
 	}
 	return strings.TrimRight(prompt.String(), "\n")
+}
+
+func catalogWithPriority(priority []string) []Lens {
+	catalog := Catalog()
+	byName := make(map[string]Lens, len(catalog))
+	for _, lens := range catalog {
+		byName[lens.Name] = lens
+	}
+	ordered := make([]Lens, 0, len(catalog))
+	seen := make(map[string]bool, len(catalog))
+	for _, name := range priority {
+		if lens, ok := byName[name]; ok && !seen[name] {
+			ordered = append(ordered, lens)
+			seen[name] = true
+		}
+	}
+	for _, lens := range catalog {
+		if !seen[lens.Name] {
+			ordered = append(ordered, lens)
+		}
+	}
+	return ordered
 }

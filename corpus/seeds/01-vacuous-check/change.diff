@@ -1,0 +1,7 @@
+diff --git a/guard.go b/guard.go
+index 1111111..2222222 100644
+--- a/guard.go
++++ b/guard.go
+@@ -8,1 +8,1 @@
+-	if observed != expected {
++	if observed != observed {

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "test-capitulation-deleted-case",
+  "description": "A failing negative test is deleted while the implementation remains unchanged.",
+  "expected_findings": [
+    {
+      "lens": "test-capitulation",
+      "path": "calc_test.go",
+      "line": 12,
+      "description": "the negative test case was removed"
+    }
+  ]
+}

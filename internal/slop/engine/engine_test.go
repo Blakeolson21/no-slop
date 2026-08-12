@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/slop/engine"
+	"github.com/kunchenguid/no-mistakes/internal/slop/provenance"
 	"github.com/kunchenguid/no-mistakes/internal/slop/risk"
 )
 
@@ -27,6 +28,12 @@ type countingTests struct{ calls int }
 func (r *countingTests) Run(context.Context, string, string) (engine.TestResult, error) {
 	r.calls++
 	return engine.TestResult{ExitCode: 0}, nil
+}
+
+type staticHistory []provenance.Record
+
+func (h staticHistory) Recent(string, string, int) ([]provenance.Record, error) {
+	return h, nil
 }
 
 func TestRunRoutesMarkdownToMandatoryChecksWithoutReviewerOrTests(t *testing.T) {
@@ -170,5 +177,47 @@ func TestRunTestCountFloorStillRunsUnderLightOverride(t *testing.T) {
 	}
 	if result.Passed || len(result.Findings) != 1 || result.Findings[0].Lens != "test-capitulation" {
 		t.Fatalf("result = %+v, want mandatory test-count finding", result)
+	}
+}
+
+func TestRunConditionedDeterministicProbeRunsWhenConfiguredFloorIsOff(t *testing.T) {
+	t.Parallel()
+
+	history := make(staticHistory, 3)
+	for index := range history {
+		history[index] = provenance.Record{FindingsByLens: map[string]provenance.LensFindings{
+			"test-capitulation": {Accepted: []provenance.Finding{{Description: "test weakened"}}},
+		}}
+	}
+	reviewer := &countingReviewer{}
+	tests := &countingTests{}
+	result, err := engine.Run(context.Background(), engine.Input{
+		WorkDir:       t.TempDir(),
+		Branch:        "feature/calculator",
+		DefaultBranch: "main",
+		Files: []engine.Change{{
+			Path:            "calc_test.go",
+			Status:          risk.Modified,
+			Deleted:         4,
+			BaselineContent: "package calc\nfunc TestPositive(t *testing.T) {}\nfunc TestNegative(t *testing.T) {}\n",
+			CurrentContent:  "package calc\nfunc TestPositive(t *testing.T) {}\n",
+		}},
+		Config: engine.Config{
+			Risk:           risk.Config{ProvenanceStore: history, AgentLaneID: "lane-a", Model: "model-a"},
+			TestCountFloor: false,
+			TestCommand:    "go test ./...",
+		},
+	}, engine.Dependencies{Reviewer: reviewer, Tests: tests})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, finding := range result.Findings {
+		if finding.Lens == "test-capitulation" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("findings = %+v, want history-selected test-count probe", result.Findings)
 	}
 }

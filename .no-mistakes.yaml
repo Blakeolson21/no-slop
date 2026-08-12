@@ -13,6 +13,7 @@ commands:
 
 # NoSlop front-stage policy. The private-name file is local and ignored.
 slop:
+  data_dir: ".noslop-data"
   risk:
     single_review_threshold: 3
     full_adversarial_threshold: 6

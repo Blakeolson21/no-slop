@@ -34,3 +34,4 @@ demo_raw.gif
 
 # Local NoSlop identity data
 .noslop-blocklist
+.noslop-data/

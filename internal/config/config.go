@@ -169,6 +169,7 @@ type RepoConfig struct {
 
 // SlopRaw is the YAML representation of NoSlop front-stage settings.
 type SlopRaw struct {
+	DataDir        string          `yaml:"data_dir"`
 	Risk           SlopRiskRaw     `yaml:"risk"`
 	LeakScan       SlopLeakScanRaw `yaml:"leak_scan"`
 	Prose          SlopProseRaw    `yaml:"prose"`
@@ -462,6 +463,7 @@ type Config struct {
 
 // Slop is the resolved NoSlop front-stage configuration.
 type Slop struct {
+	DataDir        string
 	Risk           SlopRisk
 	LeakScan       SlopLeakScan
 	Prose          SlopProse
@@ -1811,6 +1813,7 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 
 func resolveSlop(raw SlopRaw) Slop {
 	resolved := Slop{
+		DataDir: ".noslop-data",
 		Risk: SlopRisk{
 			SingleReviewThreshold:    3,
 			FullAdversarialThreshold: 6,
@@ -1820,6 +1823,9 @@ func resolveSlop(raw SlopRaw) Slop {
 			OutboundPaths: []string{"outbound/**"},
 		},
 		TestCountFloor: true,
+	}
+	if value := strings.TrimSpace(raw.DataDir); value != "" {
+		resolved.DataDir = value
 	}
 	if raw.Risk.SingleReviewThreshold > 0 {
 		resolved.Risk.SingleReviewThreshold = raw.Risk.SingleReviewThreshold

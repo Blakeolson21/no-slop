@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "self-consistent-oracle-copied-formula",
+  "description": "A test computes its expected value with the same formula as production.",
+  "expected_findings": [
+    {
+      "lens": "self-consistent-oracle",
+      "path": "price_test.go",
+      "line": 20,
+      "description": "the expected price repeats the production formula"
+    }
+  ]
+}

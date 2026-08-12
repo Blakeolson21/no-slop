@@ -6,6 +6,8 @@ Most review tools evaluate a diff as if a person wrote it. AI-authored changes h
 
 NoSlop makes those patterns a first-class review contract. It classifies the change before spending reviewer time, applies named AI-authorship lenses, and uses artifact-specific checks for code and outbound prose.
 
+When generating-agent provenance is supplied, NoSlop also conditions the policy on the last 10 changes from that lane and model. Repeated accepted findings can raise the tier, move affected lenses first, and enable mapped deterministic probes. Every decision prints the history rationale. Missing history keeps the v1 route and says so; unreadable history selects `full-adversarial`.
+
 This repository is an MIT-licensed fork of [kunchenguid/no-mistakes](https://github.com/kunchenguid/no-mistakes). The inherited `no-mistakes` gate remains available. The new `noslop gate` command is a front stage that can run before it or on its own.
 
 ## Three pillars
@@ -91,6 +93,17 @@ Check outbound text against a live GitHub thread:
 ./bin/noslop gate --base origin/main --thread https://github.com/owner/repo/issues/123
 ```
 
+Capture generating-agent provenance for conditioning and later evaluation:
+
+```sh
+./bin/noslop gate --base origin/main \
+  --provider example-provider \
+  --model example-model \
+  --reasoning-effort high \
+  --lane-id review-lane-1 \
+  --change-class source
+```
+
 Use a different private-name blocklist:
 
 ```sh
@@ -105,12 +118,24 @@ NoSlop uses the existing `.no-mistakes.yaml` repository config shape:
 
 ```yaml
 slop:
+  data_dir: ".noslop-data"
   leak_scan:
     blocklist_file: ".noslop-blocklist"
   test_command: "go test -race ./..."
 ```
 
 Keep the real blocklist private and uncommitted. The [repository config reference](docs/src/content/docs/reference/repo-config.md#slop) owns all fields, defaults, outbound selection, and blocklist details.
+
+Replay captured policy findings against the seed corpus:
+
+```sh
+./bin/noslop evaluate \
+  --corpus corpus/seeds \
+  --unconditioned-results results/unconditioned.json \
+  --conditioned-results results/conditioned.json
+```
+
+The [corpus format](docs/src/content/docs/reference/evaluation-corpus.md) records diffs and independent expected findings. The runner reports found, missed, and false-positive counts without inventing reviewer output.
 
 ## Development
 

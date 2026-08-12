@@ -1,11 +1,22 @@
 package risk_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/kunchenguid/no-mistakes/internal/slop/provenance"
 	"github.com/kunchenguid/no-mistakes/internal/slop/risk"
 )
+
+type historyReader struct {
+	records []provenance.Record
+	err     error
+}
+
+func (r historyReader) Recent(string, string, int) ([]provenance.Record, error) {
+	return r.records, r.err
+}
 
 func TestClassifyMarkdownOnlyChangeUsesLeakScanOnlyTier(t *testing.T) {
 	t.Parallel()
@@ -276,4 +287,95 @@ func TestClassifyLiteralOrOperatorChangeAsLogic(t *testing.T) {
 			t.Fatalf("novelty = %+v for %q, want changed logic", decision.Novelty, current)
 		}
 	}
+}
+
+func TestClassifyConditionsTierLensOrderAndProbesOnLaneModelHistory(t *testing.T) {
+	t.Parallel()
+
+	records := make([]provenance.Record, 3)
+	for index := range records {
+		records[index] = provenance.Record{FindingsByLens: map[string]provenance.LensFindings{
+			"test-capitulation": {Accepted: []provenance.Finding{{Description: "test weakened"}}},
+		}}
+	}
+	decision, err := risk.Classify(risk.ChangeSet{
+		Branch:        "docs/update",
+		DefaultBranch: "main",
+		Files:         []risk.FileChange{{Path: "README.md", Status: risk.Modified, Added: 1, Deleted: 1}},
+	}, risk.Config{
+		ProvenanceStore: recordsReader(records),
+		AgentLaneID:     "lane-x",
+		Model:           "model-a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Tier != risk.TierSingleReview {
+		t.Fatalf("tier = %q, want one-tier escalation", decision.Tier)
+	}
+	if len(decision.PriorityLenses) == 0 || decision.PriorityLenses[0] != "test-capitulation" {
+		t.Fatalf("priority lenses = %v", decision.PriorityLenses)
+	}
+	if len(decision.DeterministicProbes) != 1 || decision.DeterministicProbes[0] != "test-count-floor" {
+		t.Fatalf("deterministic probes = %v", decision.DeterministicProbes)
+	}
+	want := "lane lane-x: 3 test-capitulation findings in last 3 changes, escalating"
+	if !strings.Contains(decision.String(), want) {
+		t.Fatalf("decision rationale missing %q:\n%s", want, decision.String())
+	}
+}
+
+func TestClassifyWithNoLaneModelHistoryKeepsV1TierAndPrintsDefault(t *testing.T) {
+	t.Parallel()
+
+	change := risk.ChangeSet{
+		Branch:        "docs/update",
+		DefaultBranch: "main",
+		Files:         []risk.FileChange{{Path: "README.md", Status: risk.Modified, Added: 1, Deleted: 1}},
+	}
+	v1, err := risk.Classify(change, risk.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conditioned, err := risk.Classify(change, risk.Config{
+		ProvenanceStore: recordsReader(nil),
+		AgentLaneID:     "lane-new",
+		Model:           "model-new",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conditioned.Tier != v1.Tier || conditioned.BlastRadius != v1.BlastRadius || conditioned.Novelty != v1.Novelty || conditioned.Reversibility != v1.Reversibility {
+		t.Fatalf("conditioned = %+v, want v1 route %+v", conditioned, v1)
+	}
+	if !strings.Contains(conditioned.String(), "no history for lane lane-new and model model-new; using v1 policy") {
+		t.Fatalf("decision does not print safe default:\n%s", conditioned.String())
+	}
+}
+
+func TestClassifyUnreadableHistoryEscalatesToStrictestTier(t *testing.T) {
+	t.Parallel()
+
+	decision, err := risk.Classify(risk.ChangeSet{
+		Branch:        "docs/update",
+		DefaultBranch: "main",
+		Files:         []risk.FileChange{{Path: "README.md", Status: risk.Modified, Added: 1, Deleted: 1}},
+	}, risk.Config{
+		ProvenanceStore: historyReader{err: errors.New("malformed history")},
+		AgentLaneID:     "lane-x",
+		Model:           "model-a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Tier != risk.TierFullAdversarial {
+		t.Fatalf("decision = %+v, want strictest tier", decision)
+	}
+	if !strings.Contains(decision.String(), "history could not be read") || !strings.Contains(decision.String(), "escalating to full-adversarial") {
+		t.Fatalf("decision does not print fail-closed rationale:\n%s", decision.String())
+	}
+}
+
+func recordsReader(records []provenance.Record) historyReader {
+	return historyReader{records: records}
 }

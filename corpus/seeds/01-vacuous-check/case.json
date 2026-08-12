@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "vacuous-check-self-comparison",
+  "description": "A protective comparison is changed to compare one value with itself.",
+  "expected_findings": [
+    {
+      "lens": "vacuous-check",
+      "path": "guard.go",
+      "line": 8,
+      "description": "the guard can no longer disagree with the observed value"
+    }
+  ]
+}

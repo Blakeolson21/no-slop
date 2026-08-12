@@ -15,9 +15,11 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/git"
+	"github.com/kunchenguid/no-mistakes/internal/slop/corpus"
 	"github.com/kunchenguid/no-mistakes/internal/slop/engine"
 	"github.com/kunchenguid/no-mistakes/internal/slop/leakscan"
 	"github.com/kunchenguid/no-mistakes/internal/slop/prose"
+	"github.com/kunchenguid/no-mistakes/internal/slop/provenance"
 	"github.com/kunchenguid/no-mistakes/internal/slop/risk"
 )
 
@@ -26,12 +28,20 @@ type Options struct {
 	ReviewerFactory func(context.Context, *config.Config, io.Writer) (engine.Reviewer, io.Closer, error)
 	TestRunner      engine.TestRunner
 	ThreadReader    prose.ThreadReader
+	ProvenanceStore provenance.Store
 }
 
 // Run executes the noslop command and returns its process exit code.
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer, opts Options) int {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
 		writeUsage(stdout)
+		return 0
+	}
+	if args[0] == "evaluate" {
+		if err := runEvaluate(args[1:], stdout, stderr); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
 		return 0
 	}
 	if args[0] != "gate" {
@@ -50,6 +60,47 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, opts Opti
 	return 0
 }
 
+func runEvaluate(args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("evaluate", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	corpusRoot := flags.String("corpus", "", "directory containing recorded corpus cases")
+	unconditionedPath := flags.String("unconditioned-results", "", "captured unconditioned policy findings")
+	conditionedPath := flags.String("conditioned-results", "", "captured conditioned policy findings")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("evaluate takes no positional arguments")
+	}
+	if strings.TrimSpace(*corpusRoot) == "" || strings.TrimSpace(*unconditionedPath) == "" || strings.TrimSpace(*conditionedPath) == "" {
+		return fmt.Errorf("evaluate requires --corpus, --unconditioned-results, and --conditioned-results")
+	}
+	cases, err := corpus.Load(*corpusRoot)
+	if err != nil {
+		return err
+	}
+	unconditioned, err := corpus.LoadResults(*unconditionedPath)
+	if err != nil {
+		return fmt.Errorf("load unconditioned results: %w", err)
+	}
+	conditioned, err := corpus.LoadResults(*conditionedPath)
+	if err != nil {
+		return fmt.Errorf("load conditioned results: %w", err)
+	}
+	comparison, err := corpus.Compare(cases, unconditioned, conditioned)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "unconditioned: found %d, missed %d, false-positive %d\n", comparison.Unconditioned.Found, comparison.Unconditioned.Missed, comparison.Unconditioned.FalsePositive)
+	fmt.Fprintf(stdout, "conditioned: found %d, missed %d, false-positive %d\n", comparison.Conditioned.Found, comparison.Conditioned.Missed, comparison.Conditioned.FalsePositive)
+	fmt.Fprintf(stdout, "delta: found %+d, missed %+d, false-positive %+d\n",
+		comparison.Conditioned.Found-comparison.Unconditioned.Found,
+		comparison.Conditioned.Missed-comparison.Unconditioned.Missed,
+		comparison.Conditioned.FalsePositive-comparison.Unconditioned.FalsePositive,
+	)
+	return nil
+}
+
 type gateVerdictError struct{}
 
 func (*gateVerdictError) Error() string { return "gate failed" }
@@ -63,6 +114,11 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 	tier := flags.String("tier", "auto", "validation tier: auto, leak-scan-only, single-review, full-adversarial")
 	thread := flags.String("thread", "", "GitHub issue or pull request URL for outbound text")
 	blocklist := flags.String("blocklist", "", "private-name blocklist file override")
+	provider := flags.String("provider", "", "generating agent provider")
+	model := flags.String("model", "", "generating model")
+	reasoningEffort := flags.String("reasoning-effort", "", "generating model reasoning effort")
+	laneID := flags.String("lane-id", "", "generating agent lane identifier")
+	changeClass := flags.String("change-class", "", "change class recorded with provenance")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -120,6 +176,9 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 	if tierOverride == "auto" {
 		tierOverride = ""
 	}
+	if opts.ProvenanceStore == nil {
+		opts.ProvenanceStore = provenance.NewFileStore(resolveDataDir(workDir, cfg.Slop.DataDir))
+	}
 	input := engine.Input{
 		WorkDir:       workDir,
 		Branch:        branch,
@@ -132,6 +191,9 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 				SingleReviewThreshold: cfg.Slop.Risk.SingleReviewThreshold,
 				FullReviewThreshold:   cfg.Slop.Risk.FullAdversarialThreshold,
 				HighRiskPaths:         cfg.Slop.Risk.HighRiskPaths,
+				ProvenanceStore:       opts.ProvenanceStore,
+				AgentLaneID:           strings.TrimSpace(*laneID),
+				Model:                 strings.TrimSpace(*model),
 			},
 			Blocklist:      blocklistEntries,
 			OutboundPaths:  cfg.Slop.Prose.OutboundPaths,
@@ -154,6 +216,7 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 		opts.ReviewerFactory = defaultReviewerFactory
 	}
 	var reviewerCloser io.Closer
+	var selectedDecision risk.Decision
 	result, err := engine.Run(ctx, input, engine.Dependencies{
 		ReviewerFactory: func(ctx context.Context) (engine.Reviewer, error) {
 			reviewer, closer, createErr := opts.ReviewerFactory(ctx, cfg, stderr)
@@ -163,6 +226,7 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 		Tests:        opts.TestRunner,
 		ThreadReader: opts.ThreadReader,
 		OnDecision: func(decision risk.Decision) {
+			selectedDecision = decision
 			fmt.Fprintln(stdout, decision.String())
 		},
 	})
@@ -170,13 +234,109 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 		defer reviewerCloser.Close()
 	}
 	if err != nil {
+		if selectedDecision.Tier != "" {
+			recordErr := opts.ProvenanceStore.Append(provenanceRecord(provenanceInput{
+				Provider:        *provider,
+				Model:           *model,
+				ReasoningEffort: *reasoningEffort,
+				LaneID:          *laneID,
+				ChangeClass:     resolvedChangeClass(*changeClass, changes),
+				ChangeID:        baseRef + ".." + headRef,
+			}, selectedDecision, engine.Result{}, "error"))
+			if recordErr != nil {
+				return errors.Join(err, fmt.Errorf("record provenance: %w", recordErr))
+			}
+		}
 		return err
+	}
+	outcome := "fail"
+	if result.Passed {
+		outcome = "pass"
+	}
+	if err := opts.ProvenanceStore.Append(provenanceRecord(provenanceInput{
+		Provider:        *provider,
+		Model:           *model,
+		ReasoningEffort: *reasoningEffort,
+		LaneID:          *laneID,
+		ChangeClass:     resolvedChangeClass(*changeClass, changes),
+		ChangeID:        baseRef + ".." + headRef,
+	}, result.Decision, result, outcome)); err != nil {
+		return fmt.Errorf("record provenance: %w", err)
 	}
 	printResult(stdout, result)
 	if !result.Passed {
 		return &gateVerdictError{}
 	}
 	return nil
+}
+
+type provenanceInput struct {
+	Provider        string
+	Model           string
+	ReasoningEffort string
+	LaneID          string
+	ChangeClass     string
+	ChangeID        string
+}
+
+func provenanceRecord(input provenanceInput, decision risk.Decision, result engine.Result, outcome string) provenance.Record {
+	byLens := make(map[string]provenance.LensFindings)
+	for _, finding := range result.Findings {
+		current := byLens[finding.Lens]
+		current.Accepted = append(current.Accepted, provenance.Finding{
+			Path:        finding.Path,
+			Line:        finding.Line,
+			Description: finding.Description,
+		})
+		if current.Rejected == nil {
+			current.Rejected = []provenance.Finding{}
+		}
+		byLens[finding.Lens] = current
+	}
+	return provenance.Record{
+		SchemaVersion:   provenance.CurrentSchemaVersion,
+		ChangeID:        input.ChangeID,
+		Provider:        input.Provider,
+		Model:           input.Model,
+		ReasoningEffort: input.ReasoningEffort,
+		AgentLaneID:     input.LaneID,
+		ChangeClass:     input.ChangeClass,
+		SelectedTier:    string(decision.Tier),
+		FindingsByLens:  byLens,
+		Rounds:          result.ReviewRounds,
+		FixGrowth:       0,
+		Outcome:         outcome,
+	}
+}
+
+func resolveDataDir(workDir, configured string) string {
+	configured = strings.TrimSpace(configured)
+	if filepath.IsAbs(configured) {
+		return configured
+	}
+	return filepath.Join(workDir, configured)
+}
+
+func resolvedChangeClass(configured string, changes []engine.Change) string {
+	if configured = strings.TrimSpace(configured); configured != "" {
+		return configured
+	}
+	allMarkdown := true
+	allTests := true
+	for _, change := range changes {
+		path := strings.ToLower(filepath.ToSlash(change.Path))
+		extension := strings.ToLower(filepath.Ext(path))
+		allMarkdown = allMarkdown && (extension == ".md" || extension == ".mdx")
+		allTests = allTests && (strings.HasSuffix(path, "_test.go") || strings.Contains(path, ".test.") || strings.Contains(path, ".spec."))
+	}
+	switch {
+	case allMarkdown:
+		return "documentation"
+	case allTests:
+		return "tests"
+	default:
+		return "source-or-mixed"
+	}
 }
 
 func defaultReviewerFactory(ctx context.Context, cfg *config.Config, stderr io.Writer) (engine.Reviewer, io.Closer, error) {
@@ -283,5 +443,6 @@ func printResult(stdout io.Writer, result engine.Result) {
 
 func writeUsage(output io.Writer) {
 	fmt.Fprintln(output, "NoSlop is the reviewer that knows the author is an AI.")
-	fmt.Fprintln(output, "usage: noslop gate [--repo DIR] [--base REF] [--head REF] [--tier TIER] [--thread URL] [--blocklist FILE]")
+	fmt.Fprintln(output, "usage: noslop gate [--repo DIR] [--base REF] [--head REF] [--tier TIER] [--thread URL] [--blocklist FILE] [--provider NAME] [--model NAME] [--reasoning-effort LEVEL] [--lane-id ID] [--change-class CLASS]")
+	fmt.Fprintln(output, "       noslop evaluate --corpus DIR --unconditioned-results FILE --conditioned-results FILE")
 }

@@ -142,7 +142,7 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 	result := Result{Decision: decision}
 
 	result.Findings = append(result.Findings, runLeakScan(input.Files, input.Config.Blocklist)...)
-	if input.Config.TestCountFloor {
+	if input.Config.TestCountFloor || containsProbe(decision.DeterministicProbes, "test-count-floor") {
 		result.Findings = append(result.Findings, runTestFloor(input.Files)...)
 	}
 	proseFindings, err := runProseOracle(ctx, input, deps.ThreadReader)
@@ -180,7 +180,7 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 					Tier:          decision.Tier,
 					Round:         round,
 					PriorFindings: append([]Finding(nil), priorFindings...),
-					Prompt:        lenses.ReviewerPrompt(),
+					Prompt:        lenses.ReviewerPromptWithPriority(decision.PriorityLenses),
 				})
 				if reviewErr != nil {
 					return Result{}, fmt.Errorf("run slop reviewer round %q: %w", round, reviewErr)
@@ -225,6 +225,15 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 
 	result.Passed = len(result.Findings) == 0
 	return result, nil
+}
+
+func containsProbe(probes []string, target string) bool {
+	for _, probe := range probes {
+		if probe == target {
+			return true
+		}
+	}
+	return false
 }
 
 func appendUniqueFindings(existing []Finding, additions ...Finding) []Finding {

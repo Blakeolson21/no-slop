@@ -151,6 +151,7 @@ func TestLoadRepo_SlopEngineConfig(t *testing.T) {
 	t.Parallel()
 
 	cfg, err := LoadRepoFromBytes([]byte(`slop:
+  data_dir: ".review-history"
   risk:
     single_review_threshold: 4
     full_adversarial_threshold: 8
@@ -174,6 +175,9 @@ func TestLoadRepo_SlopEngineConfig(t *testing.T) {
 	}
 	if cfg.Slop.LeakScan.BlocklistFile != ".noslop-private" {
 		t.Fatalf("blocklist file = %q", cfg.Slop.LeakScan.BlocklistFile)
+	}
+	if cfg.Slop.DataDir != ".review-history" {
+		t.Fatalf("data dir = %q", cfg.Slop.DataDir)
 	}
 	if len(cfg.Slop.Prose.OutboundPaths) != 1 || cfg.Slop.Prose.OutboundPaths[0] != "outbound/**" {
 		t.Fatalf("outbound paths = %v", cfg.Slop.Prose.OutboundPaths)

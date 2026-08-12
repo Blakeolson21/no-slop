@@ -47,3 +47,23 @@ func TestCatalogDefinesEveryV1LensForReviewerPrompts(t *testing.T) {
 		t.Fatalf("test-capitulation mechanical check = %q, want test-count-floor", catalog[1].MechanicalCheck)
 	}
 }
+
+func TestReviewerPromptPrioritizesHistoryLensesWithoutDroppingCatalog(t *testing.T) {
+	t.Parallel()
+
+	prompt := lenses.ReviewerPromptWithPriority([]string{"fail-open-default", "test-capitulation"})
+	failOpen := strings.Index(prompt, "[fail-open-default]")
+	testCapitulation := strings.Index(prompt, "[test-capitulation]")
+	vacuous := strings.Index(prompt, "[vacuous-check]")
+	if failOpen < 0 || testCapitulation < 0 || vacuous < 0 {
+		t.Fatalf("prioritized prompt dropped a lens:\n%s", prompt)
+	}
+	if !(failOpen < testCapitulation && testCapitulation < vacuous) {
+		t.Fatalf("prioritized lens order is wrong:\n%s", prompt)
+	}
+	for _, name := range lenses.Names() {
+		if strings.Count(prompt, "["+name+"]") != 1 {
+			t.Fatalf("lens %q not rendered exactly once:\n%s", name, prompt)
+		}
+	}
+}

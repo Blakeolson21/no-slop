@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "asserted-followup-without-reference",
+  "description": "A comment claims tracking exists but provides no durable artifact.",
+  "expected_findings": [
+    {
+      "lens": "asserted-followup-without-artifact",
+      "path": "handler.go",
+      "line": 19,
+      "description": "the claimed follow-up has no inspectable reference"
+    }
+  ]
+}

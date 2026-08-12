@@ -96,3 +96,9 @@ The scanner checks common credential shapes, private key headers, personal home 
 A configured blocklist that cannot be read stops evaluation. Intentional fixture literals can carry `noslop:allow-leak` on the same source line. The exemption applies only to that line.
 
 NoSlop ships generic placeholder entries only. It does not ship any operator's actual hostnames, codenames, project names, or identity data.
+
+## Provenance conditioning
+
+Provenance history does not add a ninth lens. It changes the policy applied to the same catalog. When one generating lane and model accumulates three net accepted findings for a lens in its last 10 changes, NoSlop raises the tier by one level and reviews repeated lenses first. A lens with a mechanical pre-check can also enable that probe even when the static repository setting is off.
+
+No matching history preserves the unconditioned v1 route and prints that default. Unreadable or malformed history selects `full-adversarial` because the policy could not establish that a lighter tier is safe.
