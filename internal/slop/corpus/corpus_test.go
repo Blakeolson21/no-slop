@@ -44,6 +44,72 @@ func TestCompareScoresConditionedAndUnconditionedFindings(t *testing.T) {
 	}
 }
 
+func TestLoadCaseSetSelectsAnExplicitHistoricalSnapshot(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "round-four.json")
+	if err := os.WriteFile(path, []byte(`{"schema_version":1,"name":"round-four","case_ids":["case-a"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases := []corpus.Case{{ID: "case-a"}, {ID: "case-b"}}
+	selected, err := corpus.LoadCaseSet(path, cases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selected) != 1 || selected[0].ID != "case-a" {
+		t.Fatalf("selected cases = %+v, want case-a", selected)
+	}
+
+	if err := os.WriteFile(path, []byte(`{"schema_version":1,"name":"round-four","case_ids":["missing"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := corpus.LoadCaseSet(path, cases); err == nil || !strings.Contains(err.Error(), `unknown case "missing"`) {
+		t.Fatalf("unknown case error = %v", err)
+	}
+}
+
+func TestHistoricalCaseSetReplaysBaselineAndRoundFourCaptures(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join("..", "..", "..", "corpus")
+	cases, err := corpus.Load(filepath.Join(root, "seeds"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases, err = corpus.LoadCaseSet(filepath.Join(root, "case-sets", "rounds-1-through-4.json"), cases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, capture := range []struct {
+		name          string
+		found         int
+		missed        int
+		falsePositive int
+	}{
+		{name: "2026-08-12", found: 10, missed: 22},
+		{name: "2026-08-12-r4", found: 32},
+	} {
+		unconditioned, err := corpus.LoadResults(filepath.Join(root, "results", capture.name, "unconditioned.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		conditioned, err := corpus.LoadResults(filepath.Join(root, "results", capture.name, "conditioned.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		comparison, err := corpus.Compare(cases, unconditioned, conditioned)
+		if err != nil {
+			t.Fatalf("replay %s: %v", capture.name, err)
+		}
+		for _, score := range []corpus.Score{comparison.Unconditioned, comparison.Conditioned} {
+			if score.Found != capture.found || score.Missed != capture.missed || score.FalsePositive != capture.falsePositive {
+				t.Fatalf("replay %s score = %+v, want found %d, missed %d, false-positive %d", capture.name, score, capture.found, capture.missed, capture.falsePositive)
+			}
+		}
+	}
+}
+
 func TestLoadRequiresRecordedDiff(t *testing.T) {
 	t.Parallel()
 

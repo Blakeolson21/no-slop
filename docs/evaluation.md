@@ -99,7 +99,7 @@ The public corpus contains 36 synthetic diffs:
 - 1 clean negative constraint-comment case
 - 16 `single-review`, 8 `full-adversarial`, and 12 `leak-scan-only` cases
 
-Every `case.json` expectation was written from the case design before either policy ran. Round 5's expected-finding files have aggregate SHA-256 `c0e10a220825260a27652d9cf338fc4424199194c5a69e4ab91769f3e104a88c`; its campaign manifest is `da1cdba971a975d32273feebfd06d216d9b508cea57b9c57371e8766c0f301a9`. The clean negative declares an explicit empty expectation array rather than omitting expectations.
+Every `case.json` expectation was written from the case design before either policy ran. Round 5's capture-time expected-finding files had aggregate SHA-256 `c0e10a220825260a27652d9cf338fc4424199194c5a69e4ab91769f3e104a88c`; review later clarified one diagnostic without changing its match key, and the current aggregate is `c8ffbabc7fefc4632deca4977c1685fa6022966a76018b8dc3b6f54e06c84639`. Its campaign manifest is `da1cdba971a975d32273feebfd06d216d9b508cea57b9c57371e8766c0f301a9`. The clean negative declares an explicit empty expectation array rather than omitting expectations.
 
 The unconditioned policy applies the complete taxonomy with no history-selected priority. It uses one reviewer round for `single-review` and two linked rounds for `full-adversarial`. The conditioned policy supplies the case lens as repeated provenance, reviews it first, and raises `single-review` to two linked rounds. `full-adversarial` remains two rounds. The baseline policy files had aggregate SHA-256 `38ea6194194aef6e3a7e5cba755766408df1840e88b6022d61615fa99f3cb9d0`. Round 4 sharpened case-driven reviewer guidance without changing the policy shape; those policy files had aggregate SHA-256 `fa6a54fb8aa653fa5aefe6f8dd5065cc3bdfd85dd9e4012cafff43d89d05c06f`. Round 5 added the `redundant-comment` lens line to both policy files; the capture policy files had aggregate SHA-256 `b6e14aaf4c8d4222e5869c84715be863308bfaa31b6458bf7bdaf9b1201d120f`. Review subsequently clarified that naming a declaration is conventional and only comments adding no other information are redundant. The current policy files, hashed as `cat corpus/policies/*.md | shasum -a 256`, have aggregate SHA-256 `7c92aa28aaa728513730ac66e00c701dc556b673633df6303f4498bec0fb8bac`.
 
@@ -177,6 +177,7 @@ Score the baseline captures:
 ```sh
 ./bin/noslop evaluate \
   --corpus corpus/seeds \
+  --case-set corpus/case-sets/rounds-1-through-4.json \
   --unconditioned-results corpus/results/2026-08-12/unconditioned.json \
   --conditioned-results corpus/results/2026-08-12/conditioned.json
 ```
@@ -186,6 +187,7 @@ Score the round 4 captures:
 ```sh
 ./bin/noslop evaluate \
   --corpus corpus/seeds \
+  --case-set corpus/case-sets/rounds-1-through-4.json \
   --unconditioned-results corpus/results/2026-08-12-r4/unconditioned.json \
   --conditioned-results corpus/results/2026-08-12-r4/conditioned.json
 ```
@@ -199,7 +201,7 @@ Score the round 5 captures:
   --conditioned-results corpus/results/2026-08-12-r5/conditioned.json
 ```
 
-The checked-in scorer captures are under `corpus/results/2026-08-12/` for the baseline, `corpus/results/2026-08-12-r4/` for round 4, and `corpus/results/2026-08-12-r5/` for round 5. Their matching `.run.json` files retain policy name, model, timeout, case aliases, tier, priority lens, round, raw response, error, and elapsed milliseconds for every invocation.
+The checked-in scorer captures are under `corpus/results/2026-08-12/` for the baseline, `corpus/results/2026-08-12-r4/` for round 4, and `corpus/results/2026-08-12-r5/` for round 5. The first two use the checked-in 32-case manifest, SHA-256 `df68d74bf5b978e60c43d6a2cd2ef013f7fa569228bbb88989db7377e8119fc2`, because the live corpus later expanded to 36 cases; missing cases within that explicit snapshot still fail scoring. Their matching `.run.json` files retain policy name, model, timeout, case aliases, tier, priority lens, round, raw response, error, and elapsed milliseconds for every invocation.
 
 Baseline result SHA-256 values:
 

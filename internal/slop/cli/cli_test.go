@@ -674,6 +674,37 @@ func TestRunEvaluateAttributesReplayedResultSources(t *testing.T) {
 	}
 }
 
+func TestRunEvaluateUsesExplicitHistoricalCaseSet(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeFile(t, root, "case-a/case.json", `{"schema_version":1,"id":"case-a","description":"original","expected_findings":[]}`)
+	writeFile(t, root, "case-a/change.diff", "--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n-old\n+new\n")
+	writeFile(t, root, "case-b/case.json", `{"schema_version":1,"id":"case-b","description":"later","expected_findings":[]}`)
+	writeFile(t, root, "case-b/change.diff", "--- a/b.go\n+++ b/b.go\n@@ -1 +1 @@\n-old\n+new\n")
+	writeFile(t, root, "historical.json", `{"schema_version":1,"name":"historical","case_ids":["case-a"]}`)
+	writeFile(t, root, "unconditioned.json", `{"schema_version":1,"policy":"unconditioned","cases":[{"case_id":"case-a","findings":[]}]}`)
+	writeFile(t, root, "conditioned.json", `{"schema_version":1,"policy":"conditioned","cases":[{"case_id":"case-a","findings":[]}]}`)
+
+	args := []string{
+		"evaluate",
+		"--corpus", root,
+		"--unconditioned-results", filepath.Join(root, "unconditioned.json"),
+		"--conditioned-results", filepath.Join(root, "conditioned.json"),
+	}
+	var stdout, stderr bytes.Buffer
+	if exitCode := slopcli.Run(context.Background(), args, &stdout, &stderr, slopcli.Options{}); exitCode != 2 || !strings.Contains(stderr.String(), `results are missing case "case-b"`) {
+		t.Fatalf("unselected exit = %d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
+	}
+
+	args = append(args, "--case-set", filepath.Join(root, "historical.json"))
+	stdout.Reset()
+	stderr.Reset()
+	if exitCode := slopcli.Run(context.Background(), args, &stdout, &stderr, slopcli.Options{}); exitCode != 0 {
+		t.Fatalf("selected exit = %d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
+	}
+}
+
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)

@@ -67,6 +67,12 @@ type Comparison struct {
 	Conditioned   Score
 }
 
+type CaseSet struct {
+	SchemaVersion int      `json:"schema_version"`
+	Name          string   `json:"name"`
+	CaseIDs       []string `json:"case_ids"`
+}
+
 // Load reads every immediate case directory in stable name order.
 func Load(root string) ([]Case, error) {
 	entries, err := os.ReadDir(root)
@@ -163,6 +169,50 @@ func LoadResults(path string) (Results, error) {
 		return Results{}, fmt.Errorf("load policy results: policy is required")
 	}
 	return results, nil
+}
+
+func LoadCaseSet(path string, cases []Case) ([]Case, error) {
+	encoded, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("load case set: %w", err)
+	}
+	var set CaseSet
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&set); err != nil {
+		return nil, fmt.Errorf("load case set: decode: %w", err)
+	}
+	if set.SchemaVersion != CurrentSchemaVersion {
+		return nil, fmt.Errorf("load case set: unsupported schema version %d", set.SchemaVersion)
+	}
+	if strings.TrimSpace(set.Name) == "" {
+		return nil, fmt.Errorf("load case set: name is required")
+	}
+	if len(set.CaseIDs) == 0 {
+		return nil, fmt.Errorf("load case set: case_ids is required")
+	}
+	byID := make(map[string]Case, len(cases))
+	for _, testCase := range cases {
+		byID[testCase.ID] = testCase
+	}
+	selected := make([]Case, 0, len(set.CaseIDs))
+	seen := make(map[string]bool, len(set.CaseIDs))
+	for _, id := range set.CaseIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return nil, fmt.Errorf("load case set %q: empty case id", set.Name)
+		}
+		if seen[id] {
+			return nil, fmt.Errorf("load case set %q: duplicate case %q", set.Name, id)
+		}
+		seen[id] = true
+		testCase, ok := byID[id]
+		if !ok {
+			return nil, fmt.Errorf("load case set %q: unknown case %q", set.Name, id)
+		}
+		selected = append(selected, testCase)
+	}
+	return selected, nil
 }
 
 // Compare scores captured conditioned and unconditioned policy findings.

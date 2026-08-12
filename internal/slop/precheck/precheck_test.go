@@ -374,7 +374,7 @@ func TestScanFlagsRedundantCommentShapes(t *testing.T) {
 					"}\n",
 			},
 			line:        1,
-			description: "doc comment repeats the declaration name verbatim",
+			description: "doc comment adds no information beyond the declaration name",
 		},
 		{
 			name: "phrase restated immediately within one comment",
@@ -414,7 +414,7 @@ func TestScanFlagsRedundantCommentShapes(t *testing.T) {
 					"}\n",
 			},
 			line:        1,
-			description: "doc comment repeats the declaration name verbatim",
+			description: "doc comment adds no information beyond the declaration name",
 		},
 		{
 			name: "physical line after line directive",

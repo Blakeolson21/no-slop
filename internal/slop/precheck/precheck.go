@@ -99,7 +99,7 @@ func detectRedundantComment(file File) []Finding {
 		case hasRepeatedPhrase(block.text):
 			description = "comment repeats a phrase internally"
 		case docCommentRepeatsDeclarationName(block.text, current, lexed, block.lastLine):
-			description = "doc comment repeats the declaration name verbatim"
+			description = "doc comment adds no information beyond the declaration name"
 		case commentRestatesNextCode(block.text, current, lexed, block.lastLine):
 			description = "comment restates the adjacent code"
 		}
