@@ -161,7 +161,9 @@ func TestLoadGitChangesPreservesCommentLineageBelowRenameThreshold(t *testing.T)
 		current.WriteString("}\n")
 	}
 	writeFixture(t, dir, "new.go", current.String())
+	writeFixture(t, dir, "unrelated.go", "package sample\n\n// normalize key before lookup; normalize key before lookup.\nvar unrelated = true\n")
 	gitRun(t, dir, "add", "new.go")
+	gitRun(t, dir, "add", "unrelated.go")
 	gitRun(t, dir, "commit", "-m", "rewrite and rename")
 	head := gitRun(t, dir, "rev-parse", "HEAD")
 
@@ -169,10 +171,11 @@ func TestLoadGitChangesPreservesCommentLineageBelowRenameThreshold(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(changes) != 2 {
-		t.Fatalf("changes = %+v, want distinct deletion and addition", changes)
+	if len(changes) != 3 {
+		t.Fatalf("changes = %+v, want deletion and two additions", changes)
 	}
 	var added *engine.Change
+	var precheckFiles []precheck.File
 	var riskFiles []risk.FileChange
 	for index := range changes {
 		change := &changes[index]
@@ -183,9 +186,17 @@ func TestLoadGitChangesPreservesCommentLineageBelowRenameThreshold(t *testing.T)
 			Added:        change.Added,
 			Deleted:      change.Deleted,
 		})
-		if change.Status == risk.Added {
+		if change.Status == risk.Added && change.Path == "new.go" {
 			added = change
 		}
+		precheckFiles = append(precheckFiles, precheck.File{
+			Path:                   change.Path,
+			CommentBaselinePath:    change.CommentBaselinePath,
+			AddedContent:           change.AddedContent,
+			CommentAddedContent:    change.CommentAddedContent,
+			CommentBaselineContent: change.CommentBaselineContent,
+			CurrentContent:         change.CurrentContent,
+		})
 	}
 	if added == nil || added.Path != "new.go" || added.BaselinePath != "" || added.CommentBaselinePath != "old.go" || added.Added < 500 {
 		t.Fatalf("changes = %+v, want semantic addition with comment-only lineage", changes)
@@ -197,15 +208,9 @@ func TestLoadGitChangesPreservesCommentLineageBelowRenameThreshold(t *testing.T)
 	if decision.Tier != risk.TierFullAdversarial || decision.Novelty.Score != 3 {
 		t.Fatalf("decision = %+v, want substantial addition routed full", decision)
 	}
-	if findings := precheck.Scan([]precheck.File{{
-		Path:                   added.Path,
-		CommentBaselinePath:    added.CommentBaselinePath,
-		AddedContent:           added.AddedContent,
-		CommentAddedContent:    added.CommentAddedContent,
-		CommentBaselineContent: added.CommentBaselineContent,
-		CurrentContent:         added.CurrentContent,
-	}}, ""); len(findings) != 0 {
-		t.Fatalf("low-similarity rename rescanned existing comment: %+v", findings)
+	findings := precheck.Scan(precheckFiles, "")
+	if len(findings) != 1 || findings[0].Lens != "redundant-comment" {
+		t.Fatalf("findings = %+v, want one unmatched added comment", findings)
 	}
 }
 

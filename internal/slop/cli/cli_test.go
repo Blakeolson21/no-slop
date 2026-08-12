@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -686,7 +687,7 @@ func TestRunEvaluateUsesExplicitHistoricalCaseSet(t *testing.T) {
 	writeFile(t, root, "case-a/change.diff", caseDiff)
 	writeFile(t, root, "case-b/case.json", `{"schema_version":1,"id":"case-b","description":"later","expected_findings":[]}`)
 	writeFile(t, root, "case-b/change.diff", "--- a/b.go\n+++ b/b.go\n@@ -1 +1 @@\n-old\n+new\n")
-	digest := sha256.Sum256([]byte(caseJSON + caseDiff))
+	digest := caseSetDigest("case-a", []byte(caseJSON), []byte(caseDiff))
 	writeFile(t, root, "historical.json", fmt.Sprintf(`{"schema_version":1,"name":"historical","content_sha256":"%x","case_ids":["case-a"]}`, digest))
 	writeFile(t, root, "unconditioned.json", `{"schema_version":1,"policy":"unconditioned","cases":[{"case_id":"case-a","findings":[]}]}`)
 	writeFile(t, root, "conditioned.json", `{"schema_version":1,"policy":"conditioned","cases":[{"case_id":"case-a","findings":[]}]}`)
@@ -708,6 +709,23 @@ func TestRunEvaluateUsesExplicitHistoricalCaseSet(t *testing.T) {
 	if exitCode := slopcli.Run(context.Background(), args, &stdout, &stderr, slopcli.Options{}); exitCode != 0 {
 		t.Fatalf("selected exit = %d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
 	}
+}
+
+func caseSetDigest(id string, caseJSON, diff []byte) [sha256.Size]byte {
+	var snapshot bytes.Buffer
+	writeDigestFrame(&snapshot, caseJSON)
+	writeDigestFrame(&snapshot, diff)
+	var aggregate bytes.Buffer
+	writeDigestFrame(&aggregate, []byte(id))
+	writeDigestFrame(&aggregate, snapshot.Bytes())
+	return sha256.Sum256(aggregate.Bytes())
+}
+
+func writeDigestFrame(buffer *bytes.Buffer, value []byte) {
+	var size [8]byte
+	binary.BigEndian.PutUint64(size[:], uint64(len(value)))
+	buffer.Write(size[:])
+	buffer.Write(value)
 }
 
 func runGit(t *testing.T, dir string, args ...string) string {

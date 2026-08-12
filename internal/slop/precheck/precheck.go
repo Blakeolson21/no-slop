@@ -89,9 +89,10 @@ var qualificationWords = map[string]bool{
 // scope-expansion check uses it, and it emits nothing when intent is absent.
 func Scan(files []File, intent string) []Finding {
 	var findings []Finding
+	commentBaselines := make(map[commentBaselineKey]map[string]int)
 	findings = append(findings, detectScopeExpansion(files, intent)...)
 	for _, file := range files {
-		findings = append(findings, detectRedundantComment(file)...)
+		findings = append(findings, detectRedundantComment(file, commentBaselines)...)
 		sibling := detectSiblingRule(file)
 		workaround := detectCommentDefendedWorkaround(file)
 		findings = append(findings, sibling...)
@@ -107,7 +108,12 @@ func Scan(files []File, intent string) []Finding {
 	return uniqueSorted(findings)
 }
 
-func detectRedundantComment(file File) []Finding {
+type commentBaselineKey struct {
+	path    string
+	content string
+}
+
+func detectRedundantComment(file File, sharedBaselines map[commentBaselineKey]map[string]int) []Finding {
 	var findings []Finding
 	current := splitLines(file.CurrentContent)
 	lexed, declarations := lexSource(file.Path, current)
@@ -123,7 +129,16 @@ func detectRedundantComment(file File) []Finding {
 		addedContent = file.AddedContent
 	}
 	baseline, _ := lexSource(baselinePath, splitLines(baselineContent))
-	for _, block := range commentBlocks(addedContent, lexed, baseline) {
+	var baselineComments map[string]int
+	if file.CommentBaselinePath != "" {
+		key := commentBaselineKey{path: baselinePath, content: baselineContent}
+		baselineComments = sharedBaselines[key]
+		if baselineComments == nil {
+			baselineComments = countCommentBlocks(baseline)
+			sharedBaselines[key] = baselineComments
+		}
+	}
+	for _, block := range commentBlocks(addedContent, lexed, baseline, baselineComments) {
 		description := ""
 		switch {
 		case hasRepeatedPhrase(block.text, declarations[block.lastLine]):
@@ -158,16 +173,13 @@ type commentBlock struct {
 // are sentence fragments that never document the code beneath the block. Only
 // blocks the change actually touched are returned, reported at their first
 // added line.
-func commentBlocks(addedContent string, lines, baseline []lexedSourceLine) []commentBlock {
+func commentBlocks(addedContent string, lines, baseline []lexedSourceLine, baselineComments map[string]int) []commentBlock {
 	added := make(map[int]bool)
 	for _, line := range addedContentLines(addedContent) {
 		added[line.number] = true
 	}
-	baselineComments := make(map[string]int)
-	for _, block := range allCommentBlocks(baseline) {
-		if block.text != "" {
-			baselineComments[block.text]++
-		}
+	if baselineComments == nil {
+		baselineComments = countCommentBlocks(baseline)
 	}
 	current := allCommentBlocks(lines)
 	for _, block := range current {
@@ -193,6 +205,16 @@ func commentBlocks(addedContent string, lines, baseline []lexedSourceLine) []com
 		}
 	}
 	return blocks
+}
+
+func countCommentBlocks(lines []lexedSourceLine) map[string]int {
+	counts := make(map[string]int)
+	for _, block := range allCommentBlocks(lines) {
+		if block.text != "" {
+			counts[block.text]++
+		}
+	}
+	return counts
 }
 
 func addedContentLines(content string) []sourceLine {
