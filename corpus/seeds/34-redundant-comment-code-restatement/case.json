@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "redundant-comment-code-restatement",
+  "description": "A newly added comment restates the next code line instead of adding information.",
+  "expected_findings": [
+    {
+      "lens": "redundant-comment",
+      "path": "counter.go",
+      "line": 4,
+      "description": "the comment restates the adjacent code"
+    }
+  ]
+}

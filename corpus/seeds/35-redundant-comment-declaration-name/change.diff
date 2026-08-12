@@ -1,0 +1,14 @@
+diff --git a/parser_test.go b/parser_test.go
+new file mode 100644
+index 0000000..5555555
+--- /dev/null
++++ b/parser_test.go
+@@ -0,0 +1,8 @@
++package parser
++
++import "testing"
++
++// TestRejectsEmptyInput verifies the empty-input behavior.
++func TestRejectsEmptyInput(t *testing.T) {
++	t.Fatal("fixture")
++}

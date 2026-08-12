@@ -19,6 +19,7 @@ func TestCatalogDefinesEveryV1LensForReviewerPrompts(t *testing.T) {
 		"asserted-followup-without-artifact",
 		"fail-open-default",
 		"rule-applied-in-one-place-not-sibling",
+		"redundant-comment",
 	}
 	catalog := lenses.Catalog()
 	names := lenses.Names()
@@ -80,6 +81,7 @@ func TestWorstMissedLensGuidanceNamesCorpusDecisionRules(t *testing.T) {
 		"asserted-followup-without-artifact":    {"issue number", "approval reference"},
 		"fail-open-default":                     {"nil, nil", "privileged"},
 		"rule-applied-in-one-place-not-sibling": {"versioned", "transport"},
+		"redundant-comment":                     {"repeated phrases", "function name"},
 	}
 	for _, lens := range lenses.Catalog() {
 		guidance := strings.ToLower(lens.DetectionGuidance)

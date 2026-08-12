@@ -295,6 +295,34 @@
           "Please restore the deleted replayed-nonce rejection test."
         ]
       }
+    },
+    {
+      "case_id": "redundant-comment-repeated-phrase",
+      "alias": "case-033",
+      "tier": "leak-scan-only",
+      "intent": "Keep comments limited to information the code cannot state.",
+      "conditioning_lenses": []
+    },
+    {
+      "case_id": "redundant-comment-code-restatement",
+      "alias": "case-034",
+      "tier": "leak-scan-only",
+      "intent": "Keep comments limited to information the code cannot state.",
+      "conditioning_lenses": []
+    },
+    {
+      "case_id": "redundant-comment-declaration-name",
+      "alias": "case-035",
+      "tier": "leak-scan-only",
+      "intent": "Keep comments limited to information the code cannot state.",
+      "conditioning_lenses": []
+    },
+    {
+      "case_id": "comment-genuine-constraint",
+      "alias": "case-036",
+      "tier": "leak-scan-only",
+      "intent": "Preserve comments that record constraints the code cannot express.",
+      "conditioning_lenses": []
     }
   ]
 }

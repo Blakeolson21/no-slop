@@ -7,7 +7,7 @@ Each directory under `seeds/` contains:
 - `change.diff`: the recorded change presented to a review policy.
 - `case.json`: schema version 1 metadata and independently expected findings.
 
-The campaign contains 32 synthetic cases: three per reviewer lens, four leak cases, and four stale outbound-prose cases. Expected findings match on lens, path, and line. An expected line of `0` matches any line in that path.
+The campaign contains 36 synthetic cases: three positive cases per reviewer lens, four leak cases, four stale outbound-prose cases, and one clean constraint-comment negative. Expected findings match on lens, path, and line. An expected line of `0` matches any line in that path. Clean negatives declare an explicit empty `expected_findings` array.
 
 `campaign.json` fixes each case's alias, intent, tier, conditioning input, and optional thread fixture. `policies/` contains the conditioned, unconditioned, and challenge policies. `results/2026-08-12/` preserves the 10-found/22-missed baseline, while `results/2026-08-12-r4/` preserves the 32-found/0-missed round 4 capture. Both directories contain scorer inputs plus raw invocation and latency records. [The measured report](../docs/evaluation.md) keeps the before/after protocol, full result tables, failures, and limitations.
 

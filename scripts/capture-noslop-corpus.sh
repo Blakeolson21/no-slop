@@ -68,6 +68,7 @@ lenses=(
   asserted-followup-without-artifact
   fail-open-default
   rule-applied-in-one-place-not-sibling
+  redundant-comment
 )
 
 for lens in "${lenses[@]}"; do
@@ -145,7 +146,7 @@ for lens in "${lenses[@]}"; do
       fi
       if ! jq -e --slurpfile packet "$packet" '
         all(.findings[]; (.case_id as $id | any($packet[0][]; .alias == $id))) and
-        all(.findings[]; .lens == "vacuous-check" or .lens == "test-capitulation" or .lens == "self-consistent-oracle" or .lens == "comment-defended-workaround" or .lens == "scope-expansion" or .lens == "asserted-followup-without-artifact" or .lens == "fail-open-default" or .lens == "rule-applied-in-one-place-not-sibling")
+        all(.findings[]; .lens == "vacuous-check" or .lens == "test-capitulation" or .lens == "self-consistent-oracle" or .lens == "comment-defended-workaround" or .lens == "scope-expansion" or .lens == "asserted-followup-without-artifact" or .lens == "fail-open-default" or .lens == "rule-applied-in-one-place-not-sibling" or .lens == "redundant-comment")
       ' >/dev/null <<<"$structured"; then
         echo "output used an unknown case alias or finding lens" >&2
         echo "$raw" >&2

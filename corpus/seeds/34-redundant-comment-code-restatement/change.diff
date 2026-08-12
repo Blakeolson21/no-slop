@@ -1,0 +1,13 @@
+diff --git a/counter.go b/counter.go
+new file mode 100644
+index 0000000..4444444
+--- /dev/null
++++ b/counter.go
+@@ -0,0 +1,7 @@
++package counter
++
++func advance(i int) int {
++	// increment i
++	i += 1
++	return i
++}

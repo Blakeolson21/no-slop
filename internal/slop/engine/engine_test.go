@@ -170,6 +170,37 @@ func TestRunLensPrecheckStillRunsUnderLightOverride(t *testing.T) {
 	}
 }
 
+func TestRunRedundantCommentCheckUsesOnlyAddedCommentsAtLightestTier(t *testing.T) {
+	t.Parallel()
+
+	result, err := engine.Run(context.Background(), engine.Input{
+		WorkDir:       t.TempDir(),
+		Branch:        "feature/comments",
+		DefaultBranch: "main",
+		Files: []engine.Change{
+			{
+				Path:           "counter.go",
+				Status:         risk.Modified,
+				AddedContent:   "\n// increment i\n\n\n",
+				CurrentContent: "func advance(i int) int {\n\t// increment i\n\ti += 1\n\treturn i\n}\n",
+			},
+			{
+				Path:           "legacy.go",
+				Status:         risk.Modified,
+				AddedContent:   "\nreturn value\n",
+				CurrentContent: "// return value\nreturn value\n",
+			},
+		},
+		Config: engine.Config{TierOverride: risk.TierLeakScanOnly},
+	}, engine.Dependencies{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Passed || len(result.Findings) != 1 || result.Findings[0].Lens != "redundant-comment" || result.Findings[0].Path != "counter.go" {
+		t.Fatalf("result = %+v, want only the added redundant comment", result)
+	}
+}
+
 func TestRunDeduplicatesReviewerFindingAlreadyCaughtMechanically(t *testing.T) {
 	t.Parallel()
 

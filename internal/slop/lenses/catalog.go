@@ -65,6 +65,12 @@ func Catalog() []Lens {
 			DetectionGuidance: "Find sibling adapters, handlers, versioned routes, formats, platforms, transports, and state transitions that enforce the same invariant. Compare strict and permissive branches explicitly; verify the rule lives at the earliest shared owner or is deliberately and completely repeated.",
 			MechanicalCheck:   "contradictory-sibling-branches",
 		},
+		{
+			Name:              "redundant-comment",
+			Description:       "A comment repeats itself or says only what the adjacent code already states.",
+			DetectionGuidance: "A comment should state only what the code cannot. Flag repeated phrases within one comment, comments whose words restate the next code line, and doc comments that repeat the test or function name verbatim.",
+			MechanicalCheck:   "added-comment-redundancy",
+		},
 	}
 }
 

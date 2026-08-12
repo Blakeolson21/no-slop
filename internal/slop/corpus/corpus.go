@@ -116,8 +116,8 @@ func Load(root string) ([]Case, error) {
 			return nil, fmt.Errorf("load corpus case %q: duplicate id %q", entry.Name(), testCase.ID)
 		}
 		seenIDs[testCase.ID] = true
-		if len(testCase.ExpectedFindings) == 0 {
-			return nil, fmt.Errorf("load corpus case %q: expected_findings must not be empty", entry.Name())
+		if testCase.ExpectedFindings == nil {
+			return nil, fmt.Errorf("load corpus case %q: expected_findings is required", entry.Name())
 		}
 		for _, finding := range testCase.ExpectedFindings {
 			if !knownLenses[finding.Lens] {

@@ -219,8 +219,8 @@ func TestReplayMandatoryChecksMatchEverySeedWithoutExtras(t *testing.T) {
 		t.Fatal(err)
 	}
 	score := comparison.Unconditioned
-	if score.Found != 32 || score.Missed != 0 || score.FalsePositive != 0 {
-		t.Fatalf("mechanical corpus score = found %d, missed %d, false-positive %d; want 32, 0, 0", score.Found, score.Missed, score.FalsePositive)
+	if score.Found != 35 || score.Missed != 0 || score.FalsePositive != 0 {
+		t.Fatalf("mechanical corpus score = found %d, missed %d, false-positive %d; want 35, 0, 0", score.Found, score.Missed, score.FalsePositive)
 	}
 }
 
@@ -243,6 +243,7 @@ func TestCampaignPoliciesCarryRoundFourDecisionRules(t *testing.T) {
 			"approval reference",
 			"privileged objects returned",
 			"versioned routes",
+			"a comment should state only what the code cannot",
 		} {
 			if !strings.Contains(policy, decisionRule) {
 				t.Errorf("%s is missing decision rule %q", name, decisionRule)

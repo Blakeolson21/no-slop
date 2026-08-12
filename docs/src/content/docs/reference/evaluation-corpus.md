@@ -3,12 +3,12 @@ title: NoSlop Evaluation Corpus
 description: Replay format and scoring for conditioned and unconditioned policy findings.
 ---
 
-The NoSlop corpus stores recorded diffs with independent expected findings. The current public campaign has 32 synthetic cases covering every reviewer lens plus deterministic leak and stale outbound-prose checks. The checked-in `2026-08-12` baseline found 10 and missed 22; the `2026-08-12-r4` capture found all 32 after adding shared deterministic lens pre-checks. No case or expectation changed between those captures. Each directory under `corpus/seeds/` contains:
+The NoSlop corpus stores recorded diffs with independent expectations. The current public campaign has 36 synthetic cases covering every reviewer lens plus deterministic leak and stale outbound-prose checks. Three positive cases exercise the `redundant-comment` subclasses, and one clean negative case preserves a genuine constraint comment. The checked-in `2026-08-12` baseline found 10 and missed 22; the `2026-08-12-r4` capture found all 32 original expectations after adding shared deterministic lens pre-checks. Each directory under `corpus/seeds/` contains:
 
 - `change.diff`: the recorded change presented to a review policy.
 - `case.json`: schema version 1 metadata and expected findings.
 
-Expected findings match on lens, path, and line. An expected line of `0` matches any line in that path. `corpus/campaign.json` records the fixed alias, intent, tier, conditioning input, and optional thread fixture for each case. The policy prompts and raw dated captures live alongside the cases under `corpus/`.
+Expected findings match on lens, path, and line. An expected line of `0` matches any line in that path. A clean negative case states its expectation first as an explicit empty `expected_findings` array; omitting the field is invalid. `corpus/campaign.json` records the fixed alias, intent, tier, conditioning input, and optional thread fixture for each case. The policy prompts and raw dated captures live alongside the cases under `corpus/`.
 
 Policy result files use this shape:
 

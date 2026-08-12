@@ -87,6 +87,16 @@ Reviewer guidance: Find explicit/configured paths, transports, providers, platfo
 
 Mechanical pre-check: Detect an explicit path failing beside a configured path returning empty success, one transport denying beside another allowing, and one versioned route gaining validation while its equivalent sibling remains unvalidated.
 
+## Redundant comment
+
+Name: `redundant-comment`
+
+Description: A comment repeats itself or says only what the adjacent code already states.
+
+Reviewer guidance: A comment should state only what the code cannot. Flag repeated phrases within one comment, comments whose words merely restate the next code line, and doc comments that repeat the adjacent test or function name verbatim. Preserve comments that record genuine constraints, rationale, invariants, or external requirements that the implementation cannot express.
+
+Mechanical pre-check: On newly added comment lines, detect repeated two-to-six-word n-grams, at least 75 percent overlap between meaningful comment words and the next non-comment code line, and verbatim test or function names in an adjacent doc comment. Operator normalization treats increment and decrement wording as equivalent to their compound-assignment forms. Existing comments are not scanned merely because adjacent code changed.
+
 ## Mandatory leak and identity scan
 
 The leak and identity scan is an artifact-wide mechanical check, not a reviewer-only lens. It runs at every tier before any optional reviewer or test command.
@@ -101,6 +111,6 @@ NoSlop ships generic placeholder entries only. It does not ship any operator's a
 
 ## Provenance conditioning
 
-Provenance history does not add a ninth lens. It changes the policy applied to the same catalog. When one generating lane and model accumulates three net accepted findings for a lens in its last 10 changes, NoSlop raises the tier by one level and reviews repeated lenses first. Repeated `test-capitulation` findings can also enable the configurable test-count floor when its static repository setting is off; the other conservative lens pre-checks always run.
+Provenance history does not add another lens. It changes the policy applied to the same catalog. When one generating lane and model accumulates three net accepted findings for a lens in its last 10 changes, NoSlop raises the tier by one level and reviews repeated lenses first. Repeated `test-capitulation` findings can also enable the configurable test-count floor when its static repository setting is off; the other conservative lens pre-checks always run.
 
 No matching history preserves the unconditioned v1 route and prints that default. Unreadable or malformed history selects `full-adversarial` because the policy could not establish that a lighter tier is safe. A lower `--tier` that contradicts provenance is refused unless the operator also supplies `--force-tier`; the output prints both the escalation and any forced override.

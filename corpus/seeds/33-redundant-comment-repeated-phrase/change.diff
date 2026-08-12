@@ -1,0 +1,12 @@
+diff --git a/cache.go b/cache.go
+new file mode 100644
+index 0000000..3333333
+--- /dev/null
++++ b/cache.go
+@@ -0,0 +1,6 @@
++package cache
++
++// normalizeKey removes ASCII padding before lookup; removes ASCII padding before lookup.
++func normalizeKey(value string) string {
++	return value
++}

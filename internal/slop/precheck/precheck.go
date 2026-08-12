@@ -40,6 +40,7 @@ var (
 	versionPathPattern  = regexp.MustCompile(`["']/v([0-9]+)/([^"']+)["']`)
 	durableReference    = regexp.MustCompile(`(?i)(https?://|#[0-9]+\b|\b[A-Z][A-Z0-9]+-[0-9]+\b|\b(?:issue|ticket|approval)\s+(?:id|ref(?:erence)?)\s*[:#]?\s*[A-Za-z0-9-]+)`)
 	errorContextPattern = regexp.MustCompile(`(?i)\berr(?:or)?s?\b|deadlineexceeded|timeout|unreadable|notexist`)
+	declarationPattern  = regexp.MustCompile(`^(?:func|function|def)\s+([A-Za-z_][A-Za-z0-9_]*)\b`)
 )
 
 // Scan runs every conservative lens pre-check. Intent is optional; only the
@@ -48,6 +49,7 @@ func Scan(files []File, intent string) []Finding {
 	var findings []Finding
 	findings = append(findings, detectScopeExpansion(files, intent)...)
 	for _, file := range files {
+		findings = append(findings, detectRedundantComment(file)...)
 		sibling := detectSiblingRule(file)
 		workaround := detectCommentDefendedWorkaround(file)
 		findings = append(findings, sibling...)
@@ -61,6 +63,134 @@ func Scan(files []File, intent string) []Finding {
 		}
 	}
 	return uniqueSorted(findings)
+}
+
+func detectRedundantComment(file File) []Finding {
+	current := splitLines(file.CurrentContent)
+	var findings []Finding
+	for _, line := range addedLines(file) {
+		comment, ok := commentText(line.text)
+		if !ok {
+			continue
+		}
+		description := ""
+		switch {
+		case hasRepeatedPhrase(comment):
+			description = "comment repeats a phrase internally"
+		case docCommentRepeatsDeclarationName(comment, current, line.number):
+			description = "doc comment repeats the declaration name verbatim"
+		case commentRestatesNextCode(comment, current, line.number):
+			description = "comment restates the adjacent code"
+		}
+		if description != "" {
+			findings = append(findings, Finding{
+				Lens:        "redundant-comment",
+				Path:        file.Path,
+				Line:        line.number,
+				Description: description,
+			})
+		}
+	}
+	return findings
+}
+
+func docCommentRepeatsDeclarationName(comment string, lines []string, after int) bool {
+	declaration := nextCodeLine(lines, after)
+	match := declarationPattern.FindStringSubmatch(strings.TrimSpace(declaration))
+	if match == nil {
+		return false
+	}
+	return regexp.MustCompile(`\b` + regexp.QuoteMeta(match[1]) + `\b`).MatchString(comment)
+}
+
+func commentRestatesNextCode(comment string, lines []string, after int) bool {
+	code := nextCodeLine(lines, after)
+	if code == "" || isDeclaration(code) {
+		return false
+	}
+	commentWords := meaningfulWords(comment)
+	if len(commentWords) < 2 {
+		return false
+	}
+	codeWords := make(map[string]bool)
+	for _, word := range wordTokens(code) {
+		codeWords[word] = true
+	}
+	compact := strings.Join(strings.Fields(code), "")
+	if strings.Contains(compact, "++") || strings.Contains(compact, "+=") {
+		codeWords["increment"] = true
+	}
+	if strings.Contains(compact, "--") || strings.Contains(compact, "-=") {
+		codeWords["decrement"] = true
+	}
+	overlap := 0
+	for _, word := range commentWords {
+		if codeWords[word] {
+			overlap++
+		}
+	}
+	return float64(overlap)/float64(len(commentWords)) >= 0.75
+}
+
+func nextCodeLine(lines []string, after int) string {
+	for number := after + 1; number <= len(lines); number++ {
+		candidate := strings.TrimSpace(lines[number-1])
+		if candidate != "" && !isComment(candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func isDeclaration(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	return declarationPattern.MatchString(trimmed) || regexp.MustCompile(`^(?:class|type)\b`).MatchString(trimmed)
+}
+
+func meaningfulWords(value string) []string {
+	stop := map[string]bool{
+		"a": true, "an": true, "and": true, "as": true, "the": true,
+		"this": true, "to": true, "we": true,
+	}
+	var result []string
+	for _, word := range wordTokens(value) {
+		if !stop[word] {
+			result = append(result, word)
+		}
+	}
+	return result
+}
+
+func commentText(value string) (string, bool) {
+	trimmed := strings.TrimSpace(value)
+	for _, prefix := range []string{"//", "#", "--", "/*", "*"} {
+		if strings.HasPrefix(trimmed, prefix) {
+			comment := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, prefix), "*/"))
+			return comment, comment != ""
+		}
+	}
+	return "", false
+}
+
+func hasRepeatedPhrase(comment string) bool {
+	words := wordTokens(comment)
+	for width := 2; width <= 6 && width*2 <= len(words); width++ {
+		seen := make(map[string]bool)
+		for start := 0; start+width <= len(words); start++ {
+			phrase := strings.Join(words[start:start+width], " ")
+			if seen[phrase] {
+				return true
+			}
+			seen[phrase] = true
+		}
+	}
+	return false
+}
+
+func wordTokens(value string) []string {
+	return strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_'
+	})
 }
 
 func detectVacuousCheck(file File) []Finding {

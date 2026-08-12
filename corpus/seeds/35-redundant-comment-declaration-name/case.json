@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "redundant-comment-declaration-name",
+  "description": "A newly added doc comment repeats the adjacent test name verbatim.",
+  "expected_findings": [
+    {
+      "lens": "redundant-comment",
+      "path": "parser_test.go",
+      "line": 5,
+      "description": "the doc comment repeats the declaration name verbatim"
+    }
+  ]
+}
