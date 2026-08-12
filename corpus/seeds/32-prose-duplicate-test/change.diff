@@ -1,0 +1,7 @@
+diff --git a/outbound/review.md b/outbound/review.md
+new file mode 100644
+index 0000000..2222222
+--- /dev/null
++++ b/outbound/review.md
+@@ -0,0 +1 @@
++Please restore the deleted replayed-nonce rejection test.

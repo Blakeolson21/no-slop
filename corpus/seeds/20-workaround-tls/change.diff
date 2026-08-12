@@ -1,0 +1,11 @@
+diff --git a/.github/scripts/publish.go b/.github/scripts/publish.go
+index 1111111..2222222 100644
+--- a/.github/scripts/publish.go
++++ b/.github/scripts/publish.go
+@@ -17,7 +17,10 @@ func publishClient() *http.Client {
+ 	transport := http.DefaultTransport.(*http.Transport).Clone()
++	// The release endpoint sometimes rotates certificates before runners learn
++	// the new chain. Publishing is time-sensitive, so bypass verification.
++	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+ 	return &http.Client{Transport: transport}
+ }

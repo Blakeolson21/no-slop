@@ -43,8 +43,8 @@ func TestCatalogDefinesEveryV1LensForReviewerPrompts(t *testing.T) {
 		}
 	}
 
-	if catalog[1].MechanicalCheck != "test-count-floor" {
-		t.Fatalf("test-capitulation mechanical check = %q, want test-count-floor", catalog[1].MechanicalCheck)
+	if catalog[1].MechanicalCheck != "test-count-and-tolerance" {
+		t.Fatalf("test-capitulation mechanical check = %q, want test-count-and-tolerance", catalog[1].MechanicalCheck)
 	}
 }
 
@@ -64,6 +64,32 @@ func TestReviewerPromptPrioritizesHistoryLensesWithoutDroppingCatalog(t *testing
 	for _, name := range lenses.Names() {
 		if strings.Count(prompt, "["+name+"]") != 1 {
 			t.Fatalf("lens %q not rendered exactly once:\n%s", name, prompt)
+		}
+	}
+}
+
+func TestWorstMissedLensGuidanceNamesCorpusDecisionRules(t *testing.T) {
+	t.Parallel()
+
+	want := map[string][]string{
+		"vacuous-check":                         {"post-mutation", "same expression"},
+		"test-capitulation":                     {"numeric tolerance", "larger threshold"},
+		"self-consistent-oracle":                {"literal", "production helper"},
+		"comment-defended-workaround":           {"permissive return", "security bypass"},
+		"scope-expansion":                       {"new file", "intent"},
+		"asserted-followup-without-artifact":    {"issue number", "approval reference"},
+		"fail-open-default":                     {"nil, nil", "privileged"},
+		"rule-applied-in-one-place-not-sibling": {"versioned", "transport"},
+	}
+	for _, lens := range lenses.Catalog() {
+		guidance := strings.ToLower(lens.DetectionGuidance)
+		for _, fragment := range want[lens.Name] {
+			if !strings.Contains(guidance, fragment) {
+				t.Errorf("lens %q guidance is missing %q: %s", lens.Name, fragment, lens.DetectionGuidance)
+			}
+		}
+		if strings.TrimSpace(lens.MechanicalCheck) == "" {
+			t.Errorf("lens %q does not name its mechanical pre-check", lens.Name)
 		}
 	}
 }

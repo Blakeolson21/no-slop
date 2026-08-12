@@ -1,0 +1,358 @@
+{
+  "schema_version": 1,
+  "policy": "unconditioned",
+  "cases": [
+    {
+      "case_id": "asserted-followup-security-exception-without-reference",
+      "findings": [
+        {
+          "lens": "asserted-followup-without-artifact",
+          "path": "internal/security/headers.go",
+          "line": 76,
+          "description": "follow-up or approval is asserted without an issue, ticket, URL, or approval reference"
+        }
+      ]
+    },
+    {
+      "case_id": "asserted-followup-ticket-without-id",
+      "findings": [
+        {
+          "lens": "asserted-followup-without-artifact",
+          "path": "session.go",
+          "line": 55,
+          "description": "follow-up or approval is asserted without an issue, ticket, URL, or approval reference"
+        }
+      ]
+    },
+    {
+      "case_id": "asserted-followup-without-reference",
+      "findings": [
+        {
+          "lens": "asserted-followup-without-artifact",
+          "path": "handler.go",
+          "line": 19,
+          "description": "follow-up or approval is asserted without an issue, ticket, URL, or approval reference"
+        }
+      ]
+    },
+    {
+      "case_id": "comment-defended-workaround-permissive-fallback",
+      "findings": [
+        {
+          "lens": "comment-defended-workaround",
+          "path": "policy.go",
+          "line": 14,
+          "description": "a justification comment accompanies a permissive return or security bypass"
+        }
+      ]
+    },
+    {
+      "case_id": "comment-defended-workaround-stale-cache",
+      "findings": [
+        {
+          "lens": "comment-defended-workaround",
+          "path": "roles.go",
+          "line": 42,
+          "description": "a justification comment accompanies a permissive return or security bypass"
+        }
+      ]
+    },
+    {
+      "case_id": "comment-defended-workaround-tls-bypass",
+      "findings": [
+        {
+          "lens": "comment-defended-workaround",
+          "path": ".github/scripts/publish.go",
+          "line": 21,
+          "description": "a justification comment accompanies a permissive return or security bypass"
+        }
+      ]
+    },
+    {
+      "case_id": "fail-open-default-missing-blocklist",
+      "findings": [
+        {
+          "lens": "fail-open-default",
+          "path": "blocklist.go",
+          "line": 24,
+          "description": "an error, timeout, or unreadable state becomes a permissive result"
+        }
+      ]
+    },
+    {
+      "case_id": "fail-open-default-permission-read-error",
+      "findings": [
+        {
+          "lens": "fail-open-default",
+          "path": "internal/auth/permissions.go",
+          "line": 39,
+          "description": "an error, timeout, or unreadable state becomes a permissive result"
+        }
+      ]
+    },
+    {
+      "case_id": "fail-open-default-timeout-healthy",
+      "findings": [
+        {
+          "lens": "fail-open-default",
+          "path": "health.go",
+          "line": 29,
+          "description": "an error, timeout, or unreadable state becomes a permissive result"
+        }
+      ]
+    },
+    {
+      "case_id": "leak-credential-assignment-api-key",
+      "findings": [
+        {
+          "lens": "leak-identity-scan",
+          "path": "examples/client.conf",
+          "line": 2,
+          "description": "possible credential assignment shape"
+        }
+      ]
+    },
+    {
+      "case_id": "leak-credential-assignment-password",
+      "findings": [
+        {
+          "lens": "leak-identity-scan",
+          "path": "deploy/sample.env",
+          "line": 1,
+          "description": "possible credential assignment shape"
+        }
+      ]
+    },
+    {
+      "case_id": "leak-personal-home-path",
+      "findings": [
+        {
+          "lens": "leak-identity-scan",
+          "path": "scripts/run.sh",
+          "line": 3,
+          "description": "possible personal home path"
+        }
+      ]
+    },
+    {
+      "case_id": "leak-private-key-header",
+      "findings": [
+        {
+          "lens": "leak-identity-scan",
+          "path": "fixtures/key.txt",
+          "line": 1,
+          "description": "possible private key shape"
+        }
+      ]
+    },
+    {
+      "case_id": "prose-stale-closed-issue",
+      "findings": [
+        {
+          "lens": "thread-closed",
+          "path": "",
+          "line": 0,
+          "description": "target issue or pull request is not open"
+        }
+      ]
+    },
+    {
+      "case_id": "prose-stale-closed-pull-request",
+      "findings": [
+        {
+          "lens": "thread-closed",
+          "path": "",
+          "line": 0,
+          "description": "target issue or pull request is not open"
+        }
+      ]
+    },
+    {
+      "case_id": "prose-stale-duplicate-claim",
+      "findings": [
+        {
+          "lens": "duplicate-claim",
+          "path": "outbound/comment.md",
+          "line": 0,
+          "description": "an existing comment already makes substantially the same claim"
+        }
+      ]
+    },
+    {
+      "case_id": "prose-stale-duplicate-test-point",
+      "findings": [
+        {
+          "lens": "duplicate-claim",
+          "path": "outbound/review.md",
+          "line": 0,
+          "description": "an existing comment already makes substantially the same claim"
+        }
+      ]
+    },
+    {
+      "case_id": "scope-expansion-unrequested-audit-schema",
+      "findings": [
+        {
+          "lens": "scope-expansion",
+          "path": "migrations/042_audit_events.sql",
+          "line": 1,
+          "description": "new runtime or schema file exceeds the stated intent"
+        }
+      ]
+    },
+    {
+      "case_id": "scope-expansion-unrequested-dashboard",
+      "findings": [
+        {
+          "lens": "scope-expansion",
+          "path": "deploy/dashboard.go",
+          "line": 1,
+          "description": "new runtime or schema file exceeds the stated intent"
+        }
+      ]
+    },
+    {
+      "case_id": "scope-expansion-unrequested-metrics-server",
+      "findings": [
+        {
+          "lens": "scope-expansion",
+          "path": "metrics/server.go",
+          "line": 1,
+          "description": "new runtime or schema file exceeds the stated intent"
+        }
+      ]
+    },
+    {
+      "case_id": "self-consistent-oracle-copied-formula",
+      "findings": [
+        {
+          "lens": "self-consistent-oracle",
+          "path": "price_test.go",
+          "line": 20,
+          "description": "independent literal oracle was replaced with a production-derived expression"
+        }
+      ]
+    },
+    {
+      "case_id": "self-consistent-oracle-encryption-roundtrip-only",
+      "findings": [
+        {
+          "lens": "self-consistent-oracle",
+          "path": "internal/security/cipher_test.go",
+          "line": 33,
+          "description": "independent literal oracle was replaced with a production-derived expression"
+        }
+      ]
+    },
+    {
+      "case_id": "self-consistent-oracle-production-helper",
+      "findings": [
+        {
+          "lens": "self-consistent-oracle",
+          "path": "checksum_test.go",
+          "line": 18,
+          "description": "independent literal oracle was replaced with a production-derived expression"
+        }
+      ]
+    },
+    {
+      "case_id": "sibling-rule-api-v2-unvalidated",
+      "findings": [
+        {
+          "lens": "rule-applied-in-one-place-not-sibling",
+          "path": "internal/security/routes.go",
+          "line": 88,
+          "description": "validation was added to one versioned route but not its sibling"
+        }
+      ]
+    },
+    {
+      "case_id": "sibling-rule-explicit-only",
+      "findings": [
+        {
+          "lens": "rule-applied-in-one-place-not-sibling",
+          "path": "loader.go",
+          "line": 41,
+          "description": "the configured-path branch stays permissive beside an explicit-path failure"
+        }
+      ]
+    },
+    {
+      "case_id": "sibling-rule-http-only-denial",
+      "findings": [
+        {
+          "lens": "rule-applied-in-one-place-not-sibling",
+          "path": "authorize.go",
+          "line": 52,
+          "description": "one transport branch denies the error while its sibling still allows it"
+        }
+      ]
+    },
+    {
+      "case_id": "test-capitulation-deleted-case",
+      "findings": [
+        {
+          "lens": "test-capitulation",
+          "path": "calc_test.go",
+          "line": 12,
+          "description": "test-count floor dropped from 1 to 0"
+        }
+      ]
+    },
+    {
+      "case_id": "test-capitulation-removed-replay-case",
+      "findings": [
+        {
+          "lens": "test-capitulation",
+          "path": "internal/auth/nonce_test.go",
+          "line": 44,
+          "description": "test-count floor dropped from 1 to 0"
+        }
+      ]
+    },
+    {
+      "case_id": "test-capitulation-widened-tolerance",
+      "findings": [
+        {
+          "lens": "test-capitulation",
+          "path": "money_test.go",
+          "line": 27,
+          "description": "numeric tolerance widened from 0.001 to 0.02"
+        }
+      ]
+    },
+    {
+      "case_id": "vacuous-check-auth-token-self-compare",
+      "findings": [
+        {
+          "lens": "vacuous-check",
+          "path": "internal/auth/token.go",
+          "line": 67,
+          "description": "comparison helper receives the same expression twice"
+        }
+      ]
+    },
+    {
+      "case_id": "vacuous-check-post-update-snapshot",
+      "findings": [
+        {
+          "lens": "vacuous-check",
+          "path": "cache.go",
+          "line": 34,
+          "description": "previousGeneration snapshots c.generation only after it was mutated"
+        }
+      ]
+    },
+    {
+      "case_id": "vacuous-check-self-comparison",
+      "findings": [
+        {
+          "lens": "vacuous-check",
+          "path": "guard.go",
+          "line": 8,
+          "description": "comparison uses the same expression on both sides"
+        }
+      ]
+    }
+  ]
+}

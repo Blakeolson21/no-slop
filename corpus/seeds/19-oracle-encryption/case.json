@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "self-consistent-oracle-encryption-roundtrip-only",
+  "description": "A security test replaces a standard ciphertext vector with output from the production encryptor.",
+  "expected_findings": [
+    {
+      "lens": "self-consistent-oracle",
+      "path": "internal/security/cipher_test.go",
+      "line": 33,
+      "description": "a security test replaces a standard ciphertext vector with output from the production encryptor."
+    }
+  ]
+}

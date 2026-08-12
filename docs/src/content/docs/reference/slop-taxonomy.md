@@ -13,9 +13,9 @@ Name: `vacuous-check`
 
 Description: A check looks protective but cannot disagree with the value it validates.
 
-Reviewer guidance: Trace both sides of assertions and guards to independent sources. Look for a value compared with itself, a saved value created after mutation, a copy that still shares the relevant state, or a predicate made unreachable by an earlier assignment.
+Reviewer guidance: Trace both sides of assertions and guards to independent sources. Look for the same expression on both sides, a comparison helper given identical arguments, a saved value created after mutation, a copy that still shares the relevant state, or a predicate made unreachable by an earlier assignment.
 
-Mechanical pre-check: None in v1. Syntax alone cannot reliably establish whether two expressions have independent provenance.
+Mechanical pre-check: Same-expression comparisons and comparison-helper arguments, plus previous/before snapshots assigned after their source was mutated and then compared.
 
 ## Test capitulation
 
@@ -23,9 +23,9 @@ Name: `test-capitulation`
 
 Description: Tests were changed to accept the implementation instead of preserving the required behavior.
 
-Reviewer guidance: Compare test strength with the base revision. Look for deleted cases, skipped tests, wider tolerances, weaker assertions, changed expected values without independent evidence, and coverage removed from an important branch. A passing suite is not proof when the suite became easier to pass.
+Reviewer guidance: Compare test strength with the base revision. Look for deleted cases, skipped tests, numeric tolerances changed to larger thresholds, weaker assertions, changed expected values without independent evidence, and coverage removed from an important branch. A passing suite is not proof when the suite became easier to pass.
 
-Mechanical pre-check: Test-count floor. NoSlop counts recognizable test declarations in the changed files at the base and head revisions. A lower head count blocks the gate at every tier, including an operator override, even when the configured test command passes.
+Mechanical pre-check: Test-count floor plus numeric tolerance comparison. NoSlop counts recognizable test declarations in the changed files at the base and head revisions and detects a changed `>` threshold that became numerically larger. Either finding blocks at every tier, including an operator override, even when the configured test command passes.
 
 ## Self-consistent oracle
 
@@ -33,9 +33,9 @@ Name: `self-consistent-oracle`
 
 Description: A test oracle repeats the implementation and can only confirm the same mistake twice.
 
-Reviewer guidance: Inspect expected vectors, formulas, fixtures, snapshots, and helper functions. Require expected results from a specification, known example, independently produced fixture, or worked literal. Production code and its test should not derive truth through the same algorithm.
+Reviewer guidance: Inspect expected vectors, formulas, fixtures, snapshots, and helper functions. Look for an independent literal or standard vector replaced by the production helper or the same expression used for the actual result. Require expected results from a specification, known example, independently produced fixture, or worked literal.
 
-Mechanical pre-check: None in v1. Code similarity is useful evidence but not enough to distinguish a copied oracle from a legitimate shared standard.
+Mechanical pre-check: In test files, detect an expected-value assignment whose base literal or standard vector was replaced by arithmetic over runtime values or the same helper expression used to assign the actual result. Unchanged helpers and independently constructed expected objects do not match.
 
 ## Comment-defended workaround
 
@@ -43,9 +43,9 @@ Name: `comment-defended-workaround`
 
 Description: An explanatory comment is used to legitimize a workaround instead of resolving its design cost.
 
-Reviewer guidance: Treat comments that justify bypasses, duplication, special cases, or disabled validation as design signals. Verify that the workaround is necessary, bounded, and owned. The comment explains the choice but does not prove the choice is safe.
+Reviewer guidance: Treat comments that justify bypasses, duplication, special cases, or disabled validation as design signals. Connect the comment to its nearby permissive return, stale-data fallback, or security bypass. Verify that the workaround is necessary, bounded, and owned. The comment explains the choice but does not prove the choice is safe.
 
-Mechanical pre-check: None in v1.
+Mechanical pre-check: A narrow justification vocabulary must appear next to a permissive return or an explicit security bypass. A similar comment paired with a fail-closed action does not match.
 
 ## Scope expansion
 
@@ -53,9 +53,9 @@ Name: `scope-expansion`
 
 Description: A fix quietly adds behavior or infrastructure beyond the requested change.
 
-Reviewer guidance: Compare the diff with the stated intent and original failing path. Flag unrelated cleanup, new features, generalized frameworks, or enforcement systems that were not needed for the smallest correct fix. Do not flag a shared fix merely because it touches multiple callers when that is the actual invariant owner.
+Reviewer guidance: Compare every new file and subsystem with the stated intent and original failing path. Flag unrelated cleanup, new features, generalized frameworks, schema work, or enforcement systems that were not needed for the smallest correct fix. Do not flag a shared fix merely because it touches multiple callers when that is the actual invariant owner.
 
-Mechanical pre-check: None in v1.
+Mechanical pre-check: With `--intent`, detect a new runtime or schema file that contradicts an explicit scope limit such as wording-only, header-only, or no schema change. A new subsystem named by the intent is acquitted. Without stated intent, this pre-check emits nothing.
 
 ## Asserted follow-up without artifact
 
@@ -63,9 +63,9 @@ Name: `asserted-followup-without-artifact`
 
 Description: The change says a follow-up exists but provides no inspectable artifact.
 
-Reviewer guidance: Verify claims such as filed, tracked, scheduled, or deferred against the artifacts available to the review. A comment that promises later work is not evidence that the work has an owner or durable reference.
+Reviewer guidance: Verify claims such as filed, tracked, assigned, approved, scheduled, or deferred against the artifacts available to the review. Require a URL, issue number, ticket ID, or approval reference. A comment that promises later work is not evidence that the work has an owner or durable reference.
 
-Mechanical pre-check: None in v1.
+Mechanical pre-check: Flag a newly added comment that asserts filed, tracked, assigned, approved, or scheduled work without a URL or recognizable issue, ticket, or approval reference.
 
 ## Fail-open default
 
@@ -73,9 +73,9 @@ Name: `fail-open-default`
 
 Description: An unknown, failed, timed-out, or unparsed state becomes permission to continue.
 
-Reviewer guidance: Follow error, empty, timeout, parse-failure, and default branches. Flag paths where could-not-determine becomes allow, pass, ready, empty findings, or another permissive result without an explicit policy. Pay particular attention to fallback values that collapse unknown into false.
+Reviewer guidance: Follow error, empty, timeout, parse-failure, and default branches. Flag paths where could-not-determine becomes `nil, nil`, true, allow, ready, healthy, empty findings, a privileged object, or another permissive result without an explicit policy.
 
-Mechanical pre-check: None in v1.
+Mechanical pre-check: Detect a newly added permissive return within an error, not-found, timeout, or unreadable-state branch. A nearby comment that names an explicit permissive policy prevents a mechanical finding and leaves the judgment to review.
 
 ## Rule applied in one place, not its sibling
 
@@ -83,9 +83,9 @@ Name: `rule-applied-in-one-place-not-sibling`
 
 Description: A rule fixes one path while equivalent sibling paths remain exposed.
 
-Reviewer guidance: Find sibling adapters, handlers, formats, platforms, and state transitions that enforce the same invariant. Prefer the earliest shared owner when one exists. When repetition is intentional, verify every sibling is covered and that new siblings cannot silently omit the rule.
+Reviewer guidance: Find explicit/configured paths, transports, providers, platforms, formats, versioned routes, and state transitions that enforce the same invariant. Compare strict and permissive branches explicitly. Prefer the earliest shared owner when one exists. When repetition is intentional, verify every sibling is covered and that new siblings cannot silently omit the rule.
 
-Mechanical pre-check: None in v1.
+Mechanical pre-check: Detect an explicit path failing beside a configured path returning empty success, one transport denying beside another allowing, and one versioned route gaining validation while its equivalent sibling remains unvalidated.
 
 ## Mandatory leak and identity scan
 
@@ -95,12 +95,12 @@ The scanner checks common credential shapes, private key headers, personal home 
 
 A configured missing blocklist and an unreadable blocklist stop evaluation. Intentional fixture literals can carry `noslop:allow-leak` on the same source line. Every honored marker prints its file and line and counts in the verdict summary. Repositories can set `slop.leak_scan.allow_exemptions: false` to turn every marker into a blocking finding.
 
-Every completed verdict reports the status and finding count for the leak scan, test-count floor, and prose oracle. A disabled test-count floor is stated explicitly.
+Every completed verdict reports the status and finding count for the lens pre-check, leak scan, test-count floor, and prose oracle. A disabled test-count floor is stated explicitly. The other lens pre-checks run at every tier.
 
 NoSlop ships generic placeholder entries only. It does not ship any operator's actual hostnames, codenames, project names, or identity data.
 
 ## Provenance conditioning
 
-Provenance history does not add a ninth lens. It changes the policy applied to the same catalog. When one generating lane and model accumulates three net accepted findings for a lens in its last 10 changes, NoSlop raises the tier by one level and reviews repeated lenses first. A lens with a mechanical pre-check can also enable that probe even when the static repository setting is off.
+Provenance history does not add a ninth lens. It changes the policy applied to the same catalog. When one generating lane and model accumulates three net accepted findings for a lens in its last 10 changes, NoSlop raises the tier by one level and reviews repeated lenses first. Repeated `test-capitulation` findings can also enable the configurable test-count floor when its static repository setting is off; the other conservative lens pre-checks always run.
 
 No matching history preserves the unconditioned v1 route and prints that default. Unreadable or malformed history selects `full-adversarial` because the policy could not establish that a lighter tier is safe. A lower `--tier` that contradicts provenance is refused unless the operator also supplies `--force-tier`; the output prints both the escalation and any forced override.

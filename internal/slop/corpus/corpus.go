@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/kunchenguid/no-mistakes/internal/slop/lenses"
+	"github.com/kunchenguid/no-mistakes/internal/slop/prose"
 )
 
 const (
@@ -76,6 +77,17 @@ func Load(root string) ([]Case, error) {
 	for _, name := range lenses.Names() {
 		knownLenses[name] = true
 	}
+	knownLenses["leak-identity-scan"] = true
+	for _, kind := range []prose.Kind{
+		prose.AITell,
+		prose.EmDash,
+		prose.ThreadClosed,
+		prose.DuplicateClaim,
+		prose.EvidenceMismatch,
+		prose.EvidenceUnreadable,
+	} {
+		knownLenses[string(kind)] = true
+	}
 	var cases []Case
 	seenIDs := make(map[string]bool)
 	for _, entry := range entries {
@@ -111,7 +123,7 @@ func Load(root string) ([]Case, error) {
 			if !knownLenses[finding.Lens] {
 				return nil, fmt.Errorf("load corpus case %q: unknown expected lens %q", entry.Name(), finding.Lens)
 			}
-			if strings.TrimSpace(finding.Path) == "" {
+			if strings.TrimSpace(finding.Path) == "" && finding.Lens != string(prose.ThreadClosed) {
 				return nil, fmt.Errorf("load corpus case %q: expected finding path is required", entry.Name())
 			}
 		}

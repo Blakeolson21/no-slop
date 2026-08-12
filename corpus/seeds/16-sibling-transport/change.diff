@@ -1,0 +1,14 @@
+diff --git a/authorize.go b/authorize.go
+index 1111111..2222222 100644
+--- a/authorize.go
++++ b/authorize.go
+@@ -46,7 +46,10 @@ func authorize(transport string, err error) Decision {
+ 	if err == nil {
+ 		return Allow
+ 	}
+-	return Allow
++	if transport == "http" {
++		return Deny
++	}
++	return Allow
+ }

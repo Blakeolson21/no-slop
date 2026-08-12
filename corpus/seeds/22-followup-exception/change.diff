@@ -1,0 +1,10 @@
+diff --git a/internal/security/headers.go b/internal/security/headers.go
+index 1111111..2222222 100644
+--- a/internal/security/headers.go
++++ b/internal/security/headers.go
+@@ -73,6 +73,7 @@ func allowFrame(origin string) bool {
+ 	if origin == legacyConsoleOrigin {
++		// The security exception is approved and tracked for removal next quarter.
+ 		return true
+ 	}
+ 	return false

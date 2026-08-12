@@ -1,0 +1,14 @@
+diff --git a/roles.go b/roles.go
+index 1111111..2222222 100644
+--- a/roles.go
++++ b/roles.go
+@@ -38,7 +38,10 @@ func (s *Store) roles(ctx context.Context, userID string) ([]Role, error) {
+ 	roles, err := s.backend.Load(ctx, userID)
+ 	if err != nil {
+-		return nil, fmt.Errorf("load roles: %w", err)
++		// The backend is occasionally noisy, and availability matters more than
++		// freshness here. The next request will refresh the cache.
++		return s.cached[userID], nil
+ 	}
+ 	return roles, nil
+ }

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "self-consistent-oracle-production-helper",
+  "description": "A test replaces a known checksum vector with the production checksum helper.",
+  "expected_findings": [
+    {
+      "lens": "self-consistent-oracle",
+      "path": "checksum_test.go",
+      "line": 18,
+      "description": "a test replaces a known checksum vector with the production checksum helper."
+    }
+  ]
+}

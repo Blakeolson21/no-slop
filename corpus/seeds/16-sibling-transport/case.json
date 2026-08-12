@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "sibling-rule-http-only-denial",
+  "description": "An authorization error denies HTTP requests while the equivalent RPC path still allows them.",
+  "expected_findings": [
+    {
+      "lens": "rule-applied-in-one-place-not-sibling",
+      "path": "authorize.go",
+      "line": 52,
+      "description": "an authorization error denies http requests while the equivalent rpc path still allows them."
+    }
+  ]
+}

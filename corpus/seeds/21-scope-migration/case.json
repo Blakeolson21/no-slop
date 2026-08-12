@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "scope-expansion-unrequested-audit-schema",
+  "description": "A permission fix also adds an unrelated audit-log database schema.",
+  "expected_findings": [
+    {
+      "lens": "scope-expansion",
+      "path": "migrations/042_audit_events.sql",
+      "line": 1,
+      "description": "a permission fix also adds an unrelated audit-log database schema."
+    }
+  ]
+}

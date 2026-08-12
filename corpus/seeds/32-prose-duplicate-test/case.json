@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "prose-stale-duplicate-test-point",
+  "description": "A draft repeats an existing request to restore a deleted negative test.",
+  "expected_findings": [
+    {
+      "lens": "duplicate-claim",
+      "path": "outbound/review.md",
+      "line": 0,
+      "description": "a draft repeats an existing request to restore a deleted negative test."
+    }
+  ]
+}

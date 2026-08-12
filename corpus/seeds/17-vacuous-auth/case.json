@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "vacuous-check-auth-token-self-compare",
+  "description": "A high-risk token check compares the computed token hash with itself.",
+  "expected_findings": [
+    {
+      "lens": "vacuous-check",
+      "path": "internal/auth/token.go",
+      "line": 67,
+      "description": "a high-risk token check compares the computed token hash with itself."
+    }
+  ]
+}

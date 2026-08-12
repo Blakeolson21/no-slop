@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "vacuous-check-post-update-snapshot",
+  "description": "A concurrency guard snapshots a generation only after the generation was updated.",
+  "expected_findings": [
+    {
+      "lens": "vacuous-check",
+      "path": "cache.go",
+      "line": 34,
+      "description": "a concurrency guard snapshots a generation only after the generation was updated."
+    }
+  ]
+}

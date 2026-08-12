@@ -51,6 +51,7 @@ func TestAgentReviewerReturnsNamedStructuredFindings(t *testing.T) {
 		Branch:  "feature/policy",
 		BaseRef: "base-sha",
 		HeadRef: "head-sha",
+		Intent:  "Make policy reads fail closed.",
 		Tier:    risk.TierSingleReview,
 		Prompt:  "[fail-open-default] inspect permissive defaults",
 	})
@@ -62,6 +63,9 @@ func TestAgentReviewerReturnsNamedStructuredFindings(t *testing.T) {
 	}
 	if ag.opts.CWD != "/repo" || len(ag.opts.JSONSchema) == 0 {
 		t.Fatalf("agent options = %+v", ag.opts)
+	}
+	if !strings.Contains(ag.opts.Prompt, "stated intent: Make policy reads fail closed.") {
+		t.Fatalf("review prompt did not carry intent:\n%s", ag.opts.Prompt)
 	}
 	for _, name := range lenses.Names() {
 		if !strings.Contains(string(ag.opts.JSONSchema), name) {

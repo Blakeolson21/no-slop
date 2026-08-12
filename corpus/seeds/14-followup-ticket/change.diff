@@ -1,0 +1,10 @@
+diff --git a/session.go b/session.go
+index 1111111..2222222 100644
+--- a/session.go
++++ b/session.go
+@@ -52,6 +52,7 @@ func decodeSession(raw string) (Session, error) {
+ 	if legacy(raw) {
++		// TODO: A migration ticket is filed and assigned for removing this path.
+ 		return decodeLegacy(raw)
+ 	}
+ 	return decodeCurrent(raw)

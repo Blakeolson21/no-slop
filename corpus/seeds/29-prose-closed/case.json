@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "prose-stale-closed-issue",
+  "description": "A draft proposes work on a thread whose replay fixture says it is closed.",
+  "expected_findings": [
+    {
+      "lens": "thread-closed",
+      "path": "",
+      "line": 0,
+      "description": "a draft proposes work on a thread whose replay fixture says it is closed."
+    }
+  ]
+}

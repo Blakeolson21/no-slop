@@ -1,0 +1,8 @@
+diff --git a/examples/client.conf b/examples/client.conf
+new file mode 100644
+index 0000000..2222222
+--- /dev/null
++++ b/examples/client.conf
+@@ -0,0 +1,2 @@
++endpoint = "https://example.invalid"
++api_key = "EXAMPLE_NOT_A_REAL_KEY_123456789"

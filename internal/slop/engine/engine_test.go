@@ -30,6 +30,17 @@ func (r *countingTests) Run(context.Context, string, string) (engine.TestResult,
 	return engine.TestResult{ExitCode: 0}, nil
 }
 
+type duplicateMechanicalReviewer struct{}
+
+func (duplicateMechanicalReviewer) Review(context.Context, engine.ReviewRequest) ([]engine.Finding, error) {
+	return []engine.Finding{{
+		Lens:        "vacuous-check",
+		Path:        "guard.go",
+		Line:        1,
+		Description: "reviewer phrased the same source finding differently",
+	}}, nil
+}
+
 type staticHistory []provenance.Record
 
 func (h staticHistory) Recent(string, string, int) ([]provenance.Record, error) {
@@ -105,6 +116,7 @@ func TestRunFullTierRequiresReviewAndRunsConfiguredTests(t *testing.T) {
 		WorkDir:       t.TempDir(),
 		Branch:        "feature/policy",
 		DefaultBranch: "main",
+		Intent:        "Make policy reads fail closed.",
 		Files: []engine.Change{{
 			Path:           "internal/auth/policy.go",
 			Status:         risk.Added,
@@ -125,6 +137,61 @@ func TestRunFullTierRequiresReviewAndRunsConfiguredTests(t *testing.T) {
 	}
 	if len(reviewer.requests[1].PriorFindings) != 1 || reviewer.requests[1].PriorFindings[0].Lens != "fail-open-default" {
 		t.Fatalf("second round prior findings = %+v", reviewer.requests[1].PriorFindings)
+	}
+	if reviewer.requests[0].Intent != "Make policy reads fail closed." {
+		t.Fatalf("reviewer request intent = %q", reviewer.requests[0].Intent)
+	}
+}
+
+func TestRunLensPrecheckStillRunsUnderLightOverride(t *testing.T) {
+	t.Parallel()
+
+	result, err := engine.Run(context.Background(), engine.Input{
+		WorkDir:       t.TempDir(),
+		Branch:        "feature/guard",
+		DefaultBranch: "main",
+		Files: []engine.Change{{
+			Path:            "guard.go",
+			Status:          risk.Modified,
+			AddedContent:    "if observed != observed {}\n",
+			BaselineContent: "if observed != expected {}\n",
+			CurrentContent:  "if observed != observed {}\n",
+		}},
+		Config: engine.Config{TierOverride: risk.TierLeakScanOnly},
+	}, engine.Dependencies{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Passed || len(result.Findings) != 1 || result.Findings[0].Lens != "vacuous-check" {
+		t.Fatalf("result = %+v, want mandatory vacuous-check finding", result)
+	}
+	if len(result.MandatoryChecks) == 0 || result.MandatoryChecks[0].Name != "lens pre-check" || result.MandatoryChecks[0].Findings != 1 {
+		t.Fatalf("mandatory checks = %+v", result.MandatoryChecks)
+	}
+}
+
+func TestRunDeduplicatesReviewerFindingAlreadyCaughtMechanically(t *testing.T) {
+	t.Parallel()
+
+	result, err := engine.Run(context.Background(), engine.Input{
+		WorkDir:       t.TempDir(),
+		Branch:        "feature/guard",
+		DefaultBranch: "main",
+		Files: []engine.Change{{
+			Path:            "guard.go",
+			Status:          risk.Modified,
+			Added:           10,
+			AddedContent:    "if observed != observed {}\n",
+			BaselineContent: "if observed != expected {}\n",
+			CurrentContent:  "if observed != observed {}\n",
+		}},
+		Config: engine.Config{TierOverride: risk.TierSingleReview},
+	}, engine.Dependencies{Reviewer: duplicateMechanicalReviewer{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Findings) != 1 || result.Findings[0].Description == "reviewer phrased the same source finding differently" {
+		t.Fatalf("findings = %+v, want one mechanical finding", result.Findings)
 	}
 }
 

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "comment-defended-workaround-stale-cache",
+  "description": "A comment justifies serving stale authorization data on every loader error.",
+  "expected_findings": [
+    {
+      "lens": "comment-defended-workaround",
+      "path": "roles.go",
+      "line": 42,
+      "description": "a comment justifies serving stale authorization data on every loader error."
+    }
+  ]
+}

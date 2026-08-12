@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "prose-stale-duplicate-claim",
+  "description": "A draft repeats the same point already present in the thread fixture.",
+  "expected_findings": [
+    {
+      "lens": "duplicate-claim",
+      "path": "outbound/comment.md",
+      "line": 0,
+      "description": "a draft repeats the same point already present in the thread fixture."
+    }
+  ]
+}

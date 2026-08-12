@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "leak-personal-home-path",
+  "description": "A generated script hard-codes a user-shaped home directory.",
+  "expected_findings": [
+    {
+      "lens": "leak-identity-scan",
+      "path": "scripts/run.sh",
+      "line": 3,
+      "description": "a generated script hard-codes a user-shaped home directory."
+    }
+  ]
+}

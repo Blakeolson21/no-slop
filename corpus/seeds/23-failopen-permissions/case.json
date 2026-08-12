@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "fail-open-default-permission-read-error",
+  "description": "A high-risk permission lookup treats storage failure as administrator access.",
+  "expected_findings": [
+    {
+      "lens": "fail-open-default",
+      "path": "internal/auth/permissions.go",
+      "line": 39,
+      "description": "a high-risk permission lookup treats storage failure as administrator access."
+    }
+  ]
+}

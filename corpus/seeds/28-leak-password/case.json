@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "leak-credential-assignment-password",
+  "description": "A sample deployment file contains a credential-shaped password assignment.",
+  "expected_findings": [
+    {
+      "lens": "leak-identity-scan",
+      "path": "deploy/sample.env",
+      "line": 1,
+      "description": "a sample deployment file contains a credential-shaped password assignment."
+    }
+  ]
+}
