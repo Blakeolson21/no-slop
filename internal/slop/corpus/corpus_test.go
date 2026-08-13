@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -166,6 +167,89 @@ func TestHistoricalCaseSetReplaysBaselineAndRoundFourCaptures(t *testing.T) {
 				t.Fatalf("replay %s score = %+v, want found %d, missed %d, false-positive %d", capture.name, score, capture.found, capture.missed, capture.falsePositive)
 			}
 		}
+	}
+}
+
+// The case-set manifest pins a SHA-256 over the exact bytes of each recorded
+// case, so the pin only holds if a checkout reproduces the committed bytes.
+// core.autocrlf=true is the Git for Windows default, and under it every corpus
+// text file lands with CRLF line endings, which digests differently and failed
+// the pinned replay on the Windows CI leg alone. Drive the real consumer: check
+// the corpus out through Git with that setting and load the pinned case set.
+func TestPinnedCaseSetSurvivesAnAutoCRLFCheckout(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := filepath.Join("..", "..", "..")
+	checkout := t.TempDir()
+
+	gitCheckoutRun(t, checkout, "init", "-b", "main", ".")
+	gitCheckoutRun(t, checkout, "config", "core.autocrlf", "true")
+	gitCheckoutRun(t, checkout, "config", "user.email", "test@example.com")
+	gitCheckoutRun(t, checkout, "config", "user.name", "Test")
+
+	for _, relative := range []string{
+		".gitattributes",
+		filepath.Join("corpus", "seeds"),
+		filepath.Join("corpus", "case-sets"),
+	} {
+		copyIntoCheckout(t, filepath.Join(repoRoot, relative), filepath.Join(checkout, relative))
+	}
+	gitCheckoutRun(t, checkout, "add", "-A")
+	gitCheckoutRun(t, checkout, "commit", "-m", "corpus")
+
+	// Discard the worktree copies and let Git materialize them itself, so the
+	// bytes under test are the ones a fresh clone on Windows would receive.
+	if err := os.RemoveAll(filepath.Join(checkout, "corpus")); err != nil {
+		t.Fatal(err)
+	}
+	gitCheckoutRun(t, checkout, "checkout", "--", ".")
+
+	cases, err := corpus.Load(filepath.Join(checkout, "corpus", "seeds"))
+	if err != nil {
+		t.Fatalf("load seeds from an autocrlf checkout: %v", err)
+	}
+	selected, err := corpus.LoadCaseSet(filepath.Join(checkout, "corpus", "case-sets", "rounds-1-through-4.json"), cases)
+	if err != nil {
+		t.Fatalf("load pinned case set from an autocrlf checkout: %v", err)
+	}
+	if len(selected) == 0 {
+		t.Fatal("pinned case set selected no cases")
+	}
+}
+
+func gitCheckoutRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, output)
+	}
+}
+
+func copyIntoCheckout(t *testing.T, source, target string) {
+	t.Helper()
+	if err := filepath.Walk(source, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		destination := filepath.Join(target, relative)
+		if info.IsDir() {
+			return os.MkdirAll(destination, 0o755)
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(destination, content, 0o644)
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
