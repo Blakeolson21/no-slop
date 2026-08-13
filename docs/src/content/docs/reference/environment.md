@@ -1,9 +1,9 @@
 ---
 title: Environment Variables
-description: All environment variables recognized by no-mistakes.
+description: All environment variables recognized by no-slop.
 ---
 
-## `NM_HOME`
+## `NS_HOME`
 
 Override the data directory.
 
@@ -14,17 +14,20 @@ Override the data directory.
 
 When set, everything else moves under this root:
 
-- Global config: `$NM_HOME/config.yaml`
-- Gate repos: `$NM_HOME/repos/<id>.git`
-- Worktrees: `$NM_HOME/worktrees/<repoID>/<runID>/`
-- Logs: `$NM_HOME/logs/`
-- Database: `$NM_HOME/state.sqlite`
-- Socket / PID / singleton lock: `$NM_HOME/socket`, `$NM_HOME/daemon.pid`, and `$NM_HOME/daemon.lock`
-- Managed agent server PID records: `$NM_HOME/servers/`
-- Process-tree recovery records: `$NM_HOME/proctrees/`
-- Managed service names get a short stable suffix derived from `$NM_HOME` so multiple installs don't collide.
+- Global config: `$NS_HOME/config.yaml`
+- Gate repos: `$NS_HOME/repos/<id>.git`
+- Worktrees: `$NS_HOME/worktrees/<repoID>/<runID>/`
+- Logs: `$NS_HOME/logs/`
+- Database: `$NS_HOME/state.sqlite`
+- Socket / PID / singleton lock: `$NS_HOME/socket`, `$NS_HOME/daemon.pid`, and `$NS_HOME/daemon.lock`
+- Managed agent server PID records: `$NS_HOME/servers/`
+- Process-tree recovery records: `$NS_HOME/proctrees/`
+- Managed service names get a short stable suffix derived from `$NS_HOME` so multiple installs don't collide.
 
-## `NM_DAEMON_CONNECT_TIMEOUT`
+`NM_HOME` is a compatibility alias. If both names are set, their values must
+match or the command refuses to choose a state root.
+
+## `NS_DAEMON_CONNECT_TIMEOUT`
 
 Override how long a CLI client waits for an existing daemon socket to accept a connection before failing instead of hanging.
 
@@ -35,7 +38,10 @@ Override how long a CLI client waits for an existing daemon socket to accept a c
 
 Takes precedence over `daemon_connect_timeout` in `config.yaml`. An empty, unparsable, or non-positive value is ignored and the config value (or its default) is used instead.
 
-## `NO_MISTAKES_BITBUCKET_EMAIL`
+`NM_DAEMON_CONNECT_TIMEOUT` is a compatibility alias. Conflicting non-empty
+values fail safe to the configured default.
+
+## `NS_BITBUCKET_EMAIL`
 
 Bitbucket Cloud account email used for PR creation and CI monitoring.
 
@@ -44,9 +50,9 @@ Bitbucket Cloud account email used for PR creation and CI monitoring.
 | Type    | `string`                                      |
 | Default | (none; Bitbucket PR/CI steps skip when unset) |
 
-Used alongside `NO_MISTAKES_BITBUCKET_API_TOKEN`. See [Provider Integration](/no-mistakes/guides/provider-integration/#bitbucket-cloud).
+Used alongside `NS_BITBUCKET_API_TOKEN`. See [Provider Integration](/no-slop/guides/provider-integration/#bitbucket-cloud).
 
-## `NO_MISTAKES_BITBUCKET_API_TOKEN`
+## `NS_BITBUCKET_API_TOKEN`
 
 Bitbucket Cloud API token.
 
@@ -57,7 +63,7 @@ Bitbucket Cloud API token.
 
 Get one from [Bitbucket account settings](https://bitbucket.org/account/settings/app-passwords/).
 
-## `NO_MISTAKES_BITBUCKET_API_BASE_URL`
+## `NS_BITBUCKET_API_BASE_URL`
 
 Override the Bitbucket Cloud API base URL.
 
@@ -78,7 +84,7 @@ Alternatively, authenticate the Azure DevOps extension with `az devops login`.
 | Type    | `string`                                           |
 | Default | (none)                                             |
 
-See [Provider Integration](/no-mistakes/guides/provider-integration/#azure-devops).
+See [Provider Integration](/no-slop/guides/provider-integration/#azure-devops).
 
 ## `GITHUB_TOKEN`
 
@@ -91,7 +97,7 @@ GitHub token used to authenticate updater release requests.
 
 When set, the updater sends the token as a Bearer authorization header for release metadata requests, including background update checks, and release asset downloads. `GITHUB_TOKEN` takes precedence over `GH_TOKEN`; when neither variable is set, these requests remain anonymous. The token is not printed, logged, or persisted.
 
-This variable no longer affects update behavior in this build: self-update and its background checks are disabled, so the updater never makes a release request. See the [CLI reference](/no-mistakes/reference/cli/#no-mistakes-update).
+This variable no longer affects update behavior in this build: self-update and its background checks are disabled, so the updater never makes a release request. See the [CLI reference](/no-slop/reference/cli/#no-slop-update).
 It still matters everywhere else. The `gh` CLI that the PR and CI steps shell out to inherits the daemon's environment and authenticates from it, so unsetting the token breaks PR creation and CI polling.
 
 ## `GH_TOKEN`
@@ -105,7 +111,7 @@ Fallback GitHub token when `GITHUB_TOKEN` is unset or empty. The `gh` CLI behind
 
 See [`GITHUB_TOKEN`](#github_token) for the updater's authentication behavior and precedence.
 
-## `NO_MISTAKES_NO_UPDATE_CHECK`
+## `NS_NO_UPDATE_CHECK`
 
 Disable background update checks.
 
@@ -114,9 +120,11 @@ Disable background update checks.
 | Type    | `1` to disable, anything else to leave enabled |
 | Default | unset (checks enabled)                         |
 
-Update checks run on every CLI invocation except `update` itself and version queries (`--version` / `-v`, which stay side-effect-free), hit GitHub releases, cache the result in `$NM_HOME/update-check.json`, and print a one-line notification to stderr when a newer version is available. Dev builds (non-semver versions) suppress the check automatically.
+Update checks run on every CLI invocation except `update` itself and version queries (`--version` / `-v`, which stay side-effect-free), hit GitHub releases, cache the result in `$NS_HOME/update-check.json`, and print a one-line notification to stderr when a newer version is available. Dev builds (non-semver versions) suppress the check automatically.
 
-This variable has no effect in this build: self-update is disabled, so background checks never run whether or not it is set. See the [CLI reference](/no-mistakes/reference/cli/#no-mistakes-update).
+This variable has no effect in this build: self-update is disabled, so background checks never run whether or not it is set. See the [CLI reference](/no-slop/reference/cli/#no-slop-update).
+
+`NO_MISTAKES_NO_UPDATE_CHECK` is a compatibility alias.
 
 ## `XDG_DATA_HOME`
 
@@ -127,7 +135,7 @@ Data directory used to discover OpenCode transcripts for intent extraction.
 | Type    | `string`         |
 | Default | `~/.local/share` |
 
-When set, no-mistakes looks for OpenCode's intent transcript database at `$XDG_DATA_HOME/opencode/opencode.db`.
+When set, no-slop looks for OpenCode's intent transcript database at `$XDG_DATA_HOME/opencode/opencode.db`.
 When unset, it falls back to `~/.local/share/opencode/opencode.db`.
 
 ## `GLAB_CONFIG_DIR`
@@ -139,7 +147,7 @@ Directory holding glab's `config.yml`, consulted when detecting self-hosted GitL
 | Type    | `string` |
 | Default | (none)   |
 
-When the upstream hostname carries no `gitlab` marker, no-mistakes reads glab's configured hosts from `$GLAB_CONFIG_DIR/config.yml` to decide whether the host is a GitLab instance. It takes precedence over `XDG_CONFIG_HOME`. See [Provider Integration](/no-mistakes/guides/provider-integration/#self-hosted-githubgitlab).
+When the upstream hostname carries no `gitlab` marker, no-slop reads glab's configured hosts from `$GLAB_CONFIG_DIR/config.yml` to decide whether the host is a GitLab instance. It takes precedence over `XDG_CONFIG_HOME`. See [Provider Integration](/no-slop/guides/provider-integration/#self-hosted-githubgitlab).
 
 ## `GH_CONFIG_DIR`
 
@@ -150,7 +158,7 @@ Directory holding gh's `hosts.yml`, consulted when detecting self-hosted GitHub 
 | Type    | `string` |
 | Default | (none)   |
 
-When the upstream hostname is not `github.com`, no-mistakes reads gh's configured hosts from `$GH_CONFIG_DIR/hosts.yml` to decide whether the host is a GitHub Enterprise instance. It takes precedence over `XDG_CONFIG_HOME`. See [Provider Integration](/no-mistakes/guides/provider-integration/#self-hosted-githubgitlab).
+When the upstream hostname is not `github.com`, no-slop reads gh's configured hosts from `$GH_CONFIG_DIR/hosts.yml` to decide whether the host is a GitHub Enterprise instance. It takes precedence over `XDG_CONFIG_HOME`. See [Provider Integration](/no-slop/guides/provider-integration/#self-hosted-githubgitlab).
 
 ## `XDG_CONFIG_HOME`
 
@@ -161,10 +169,10 @@ Config directory used to locate glab's `config.yml` for self-hosted GitLab detec
 | Type    | `string`    |
 | Default | `~/.config` |
 
-When `GLAB_CONFIG_DIR` is unset, no-mistakes looks for glab's configured hosts at `$XDG_CONFIG_HOME/glab-cli/config.yml`, falling back to `~/.config/glab-cli/config.yml` when `XDG_CONFIG_HOME` is unset.
-When `GH_CONFIG_DIR` is unset, no-mistakes looks for gh's configured hosts at `$XDG_CONFIG_HOME/gh/hosts.yml`, falling back to `~/.config/gh/hosts.yml` when `XDG_CONFIG_HOME` is unset.
+When `GLAB_CONFIG_DIR` is unset, no-slop looks for glab's configured hosts at `$XDG_CONFIG_HOME/glab-cli/config.yml`, falling back to `~/.config/glab-cli/config.yml` when `XDG_CONFIG_HOME` is unset.
+When `GH_CONFIG_DIR` is unset, no-slop looks for gh's configured hosts at `$XDG_CONFIG_HOME/gh/hosts.yml`, falling back to `~/.config/gh/hosts.yml` when `XDG_CONFIG_HOME` is unset.
 
-## `NO_MISTAKES_UMAMI_HOST`
+## `NS_UMAMI_HOST`
 
 Override the telemetry collection host.
 
@@ -173,9 +181,9 @@ Override the telemetry collection host.
 | Type    | `URL`                       |
 | Default | `https://a.kunchenguid.com` |
 
-When set, telemetry sends events to this host's `/api/send` endpoint. If it is unset in a dev build, `no-mistakes` also checks a repo-local `.env` file for `NO_MISTAKES_UMAMI_HOST`. If no runtime value is found, it falls back to any host embedded at build time and then the default self-hosted Umami instance.
+When set, telemetry sends events to this host's `/api/send` endpoint. If it is unset in a dev build, `no-slop` also checks a repo-local `.env` file for `NS_UMAMI_HOST`. If no runtime value is found, it falls back to any host embedded at build time and then the default self-hosted Umami instance.
 
-## `NO_MISTAKES_UMAMI_WEBSITE_ID`
+## `NS_UMAMI_WEBSITE_ID`
 
 Override or enable the telemetry website ID.
 
@@ -184,13 +192,13 @@ Override or enable the telemetry website ID.
 | Type    | `string`                                                                |
 | Default | embedded in Makefile and release builds; unset in unembedded dev builds |
 
-When set, telemetry uses this website ID at runtime. If it is unset in a dev build, `no-mistakes` also checks a repo-local `.env` file for `NO_MISTAKES_UMAMI_WEBSITE_ID`. If no runtime value is found, it falls back to any website ID embedded at build time.
+When set, telemetry uses this website ID at runtime. If it is unset in a dev build, `no-slop` also checks a repo-local `.env` file for `NS_UMAMI_WEBSITE_ID`. If no runtime value is found, it falls back to any website ID embedded at build time.
 
-When telemetry is enabled, `no-mistakes` sends command, run, approval, fix, and wizard events, completed step events with `awaiting_approval`, `fix_review`, or `failed` status, and pageviews for the human surfaces `/wizard` and `/tui` and the state-changing agent surfaces `/axi/run`, `/axi/respond`, and `/axi/abort` to Umami.
+When telemetry is enabled, `no-slop` sends command, run, approval, fix, and wizard events, completed step events with `awaiting_approval`, `fix_review`, or `failed` status, and pageviews for the human surfaces `/wizard` and `/tui` and the state-changing agent surfaces `/axi/run`, `/axi/respond`, and `/axi/abort` to Umami.
 Mutation pageviews are sent alongside command events, so command status and duration remain available.
 They include only flag-derived context: `/axi/run` records whether `--yes`, `--intent`, or `--skip` was present, and `/axi/respond` records the sanitized action and whether `--yes` was present.
 
-Read-only surfaces (`axi` home, `axi status`, `axi logs`, `status`, `runs`) emit no pageview and rate-limit their command event: it is sent when the observed run state changed since the last emit, and otherwise at most once per 10 minutes, with the dedupe state persisted at `<NM_HOME>/telemetry-gate.json` so agent polling loops stay bounded across processes.
+Read-only surfaces (`axi` home, `axi status`, `axi logs`, `status`, `runs`) emit no pageview and rate-limit their command event: it is sent when the observed run state changed since the last emit, and otherwise at most once per 10 minutes, with the dedupe state persisted at `<NS_HOME>/telemetry-gate.json` so agent polling loops stay bounded across processes.
 The `axi logs` command event records the sanitized step, whether `--full` was present, and whether `--run` was present; `axi status` records whether `--run` was present.
 Each explicit human CLI, AXI, or TUI branch-sync check/apply attempt emits one command event and no additional pageview.
 Its fields are bounded enums and booleans only: surface, mode, state, relation, target kind, pipeline phase, PR state, result, refusal reason, dirty state, and duration.
@@ -201,7 +209,7 @@ It never sends a SHA, run ID, path, branch name, URL, remote name, or command ar
 Everything sent remotely is low-cardinality: command names, statuses, durations, counts, flag booleans, agent and step names, and - on the single terminal `run finished` event - the bounded performance rollup `agent_invocations`, `resumed_invocations`, and `fallback_invocations` (small counts only).
 Run IDs, repository paths, branch names, session identities, prompts, model outputs, diffs, and per-invocation performance records are never sent.
 
-Detailed performance evidence stays on the machine in the local state database (`<NM_HOME>/state.sqlite`): one `agent_invocations` row per agent invocation, plus each run's accumulated parked-at-gate time.
+Detailed performance evidence stays on the machine in the local state database (`<NS_HOME>/state.sqlite`): one `agent_invocations` row per agent invocation, plus each run's accumulated parked-at-gate time.
 Each row records run and step identity, purpose (such as review/review-fix/housekeeping), the reported model and its provider, the cold/started/resumed/fallback session mode, a truncated session-identity hash, timestamps, duration, exit status, and failure category (`quota` when provider quota exhaustion is what failed the invocation, whether the lane was skipped while recorded as exhausted or hit the banner live), alongside the session-fidelity metrics below.
 It never stores prompts, model outputs, diffs, raw command arguments, secret values, or credentials - only bounded counts, low-cardinality categories, and durations.
 
@@ -214,9 +222,9 @@ The legacy raw input, output, and cache-read token counters render numerically; 
 - Context: `workload_files`/`workload_lines` (bounded change size), `finding_count` (findings in the structured output), and `fallback_reason` (why a failed resume forced a fresh session, one of transient/parse/exit/spawn/unsupported/quota/other; `quota` means the session's lane was quota-exhausted).
 
 The count and timing definitions live in one authoritative place (`internal/agent/invocationmetrics.go`).
-Inspect the evidence with `no-mistakes stats --agents` (per-purpose aggregates, including a `METRICS` coverage count so a real zero is distinguishable from missing instrumentation) or `no-mistakes stats --run <id>` (one run's invocations, the per-round-vs-cumulative token split, and parked time).
+Inspect the evidence with `no-slop stats --agents` (per-purpose aggregates, including a `METRICS` coverage count so a real zero is distinguishable from missing instrumentation) or `no-slop stats --run <id>` (one run's invocations, the per-round-vs-cumulative token split, and parked time).
 
-## `NO_MISTAKES_TELEMETRY`
+## `NS_TELEMETRY`
 
 Disable telemetry collection.
 

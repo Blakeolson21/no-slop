@@ -1,6 +1,6 @@
 # TUI Design System
 
-Design direction for the no-mistakes TUI. Follow these primitives consistently across all screens.
+Design direction for the no-slop TUI. Follow these primitives consistently across all screens.
 
 ## Color Roles
 

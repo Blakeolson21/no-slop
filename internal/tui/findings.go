@@ -1,7 +1,7 @@
 package tui
 
 import (
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 // stepHasActionableFindings reports whether the step's findings (agent-produced

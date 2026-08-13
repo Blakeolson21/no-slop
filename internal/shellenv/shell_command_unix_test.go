@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/proctree"
+	"github.com/Blakeolson21/no-slop/internal/proctree"
 )
 
 // TestTerminateShellCommandGroup_ReapsGrandchildAfterCleanExit pins the

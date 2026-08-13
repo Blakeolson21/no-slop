@@ -1,6 +1,6 @@
 # Vision
 
-`no-mistakes` exists so that one deliberate push means a change was independently validated before anyone else sees it.
+`no-slop` exists so that one deliberate push means a change was independently validated before anyone else sees it.
 It serves the individual developer - increasingly an operator of many coding agents - who produces changes faster than they can hand-validate, and it turns a rough local branch into a clean, evidence-backed PR while their attention goes elsewhere.
 It owns exactly one thing: the gate between a local branch and the configured push target.
 
@@ -55,7 +55,7 @@ Host and platform breadth follows real users with real problems; parity with eve
 
 ## Scope and evaluation
 
-no-mistakes is a local tool for the person whose credentials and accountability are on the line; runs happen on their machine, under their identity, at their initiative.
+no-slop is a local tool for the person whose credentials and accountability are on the line; runs happen on their machine, under their identity, at their initiative.
 It is not a CI system, not an agent orchestrator, not a code host, and not a team-governance platform; CI stays the shared outer gate, and merge policy belongs to the provider.
 Every change to this repository must pass through its own gate; dogfooding is the first calibration loop, and field incidents become regression tests before they become memories.
 A change aligns when it catches more real mistakes earlier, cuts wall-clock or babysitting without moving judgment away from the human, or strengthens a refusal path.

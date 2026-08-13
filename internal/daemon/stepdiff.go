@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/kunchenguid/no-mistakes/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/git"
 )
 
 // maxStepDiffBytes bounds one fix-review diff response. The IPC transport

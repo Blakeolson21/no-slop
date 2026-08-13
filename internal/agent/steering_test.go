@@ -91,7 +91,7 @@ func TestWithSteering_ForwardsSessionCapability(t *testing.T) {
 }
 
 func TestWorktreeSteering_AllowsManagedTestEvidenceDirectory(t *testing.T) {
-	want := filepath.Join(os.TempDir(), "no-mistakes-evidence")
+	want := filepath.Join(os.TempDir(), "no-slop-evidence")
 
 	if !strings.Contains(WorktreeSteering, want) {
 		t.Fatalf("steering preamble does not allow managed evidence directory %q:\n%s", want, WorktreeSteering)

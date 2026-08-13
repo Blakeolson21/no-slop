@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/winproc"
+	"github.com/Blakeolson21/no-slop/internal/winproc"
 	"golang.org/x/sys/windows"
 )
 
@@ -23,7 +23,7 @@ const windowsStillActive = 259
 const psListDaemonProcessesScript = "$ErrorActionPreference='SilentlyContinue'; Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -ne $null } | ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }"
 
 // listDaemonProcesses enumerates running processes via PowerShell CIM and
-// returns the ones that look like `no-mistakes daemon run --root <root>`. It
+// returns the ones that look like `no-slop daemon run --root <root>`. It
 // powers the collision detection in reconcileCollidingDaemons on Windows.
 // Failures (e.g. PowerShell absent) fail open in the caller.
 func listDaemonProcesses() ([]daemonProcessInfo, error) {

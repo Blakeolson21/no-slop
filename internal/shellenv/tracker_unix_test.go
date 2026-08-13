@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/proctree"
+	"github.com/Blakeolson21/no-slop/internal/proctree"
 )
 
 // TestTracker_PersistsRecordWhileLeaderRuns covers the crash case. The in-memory
@@ -89,7 +89,7 @@ func TestTracker_RemovesRecordAfterReap(t *testing.T) {
 }
 
 // TestSetProcessRecordDir_UnsetWritesNothing keeps the CLI and the test suite off
-// disk. Only the daemon has an NM_HOME worth persisting into.
+// disk. Only the daemon has an NS_HOME worth persisting into.
 func TestSetProcessRecordDir_UnsetWritesNothing(t *testing.T) {
 	defer setTrackerTickForTest(25 * time.Millisecond)()
 	dir := t.TempDir()

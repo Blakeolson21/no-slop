@@ -78,7 +78,7 @@ func loadScenario(path string) (*Scenario, error) {
 }
 
 // defaultScenario returns an "everything is clean" response that satisfies
-// every JSON schema no-mistakes hands to an agent: empty findings array,
+// every JSON schema no-slop hands to an agent: empty findings array,
 // low risk, a populated tested array for the test step.
 func defaultScenario() *Scenario {
 	return &Scenario{
@@ -110,7 +110,7 @@ func (s *Scenario) Match(prompt string) Action {
 	return Action{Text: "no matching scenario"}
 }
 
-// applyEdits mutates files under CWD (which is the worktree no-mistakes
+// applyEdits mutates files under CWD (which is the worktree no-slop
 // pointed the agent at). Errors are logged to stderr but not fatal so a
 // scenario with a stale path doesn't kill the whole run.
 

@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
-	"github.com/kunchenguid/no-mistakes/internal/slop/engine"
-	"github.com/kunchenguid/no-mistakes/internal/slop/lenses"
-	"github.com/kunchenguid/no-mistakes/internal/slop/risk"
+	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/slop/engine"
+	"github.com/Blakeolson21/no-slop/internal/slop/lenses"
+	"github.com/Blakeolson21/no-slop/internal/slop/risk"
 )
 
 type reviewerAgent struct {

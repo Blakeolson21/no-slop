@@ -15,17 +15,18 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
-	"github.com/kunchenguid/no-mistakes/internal/config"
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/gatecontext"
-	"github.com/kunchenguid/no-mistakes/internal/git"
-	"github.com/kunchenguid/no-mistakes/internal/ipc"
-	"github.com/kunchenguid/no-mistakes/internal/logstore"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/shellenv"
-	"github.com/kunchenguid/no-mistakes/internal/telemetry"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/gatecontext"
+	"github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/identity"
+	"github.com/Blakeolson21/no-slop/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/logstore"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/shellenv"
+	"github.com/Blakeolson21/no-slop/internal/telemetry"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 var applyShellEnvToProcess = shellenv.ApplyToProcess
@@ -34,7 +35,7 @@ var renameDaemonPIDFile = os.Rename
 
 // Run starts the daemon process. It blocks until a shutdown signal is received
 // or the shutdown IPC method is called. This is called via the hidden
-// `no-mistakes daemon run` entrypoint used by managed and detached services.
+// `no-slop daemon run` entrypoint used by managed and detached services.
 func Run() (retErr error) {
 	startupStarted := time.Now()
 	p, err := paths.New()
@@ -92,7 +93,10 @@ func Run() (retErr error) {
 }
 
 func prepareDaemonEnvironment() error {
-	nmHome := os.Getenv("NM_HOME")
+	nmHome, err := identity.LookupEnv(identity.HomeEnv, identity.LegacyHomeEnv)
+	if err != nil {
+		return err
+	}
 	for _, key := range []string{
 		"CLAUDECODE",
 		"CLAUDE_CODE_ENTRYPOINT",
@@ -108,8 +112,11 @@ func prepareDaemonEnvironment() error {
 		return fmt.Errorf("apply login shell environment: %w", err)
 	}
 	if nmHome != "" {
+		if err := os.Setenv("NS_HOME", nmHome); err != nil {
+			return fmt.Errorf("restore NS_HOME: %w", err)
+		}
 		if err := os.Setenv("NM_HOME", nmHome); err != nil {
-			return fmt.Errorf("restore NM_HOME: %w", err)
+			return fmt.Errorf("restore NM_HOME compatibility alias: %w", err)
 		}
 	}
 	logDaemonPathSummary()
@@ -156,7 +163,7 @@ func RunWithResources(p *paths.Paths, d *db.DB) error {
 // stepFactory overrides the default pipeline steps (for testing).
 func RunWithOptions(p *paths.Paths, d *db.DB, stepFactory StepFactory) error {
 	startupStarted := time.Now()
-	// Singleton guard: only one live daemon may own this NM_HOME at a time.
+	// Singleton guard: only one live daemon may own this NS_HOME at a time.
 	// This must be acquired before recoverOnStartup (global stale-run
 	// recovery and orphan-worktree cleanup) and before the IPC socket is
 	// bound, and held for the rest of the process lifetime - otherwise a

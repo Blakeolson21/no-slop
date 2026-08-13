@@ -9,15 +9,19 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Blakeolson21/no-slop/internal/identity"
 )
 
 const (
 	// EnvInventory is the absolute path to the suite inventory directory.
 	// When unset, a process-local default under the system temp dir is used.
-	EnvInventory = "NM_E2E_DAEMON_INVENTORY"
+	EnvInventory       = "NS_E2E_DAEMON_INVENTORY"
+	LegacyEnvInventory = "NM_E2E_DAEMON_INVENTORY"
 
 	// EnvMaxConcurrent caps how many temporary E2E daemons may be live at once.
-	EnvMaxConcurrent = "NM_E2E_DAEMON_MAX"
+	EnvMaxConcurrent       = "NS_E2E_DAEMON_MAX"
+	LegacyEnvMaxConcurrent = "NM_E2E_DAEMON_MAX"
 
 	// DefaultMaxConcurrent bounds blast radius of one interrupted suite.
 	DefaultMaxConcurrent = 2
@@ -51,13 +55,17 @@ type Inventory struct {
 	findDaemons func(string) ([]int, error)
 }
 
-// DirFromEnv returns the inventory directory from NM_E2E_DAEMON_INVENTORY,
+// DirFromEnv returns the inventory directory from NS_E2E_DAEMON_INVENTORY,
 // or a stable per-user temp default when unset.
 func DirFromEnv() string {
-	if dir := os.Getenv(EnvInventory); dir != "" {
+	dir, err := identity.LookupEnv(EnvInventory, LegacyEnvInventory)
+	if err != nil {
+		return ""
+	}
+	if dir != "" {
 		return dir
 	}
-	return filepath.Join(os.TempDir(), "no-mistakes-e2e-daemon-inventory")
+	return filepath.Join(os.TempDir(), "no-slop-e2e-daemon-inventory")
 }
 
 // Open returns an Inventory rooted at DirFromEnv(), creating the directory

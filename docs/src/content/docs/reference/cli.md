@@ -1,15 +1,15 @@
 ---
 title: CLI Commands
-description: Complete reference for all no-mistakes commands and flags.
+description: Complete reference for all no-slop commands and flags.
 ---
 
-## no-mistakes
+## no-slop
 
-Attach to the active pipeline run for the current branch when one exists. If none exists, bare `no-mistakes` can start the setup wizard to create a branch, commit changes, push through the gate, wait for the daemon to register the new run, and then attach. If the push succeeds but no run is registered, that wizard path now exits with an explicit error instead of silently falling through. By default this wizard path is interactive and only runs in a TTY session. In non-interactive contexts, bare `no-mistakes` falls back to showing the last 5 runs inline unless you pass `-y` or `--yes` to run the wizard and accept defaults automatically. When a TTY is available, `-y` keeps the wizard visible, shows a brief `waiting for run…` state after push, and auto-advances the default path; without a TTY it falls back to the headless path.
+Attach to the active pipeline run for the current branch when one exists. If none exists, bare `no-slop` can start the setup wizard to create a branch, commit changes, push through the gate, wait for the daemon to register the new run, and then attach. If the push succeeds but no run is registered, that wizard path now exits with an explicit error instead of silently falling through. By default this wizard path is interactive and only runs in a TTY session. In non-interactive contexts, bare `no-slop` falls back to showing the last 5 runs inline unless you pass `-y` or `--yes` to run the wizard and accept defaults automatically. When a TTY is available, `-y` keeps the wizard visible, shows a brief `waiting for run…` state after push, and auto-advances the default path; without a TTY it falls back to the headless path.
 
 ```sh
-no-mistakes
-no-mistakes --skip test,lint
+no-slop
+no-slop --skip test,lint
 ```
 
 | Flag          | Type     | Default | Description                                          |
@@ -17,30 +17,30 @@ no-mistakes --skip test,lint
 | `-y`, `--yes` | `bool`   | `false` | Run setup wizard and accept defaults automatically   |
 | `--skip`      | `string` | (none)  | Comma-separated pipeline steps to skip for a new run |
 
-Unlike `no-mistakes attach`, bare `no-mistakes` only auto-attaches to an active run on the current branch.
-`--skip` only applies when bare `no-mistakes` starts a new pipeline run through the wizard; it does not skip a step on an already-active run.
+Unlike `no-slop attach`, bare `no-slop` only auto-attaches to an active run on the current branch.
+`--skip` only applies when bare `no-slop` starts a new pipeline run through the wizard; it does not skip a step on an already-active run.
 Valid step names are `intent`, `rebase`, `review`, `test`, `document`, `lint`, `push`, `pr`, and `ci`.
 
-## no-mistakes init
+## no-slop init
 
 Initialize or refresh the gate for the current repository.
 
 `init` requires an `origin` remote to identify the upstream repository: later pipeline steps push validated branches to the configured target and open pull requests against that upstream. If `origin` is missing, add it with `git remote add origin <url>`, replacing `<url>` with the upstream repository's URL, then re-run `init`.
 
 ```sh
-no-mistakes init
-no-mistakes init --fork-url git@github.com:you/my-repo.git
+no-slop init
+no-slop init --fork-url git@github.com:you/my-repo.git
 ```
 
 | Flag         | Type     | Default | Description                                                                   |
 | ------------ | -------- | ------- | ----------------------------------------------------------------------------- |
 | `--fork-url` | `string` | (none)  | GitHub fork remote URL to push branches to while opening PRs against `origin` |
 
-Creates or refreshes a local bare repo, installs the managed pre-receive admission and post-receive notification hooks, best-effort isolates the gate repo's hook path from shared git config changes when Git supports `config --worktree`, adds or repairs the `no-mistakes` git remote, detects the default branch, records or updates the repo in SQLite, installs the `/no-mistakes` agent skill at user level into `~/.claude/skills/no-mistakes/SKILL.md` and `~/.agents/skills/no-mistakes/SKILL.md`, and ensures the daemon is running, installing the managed service when available and falling back to a detached daemon otherwise.
+Creates or refreshes a local bare repo, installs the managed pre-receive admission and post-receive notification hooks, best-effort isolates the gate repo's hook path from shared git config changes when Git supports `config --worktree`, adds or repairs the `no-slop` git remote, detects the default branch, records or updates the repo in SQLite, installs the `/no-slop` agent skill at user level into `~/.claude/skills/no-slop/SKILL.md` and `~/.agents/skills/no-slop/SKILL.md`, and ensures the daemon is running, installing the managed service when available and falling back to a detached daemon otherwise.
 `init` writes no skill files into the repo; the user-level copies cover every supported agent (`~/.claude/skills` for Claude Code, `~/.agents/skills` for Codex, OpenCode, Rovo Dev, and Pi) across all repos.
 If the home `.claude` links to `.agents`, `.claude/skills` links to `.agents/skills`, or the reverse, `init` follows that layout and still makes the skill readable from both logical paths.
-If the repo still contains a vendored skill copy written by an older no-mistakes version, `init` leaves it untouched and prints a notice that it is no longer needed and can be removed.
-The gate advertises Git push-option support, so you can skip steps for one push with `git push -o no-mistakes.skip=test,lint no-mistakes <branch>`.
+If the repo still contains a vendored skill copy written by an older no-slop version, `init` leaves it untouched and prints a notice that it is no longer needed and can be removed.
+The gate advertises Git push-option support, so you can skip steps for one push with `git push -o no-slop.skip=test,lint no-slop <branch>`.
 
 For GitHub fork contributions, keep `origin` pointed at the parent repository and pass `--fork-url` with your fork remote URL.
 The push, rebase branch-sync, and CI auto-fix pushes use the fork, while GitHub PR and CI commands stay scoped to the parent repository and create PRs with `--head <fork-owner>:<branch>`.
@@ -55,20 +55,20 @@ If you copy an initialized working directory while the original still exists, th
 Fresh init rolls back gate setup when a required gate or daemon step fails; refresh does not eject a pre-existing gate if daemon startup fails.
 Skill installation is best-effort: if the skill write fails, init reports it and leaves the working gate in place.
 
-## no-mistakes axi
+## no-slop axi
 
 Agent eXperience Interface for non-interactive agents.
-Most agent workflows use the installed `/no-mistakes` skill, which drives this command surface underneath.
+Most agent workflows use the installed `/no-slop` skill, which drives this command surface underneath.
 It prints TOON to stdout, prints progress to stderr, and uses structured stdout errors with exit code `1` for operational failures and `2` for bad usage.
 At the TOON output boundary, unsupported C0 control bytes are rendered as visible `\xNN` escapes while tabs, carriage returns, newlines, printable Unicode, and the underlying durable logs remain unchanged.
 If TOON encoding still fails, AXI prints a structured error instead of returning successful empty stdout.
 The calling agent drives AXI approval gates but does not replace the configured pipeline agent that performs validation.
 
 ```sh
-no-mistakes axi
+no-slop axi
 ```
 
-With no subcommand, shows the executable path, description, repo, current branch, daemon state, recent runs, and next-step help, including a pointer to `no-mistakes axi run --help` and the installed `/no-mistakes` skill for full driving guidance.
+With no subcommand, shows the executable path, description, repo, current branch, daemon state, recent runs, and next-step help, including a pointer to `no-slop axi run --help` and the installed `/no-slop` skill for full driving guidance.
 When the current branch has an active run, that run appears as `active_run` with any approval gate and help for `axi respond` when it is parked or `axi status` when it is still running.
 If an active run object is parked at a decision gate, it includes `awaiting_agent: parked <duration>` immediately after `status`.
 That field is observability only; the `gate:` object still tells the agent which response to send.
@@ -79,15 +79,15 @@ When a relevant `branch_sync` object is present, they also include version-match
 Agents must not abort-and-restart, reset, replace the branch, or improvise Git recovery in a way that drops prior gate-fix commits.
 A fresh run re-validates the current branch state, so already-resolved findings do not re-surface.
 
-## no-mistakes axi run
+## no-slop axi run
 
 Start or reattach to validation for the current branch, blocking until the first approval gate, CI-ready decision point, or final outcome.
 An active run on another branch does not block starting validation for the current branch.
 
 ```sh
-no-mistakes axi run --intent "the user's goal"
-no-mistakes axi run --intent "the user's goal" --skip test,lint
-no-mistakes axi run --intent "the user's goal" --yes
+no-slop axi run --intent "the user's goal"
+no-slop axi run --intent "the user's goal" --skip test,lint
+no-slop axi run --intent "the user's goal" --yes
 ```
 
 | Flag          | Type     | Default | Description                                                      |
@@ -97,7 +97,7 @@ no-mistakes axi run --intent "the user's goal" --yes
 | `--skip`      | `string` | (none)  | Comma-separated pipeline steps to skip                           |
 
 `--intent` is not a description of the diff.
-It is the user's goal or request, and no-mistakes uses it verbatim instead of transcript inference.
+It is the user's goal or request, and no-slop uses it verbatim instead of transcript inference.
 Err on the side of completeness: include the goal, important decisions and tradeoffs, constraints or approaches ruled in or out, and explicit requests that might otherwise look surprising in the diff.
 When starting a new run, `axi run` refuses the default branch and uncommitted working trees with actionable errors instead of auto-branching or auto-committing.
 Reattaching to an in-flight run does not require `--intent`.
@@ -113,23 +113,23 @@ Without `--yes`, an agent driving `axi run` should stop when a gate contains `ac
 Review gates include a `note` field reminding agents that `auto_fix.review` defaults to `0`, so blocking and ask-user review findings park for a decision unless configuration explicitly opts back into review auto-fix.
 Long-running `axi run` calls are working, not stalled; if one returns a `gate:`, read that output and answer it with `axi respond`.
 Backgrounding a call is fine for an agent harness, but the run never advances past a gate on its own.
-When the CI step is still monitoring an open PR and checks are green - or the trusted default-branch config declares [`no_ci: true`](/no-mistakes/reference/repo-config/#no_ci) with no registered checks - `axi run` exits successfully with `outcome: checks-passed` instead of waiting for a human merge. A generic empty check list without that declaration is not ready.
+When the CI step is still monitoring an open PR and checks are green - or the trusted default-branch config declares [`no_ci: true`](/no-slop/reference/repo-config/#no_ci) with no registered checks - `axi run` exits successfully with `outcome: checks-passed` instead of waiting for a human merge. A generic empty check list without that declaration is not ready.
 Treat that as the agent stopping point: ask the user to review and merge the PR from the `help` line.
 If that PR later falls behind the default branch or hits a merge conflict, do not run `axi run`, `rerun`, or a manual rebase while the CI monitor is still running.
 The monitor auto-rebases onto the base, resolves actual conflicts, and re-pushes the branch; a PR that is merely behind but clean needs no command.
-Use `no-mistakes rerun` only after that monitor is no longer running, such as a closed PR, aborted or superseded run, idle timeout, or exhausted CI auto-fix attempts.
+Use `no-slop rerun` only after that monitor is no longer running, such as a closed PR, aborted or superseded run, idle timeout, or exhausted CI auto-fix attempts.
 Successful outcomes (`checks-passed` and `passed`) also carry `help` instructions telling the agent to summarize the run.
 When the pipeline applied fixes, they include a `fixes` table and a `help` instruction to acknowledge the misses and list those fixes for the user's review.
 
-## no-mistakes axi respond
+## no-slop axi respond
 
 Answer the current approval gate and continue until the next gate, CI-ready decision point, or final outcome.
 
 ```sh
-no-mistakes axi respond --action approve
-no-mistakes axi respond --action fix --findings F1,F2 --instructions "optional guidance"
-no-mistakes axi respond --action fix --add-finding '{"description":"...","action":"auto-fix"}'
-no-mistakes axi respond --action skip
+no-slop axi respond --action approve
+no-slop axi respond --action fix --findings F1,F2 --instructions "optional guidance"
+no-slop axi respond --action fix --add-finding '{"description":"...","action":"auto-fix"}'
+no-slop axi respond --action skip
 ```
 
 | Flag             | Type     | Default       | Description                                                          |
@@ -147,13 +147,13 @@ If it returns another `gate:`, answer that gate; do not idle-wait for the run to
 When the daemon is already running, `axi respond` can continue an active run even if the global config file has become invalid, because it is not starting a fresh run.
 The same successful-output reporting instructions apply to `axi respond` results.
 
-## no-mistakes axi status
+## no-slop axi status
 
 Show a run, preferring the current branch's active or most recent run before falling back to repo-wide active or recent runs.
 
 ```sh
-no-mistakes axi status
-no-mistakes axi status --run <id>
+no-slop axi status
+no-slop axi status --run <id>
 ```
 
 | Flag    | Type     | Default      | Description               |
@@ -166,19 +166,19 @@ When the resolved run has a `running` or `fixing` step, the run object includes 
 Each row reports how long the step has been active, the latest meaningful log or native-agent lifecycle activity, the native agent PID if one is currently running, and the current round such as `round 1`, `auto-fix 1/3`, or `fix 2`.
 If no activity arrives for longer than `step_quiet_warning`, `last_activity` is prefixed with `quiet`; this is only a liveness signal and does not cancel the step.
 For older active runs with no recorded activity timestamp, AXI falls back to the step log file modification time.
-Gate summaries and finding descriptions are bounded in this default status view; truncated values disclose their original length, and the gate help points to `no-mistakes axi logs --step <step> --full` for the complete step log.
+Gate summaries and finding descriptions are bounded in this default status view; truncated values disclose their original length, and the gate help points to `no-slop axi logs --step <step> --full` for the complete step log.
 Relevant current-branch states also include a cached `branch_sync` object with full SHAs, the run's status, the persisted pipeline push binding, target kind and ref, relation, safety result, PR lifecycle, and a structured next action.
 Cached home and status rendering performs no network read and labels the remote observation `pipeline_push`; only explicit sync check or apply reports `live` freshness.
 
-## no-mistakes axi sync
+## no-slop axi sync
 
 Freshly check or apply the guarded synchronization offered by a `branch_sync.next_action`.
 
 ```sh
-no-mistakes axi sync --check
-no-mistakes axi sync
-no-mistakes axi sync --recover
-no-mistakes axi sync --recover --keep-local
+no-slop axi sync --check
+no-slop axi sync
+no-slop axi sync --recover
+no-slop axi sync --recover --keep-local
 ```
 
 | Flag           | Type   | Default | Description                                                                  |
@@ -191,7 +191,7 @@ The default command is an explicit non-interactive apply request and never promp
 All modes return the complete `branch_sync` object as TOON.
 Exit code `0` means an eligible check, applied synchronization or recovery, already-synchronized, custody-returned, or user-owned no-op, or expected merged-and-removed no-op; blocked operational states return `1`.
 The ordinary worktree mutation is either a strict fast-forward of the invoking clean checked-out branch to the freshly verified pipeline-owned pushed SHA, or an equivalent-diverged advance.
-When a clean local branch and the pipeline-pushed head are diverged but the local unique work is content-equivalent to work already represented in the live pipeline head, `sync` reports `safety: safe_equivalent_advance`, anchors the pre-sync head under `refs/no-mistakes/sync-anchor/<run>`, and moves to the pipeline head with reset semantics.
+When a clean local branch and the pipeline-pushed head are diverged but the local unique work is content-equivalent to work already represented in the live pipeline head, `sync` reports `safety: safe_equivalent_advance`, anchors the pre-sync head under `refs/no-slop/sync-anchor/<run>`, and moves to the pipeline head with reset semantics.
 Genuine divergence still reports `safety: blocked_diverged` and changes nothing.
 Under `--recover`, the possible worktree mutation is a strict fast-forward to the preserved pipeline head, or an adoption of a preserved head proven to carry every local change, both after relation-specific preservation checks.
 When the local gate branch is exactly at a newer same-branch pushed binding and Git proves that an older terminal run's unpublished preserved head is its ancestor, branch synchronization selects the newer binding; missing gate evidence, non-ancestor heads, or different or ambiguous target provenance remain blocked.
@@ -204,35 +204,35 @@ Run `axi sync` only when structured output offers `next_action.code: sync`; proc
 A run that goes terminal (cancelled, failed, or completed without a push stage) after moving the pipeline head leaves the branch `pipeline_owned` with `safety: blocked_pipeline_owned_recoverable`, the run's terminal `pipeline.status`, the exact `submitted_head`/`current_head`/`relation` ownership facts, and `next_action.code: recover_custody`.
 A run whose terminalization verifies that the managed worktree head never changed from the submitted head releases the branch instead: the terminal outcome, including cancellation, ends ownership; status reports `state: user_owned` with the same exact ownership facts and no `next_action`; the branch and head are immediately usable for any separately authorized delivery; and nothing blocks a direct push or PR.
 Without that positive terminal head evidence, custody stays recoverable rather than being guessed away.
-While a run is still active, it reports `state: pipeline_owned`, the exact submitted/current heads and their relation, and `next_action.code: continue_active_run` with `no-mistakes axi status`, even when its head has not moved yet.
-`--recover` verifies the run is terminal, anchors the preserved head under `refs/no-mistakes/recover/<run>` in the invoking repository, and stamps custody returned so a fresh run can start.
+While a run is still active, it reports `state: pipeline_owned`, the exact submitted/current heads and their relation, and `next_action.code: continue_active_run` with `no-slop axi status`, even when its head has not moved yet.
+`--recover` verifies the run is terminal, anchors the preserved head under `refs/no-slop/recover/<run>` in the invoking repository, and stamps custody returned so a fresh run can start.
 For equal or ahead worktrees where the preserved head is already locally reachable, recovery writes that anchor locally without gate access.
 For behind or diverged worktrees, recovery verifies the preserved head at the local gate branch and fetches it into the anchor before moving or refusing.
 A clean behind worktree fast-forwards.
 A diverged worktree is adopted only when the preserved head provably carries every local change, proven by an executable three-way merge whose result is exactly the preserved head's tree.
 This covers a pipeline rebase onto a newer base: the rebase step adopts its rebased head on the gate branch ref, so the gate holds the preserved head for recovery to verify.
 A gate branch still frozen at the run's submitted head (a run recorded before that adoption existed) is the one case where the preserved head reached no ref and cannot be fetched: recovery anchors it when the gate object store or your worktree still holds the commit, and returns custody with no anchor only when the commit is genuinely gone.
-That adoption anchors the pre-recovery local head under `refs/no-mistakes/recover-local/<run>`, then moves the branch with Git operations that refuse on their own rather than after a preceding check: an atomic compare-and-swap on the branch ref, and a working-tree update that aborts instead of overwriting a modified or untracked file.
+That adoption anchors the pre-recovery local head under `refs/no-slop/recover-local/<run>`, then moves the branch with Git operations that refuse on their own rather than after a preceding check: an atomic compare-and-swap on the branch ref, and a working-tree update that aborts instead of overwriting a modified or untracked file.
 The proof is deliberately narrow and never uses patch identity, which discards hunk locations and whitespace and so cannot tell a genuine replay from a same-shaped edit elsewhere.
 Anything it cannot decide - unlanded local commits, or a rebase whose fix rounds also rewrote your own lines - still refuses with the anchor named, because only escalation can tell a deliberate pipeline fix apart from a dropped change.
 A dirty worktree refuses with explicit choices.
 When you explicitly keep a behind or diverged local head instead of taking the preserved head, `--keep-local` returns custody at the current head without touching the worktree and atomically points the gate branch at it, so a concurrent gate push wins and the recovery refuses instead.
-Unless your kept head already contains it, the commit the gate branch is moved off is anchored under `refs/no-mistakes/recover-abandoned/<run>` first.
-`no-mistakes rerun` is the alternative exit: instead of taking the branch back it starts a fresh run from the current gate branch head, which is the pipeline head only when the pipeline adopted one there.
+Unless your kept head already contains it, the commit the gate branch is moved off is anchored under `refs/no-slop/recover-abandoned/<run>` first.
+`no-slop rerun` is the alternative exit: instead of taking the branch back it starts a fresh run from the current gate branch head, which is the pipeline head only when the pipeline adopted one there.
 A recovered never-pushed run reports `state: custody_returned`; a recovered pushed run reports its ordinary classification against the last push binding, typically `local_ahead`.
 When custody returns while your branch does not carry a commit the recovery anchored, the success names the holding ref: `preserved_anchor` for the preserved pipeline commits (the frozen-gate case, and every `--keep-local` recovery) and `abandoned_anchor` for the gate head a `--keep-local` compare-and-swap moved the branch off.
 A recorded pipeline head that survives in no object store is reported as `lost_pipeline_head` instead, so an empty anchor set never reads the same whether the pipeline produced nothing or its work was already destroyed.
 Re-running the idempotent recovery reports the same refs, and a refusal that follows an anchor write names them instead of claiming nothing was written.
 On a `user_owned` branch, `--recover` is an idempotent no-op success: nothing pipeline-created exists to recover, and no file, ref, or database row changes.
 
-## no-mistakes axi logs
+## no-slop axi logs
 
 Show the log output of one pipeline step.
 
 ```sh
-no-mistakes axi logs --step review
-no-mistakes axi logs --step review --full
-no-mistakes axi logs --step review --run <id>
+no-slop axi logs --step review
+no-slop axi logs --step review --full
+no-slop axi logs --step review --run <id>
 ```
 
 | Flag     | Type     | Default      | Description                             |
@@ -246,13 +246,13 @@ Step logs include native subprocess agent lifecycle lines such as `codex started
 They also include fix-loop markers such as `auto-fix round 1/3 starting after round 1` and `user-fix round starting after round 2`.
 When an explicit approval completes a gate that still has actionable findings, the log records their count and identifies the approval as explicit adjudication.
 
-## no-mistakes axi abort
+## no-slop axi abort
 
 Cancel the active run for the current branch.
 Active runs on other branches are left alone.
 
 ```sh
-no-mistakes axi abort
+no-slop axi abort
 ```
 
 If there is no active run, this succeeds as a no-op.
@@ -260,7 +260,7 @@ If there is no active run, this succeeds as a no-op.
 Pass `--run <id>` to cancel a specific run by its id instead of resolving the current branch:
 
 ```sh
-no-mistakes axi abort --run <id>
+no-slop axi abort --run <id>
 ```
 
 `--run` does not need a repo, branch, or worktree, so it works from anywhere.
@@ -270,42 +270,42 @@ When the daemon is not running, nothing can be cancelled and abort never starts 
 When the daemon is already running, `axi abort` can cancel an active run even if the global config file has become invalid, because it is not starting a fresh run.
 Both abort surfaces report a completed cancellation only after the exact run positively confirms a terminal state within the bounded wait; success then includes the terminal `run_status`, and branch-scoped abort renders the refreshed `branch_sync` object and its exact next action, if any.
 When terminal quiescence cannot be confirmed - the bounded wait expires, the wait is cancelled, or a status read fails - abort exits nonzero, states explicitly that cancellation was requested but terminal quiescence is unconfirmed, includes the last structured run state when one is available, and never claims `aborted: true` or presents user-owned or recoverable ownership guidance as authoritative; re-run the abort or watch `axi status --run <id>` until a terminal status is confirmed.
-A cancellation that leaves the branch in pipeline custody points directly to `no-mistakes axi sync --recover`, which anchors whatever survives of the pipeline-created commits; when the submitted head never moved, cancellation instead reports `state: user_owned` with no sync action.
-While a run is active, do not use `axi abort` or `no-mistakes rerun` to go fix a finding yourself.
+A cancellation that leaves the branch in pipeline custody points directly to `no-slop axi sync --recover`, which anchors whatever survives of the pipeline-created commits; when the submitted head never moved, cancellation instead reports `state: user_owned` with no sync action.
+While a run is active, do not use `axi abort` or `no-slop rerun` to go fix a finding yourself.
 That cancels the pipeline's in-flight work and forces a full re-validation; use `axi respond --action fix` at the gate so the pipeline applies and re-checks the fix.
 
-## no-mistakes eject
+## no-slop eject
 
 Remove the gate from the current repository.
 
 ```sh
-no-mistakes eject
+no-slop eject
 ```
 
-Removes the `no-mistakes` remote, deletes the bare repo directory, cleans up worktrees, and deletes the database record (cascades to runs and steps).
+Removes the `no-slop` remote, deletes the bare repo directory, cleans up worktrees, and deletes the database record (cascades to runs and steps).
 It does not remove any legacy repo-local agent skill files left by older versions; current `init` installs the skill at user level instead.
 
-## no-mistakes attach
+## no-slop attach
 
 Attach to the active pipeline run.
 
 ```sh
-no-mistakes attach [--run <id>]
+no-slop attach [--run <id>]
 ```
 
 | Flag    | Type     | Default | Description                                           |
 | ------- | -------- | ------- | ----------------------------------------------------- |
 | `--run` | `string` | (none)  | Attach to a specific run ID instead of the active run |
 
-Opens the TUI for the active run anywhere in the current repo. If `--run` is specified, attaches to that specific run regardless of branch. Unlike bare `no-mistakes`, this does not stay branch-scoped before falling back.
+Opens the TUI for the active run anywhere in the current repo. If `--run` is specified, attaches to that specific run regardless of branch. Unlike bare `no-slop`, this does not stay branch-scoped before falling back.
 
-## no-mistakes rerun
+## no-slop rerun
 
 Rerun the pipeline for the current branch.
 
 ```sh
-no-mistakes rerun
-no-mistakes rerun --intent "the revised user goal"
+no-slop rerun
+no-slop rerun --intent "the revised user goal"
 ```
 
 Starts a new pipeline run using the last-known head SHA on the current branch.
@@ -322,16 +322,16 @@ an active run; do not use it to bypass a gate.
 | ---- | ---- | ------- | ----------- |
 | `--intent` | `string` | (none) | Explicit intent overriding inherited intent or fresh inference |
 
-## no-mistakes sync
+## no-slop sync
 
 Freshly verify and, with confirmation, safely move the invoking branch to an exact pipeline-owned push binding.
 
 ```sh
-no-mistakes sync
-no-mistakes sync --check
-no-mistakes sync --yes
-no-mistakes sync --recover
-no-mistakes sync --recover --keep-local
+no-slop sync
+no-slop sync --check
+no-slop sync --yes
+no-slop sync --recover
+no-slop sync --recover --keep-local
 ```
 
 | Flag           | Type   | Default | Description                                                     |
@@ -343,14 +343,14 @@ no-mistakes sync --recover --keep-local
 
 Without `--yes`, apply prints the exact full-SHA plan and requires TTY confirmation; `--recover` prompts the same way before returning custody.
 A non-TTY apply or recovery refuses with a direct `--yes` hint.
-The command uses the same service and safety contract as `no-mistakes axi sync`, including the guarded equivalent advance and custody recovery documented there; it never stashes, rebases, creates a merge commit, switches branches, deletes a branch, or updates an external remote.
+The command uses the same service and safety contract as `no-slop axi sync`, including the guarded equivalent advance and custody recovery documented there; it never stashes, rebases, creates a merge commit, switches branches, deletes a branch, or updates an external remote.
 
-## no-mistakes status
+## no-slop status
 
 Show repo, daemon, active run, and relevant cached local-branch synchronization status.
 
 ```sh
-no-mistakes status
+no-slop status
 ```
 
 Displays:
@@ -360,12 +360,12 @@ Displays:
 - Daemon status (running/stopped, PID)
 - Active run details: ID, branch, status, head SHA, start time
 
-## no-mistakes runs
+## no-slop runs
 
 List recorded pipeline runs for the current repo.
 
 ```sh
-no-mistakes runs [--limit <n>]
+no-slop runs [--limit <n>]
 ```
 
 | Flag      | Type  | Default | Description                       |
@@ -374,12 +374,12 @@ no-mistakes runs [--limit <n>]
 
 Shows runs newest-first with branch, status (styled), short SHA, timestamp, and PR URL if set.
 
-## no-mistakes stats
+## no-slop stats
 
 Show historical usage stats across all repos.
 
 ```sh
-no-mistakes stats
+no-slop stats
 ```
 
 Displays total changes, rescued changes, rescue rate, reported and fixed mistakes, fixes by pipeline step, and the top repos by rescue activity.
@@ -389,19 +389,19 @@ Use `--run <id>` to inspect the individual agent invocations for one run - inclu
 Nullable fields an adapter did not report render as `-` (unknown), which is distinct from a recorded `0`; the legacy raw input, output, and cache-read counters remain numeric.
 
 ```sh
-no-mistakes stats --agents
-no-mistakes stats --run <id>
+no-slop stats --agents
+no-slop stats --run <id>
 ```
 
 This detailed performance evidence stays local in `state.sqlite`; it is not sent to telemetry.
 The field definitions and their local/remote split are owned by [the environment reference](/reference/environment/#what-stays-local-and-what-leaves-the-machine).
 
-## no-mistakes doctor
+## no-slop doctor
 
 Check system health and dependencies.
 
 ```sh
-no-mistakes doctor
+no-slop doctor
 ```
 
 Checks:
@@ -419,21 +419,21 @@ Checks:
 Uses indicators: `✓` (available), `–` (not found, optional), `✗` (problem detected).
 
 The standalone runner rows inspect default binary names; the `cursor` row reports whichever of `cursor-agent` and `acpx` are missing.
-`doctor` is the only place a provider quota cooldown surfaces, so it reports one three ways: an installed runner whose quota is exhausted reports `quota-exhausted until <time>` instead of its binary path; a recorded lane with no runner row above it, such as an explicit `acp:<target>` fallback, gets its own row under the same name; and `gate validation` reports the resolved agent as runnable but quota-exhausted rather than plainly runnable. See [Global Config Reference](/no-mistakes/reference/global-config/#agent) for how the cooldown is recorded and cleared.
-The [Global Config Reference](/no-mistakes/reference/global-config/) owns ACP gate-validation availability and probing semantics.
+`doctor` is the only place a provider quota cooldown surfaces, so it reports one three ways: an installed runner whose quota is exhausted reports `quota-exhausted until <time>` instead of its binary path; a recorded lane with no runner row above it, such as an explicit `acp:<target>` fallback, gets its own row under the same name; and `gate validation` reports the resolved agent as runnable but quota-exhausted rather than plainly runnable. See [Global Config Reference](/no-slop/reference/global-config/#agent) for how the cooldown is recorded and cleared.
+The [Global Config Reference](/no-slop/reference/global-config/) owns ACP gate-validation availability and probing semantics.
 Each validation run performs the authoritative agent resolution again after applying any trusted repository-level override.
 
-`doctor` checks `gh` and `az` availability. For GitLab PR and CI steps, install and authenticate `glab`. For Bitbucket Cloud PR and CI steps, set `NO_MISTAKES_BITBUCKET_EMAIL` and `NO_MISTAKES_BITBUCKET_API_TOKEN`. For Azure DevOps PR and CI steps, install the `azure-devops` extension and provide a PAT.
+`doctor` checks `gh` and `az` availability. For GitLab PR and CI steps, install and authenticate `glab`. For Bitbucket Cloud PR and CI steps, set `NS_BITBUCKET_EMAIL` and `NS_BITBUCKET_API_TOKEN`. For Azure DevOps PR and CI steps, install the `azure-devops` extension and provide a PAT.
 
-## no-mistakes update
+## no-slop update
 
 Self-update is disabled in this build.
 
 ```sh
-no-mistakes update
-no-mistakes update --beta
-no-mistakes update -y
-no-mistakes update --force
+no-slop update
+no-slop update --beta
+no-slop update -y
+no-slop update --force
 ```
 
 Every one of these invocations fails with an explanation instead of replacing the binary. `--beta`, `-y`/`--yes`, and `--force` are still accepted by the command line, but none of them re-enable the update.
@@ -441,69 +441,69 @@ Every one of these invocations fails with an explanation instead of replacing th
 This build comes from the `Blakeolson21/no-slop` fork, which carries local patches that exist in no published release. Downloading a release archive over it would silently drop every one of them, and the fork publishes no release archives of its own, so rebuilding from source is the supported way to move it forward:
 
 ```sh
-go build -o ~/.no-mistakes/bin/no-mistakes.new ./cmd/no-mistakes
-mv ~/.no-mistakes/bin/no-mistakes.new ~/.no-mistakes/bin/no-mistakes
-no-mistakes daemon restart
+go build -o ~/.no-mistakes/bin/no-slop.new ./cmd/no-slop
+mv ~/.no-mistakes/bin/no-slop.new ~/.no-mistakes/bin/no-slop
+no-slop daemon restart
 ```
 
 Target the real binary, not the `~/.local/bin` symlink `command -v` reports. `go build -o` removes a regular destination before writing it, but it leaves a symlink in place and truncates whatever the link points at, which on Linux fails with `ETXTBSY` while the daemon is executing that file.
 
 Stage the build beside its destination rather than under `/tmp`, so the `mv` is a rename within one filesystem and replaces the binary atomically. `/tmp` is a separate tmpfs mount on most Linux systems, which silently degrades the move to a copy.
 
-The install directory comes from `NO_MISTAKES_INSTALL_DIR` and defaults to `~/.no-mistakes/bin`; `NM_HOME` does not affect it. A `go install` layout puts the binary in `GOBIN` instead.
+The install directory comes from `NS_INSTALL_DIR` and defaults to `~/.no-mistakes/bin`; `NS_HOME` does not affect it. A `go install` layout puts the binary in `GOBIN` instead.
 
-Because the binary is never replaced by the command itself, the daemon is never reset by it either; the restart above is what picks up a rebuild. [Daemon & Worktrees](/no-mistakes/concepts/daemon/#starting-and-stopping) owns the active-run guard that applies to it.
+Because the binary is never replaced by the command itself, the daemon is never reset by it either; the restart above is what picks up a rebuild. [Daemon & Worktrees](/no-slop/concepts/daemon/#starting-and-stopping) owns the active-run guard that applies to it.
 
-Background update checks are disabled with the command, so no CLI invocation probes GitHub for releases, no upgrade notice is printed to stderr, and the TUI never shows an "update available" badge. `NO_MISTAKES_NO_UPDATE_CHECK=1` has no additional effect in this build.
+Background update checks are disabled with the command, so no CLI invocation probes GitHub for releases, no upgrade notice is printed to stderr, and the TUI never shows an "update available" badge. `NS_NO_UPDATE_CHECK=1` has no additional effect in this build.
 
-## no-mistakes daemon start
+## no-slop daemon start
 
 Start the daemon, installing or refreshing the managed service when possible.
 
 ```sh
-no-mistakes daemon start
-no-mistakes daemon start --abandon-executing-runs
+no-slop daemon start
+no-slop daemon start --abandon-executing-runs
 ```
 
-Prefers the managed service path and falls back to a detached daemon if service install or startup is unavailable or fails. If the daemon is already running, the command refreshes a stale macOS `launchd` or Linux `systemd` service definition and restarts through the managed service; if the definition is unchanged, it reports that the daemon is already running. Because that refresh stops the running daemon, the command refuses while a run is executing a step unless you pass `--abandon-executing-runs`. [Daemon & Worktrees](/no-mistakes/concepts/daemon/#starting-and-stopping) owns that guard, plus the startup readiness, timeout, fallback cleanup, and singleton lifecycle details.
+Prefers the managed service path and falls back to a detached daemon if service install or startup is unavailable or fails. If the daemon is already running, the command refreshes a stale macOS `launchd` or Linux `systemd` service definition and restarts through the managed service; if the definition is unchanged, it reports that the daemon is already running. Because that refresh stops the running daemon, the command refuses while a run is executing a step unless you pass `--abandon-executing-runs`. [Daemon & Worktrees](/no-slop/concepts/daemon/#starting-and-stopping) owns that guard, plus the startup readiness, timeout, fallback cleanup, and singleton lifecycle details.
 
-## no-mistakes daemon stop
+## no-slop daemon stop
 
 Stop the running daemon process.
 
 ```sh
-no-mistakes daemon stop
-no-mistakes daemon stop --force
-no-mistakes daemon stop --abandon-executing-runs
+no-slop daemon stop
+no-slop daemon stop --force
+no-slop daemon stop --abandon-executing-runs
 ```
 
-[Daemon & Worktrees](/no-mistakes/concepts/daemon/#starting-and-stopping)
+[Daemon & Worktrees](/no-slop/concepts/daemon/#starting-and-stopping)
 owns the active-run guard, the scope of `--force`, why it does not cover a run
 that is executing a step, and recursive validation-step containment.
 
-This does not remove the managed service. A later `no-mistakes`, `no-mistakes daemon start`, `init`, `attach`, or `rerun` can start the daemon again through the same service manager when available, or as a detached daemon otherwise.
+This does not remove the managed service. A later `no-slop`, `no-slop daemon start`, `init`, `attach`, or `rerun` can start the daemon again through the same service manager when available, or as a detached daemon otherwise.
 
-## no-mistakes daemon restart
+## no-slop daemon restart
 
 Restart the daemon.
 
 ```sh
-no-mistakes daemon restart
-no-mistakes daemon restart --force
-no-mistakes daemon restart --abandon-executing-runs
+no-slop daemon restart
+no-slop daemon restart --force
+no-slop daemon restart --abandon-executing-runs
 ```
 
 Stops the current daemon and starts it again. This works whether the daemon is currently running or not.
-[Daemon & Worktrees](/no-mistakes/concepts/daemon/#starting-and-stopping)
+[Daemon & Worktrees](/no-slop/concepts/daemon/#starting-and-stopping)
 owns the active-run guard, the scope of `--force`, why it does not cover a run
 that is executing a step, and recursive validation-step containment.
 
-## no-mistakes daemon status
+## no-slop daemon status
 
 Check whether the daemon is running.
 
 ```sh
-no-mistakes daemon status
+no-slop daemon status
 ```
 
 Shows the PID if the daemon is running.

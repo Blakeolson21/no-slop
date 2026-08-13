@@ -9,14 +9,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	gitpkg "github.com/kunchenguid/no-mistakes/internal/git"
-	"github.com/kunchenguid/no-mistakes/internal/ipc"
-	"github.com/kunchenguid/no-mistakes/internal/lifecycle"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/pipeline"
-	"github.com/kunchenguid/no-mistakes/internal/pipeline/steps"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	gitpkg "github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/lifecycle"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/pipeline"
+	"github.com/Blakeolson21/no-slop/internal/pipeline/steps"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestSubscribeReceivesEvents(t *testing.T) {
@@ -798,9 +798,9 @@ func TestRecoverRefreshesLegacyManagedGateHook(t *testing.T) {
 	}
 	hookPath := filepath.Join(bareDir, "hooks", "post-receive")
 	legacyHook := `#!/bin/sh
-# no-mistakes post-receive hook
+# no-slop post-receive hook
 # Notify daemon of push. Non-blocking - push always succeeds.
-NM_BIN='/usr/local/bin/no-mistakes'
+NM_BIN='/usr/local/bin/no-slop'
 while read oldrev newrev refname; do
   NM_HOOK_HELPER=1 "$NM_BIN" daemon notify-push \
     --gate "$(pwd)" \

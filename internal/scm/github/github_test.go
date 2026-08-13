@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/scm"
+	"github.com/Blakeolson21/no-slop/internal/scm"
 )
 
 func TestRepoSlug(t *testing.T) {

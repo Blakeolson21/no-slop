@@ -7,14 +7,14 @@ import (
 	"os"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
 // ErrSingletonLockHeld is returned by acquireSingletonLock when another live
-// process already holds the lock for the same NM_HOME.
-var ErrSingletonLockHeld = errors.New("a no-mistakes daemon is already running for this NM_HOME")
+// process already holds the lock for the same NS_HOME.
+var ErrSingletonLockHeld = errors.New("a no-slop daemon is already running for this NS_HOME")
 
-// singletonLock guards NM_HOME against more than one live daemon process.
+// singletonLock guards NS_HOME against more than one live daemon process.
 // It must be acquired before any global, destructive startup operation
 // (stale-run recovery, orphan worktree cleanup) and before the IPC socket is
 // bound, and held for the lifetime of the process.

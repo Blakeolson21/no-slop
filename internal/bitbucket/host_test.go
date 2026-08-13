@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/scm"
+	"github.com/Blakeolson21/no-slop/internal/scm"
 )
 
 func TestNormalizePRState(t *testing.T) {

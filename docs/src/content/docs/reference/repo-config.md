@@ -1,16 +1,16 @@
 ---
 title: Repo Config Reference
-description: All fields for .no-mistakes.yaml.
+description: All fields for .no-slop.yaml.
 ---
 
-Per-repo configuration lives in `.no-mistakes.yaml` at the root of your repository.
+Per-repo configuration lives in `.no-slop.yaml` at the root of your repository.
 
 :::caution[Security: gate-control fields are read from the default branch]
 `commands.*` execute arbitrary shell on the daemon host via `sh -c` / `cmd.exe /c`, and `agent` selects which process launches there (including ordered fallback lists, ACP aliases such as `cursor`, and `acp:` targets) with the maintainer's credentials.
 To prevent a supply-chain attack where a contributor lands a hostile value on a gated branch, the daemon always reads **`commands` and `agent` from your default branch** (e.g. `origin/main`), never from the pushed SHA, and reads them at the exact commit a fresh fetch resolved (so a stale `origin/<default>` ref cannot serve a value the live default branch removed).
 The daemon also reads `document.instructions`, the `review` section (`review.path_instructions`, `review.convergence`), `disable_project_settings`, `no_ci`, and `ci.rerun_transient` only from that trusted copy.
-If the default branch cannot be fetched and resolved to a readable commit, or its present `.no-mistakes.yaml` cannot be read and parsed, the run aborts before launching an agent.
-A readable default-branch tree with no `.no-mistakes.yaml` is valid and uses defaults.
+If the default branch cannot be fetched and resolved to a readable commit, or its present `.no-slop.yaml` cannot be read and parsed, the run aborts before launching an agent.
+A readable default-branch tree with no `.no-slop.yaml` is valid and uses defaults.
 Commit the gate-control settings you want to your default branch.
 Non-executing fields (`ignore_patterns`, `auto_fix`, `commit`, `intent`, `test`) are still read from the pushed branch.
 
@@ -18,7 +18,7 @@ If you genuinely want per-branch `commands` and `agent` (for example, a single-d
 :::
 
 ```yaml
-# .no-mistakes.yaml
+# .no-slop.yaml
 
 agent: codex
 
@@ -69,7 +69,7 @@ ci:
   rerun_transient: 0
 
 commit:
-  fix_message: "chore(no-mistakes-{{.Step}}): {{.Summary}}"
+  fix_message: "chore(no-slop-{{.Step}}): {{.Summary}}"
 
 intent:
   enabled: true
@@ -80,7 +80,7 @@ intent:
 test:
   evidence:
     store_in_repo: true
-    dir: .no-mistakes/evidence
+    dir: .no-slop/evidence
 
 # NoSlop front-stage settings.
 slop:
@@ -180,9 +180,9 @@ agent: [codex, claude]
 The list is filtered to entries available to the daemon at run startup, and the first available entry becomes the primary agent.
 After resolving `auto`, entries that resolve to the same ACP target are deduplicated in list order, so `cursor` and `acp:cursor` provide one fallback and preserve whichever spelling appears first.
 If no entry is available, the gate fails before its first pipeline step.
-If a pipeline invocation fails because that agent process cannot start or exits with an error, no-mistakes retries that invocation with the next available fallback.
+If a pipeline invocation fails because that agent process cannot start or exits with an error, no-slop retries that invocation with the next available fallback.
 Structured findings and schema/output validation problems do not trigger fallback.
-This per-repo `agent` value, including every fallback entry, is still read from the trusted default-branch `.no-mistakes.yaml` unless `allow_repo_commands` is enabled there.
+This per-repo `agent` value, including every fallback entry, is still read from the trusted default-branch `.no-slop.yaml` unless `allow_repo_commands` is enabled there.
 
 ### allow_repo_commands
 
@@ -193,7 +193,7 @@ Opt in to honoring the code-executing selection fields (`commands.{test,lint,for
 | Type | `bool` |
 | Default | `false` |
 
-This field is itself read **only from the trusted default-branch copy** of `.no-mistakes.yaml`, never from the pushed SHA, so a contributor cannot self-enable it by setting it on a feature branch. By default the daemon reads `commands` and `agent` from your default branch (e.g. `origin/main`) so a pushed SHA cannot inject shell or pick the launched agent on the daemon host. This opt-in covers those two fields only; `document.instructions`, `review.path_instructions`, and `disable_project_settings` stay trusted-only either way. Leave this `false` for any repo that accepts contributions. Set it to `true` only for a single-developer environment where you trust every branch you push (for example, a personal repo gated by your own daemon).
+This field is itself read **only from the trusted default-branch copy** of `.no-slop.yaml`, never from the pushed SHA, so a contributor cannot self-enable it by setting it on a feature branch. By default the daemon reads `commands` and `agent` from your default branch (e.g. `origin/main`) so a pushed SHA cannot inject shell or pick the launched agent on the daemon host. This opt-in covers those two fields only; `document.instructions`, `review.path_instructions`, and `disable_project_settings` stay trusted-only either way. Leave this `false` for any repo that accepts contributions. Set it to `true` only for a single-developer environment where you trust every branch you push (for example, a personal repo gated by your own daemon).
 
 ### disable_project_settings
 
@@ -205,7 +205,7 @@ Suppress project-level agent settings and instructions for every gate-agent star
 | Default | `false` |
 
 This opt-in is intended for agent-orchestration repositories whose `AGENTS.md`, `CLAUDE.md`, or harness-specific project settings would give a validation agent an operator identity and authority that it must not adopt.
-When enabled, no-mistakes suppresses the target checkout's project settings for every agent-driven gate step while preserving user-level agent configuration.
+When enabled, no-slop suppresses the target checkout's project settings for every agent-driven gate step while preserving user-level agent configuration.
 Codex, Claude, and Pi are the currently verified agents: Codex receives `project_doc_max_bytes=0` and `--ignore-rules`, Claude loads only its user setting source, and Pi runs with `--no-context-files` (preserving a pinned `--no-context-files` or `-nc` spelling).
 The setting applies to both new and resumed sessions.
 
@@ -213,7 +213,7 @@ The gate fails before launching an agent if any resolved agent or fallback lacks
 It also fails if `agent_args_override` defeats suppression, such as a nonzero Codex `project_doc_max_bytes` or Claude setting sources that include `project` or `local`.
 When this option is `false`, missing, or `null`, all agents retain their existing project-setting behavior.
 
-This field is honored **only from the trusted default-branch copy** of `.no-mistakes.yaml`, regardless of `allow_repo_commands`.
+This field is honored **only from the trusted default-branch copy** of `.no-slop.yaml`, regardless of `allow_repo_commands`.
 A pushed branch cannot enable it or disable a trusted opt-in.
 If the trusted commit or its present config file cannot be read and parsed, the run aborts rather than guessing that the option is disabled.
 
@@ -232,7 +232,7 @@ Absence of this field means CI is expected. A zero-length check result then stay
 
 If checks still appear on a declared no-CI repository, their actual states are processed normally. The declaration never waives a registered pending or failing check.
 
-This field is honored **only from the trusted default-branch copy** of `.no-mistakes.yaml`, regardless of `allow_repo_commands`.
+This field is honored **only from the trusted default-branch copy** of `.no-slop.yaml`, regardless of `allow_repo_commands`.
 A feature branch cannot self-declare `no_ci: true` to bypass checks, and cannot clear a trusted declaration either.
 
 ### commands.test
@@ -246,7 +246,7 @@ Explicit **targeted** local test command. Run via the platform shell - `sh -c` o
 
 `commands.test` is local **targeted validation** of the change and requested intent, not a CI-parity repository-wide regression command.
 Broad regression belongs in remote CI and remains mandatory before a PR is ready; do not put a complete-suite walk here just to mirror CI.
-no-mistakes does not guess whether an arbitrary shell string is "too broad" - the contract is documented and dogfooded, not enforced with language- or filename-specific heuristics.
+no-slop does not guess whether an arbitrary shell string is "too broad" - the contract is documented and dogfooded, not enforced with language- or filename-specific heuristics.
 
 When set, the test step runs this exact command first as the baseline and checks the exit code.
 When empty, the agent detects and runs the smallest relevant tests itself (and is instructed never to run the complete repository suite).
@@ -289,7 +289,7 @@ The document step always applies a built-in placement policy: every fact has exa
 `document.instructions` states this repository's ownership map or extra placement rules (for example, which file owns which class of facts).
 It augments or clarifies the built-in policy; it cannot disable documentation integrity.
 
-Like `commands.*` and `agent`, this field steers gate behavior, so it is honored **only from the trusted default-branch copy** of `.no-mistakes.yaml`: a contributor's pushed branch cannot weaken the documentation rules that gate its own review.
+Like `commands.*` and `agent`, this field steers gate behavior, so it is honored **only from the trusted default-branch copy** of `.no-slop.yaml`: a contributor's pushed branch cannot weaken the documentation rules that gate its own review.
 
 ### review.path_instructions
 
@@ -332,7 +332,7 @@ Matching runs against the full changed-file list and is deliberately **not** fil
 
 Blocks augment the built-in review instructions; they cannot disable them, and a finding the reviewer raises from a block goes through the same severity and action model as any other finding.
 With nothing configured, or nothing matching the change, the review prompt is exactly what it would be without this setting.
-The step log names the rules it applied and the rules that matched nothing, so a rule that never fires is visible in `no-mistakes axi logs --step review`.
+The step log names the rules it applied and the rules that matched nothing, so a rule that never fires is visible in `no-slop axi logs --step review`.
 
 #### Limits and validation
 
@@ -346,7 +346,7 @@ These checks run on whichever copy of the file is parsed, including the pushed b
 
 #### Trust
 
-Like `document.instructions`, this field steers gate behavior, so it is honored **only from the trusted default-branch copy** of `.no-mistakes.yaml`, regardless of [`allow_repo_commands`](#allow_repo_commands): a value present only on a pushed branch is ignored, so a contributor cannot inject instructions into the review that gates them.
+Like `document.instructions`, this field steers gate behavior, so it is honored **only from the trusted default-branch copy** of `.no-slop.yaml`, regardless of [`allow_repo_commands`](#allow_repo_commands): a value present only on a pushed branch is ignored, so a contributor cannot inject instructions into the review that gates them.
 
 ### review.convergence
 
@@ -375,13 +375,13 @@ review:
     budget_minutes: 90
 ```
 
-Like the rest of the `review` section, these thresholds are honored **only from the trusted default-branch copy** of `.no-mistakes.yaml`: a pushed branch cannot widen or disable the guard on its own run.
+Like the rest of the `review` section, these thresholds are honored **only from the trusted default-branch copy** of `.no-slop.yaml`: a pushed branch cannot widen or disable the guard on its own run.
 
 ### Command process lifetime
 
 All configured `commands.*` entries are scoped to their step.
-After no-mistakes starts one of these commands, it terminates any remaining child processes from that command when the command exits, fails, or the step is cancelled.
-Do not rely on a configured command to leave a background server or watcher running after it returns; keep that service inside the command lifetime or start it outside no-mistakes.
+After no-slop starts one of these commands, it terminates any remaining child processes from that command when the command exits, fails, or the step is cancelled.
+Do not rely on a configured command to leave a background server or watcher running after it returns; keep that service inside the command lifetime or start it outside no-slop.
 
 ### ignore_patterns
 
@@ -444,7 +444,7 @@ A pushed branch cannot raise its own rerun budget.
 The default is `0` because a cancelled conclusion does not identify its cause: the same value covers the provider aborting its own infrastructure, a maintainer stopping a runaway or unsafe job, and repository concurrency with `cancel-in-progress`.
 Rerunning on that ambiguity can restart work someone deliberately stopped, so raise this only for a repository whose cancellations are known to be provider-side.
 
-With no trusted copy of this file, the operator's own [`ci.rerun_transient`](/no-mistakes/reference/global-config/#cirerun_transient) applies, then the built-in default.
+With no trusted copy of this file, the operator's own [`ci.rerun_transient`](/no-slop/reference/global-config/#cirerun_transient) applies, then the built-in default.
 A value set here always wins over the global one, so the maintainer of the repository has the last word on how many workflow runs their project is billed for.
 
 A rerun is requested only when the provider itself reported the outcome as `cancelled`, which is the one terminal outcome it attributes to itself rather than to the job:
@@ -452,7 +452,7 @@ A rerun is requested only when the provider itself reported the outcome as `canc
 - `failure`, `error`, `action_required`, and `startup_failure` are the job's own verdict on the commit, so they escalate on the first failure with no added latency.
 - `timed_out` means the job exceeded its own `timeout-minutes`, which is usually the branch's own code hanging. Re-running it burns another full timeout window reproducing the same failure, so it is treated as a genuine failure and is not opt-in.
 - `stale` is already treated as skipped rather than failed, so it never reaches this decision.
-- An outcome no-mistakes recognizes as none of the above never earns a rerun either.
+- An outcome no-slop recognizes as none of the above never earns a rerun either.
 
 A single non-cancelled failure, or a merge conflict, suppresses the rerun for that poll: the fix agent is needed regardless, and no rerun can clear a merge conflict.
 
@@ -462,7 +462,7 @@ Check names are not unique on a pull request, so same-named checks share one bud
 A rerun request returns as soon as the provider accepts it, while the new attempt replaces the cancelled check in the status rollup a moment later.
 A poll that still reads the exact completion the rerun was requested for has observed nothing new, so the monitor waits for a bounded couple of polls rather than escalating a check it never actually re-ran.
 A provider that accepts a rerun and never publishes it cannot stall the run past that.
-Once the provider publishes a conclusive replacement, no-mistakes durably stops treating that rerun as outstanding while preserving the spent budget; if the exact watched head is then green, the monitor reports `checks-passed` normally.
+Once the provider publishes a conclusive replacement, no-slop durably stops treating that rerun as outstanding while preserving the spent budget; if the exact watched head is then green, the monitor reports `checks-passed` normally.
 
 A cancelled check that no rerun is going to replace pauses the step for user approval when cancellation is the only remaining issue, so the pull request never looks green.
 That is a check that came back cancelled after its rerun, and - at the default budget of `0`, once the budget is spent, or on a provider with no rerun API - the cancellation itself: the provider has already published its conclusion for that check and will not publish another one on its own, so there is nothing left for the monitor to wait for.
@@ -473,7 +473,7 @@ Reruns are skipped when:
 
 - The provider has no rerun API (only GitHub implements one today; GitLab, Bitbucket Cloud, and Azure DevOps reach the approval gate without a rerun).
 - The check's details link names nothing the provider can re-run, for example a third-party status pointing at an external dashboard, or a link under a workflow run that names no job the API accepts. A link naming one job re-runs that job; a link naming only the workflow run re-runs that run's failed jobs; an unrecognized link is widened into neither.
-- The published branch head no longer equals the commit the run delivered. That case terminates with the expected and observed commits instead: re-running checks against a different head would certify a revision this run never produced. See [pipeline steps: CI](/no-mistakes/reference/pipeline-steps/#ci).
+- The published branch head no longer equals the commit the run delivered. That case terminates with the expected and observed commits instead: re-running checks against a different head would certify a revision this run never produced. See [pipeline steps: CI](/no-slop/reference/pipeline-steps/#ci).
 
 ### commit.fix_message
 
@@ -482,9 +482,9 @@ Override the auto-fix commit subject template for this repository.
 | | |
 | --- | --- |
 | Type | `string` |
-| Default | Inherits from global config, whose default is `no-mistakes({{.Step}}): {{.Summary}}` |
+| Default | Inherits from global config, whose default is `no-slop({{.Step}}): {{.Summary}}` |
 
-The value follows the [global `commit.fix_message` template syntax and validation rules](/no-mistakes/reference/global-config/#commitfix_message).
+The value follows the [global `commit.fix_message` template syntax and validation rules](/no-slop/reference/global-config/#commitfix_message).
 That includes the 1,024-byte template limit, 16-placeholder limit, 4,096-byte summary and rendered-subject limits, and rejection of bidi and invisible Unicode format characters.
 The setting applies to the Review, Test, Document, and Lint fix path, not commits created by the Rebase, CI, or Push steps.
 
@@ -512,9 +512,9 @@ Fields not set here inherit from global config and then the built-in defaults.
 | Field | Type | Default |
 | --- | --- | --- |
 | `test.evidence.store_in_repo` | `bool` | Inherits from global (default `false`) |
-| `test.evidence.dir` | `string` | Inherits from global (default `.no-mistakes/evidence`) |
+| `test.evidence.dir` | `string` | Inherits from global (default `.no-slop/evidence`) |
 
 By default, test evidence stays in a temporary directory keyed by run ID and is referenced by local path.
 Set `store_in_repo: true` to write evidence under `<dir>/<branch-slug>` inside the worktree so push can commit and publish it with the branch.
 Branch slashes become nested directories, unsafe branch characters are replaced, and an empty branch slug falls back to the run ID.
-If `dir` is absolute, escapes the worktree, points into `.git`, crosses a symlink, or is ignored by Git, no-mistakes falls back to temporary evidence storage for that run.
+If `dir` is absolute, escapes the worktree, points into `.git`, crosses a symlink, or is ignored by Git, no-slop falls back to temporary evidence storage for that run.

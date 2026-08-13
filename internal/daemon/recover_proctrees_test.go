@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/proctree"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/proctree"
 )
 
 // TestReapOrphanedProcessTrees_ReapsRecordedOrphans is the restart half of the
@@ -74,7 +74,7 @@ func TestReapOrphanedProcessTrees_SkipsWhenAnotherDaemonIsAlive(t *testing.T) {
 
 func testPaths(t *testing.T) *paths.Paths {
 	t.Helper()
-	t.Setenv("NM_HOME", t.TempDir())
+	t.Setenv("NS_HOME", t.TempDir())
 	p, err := paths.New()
 	if err != nil {
 		t.Fatalf("paths.New: %v", err)

@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/git"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
 // TestInitIsIdempotent proves an existing user can re-run `init` to adopt new
@@ -37,8 +37,8 @@ func TestInitIsIdempotent(t *testing.T) {
 
 	// Overwrite the installed skill with stale content to prove the re-run
 	// refreshes the user-level copy.
-	skillPath := filepath.Join(h.HomeDir, ".claude", "skills", "no-mistakes", "SKILL.md")
-	if err := os.WriteFile(skillPath, []byte("---\nname: no-mistakes\n---\nstale body\n"), 0o644); err != nil {
+	skillPath := filepath.Join(h.HomeDir, ".claude", "skills", "no-slop", "SKILL.md")
+	if err := os.WriteFile(skillPath, []byte("---\nname: no-slop\n---\nstale body\n"), 0o644); err != nil {
 		t.Fatalf("write stale skill: %v", err)
 	}
 
@@ -59,14 +59,14 @@ func TestInitIsIdempotent(t *testing.T) {
 		t.Errorf("re-init must refresh a stale user-level skill copy")
 	}
 
-	// The no-mistakes remote must still be wired after the refresh.
-	if out, err := h.runGit(context.Background(), h.WorkDir, "remote", "get-url", "no-mistakes"); err != nil {
-		t.Fatalf("no-mistakes remote missing after re-init: %v\n%s", err, out)
+	// The no-slop remote must still be wired after the refresh.
+	if out, err := h.runGit(context.Background(), h.WorkDir, "remote", "get-url", "no-slop"); err != nil {
+		t.Fatalf("no-slop remote missing after re-init: %v\n%s", err, out)
 	}
 }
 
 // TestInitLegacyNotice proves init in a repo that still carries a vendored
-// skill copy from an older no-mistakes version points it out without touching
+// skill copy from an older no-slop version points it out without touching
 // it: the copy is the user's to remove, possibly via their VCS.
 //
 // The test name is deliberately short for the same socket path length reason
@@ -74,11 +74,11 @@ func TestInitIsIdempotent(t *testing.T) {
 func TestInitLegacyNotice(t *testing.T) {
 	h := NewHarness(t, SetupOpts{Agent: "claude"})
 
-	legacy := filepath.Join(h.WorkDir, ".agents", "skills", "no-mistakes", "SKILL.md")
+	legacy := filepath.Join(h.WorkDir, ".agents", "skills", "no-slop", "SKILL.md")
 	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	legacyContent := "---\nname: no-mistakes\nmetadata:\n  internal: true\n---\nlegacy vendored body\n"
+	legacyContent := "---\nname: no-slop\nmetadata:\n  internal: true\n---\nlegacy vendored body\n"
 	if err := os.WriteFile(legacy, []byte(legacyContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestInitLegacyNotice(t *testing.T) {
 	if !strings.Contains(out, "no longer needed") {
 		t.Errorf("init should notice the vendored legacy copy, got:\n%s", out)
 	}
-	if !strings.Contains(out, filepath.Join(".agents", "skills", "no-mistakes", "SKILL.md")) {
+	if !strings.Contains(out, filepath.Join(".agents", "skills", "no-slop", "SKILL.md")) {
 		t.Errorf("the notice should name the vendored path, got:\n%s", out)
 	}
 
@@ -108,10 +108,10 @@ func TestInitLegacyNotice(t *testing.T) {
 // directory can re-run `init` from the new location and get their existing
 // gate back, instead of the historical failure:
 //
-//	init: add remote: remote "no-mistakes" already exists with url "..."
+//	init: add remote: remote "no-slop" already exists with url "..."
 //
 // The test name is deliberately short: it becomes part of t.TempDir(), which
-// hosts NM_HOME, and the daemon's Unix socket path under it must stay within
+// hosts NS_HOME, and the daemon's Unix socket path under it must stay within
 // the OS socket path limit (104 bytes on macOS).
 func TestInitRepoRename(t *testing.T) {
 	h := NewHarness(t, SetupOpts{Agent: "claude"})
@@ -121,7 +121,7 @@ func TestInitRepoRename(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first init: %v\n%s", err, first)
 	}
-	gateURLOut, err := h.runGit(ctx, h.WorkDir, "remote", "get-url", "no-mistakes")
+	gateURLOut, err := h.runGit(ctx, h.WorkDir, "remote", "get-url", "no-slop")
 	if err != nil {
 		t.Fatalf("get gate url: %v\n%s", err, gateURLOut)
 	}
@@ -141,15 +141,15 @@ func TestInitRepoRename(t *testing.T) {
 	}
 
 	// The repo must be reattached to the same gate, not a new one.
-	if out, err := h.runGit(ctx, renamed, "remote", "get-url", "no-mistakes"); err != nil {
-		t.Fatalf("no-mistakes remote missing after rename re-init: %v\n%s", err, out)
+	if out, err := h.runGit(ctx, renamed, "remote", "get-url", "no-slop"); err != nil {
+		t.Fatalf("no-slop remote missing after rename re-init: %v\n%s", err, out)
 	} else if url := strings.TrimSpace(string(out)); url != gateURL {
 		t.Errorf("gate url after rename = %q, want %q", url, gateURL)
 	}
 }
 
 // TestInitInSubmoduleRegistersSubmoduleOwnOrigin reproduces issue #328:
-// `no-mistakes init` from inside a Git submodule checkout must register the
+// `no-slop init` from inside a Git submodule checkout must register the
 // gate against the submodule's own origin, not the superproject's. Before the
 // fix, FindMainRepoRoot took the parent of --git-common-dir, which for an
 // absorbed submodule is <super>/.git/modules/<name>. The gate then read its
@@ -254,7 +254,7 @@ func TestInitRollsBackWhenDaemonStartFails(t *testing.T) {
 	h := NewHarness(t, SetupOpts{Agent: "claude"})
 	badNMHome := filepath.Join(t.TempDir(), strings.Repeat("a", 160))
 	env := map[string]string{
-		"NM_HOME":                            badNMHome,
+		"NS_HOME":                            badNMHome,
 		"NM_TEST_DAEMON_START_TIMEOUT":       "200ms",
 		"NM_TEST_DAEMON_START_POLL_INTERVAL": "10ms",
 	}
@@ -285,8 +285,8 @@ func TestInitRollsBackWhenDaemonStartFails(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	if out, err := h.runGit(ctx, h.WorkDir, "remote", "get-url", "no-mistakes"); err == nil {
-		t.Fatalf("no-mistakes remote should be removed after failed init, got %q", out)
+	if out, err := h.runGit(ctx, h.WorkDir, "remote", "get-url", "no-slop"); err == nil {
+		t.Fatalf("no-slop remote should be removed after failed init, got %q", out)
 	}
 
 	p := paths.WithRoot(badNMHome)

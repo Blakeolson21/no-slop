@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/update"
+	"github.com/Blakeolson21/no-slop/internal/update"
 )
 
 // Self-update is disabled in this fork build: an update would overwrite the
@@ -44,5 +44,5 @@ func TestUpdateCommandRefusesRegardlessOfFlags(t *testing.T) {
 
 func isolateUpdateCommand(t *testing.T) {
 	t.Helper()
-	t.Setenv("NM_HOME", t.TempDir())
+	t.Setenv("NS_HOME", t.TempDir())
 }

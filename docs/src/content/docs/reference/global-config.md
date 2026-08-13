@@ -3,7 +3,7 @@ title: Global Config Reference
 description: All fields for ~/.no-mistakes/config.yaml.
 ---
 
-Global configuration lives at `~/.no-mistakes/config.yaml`. Set `NM_HOME` to relocate the config directory.
+Global configuration lives at `~/.no-mistakes/config.yaml`. Set `NS_HOME` to relocate the config directory.
 
 ```yaml
 # ~/.no-mistakes/config.yaml
@@ -54,7 +54,7 @@ ci:
   rerun_transient: 0
 
 commit:
-  fix_message: "chore(no-mistakes-{{.Step}}): {{.Summary}}"
+  fix_message: "chore(no-slop-{{.Step}}): {{.Summary}}"
 
 intent:
   enabled: true
@@ -65,7 +65,7 @@ intent:
 test:
   evidence:
     store_in_repo: false
-    dir: .no-mistakes/evidence
+    dir: .no-slop/evidence
 ```
 
 ## Fields
@@ -87,7 +87,7 @@ With default paths, `auto` only selects it when both `cursor-agent` and `acpx` r
 Arbitrary `acp:<target>` agents are opt-in and are not considered by `agent: auto`.
 The effective agent configuration must resolve to a runnable runner before a new validation gate starts.
 If an explicit agent is unavailable, `auto` finds no native agent or ACP alias, or no fallback-list entry is available, the gate fails before its first pipeline step rather than reporting a partial command-only validation as passed.
-`no-mistakes doctor` checks the global configuration, while every run repeats resolution after applying any trusted repository-level `agent` override.
+`no-slop doctor` checks the global configuration, while every run repeats resolution after applying any trusted repository-level `agent` override.
 
 You can also set an ordered fallback list:
 
@@ -98,7 +98,7 @@ agent: [codex, claude]
 The list is filtered to entries available to the daemon at run startup, and the first available entry becomes the primary agent.
 After resolving `auto`, entries that resolve to the same ACP target are deduplicated in list order, so `cursor` and `acp:cursor` provide one fallback and preserve whichever spelling appears first.
 If no entry is available, the gate fails before its first pipeline step.
-If a pipeline invocation fails because that agent process cannot start or exits with an error, no-mistakes retries that invocation with the next available fallback.
+If a pipeline invocation fails because that agent process cannot start or exits with an error, no-slop retries that invocation with the next available fallback.
 Structured findings and schema/output validation problems do not trigger fallback.
 
 When an invocation fails with a provider quota-exhaustion banner, that entry is recorded as unusable until its quota resets, and later invocations skip it without launching the process.
@@ -107,7 +107,7 @@ The record is stored in `lane-health.json` under the daemon root, so concurrent 
 A successful invocation clears a record that was written no later than the moment that invocation started, so a record another run wrote while it was still running stays in force.
 One invocation an hour is still let through a recorded entry to check whether it recovered early, so a reset the provider stated days out cannot keep an entry unused for longer than an hour after its quota is actually restored.
 If every configured entry is exhausted, the step fails with a message naming each entry and when it recovers.
-A recorded entry is otherwise invisible, so [`no-mistakes doctor`](/no-mistakes/reference/cli/#no-mistakes-doctor) is where it surfaces.
+A recorded entry is otherwise invisible, so [`no-slop doctor`](/no-slop/reference/cli/#no-slop-doctor) is where it surfaces.
 The record describes the account that was signed in when the banner appeared, so if you switch that provider to a different account before the stated reset, delete `lane-health.json` to make the entry available again immediately rather than waiting for the next hourly check.
 
 ### acpx_path
@@ -122,7 +122,7 @@ Path to the user-installed `acpx` binary used for `agent: acp:<target>` and ACP 
 ### acp_registry_overrides
 
 Map an ACP target name to a raw ACP agent command.
-When `agent: acp:<target>` matches an override key, no-mistakes runs `acpx --agent <command>` instead of `acpx <target>`.
+When `agent: acp:<target>` matches an override key, no-slop runs `acpx --agent <command>` instead of `acpx <target>`.
 ACP aliases use the same target keys. For example, `agent: cursor` and `agent: acp:cursor` resolve to the `cursor` target, so set `cursor` to override the default `cursor-agent acp` command.
 Values are trimmed; a blank or whitespace-only value behaves as no override, so an alias keeps its default command.
 Availability checks always resolve `acpx_path`. They also probe the executable named first in the effective non-blank raw command when it is a bare command name or clean absolute path. Relative, quoted, or escaped raw commands are not pre-probed; `acpx` executes them from the worktree. These checks do not invoke the ACP target or test its credentials.
@@ -143,7 +143,7 @@ acp_registry_overrides:
 ### agent_path_override
 
 Custom binary paths for native agents.
-When set, `no-mistakes` uses this path instead of looking up the binary on `PATH`.
+When set, `no-slop` uses this path instead of looking up the binary on `PATH`.
 ACP agents and aliases use `acpx_path` for the bridge; use `acp_registry_overrides` to replace a raw target command such as `cursor-agent acp`.
 
 |         |                                   |
@@ -173,7 +173,7 @@ Use this to set model selection, service tier, reasoning effort, permission mode
 | Keys    | `claude`, `codex`, `rovodev`, `opencode`, `pi`, `copilot` |
 | Default | Empty (no extra flags)                                    |
 
-User-supplied flags are normally inserted ahead of no-mistakes' managed flags, so your choices usually take precedence. Security suppression selected by trusted [`disable_project_settings`](/no-mistakes/reference/repo-config/#disable_project_settings) may be placed first while preserving a compatible operator pin. A few flags are reserved because no-mistakes depends on them to communicate with the agent - setting any of these returns a config error on load:
+User-supplied flags are normally inserted ahead of no-slop' managed flags, so your choices usually take precedence. Security suppression selected by trusted [`disable_project_settings`](/no-slop/reference/repo-config/#disable_project_settings) may be placed first while preserving a compatible operator pin. A few flags are reserved because no-slop depends on them to communicate with the agent - setting any of these returns a config error on load:
 
 | Agent      | Reserved flags                                                                                              |
 | ---------- | ----------------------------------------------------------------------------------------------------------- |
@@ -184,15 +184,15 @@ User-supplied flags are normally inserted ahead of no-mistakes' managed flags, s
 | `pi`       | `--mode`, `--no-session`                                                                                    |
 | `copilot`  | `-p`, `--prompt`, `--output-format`, `--no-color`                                                          |
 
-For structured `codex` runs, no-mistakes also appends its own `--output-schema <tempfile>` after your overrides. Treat that flag as managed even though config validation does not currently reject it.
-The Claude and Codex session-control forms are reserved so no-mistakes can keep review-loop conversations deterministic: review turns stay session-free while the fixer keeps its own isolated durable session.
+For structured `codex` runs, no-slop also appends its own `--output-schema <tempfile>` after your overrides. Treat that flag as managed even though config validation does not currently reject it.
+The Claude and Codex session-control forms are reserved so no-slop can keep review-loop conversations deterministic: review turns stay session-free while the fixer keeps its own isolated durable session.
 
 Smart defaults:
 
 - For `claude`, supplying `--permission-mode` (or `--dangerously-skip-permissions`) suppresses the default `--dangerously-skip-permissions`.
 - For `codex`, supplying `--ask-for-approval`, `--sandbox`, or `--dangerously-bypass-approvals-and-sandbox` suppresses the default `--dangerously-bypass-approvals-and-sandbox`.
 
-Permission and sandbox flags affect the underlying agent, but they do not disable no-mistakes' pipeline prompt steering.
+Permission and sandbox flags affect the underlying agent, but they do not disable no-slop' pipeline prompt steering.
 Pipeline agents are still told to keep intentional writes inside the worktree and avoid mutating system state outside it.
 
 Example:
@@ -222,7 +222,7 @@ agent_args_override:
     - google
 ```
 
-For Codex, `service_tier` and `model_reasoning_effort` tune different things: `service_tier` selects the speed or priority lane, while `model_reasoning_effort` selects reasoning depth. no-mistakes reloads global config while setting up each run, so edits made before `no-mistakes axi run` apply to that run. For repeatable profiles, use separately initialized `NM_HOME` directories; each has its own `config.yaml` and no-mistakes state.
+For Codex, `service_tier` and `model_reasoning_effort` tune different things: `service_tier` selects the speed or priority lane, while `model_reasoning_effort` selects reasoning depth. no-slop reloads global config while setting up each run, so edits made before `no-slop axi run` apply to that run. For repeatable profiles, use separately initialized `NS_HOME` directories; each has its own `config.yaml` and no-slop state.
 
 ### ci_timeout
 
@@ -242,7 +242,7 @@ A genuinely idle/abandoned PR still parks at an approval gate after the timeout 
 While that CI gate is parked, the daemon continues bounded read-only PR-state checks.
 If the PR is merged or closed externally, the stale gate completes automatically; an open, unknown, or temporarily unreachable PR remains parked for a user decision.
 
-Set it to `unlimited` (`none`, `off`, and `never` are accepted aliases), `0`, or any non-positive duration to monitor until the PR is merged, closed, or the run is aborted with `no-mistakes axi abort --run <id>`.
+Set it to `unlimited` (`none`, `off`, and `never` are accepted aliases), `0`, or any non-positive duration to monitor until the PR is merged, closed, or the run is aborted with `no-slop axi abort --run <id>`.
 
 Legacy alias: `babysit_timeout`.
 
@@ -272,7 +272,7 @@ Maximum time a CLI client waits for an existing daemon socket to accept a connec
 | Type    | `string` (Go duration) |
 | Default | `3s`                   |
 
-Accepts any positive Go `time.ParseDuration` string. Overridable per-invocation with the `NM_DAEMON_CONNECT_TIMEOUT` environment variable; see [Environment Variables](/no-mistakes/reference/environment/#nm_daemon_connect_timeout).
+Accepts any positive Go `time.ParseDuration` string. Overridable per-invocation with the `NS_DAEMON_CONNECT_TIMEOUT` environment variable; see [Environment Variables](/no-slop/reference/environment/#ns_daemon_connect_timeout).
 
 ### log_level
 
@@ -298,7 +298,7 @@ Review turns - the initial full review and every full rereview - always run as f
 The fixer session is never lent to review turns, other pipeline steps stay session-isolated in their own cold invocations, and different runs never reuse identities.
 When resume is unavailable or fails, the fix turn falls back to a cold run or a fresh fixer session and the fallback is recorded in the local `agent_invocations` performance record.
 Session identities are persisted only as minimum local resume metadata, never as prompts or transcripts.
-The [daemon crash-recovery reference](/no-mistakes/concepts/daemon/#crash-recovery) owns which parked gates can resume or reconcile after a restart.
+The [daemon crash-recovery reference](/no-slop/concepts/daemon/#crash-recovery) owns which parked gates can resume or reconcile after a restart.
 Set `false` to force every agent invocation cold.
 
 ### auto_fix
@@ -342,7 +342,7 @@ ci:
 Each rerun is another provider-side workflow run billed to the repository being contributed to.
 Set `0` here to never spend someone else's CI minutes; this is the only place to make that choice for a repository whose default branch you do not control.
 
-The per-repo [`ci.rerun_transient`](/no-mistakes/reference/repo-config/#cirerun_transient) overrides this value and owns the classification, the trust boundary, and every case that skips the rerun.
+The per-repo [`ci.rerun_transient`](/no-slop/reference/repo-config/#cirerun_transient) overrides this value and owns the classification, the trust boundary, and every case that skips the rerun.
 
 ### commit.fix_message
 
@@ -351,7 +351,7 @@ Template for the subject of commits created by the shared Review, Test, Document
 | | |
 | --- | --- |
 | Type | `string` |
-| Default | `no-mistakes({{.Step}}): {{.Summary}}` |
+| Default | `no-slop({{.Step}}): {{.Summary}}` |
 
 The template supports literal text and two Go-style placeholders:
 
@@ -364,18 +364,18 @@ No-mistakes removes thread-status text beginning with the literal `✅`, `⏳`, 
 The value must be a valid UTF-8 template that renders to a non-empty, single-line commit subject.
 The template source is limited to 1,024 bytes and 16 placeholders.
 The fix-agent summary and final rendered subject are each limited to 4,096 bytes.
-Before rendering, no-mistakes predicts the subject size from the validated literal text and placeholders, then rejects oversized output without allocating the expanded message.
+Before rendering, no-slop predicts the subject size from the validated literal text and placeholders, then rejects oversized output without allocating the expanded message.
 Template functions, control actions, named templates, unknown placeholders, malformed syntax, control characters, unsafe Unicode format characters, and Unicode line or paragraph separators cause configuration loading to fail.
 The blocked format set includes every Unicode `Bidi_Control` code point plus `U+00AD`, `U+180E`, `U+200B`, `U+2060` through `U+2064`, the deprecated bidi controls `U+206A` through `U+206F`, `U+FEFF`, `U+FFF9` through `U+FFFB`, and Unicode tag characters in `U+E0000` through `U+E007F`.
 Legitimate `U+200C` zero-width non-joiner and `U+200D` zero-width joiner text shaping remains allowed.
 The final rendered subject is validated again, so unsafe characters in an agent-provided summary are also rejected.
 The setting does not change commit subjects created by the Rebase, CI, or Push steps.
-A per-repo [`commit.fix_message`](/no-mistakes/reference/repo-config/#commitfix_message) value overrides this global setting.
+A per-repo [`commit.fix_message`](/no-slop/reference/repo-config/#commitfix_message) value overrides this global setting.
 
 ### intent
 
 Transcript-based user-intent extraction settings.
-When enabled and no intent was supplied directly for the run, no-mistakes can read recent local agent transcripts, match the session that produced the change, summarize the author's intent, pass that summary to rebase, review, test, document, lint, CI auto-fix, and PR prompts, and include it in generated PR descriptions.
+When enabled and no intent was supplied directly for the run, no-slop can read recent local agent transcripts, match the session that produced the change, summarize the author's intent, pass that summary to rebase, review, test, document, lint, CI auto-fix, and PR prompts, and include it in generated PR descriptions.
 
 |      |          |
 | ---- | -------- |
@@ -393,7 +393,7 @@ Valid `disabled_readers` values are `claude`, `codex`, `opencode`, `rovodev`, `p
 The match score is the share of matching files mentioned in a transcript session; deleted files are ignored when the diff also contains non-deleted changes.
 All-deletion diffs still match against the deleted changed files.
 Mentioning extra files does not reduce the score.
-For multi-file diffs, no-mistakes still requires at least two overlapping files and an effective minimum score of `0.5`.
+For multi-file diffs, no-slop still requires at least two overlapping files and an effective minimum score of `0.5`.
 Partial matches older than 24 hours are rejected unless their raw score is at least `0.8`.
 If exactly one accepted candidate has a raw score of at least `0.85`, that decisive candidate wins before recency ranking.
 Otherwise, accepted candidates are ranked by confidence, which combines the raw score with a small recency boost, with ties going to the most recent matching session, and ambiguous accepted candidates may be disambiguated by the configured pipeline agent.
@@ -410,14 +410,14 @@ By default, evidence artifacts stay in a temporary directory keyed by run ID and
 | Field                         | Type     | Default                 | Description                                                           |
 | ----------------------------- | -------- | ----------------------- | --------------------------------------------------------------------- |
 | `test.evidence.store_in_repo` | `bool`   | `false`                 | Commit and push test evidence artifacts from inside the repo worktree |
-| `test.evidence.dir`           | `string` | `.no-mistakes/evidence` | Repo-relative parent directory used when `store_in_repo` is true      |
+| `test.evidence.dir`           | `string` | `.no-slop/evidence` | Repo-relative parent directory used when `store_in_repo` is true      |
 
 When `store_in_repo` is true, the test step writes evidence under `<dir>/<branch-slug>` and the push step stages files from that directory before committing agent changes.
 Branch slashes become nested directories, unsafe branch characters are replaced, and an empty branch slug falls back to the run ID.
-If `dir` is absolute, escapes the worktree, points into `.git`, crosses a symlink, or is ignored by Git, no-mistakes falls back to temporary evidence storage for that run.
+If `dir` is absolute, escapes the worktree, points into `.git`, crosses a symlink, or is ignored by Git, no-slop falls back to temporary evidence storage for that run.
 
 These are global defaults. Per-repo config can override either field.
 
 ## Environment variables
 
-See [Environment Variables](/no-mistakes/reference/environment/) for `NM_HOME`, `NM_DAEMON_CONNECT_TIMEOUT`, Bitbucket Cloud credentials, and update-check suppression.
+See [Environment Variables](/no-slop/reference/environment/) for `NS_HOME`, `NS_DAEMON_CONNECT_TIMEOUT`, Bitbucket Cloud credentials, and update-check suppression.

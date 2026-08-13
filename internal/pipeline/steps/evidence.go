@@ -5,11 +5,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/config"
 )
 
 func testEvidenceRoot() string {
-	return filepath.Join(os.TempDir(), "no-mistakes-evidence")
+	return filepath.Join(os.TempDir(), "no-slop-evidence")
 }
 
 func testEvidenceDir(runID string) string {

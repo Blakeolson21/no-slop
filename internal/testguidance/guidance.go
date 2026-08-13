@@ -1,5 +1,5 @@
 // Package testguidance owns the default test-quality rule rendered into
-// no-mistakes agents that can write, repair, or review tests.
+// no-slop agents that can write, repair, or review tests.
 package testguidance
 
 // Rule is the shared default for writing or repairing tests. It is deliberately

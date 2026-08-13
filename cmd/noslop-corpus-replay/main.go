@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/slop/corpus"
-	"github.com/kunchenguid/no-mistakes/internal/slop/prose"
+	"github.com/Blakeolson21/no-slop/internal/slop/corpus"
+	"github.com/Blakeolson21/no-slop/internal/slop/prose"
 )
 
 type campaign struct {

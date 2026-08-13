@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/kunchenguid/no-mistakes/internal/shellenv"
+	"github.com/Blakeolson21/no-slop/internal/shellenv"
 )
 
 // piAgent spawns the pi CLI for each invocation. Pi reads its prompt from
@@ -119,7 +119,7 @@ func (a *piAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error) {
 
 // buildArgs returns the Pi argv for one invocation. Under the project-settings
 // opt-out, the context-file suppression flag comes first. User extras otherwise
-// precede the managed flags that no-mistakes requires for JSONL parsing.
+// precede the managed flags that no-slop requires for JSONL parsing.
 func (a *piAgent) buildArgs() []string {
 	args := make([]string, 0, len(a.extraArgs)+5)
 	// Project-settings opt-out (trusted-only; see config.DisableProjectSettings):
@@ -186,7 +186,7 @@ func buildPiPrompt(prompt string, schema json.RawMessage) string {
 	if err != nil {
 		pretty = []byte(schema)
 	}
-	return prompt + "\n\n## no-mistakes final output contract\n\n" +
+	return prompt + "\n\n## no-slop final output contract\n\n" +
 		"When the iteration is complete, your final assistant response must be only valid JSON matching this JSON Schema. " +
 		"Do not wrap it in Markdown fences. Do not include prose before or after the JSON object.\n\n" +
 		string(pretty)
@@ -358,7 +358,7 @@ func (p *piParser) handleAssistantEvent(raw any) {
 	idx := piIntField(evt, "contentIndex", "content_index")
 	switch evt["type"] {
 	case "text_delta":
-		// Emit just the incremental delta. no-mistakes' OnChunk consumers
+		// Emit just the incremental delta. no-slop' OnChunk consumers
 		// (TUI log line buffer, file logger) expect appended text, not
 		// cumulative state.
 		delta := piFirstString(evt, "delta", "text", "content")

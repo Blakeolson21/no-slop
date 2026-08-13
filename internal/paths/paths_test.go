@@ -7,7 +7,7 @@ import (
 )
 
 func TestWithRoot(t *testing.T) {
-	root := filepath.Join("tmp", "nm-test")
+	root := filepath.Join("tmp", "ns-test")
 	p := WithRoot(root)
 
 	if got := p.Root(); got != root {
@@ -28,7 +28,7 @@ func TestWithRoot(t *testing.T) {
 }
 
 func TestRepoPaths(t *testing.T) {
-	root := filepath.Join("tmp", "nm-test")
+	root := filepath.Join("tmp", "ns-test")
 	p := WithRoot(root)
 
 	if got := p.ReposDir(); got != filepath.Join(root, "repos") {
@@ -40,7 +40,7 @@ func TestRepoPaths(t *testing.T) {
 }
 
 func TestWorktreePaths(t *testing.T) {
-	root := filepath.Join("tmp", "nm-test")
+	root := filepath.Join("tmp", "ns-test")
 	p := WithRoot(root)
 
 	if got := p.WorktreesDir(); got != filepath.Join(root, "worktrees") {
@@ -52,7 +52,7 @@ func TestWorktreePaths(t *testing.T) {
 }
 
 func TestLogPaths(t *testing.T) {
-	root := filepath.Join("tmp", "nm-test")
+	root := filepath.Join("tmp", "ns-test")
 	p := WithRoot(root)
 
 	if got := p.LogsDir(); got != filepath.Join(root, "logs") {
@@ -75,6 +75,7 @@ func TestLogPaths(t *testing.T) {
 func TestNewWithEnvOverride(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("NM_HOME", dir)
+	t.Setenv("NS_HOME", "")
 
 	p, err := New()
 	if err != nil {
@@ -85,8 +86,43 @@ func TestNewWithEnvOverride(t *testing.T) {
 	}
 }
 
-func TestNewRejectsDefaultRootInTests(t *testing.T) {
+func TestNewWithCanonicalEnvOverride(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("NS_HOME", dir)
 	t.Setenv("NM_HOME", "")
+
+	p, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Root() != dir {
+		t.Errorf("Root() = %q, want %q", p.Root(), dir)
+	}
+}
+
+func TestNewTreatsRootEnvAliasesAsOneSetting(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("NS_HOME", dir)
+	t.Setenv("NM_HOME", dir)
+
+	p, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Root() != dir {
+		t.Errorf("Root() = %q, want %q", p.Root(), dir)
+	}
+
+	t.Setenv("NM_HOME", filepath.Join(dir, "different"))
+	if _, err := New(); err == nil {
+		t.Fatal("New() should reject conflicting NS_HOME and NM_HOME values")
+	}
+}
+
+func TestNewRejectsDefaultRootInTests(t *testing.T) {
+	t.Setenv("NS_HOME", "")
+	t.Setenv("NM_HOME", "")
+	t.Setenv("NS_ALLOW_DEFAULT_ROOT_IN_TESTS", "")
 	t.Setenv("NO_MISTAKES_ALLOW_DEFAULT_ROOT_IN_TESTS", "")
 
 	_, err := New()
@@ -96,8 +132,10 @@ func TestNewRejectsDefaultRootInTests(t *testing.T) {
 }
 
 func TestNewDefault(t *testing.T) {
+	t.Setenv("NS_HOME", "")
 	t.Setenv("NM_HOME", "")
-	t.Setenv("NO_MISTAKES_ALLOW_DEFAULT_ROOT_IN_TESTS", "1")
+	t.Setenv("NS_ALLOW_DEFAULT_ROOT_IN_TESTS", "1")
+	t.Setenv("NO_MISTAKES_ALLOW_DEFAULT_ROOT_IN_TESTS", "")
 
 	p, err := New()
 	if err != nil {

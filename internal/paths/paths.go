@@ -5,28 +5,39 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/Blakeolson21/no-slop/internal/identity"
 )
 
-// Paths provides access to all no-mistakes filesystem locations.
-// The root defaults to ~/.no-mistakes but can be overridden via NM_HOME
+// Paths provides access to all no-slop filesystem locations.
+// The root defaults to ~/.no-mistakes but can be overridden via NS_HOME or
+// its NM_HOME compatibility alias
 // or by using WithRoot (for testing).
 type Paths struct {
 	root string
 }
 
-// New returns Paths rooted at NM_HOME or ~/.no-mistakes.
+// New returns Paths rooted at NS_HOME, NM_HOME, or ~/.no-mistakes.
 func New() (*Paths, error) {
-	if env := os.Getenv("NM_HOME"); env != "" {
+	env, err := identity.LookupEnv(identity.HomeEnv, identity.LegacyHomeEnv)
+	if err != nil {
+		return nil, err
+	}
+	if env != "" {
 		return &Paths{root: env}, nil
 	}
-	if testing.Testing() && os.Getenv("NO_MISTAKES_ALLOW_DEFAULT_ROOT_IN_TESTS") != "1" {
-		return nil, fmt.Errorf("NM_HOME must be set under go test to avoid touching the real no-mistakes daemon root")
+	allowDefault, err := identity.EnvEnabled(identity.AllowDefaultRootInTestsEnv, identity.LegacyAllowDefaultRootInTestsEnv)
+	if err != nil {
+		return nil, err
+	}
+	if testing.Testing() && !allowDefault {
+		return nil, fmt.Errorf("NS_HOME or NM_HOME must be set under go test to avoid touching the real no-slop daemon root")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
 	}
-	return &Paths{root: filepath.Join(home, ".no-mistakes")}, nil
+	return &Paths{root: filepath.Join(home, identity.DefaultStateDir)}, nil
 }
 
 // WithRoot returns Paths rooted at a custom directory (for testing).
@@ -41,7 +52,7 @@ func (p *Paths) PIDFile() string    { return filepath.Join(p.root, "daemon.pid")
 func (p *Paths) ConfigFile() string { return filepath.Join(p.root, "config.yaml") }
 
 // LockFile is the OS-level advisory lock used to enforce a single live daemon
-// per NM_HOME (see the singleton lock in internal/daemon). Distinct from
+// per NS_HOME (see the singleton lock in internal/daemon). Distinct from
 // PIDFile, which is an informational record a live daemon writes for
 // CLI/status consumers: LockFile is what actually prevents two daemons from
 // ever running startup recovery or binding the socket concurrently for the

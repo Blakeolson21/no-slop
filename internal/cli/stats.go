@@ -9,10 +9,10 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/types"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/kunchenguid/no-mistakes/internal/agent"
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/types"
 	"github.com/spf13/cobra"
 )
 
@@ -28,7 +28,7 @@ func newStatsCmd() *cobra.Command {
 	var runID string
 	cmd := &cobra.Command{
 		Use:   "stats",
-		Short: "Show historical no-mistakes usage stats",
+		Short: "Show historical no-slop usage stats",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return trackCommand("stats", func() error {
@@ -289,7 +289,7 @@ func renderStatsDashboard(stats *db.Stats) string {
 
 func renderStatsBox(lines []string) string {
 	var b strings.Builder
-	eyebrow := " git push no-mistakes "
+	eyebrow := " git push no-slop "
 	b.WriteString("╭─" + eyebrow + strings.Repeat("─", statsBoxWidth-3-lipgloss.Width(eyebrow)) + "╮\n")
 	for _, line := range lines {
 		b.WriteString(renderStatsBoxLine(line))

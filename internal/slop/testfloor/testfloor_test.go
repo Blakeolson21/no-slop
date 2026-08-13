@@ -3,7 +3,7 @@ package testfloor_test
 import (
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/slop/testfloor"
+	"github.com/Blakeolson21/no-slop/internal/slop/testfloor"
 )
 
 func TestCompareFailsWhenCurrentTestCountDropsBelowBaseline(t *testing.T) {

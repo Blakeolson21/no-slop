@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/e2edaemon"
+	"github.com/Blakeolson21/no-slop/internal/e2edaemon"
 )
 
 func TestDaemonRunUsesProvidedRoot(t *testing.T) {
@@ -27,7 +27,7 @@ func TestDaemonRunUsesProvidedRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(rootDir) })
-	wantRoot := filepath.Join(rootDir, "nm-home")
+	wantRoot := filepath.Join(rootDir, "ns-home")
 
 	// Track this secondary root in the suite inventory so interrupt/reaper
 	// paths stop it without relying solely on this test's defer.
@@ -59,7 +59,7 @@ func TestDaemonRunUsesProvidedRoot(t *testing.T) {
 	}()
 
 	defer func() {
-		_, _ = h.RunInDirWithEnv(h.WorkDir, map[string]string{"NM_HOME": wantRoot}, "daemon", "stop")
+		_, _ = h.RunInDirWithEnv(h.WorkDir, map[string]string{"NS_HOME": wantRoot}, "daemon", "stop")
 		cancel()
 		select {
 		case <-done:
@@ -78,7 +78,7 @@ func TestDaemonRunUsesProvidedRoot(t *testing.T) {
 		default:
 		}
 
-		status, err := h.RunInDirWithEnv(h.WorkDir, map[string]string{"NM_HOME": wantRoot}, "daemon", "status")
+		status, err := h.RunInDirWithEnv(h.WorkDir, map[string]string{"NS_HOME": wantRoot}, "daemon", "status")
 		if err == nil && strings.Contains(status, "daemon running") {
 			break
 		}
@@ -93,6 +93,6 @@ func TestDaemonRunUsesProvidedRoot(t *testing.T) {
 		t.Fatalf("default daemon status: %v\n%s", err, defaultStatus)
 	}
 	if strings.Contains(defaultStatus, "daemon running") {
-		t.Fatalf("daemon run --root should not use default NM_HOME, got status %q", defaultStatus)
+		t.Fatalf("daemon run --root should not use default NS_HOME, got status %q", defaultStatus)
 	}
 }

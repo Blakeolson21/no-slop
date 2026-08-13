@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/daemon"
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/git"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/daemon"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
 func init() {
@@ -50,7 +50,7 @@ func init() {
 		if !ok {
 			os.Exit(1)
 		}
-		_ = os.Setenv("NM_HOME", root)
+		_ = os.Setenv("NS_HOME", root)
 		if err := daemon.RunBootstrapLogSink(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -61,7 +61,7 @@ func init() {
 		return
 	}
 	if root, ok := explicitDaemonRunRootFromArgs(os.Args[1:]); ok && root != "" {
-		_ = os.Setenv("NM_HOME", root)
+		_ = os.Setenv("NS_HOME", root)
 	} else if os.Getenv("NM_DAEMON") != "1" {
 		return
 	}
@@ -77,21 +77,21 @@ func TestMain(m *testing.M) {
 	if runtime.GOOS != "windows" {
 		base = "/tmp"
 	}
-	root, err := os.MkdirTemp(base, "nm-cli-test-")
+	root, err := os.MkdirTemp(base, "ns-cli-test-")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "create test NM_HOME: %v\n", err)
+		fmt.Fprintf(os.Stderr, "create test NS_HOME: %v\n", err)
 		os.Exit(1)
 	}
-	home, err := os.MkdirTemp(base, "nm-cli-home-")
+	home, err := os.MkdirTemp(base, "ns-cli-home-")
 	if err != nil {
 		_ = os.RemoveAll(root)
 		fmt.Fprintf(os.Stderr, "create test HOME: %v\n", err)
 		os.Exit(1)
 	}
-	_ = os.Setenv("NM_HOME", root)
+	_ = os.Setenv("NS_HOME", root)
 	_ = os.Setenv("HOME", home)
-	_ = os.Setenv("NO_MISTAKES_TELEMETRY", "off")
-	_ = os.Setenv("NO_MISTAKES_NO_UPDATE_CHECK", "1")
+	_ = os.Setenv("NS_TELEMETRY", "off")
+	_ = os.Setenv("NS_NO_UPDATE_CHECK", "1")
 
 	code := m.Run()
 
@@ -128,15 +128,15 @@ func explicitDaemonLogSinkRootFromArgs(args []string) (string, bool) {
 }
 
 // setupTestRepo creates a git repo with an origin remote in a temp dir and
-// sets NM_HOME to an isolated temp dir. Returns the repo path and a cleanup
-// function that restores the original working directory and NM_HOME.
+// sets NS_HOME to an isolated temp dir. Returns the repo path and a cleanup
+// function that restores the original working directory and NS_HOME.
 func setupTestRepo(t *testing.T) string {
 	t.Helper()
 
-	// Keep NM_HOME under a short temp root so the daemon socket path fits.
+	// Keep NS_HOME under a short temp root so the daemon socket path fits.
 	repoDir := t.TempDir()
 	nmHome := makeSocketSafeTempDir(t)
-	t.Setenv("NM_HOME", nmHome)
+	t.Setenv("NS_HOME", nmHome)
 	t.Setenv("NM_TEST_START_DAEMON", "1")
 
 	// Create a bare "origin" to use as the upstream.
@@ -298,7 +298,7 @@ func cleanupWorktree(t *testing.T, repoDir, wtDir string) {
 
 	t.Cleanup(func() {
 		_ = os.Chdir(repoDir)
-		p := paths.WithRoot(os.Getenv("NM_HOME"))
+		p := paths.WithRoot(os.Getenv("NS_HOME"))
 		_ = daemon.Stop(p)
 		if runtime.GOOS == "windows" {
 			time.Sleep(500 * time.Millisecond)

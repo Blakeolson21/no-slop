@@ -3,23 +3,42 @@ COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 DEFAULT_UMAMI_HOST := https://a.kunchenguid.com
 DEFAULT_UMAMI_WEBSITE_ID := f959e889-92f5-4121-8a1f-571b10861198
-DOTENV_UMAMI_HOST := $(shell [ -f .env ] && perl -ne 'next if /^\s*(?:\#|$$)/; s/^\s*export\s+//; next unless /^\s*NO_MISTAKES_UMAMI_HOST\s*=\s*(.*)$$/; $$v=$$1; $$v =~ s/^\s+|\s+$$//g; if ($$v =~ /^( ["\x27] )(.*)\1$$/x) { $$v=$$2; } else { $$v =~ s/\s+\#.*$$//; $$v =~ s/\s+$$//; } $$out=$$v; END { print $$out if defined $$out }' .env)
-DOTENV_UMAMI_WEBSITE_ID := $(shell [ -f .env ] && perl -ne 'next if /^\s*(?:\#|$$)/; s/^\s*export\s+//; next unless /^\s*NO_MISTAKES_UMAMI_WEBSITE_ID\s*=\s*(.*)$$/; $$v=$$1; $$v =~ s/^\s+|\s+$$//g; if ($$v =~ /^(["\x27])(.*)\1$$/) { $$v=$$2; } else { $$v =~ s/\s+\#.*$$//; $$v =~ s/\s+$$//; } $$out=$$v; END { print $$out if defined $$out }' .env)
+DOTENV_NS_UMAMI_HOST := $(shell [ -f .env ] && perl -ne 'next if /^\s*(?:\#|$$)/; s/^\s*export\s+//; next unless /^\s*NS_UMAMI_HOST\s*=\s*(.*)$$/; $$v=$$1; $$v =~ s/^\s+|\s+$$//g; if ($$v =~ /^( ["\x27] )(.*)\1$$/x) { $$v=$$2; } else { $$v =~ s/\s+\#.*$$//; $$v =~ s/\s+$$//; } $$out=$$v; END { print $$out if defined $$out }' .env)
+DOTENV_LEGACY_UMAMI_HOST := $(shell [ -f .env ] && perl -ne 'next if /^\s*(?:\#|$$)/; s/^\s*export\s+//; next unless /^\s*NO_MISTAKES_UMAMI_HOST\s*=\s*(.*)$$/; $$v=$$1; $$v =~ s/^\s+|\s+$$//g; if ($$v =~ /^( ["\x27] )(.*)\1$$/x) { $$v=$$2; } else { $$v =~ s/\s+\#.*$$//; $$v =~ s/\s+$$//; } $$out=$$v; END { print $$out if defined $$out }' .env)
+DOTENV_NS_UMAMI_WEBSITE_ID := $(shell [ -f .env ] && perl -ne 'next if /^\s*(?:\#|$$)/; s/^\s*export\s+//; next unless /^\s*NS_UMAMI_WEBSITE_ID\s*=\s*(.*)$$/; $$v=$$1; $$v =~ s/^\s+|\s+$$//g; if ($$v =~ /^(["\x27])(.*)\1$$/) { $$v=$$2; } else { $$v =~ s/\s+\#.*$$//; $$v =~ s/\s+$$//; } $$out=$$v; END { print $$out if defined $$out }' .env)
+DOTENV_LEGACY_UMAMI_WEBSITE_ID := $(shell [ -f .env ] && perl -ne 'next if /^\s*(?:\#|$$)/; s/^\s*export\s+//; next unless /^\s*NO_MISTAKES_UMAMI_WEBSITE_ID\s*=\s*(.*)$$/; $$v=$$1; $$v =~ s/^\s+|\s+$$//g; if ($$v =~ /^(["\x27])(.*)\1$$/) { $$v=$$2; } else { $$v =~ s/\s+\#.*$$//; $$v =~ s/\s+$$//; } $$out=$$v; END { print $$out if defined $$out }' .env)
+ifneq ($(strip $(DOTENV_NS_UMAMI_HOST)),)
+ifneq ($(strip $(DOTENV_LEGACY_UMAMI_HOST)),)
+ifneq ($(DOTENV_NS_UMAMI_HOST),$(DOTENV_LEGACY_UMAMI_HOST))
+$(error NS_UMAMI_HOST and NO_MISTAKES_UMAMI_HOST configure the same setting with different values)
+endif
+endif
+endif
+ifneq ($(strip $(DOTENV_NS_UMAMI_WEBSITE_ID)),)
+ifneq ($(strip $(DOTENV_LEGACY_UMAMI_WEBSITE_ID)),)
+ifneq ($(DOTENV_NS_UMAMI_WEBSITE_ID),$(DOTENV_LEGACY_UMAMI_WEBSITE_ID))
+$(error NS_UMAMI_WEBSITE_ID and NO_MISTAKES_UMAMI_WEBSITE_ID configure the same setting with different values)
+endif
+endif
+endif
+DOTENV_UMAMI_HOST := $(if $(DOTENV_NS_UMAMI_HOST),$(DOTENV_NS_UMAMI_HOST),$(DOTENV_LEGACY_UMAMI_HOST))
+DOTENV_UMAMI_WEBSITE_ID := $(if $(DOTENV_NS_UMAMI_WEBSITE_ID),$(DOTENV_NS_UMAMI_WEBSITE_ID),$(DOTENV_LEGACY_UMAMI_WEBSITE_ID))
 override UMAMI_HOST := $(if $(DOTENV_UMAMI_HOST),$(DOTENV_UMAMI_HOST),$(if $(UMAMI_HOST),$(UMAMI_HOST),$(DEFAULT_UMAMI_HOST)))
 override UMAMI_WEBSITE_ID := $(if $(DOTENV_UMAMI_WEBSITE_ID),$(DOTENV_UMAMI_WEBSITE_ID),$(if $(UMAMI_WEBSITE_ID),$(UMAMI_WEBSITE_ID),$(DEFAULT_UMAMI_WEBSITE_ID)))
-LDFLAGS := -X github.com/kunchenguid/no-mistakes/internal/buildinfo.Version=$(VERSION) \
-           -X github.com/kunchenguid/no-mistakes/internal/buildinfo.Commit=$(COMMIT) \
-           -X github.com/kunchenguid/no-mistakes/internal/buildinfo.Date=$(DATE) \
-           -X github.com/kunchenguid/no-mistakes/internal/buildinfo.TelemetryHost=$(UMAMI_HOST) \
-           -X github.com/kunchenguid/no-mistakes/internal/buildinfo.TelemetryWebsiteID=$(UMAMI_WEBSITE_ID)
+LDFLAGS := -X github.com/Blakeolson21/no-slop/internal/buildinfo.Version=$(VERSION) \
+           -X github.com/Blakeolson21/no-slop/internal/buildinfo.Commit=$(COMMIT) \
+           -X github.com/Blakeolson21/no-slop/internal/buildinfo.Date=$(DATE) \
+           -X github.com/Blakeolson21/no-slop/internal/buildinfo.TelemetryHost=$(UMAMI_HOST) \
+           -X github.com/Blakeolson21/no-slop/internal/buildinfo.TelemetryWebsiteID=$(UMAMI_WEBSITE_ID)
 
 .PHONY: build dist install test e2e e2e-record lint fmt clean docs docs-build docs-preview demo skill skill-check
 
 DIST_DIR ?= dist
-INSTALL_BIN := $(shell go env GOPATH)/bin/no-mistakes
+INSTALL_BIN := $(shell go env GOPATH)/bin/no-slop
 
 build:
-	go build -ldflags "$(LDFLAGS)" -o bin/no-mistakes ./cmd/no-mistakes
+	go build -ldflags "$(LDFLAGS)" -o bin/no-slop ./cmd/no-slop
+	go build -ldflags "$(LDFLAGS)" -o bin/no-mistakes ./cmd/no-slop
 	go build -o bin/noslop ./cmd/noslop
 
 dist:
@@ -28,31 +47,37 @@ dist:
 	for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do \
 		os=$${target%/*}; \
 		arch=$${target#*/}; \
-		bin=no-mistakes; \
+		bin=no-slop; \
+		legacy=no-mistakes; \
 		out="$(DIST_DIR)/$$bin"; \
 		if [ "$$os" = "windows" ]; then \
 			bin="$$bin.exe"; \
+			legacy="$$legacy.exe"; \
 			out="$(DIST_DIR)/$$bin"; \
 		fi; \
-		CGO_ENABLED=0 GOOS="$$os" GOARCH="$$arch" go build -ldflags "$(LDFLAGS)" -o "$$out" ./cmd/no-mistakes; \
+		CGO_ENABLED=0 GOOS="$$os" GOARCH="$$arch" go build -ldflags "$(LDFLAGS)" -o "$$out" ./cmd/no-slop; \
+		cp "$$out" "$(DIST_DIR)/$$legacy"; \
 		if [ "$$os" = "windows" ]; then \
-			( cd "$(DIST_DIR)" && zip -q "no-mistakes-$(VERSION)-$$os-$$arch.zip" "$$bin" ); \
+			( cd "$(DIST_DIR)" && zip -q "no-slop-$(VERSION)-$$os-$$arch.zip" "$$bin" ); \
+			( cd "$(DIST_DIR)" && zip -q "no-mistakes-$(VERSION)-$$os-$$arch.zip" "$$legacy" ); \
 		else \
-			tar -C "$(DIST_DIR)" -czf "$(DIST_DIR)/no-mistakes-$(VERSION)-$$os-$$arch.tar.gz" "$$bin"; \
+			tar -C "$(DIST_DIR)" -czf "$(DIST_DIR)/no-slop-$(VERSION)-$$os-$$arch.tar.gz" "$$bin"; \
+			tar -C "$(DIST_DIR)" -czf "$(DIST_DIR)/no-mistakes-$(VERSION)-$$os-$$arch.tar.gz" "$$legacy"; \
 		fi; \
-		rm -f "$$out"; \
+		rm -f "$$out" "$(DIST_DIR)/$$legacy"; \
 	done
 
 install: build
 	mkdir -p $(dir $(INSTALL_BIN))
-	install -m 755 bin/no-mistakes $(INSTALL_BIN)
+	install -m 755 bin/no-slop $(INSTALL_BIN)
+	install -m 755 bin/no-mistakes $(dir $(INSTALL_BIN))/no-mistakes
 	$(INSTALL_BIN) daemon stop
 	$(INSTALL_BIN) daemon start
 
 test:
 	go test -race ./...
 
-# End-to-end suite: drives the real no-mistakes binary against a fake
+# End-to-end suite: drives the real no-slop binary against a fake
 # agent through the full push -> pipeline -> push journey for each
 # e2e-covered agent backend, plus the step-local e2e tests that live
 # next to the pipeline-step code (e.g. coverage provider journeys).
@@ -75,7 +100,7 @@ e2e-record:
 	go run ./cmd/recordfixture codex    --out internal/e2e/fixtures/codex
 	go run ./cmd/recordfixture opencode --out internal/e2e/fixtures/opencode
 
-# Regenerate the committed agent skill (skills/no-mistakes/SKILL.md) from the
+# Regenerate the committed agent skill (skills/no-slop/SKILL.md) from the
 # internal/skill source of truth.
 skill:
 	go run ./cmd/genskill

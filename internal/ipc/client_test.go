@@ -19,7 +19,8 @@ func (timeoutDialError) Temporary() bool { return true }
 
 func TestDialConnectTimeoutFailsFastAndNamesSocket(t *testing.T) {
 	const timeout = 25 * time.Millisecond
-	t.Setenv("NM_DAEMON_CONNECT_TIMEOUT", timeout.String())
+	t.Setenv("NS_DAEMON_CONNECT_TIMEOUT", timeout.String())
+	t.Setenv("NM_DAEMON_CONNECT_TIMEOUT", "")
 
 	originalDial := dialNetworkWithTimeout
 	dialNetworkWithTimeout = func(network, address string, gotTimeout time.Duration) (net.Conn, error) {
@@ -33,7 +34,7 @@ func TestDialConnectTimeoutFailsFastAndNamesSocket(t *testing.T) {
 		dialNetworkWithTimeout = originalDial
 	})
 
-	socketPath := filepath.Join(t.TempDir(), "no-mistakes-dead.sock")
+	socketPath := filepath.Join(t.TempDir(), "no-slop-dead.sock")
 	if runtime.GOOS == "windows" {
 		endpoint := fmt.Sprintf("127.0.0.1:1\ntoken\n%d", os.Getpid())
 		if err := os.WriteFile(socketPath, []byte(endpoint), 0o600); err != nil {
@@ -57,5 +58,17 @@ func TestDialConnectTimeoutFailsFastAndNamesSocket(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), socketPath) {
 		t.Fatalf("Dial error = %q, want socket path %q", err.Error(), socketPath)
+	}
+}
+
+func TestConnectTimeoutAcceptsLegacyAliasAndRejectsConflict(t *testing.T) {
+	t.Setenv("NS_DAEMON_CONNECT_TIMEOUT", "")
+	t.Setenv("NM_DAEMON_CONNECT_TIMEOUT", "41ms")
+	if got := connectTimeout(); got != 41*time.Millisecond {
+		t.Fatalf("legacy timeout = %v, want 41ms", got)
+	}
+	t.Setenv("NS_DAEMON_CONNECT_TIMEOUT", "42ms")
+	if got := connectTimeout(); got != 3*time.Second {
+		t.Fatalf("conflicting aliases = %v, want safe default", got)
 	}
 }

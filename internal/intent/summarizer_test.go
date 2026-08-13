@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/agent"
 )
 
 type fakeAgent struct {

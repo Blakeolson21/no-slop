@@ -18,7 +18,7 @@ func setSysProcAttr(cmd *exec.Cmd) {
 }
 
 // listDaemonProcesses enumerates running processes via ps and returns the ones
-// that look like `no-mistakes daemon run --root <root>`. It powers the
+// that look like `no-slop daemon run --root <root>`. It powers the
 // pgrep-style collision detection in reconcileCollidingDaemons. `ps` is used
 // (rather than /proc) so the same approach works on Linux and macOS.
 func listDaemonProcesses() ([]daemonProcessInfo, error) {

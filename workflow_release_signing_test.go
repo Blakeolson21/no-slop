@@ -22,9 +22,9 @@ import (
 // The permanent signing identity. These MUST NEVER change once the first signed
 // release ships: the executable identifier and Team ID are the invariant part of
 // the Developer ID designated requirement that lets macOS permissions survive
-// `no-mistakes update`.
+// `no-slop update`.
 const (
-	signingIdentifier = "com.kunchenguid.no-mistakes"
+	signingIdentifier = "com.kunchenguid.no-slop"
 	signingTeamID     = "9T2J7MNUP9"
 
 	cscLinkSecret    = "CSC_LINK"
@@ -504,8 +504,8 @@ func TestReleaseWorkflowPreservesArtifactContract(t *testing.T) {
 			t.Fatalf("no darwin build job for %s", arch)
 		}
 		run := job.allRun()
-		if !strings.Contains(run, "no-mistakes-") || !strings.Contains(run, "${GOOS}-${GOARCH}.tar.gz") {
-			t.Errorf("darwin job %q must preserve the no-mistakes-<tag>-<goos>-<goarch>.tar.gz name", job.name)
+		if !strings.Contains(run, "no-slop-") || !strings.Contains(run, "${GOOS}-${GOARCH}.tar.gz") {
+			t.Errorf("darwin job %q must preserve the no-slop-<tag>-<goos>-<goarch>.tar.gz name", job.name)
 		}
 	}
 
@@ -540,13 +540,31 @@ func TestReleaseWorkflowPreservesArtifactContract(t *testing.T) {
 	}
 
 	checksums := wf.jobByRunContains("sha256sum", "checksums.txt")
-	if checksums == nil || !strings.Contains(checksums.allRun(), "sha256sum no-mistakes-*") {
-		t.Error("checksums job must still compute `sha256sum no-mistakes-*`")
+	if checksums == nil || !strings.Contains(checksums.allRun(), "sha256sum no-slop-*") {
+		t.Error("checksums job must still compute `sha256sum no-slop-*`")
 	}
 
 	finalize := wf.jobByRunContains("--prerelease=true")
 	if finalize == nil || !wfContainsAll(finalize.allRun(), "--draft=false", "--prerelease=true") {
 		t.Error("finalize job must still run `gh release edit --draft=false --prerelease=true`")
+	}
+}
+
+func TestReleaseWorkflowPublishesLegacyArchiveAliases(t *testing.T) {
+	data, err := os.ReadFile(".github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"no-mistakes-${TAG}-${GOOS}-${GOARCH}.tar.gz",
+		"no-mistakes-${TAG}-${GOOS}-${GOARCH}.zip",
+		`gh release upload "$TAG" "$ARCHIVE" "$LEGACY_ARCHIVE"`,
+		"sha256sum no-slop-* no-mistakes-*",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("release workflow missing compatibility artifact contract %q", want)
+		}
 	}
 }
 

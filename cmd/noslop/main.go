@@ -4,7 +4,7 @@ import (
 	"context"
 	"os"
 
-	slopcli "github.com/kunchenguid/no-mistakes/internal/slop/cli"
+	slopcli "github.com/Blakeolson21/no-slop/internal/slop/cli"
 )
 
 func main() {

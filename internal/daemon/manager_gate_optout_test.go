@@ -8,11 +8,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/git"
 )
 
 // gateOptOutWorktree builds a bare gate repo whose default branch carries the
-// given .no-mistakes.yaml (empty string => no file), plus a linked worktree with
+// given .no-slop.yaml (empty string => no file), plus a linked worktree with
 // origin/main fetched, and returns (wtDir, trustedSHA).
 func gateOptOutWorktree(t *testing.T, repoYAML string) (string, string) {
 	t.Helper()
@@ -29,7 +29,7 @@ func gateOptOutWorktree(t *testing.T, repoYAML string) (string, string) {
 		t.Fatal(err)
 	}
 	if repoYAML != "" {
-		if err := os.WriteFile(filepath.Join(src, ".no-mistakes.yaml"), []byte(repoYAML), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(src, ".no-slop.yaml"), []byte(repoYAML), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -61,7 +61,7 @@ func gateOptOutWorktree(t *testing.T, repoYAML string) (string, string) {
 
 // TestAssertGateTrustedConfigReadable_FileAbsentIsOK proves the common
 // ordinary-repo case: the trusted tree is readable and simply has no
-// .no-mistakes.yaml, which is NOT opted out and must NOT abort.
+// .no-slop.yaml, which is NOT opted out and must NOT abort.
 func TestAssertGateTrustedConfigReadable_FileAbsentIsOK(t *testing.T) {
 	wt, sha := gateOptOutWorktree(t, "")
 	if err := assertGateTrustedConfigReadable(context.Background(), wt, "main", sha); err != nil {
@@ -130,7 +130,7 @@ func TestAssertGateTrustedConfigReadable_PresentUnreadableBlobAborts(t *testing.
 
 	cmd := exec.Command("git", "mktree")
 	cmd.Dir = wt
-	cmd.Stdin = strings.NewReader("100644 blob " + blobSHA + "\t.no-mistakes.yaml\n")
+	cmd.Stdin = strings.NewReader("100644 blob " + blobSHA + "\t.no-slop.yaml\n")
 	treeOutput, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git mktree failed: %v\n%s", err, treeOutput)
@@ -159,7 +159,7 @@ func TestAssertGateTrustedConfigReadable_PresentUnreadableBlobAborts(t *testing.
 }
 
 // TestAssertGateTrustedConfigReadable_UnparseableAborts proves a present but
-// malformed trusted .no-mistakes.yaml aborts (we cannot evaluate the boundary).
+// malformed trusted .no-slop.yaml aborts (we cannot evaluate the boundary).
 func TestAssertGateTrustedConfigReadable_UnparseableAborts(t *testing.T) {
 	wt, sha := gateOptOutWorktree(t, "disable_project_settings: : : {{not yaml\n")
 	err := assertGateTrustedConfigReadable(context.Background(), wt, "main", sha)

@@ -11,15 +11,15 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/types"
-	"github.com/kunchenguid/no-mistakes/internal/update"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/update"
 )
 
 func TestDaemonStopRefusesWithActiveRunsAndListsThem(t *testing.T) {
 	nmHome := t.TempDir()
-	t.Setenv("NM_HOME", nmHome)
+	t.Setenv("NS_HOME", nmHome)
 	createLifecycleGuardRuns(t, paths.WithRoot(nmHome))
 
 	stopCalled := false
@@ -54,7 +54,7 @@ func TestDaemonStopRefusesWithActiveRunsAndListsThem(t *testing.T) {
 
 func TestDaemonStopForceOverridesActiveRunGuard(t *testing.T) {
 	nmHome := t.TempDir()
-	t.Setenv("NM_HOME", nmHome)
+	t.Setenv("NS_HOME", nmHome)
 	createLifecycleGuardRuns(t, paths.WithRoot(nmHome))
 
 	stopCalled := false
@@ -79,7 +79,7 @@ func TestDaemonStopForceOverridesActiveRunGuard(t *testing.T) {
 
 func TestDaemonRestartRefusesWithActiveRuns(t *testing.T) {
 	nmHome := t.TempDir()
-	t.Setenv("NM_HOME", nmHome)
+	t.Setenv("NS_HOME", nmHome)
 	createLifecycleGuardRuns(t, paths.WithRoot(nmHome))
 
 	stopCalled := false
@@ -113,7 +113,7 @@ func TestDaemonRestartRefusesWithActiveRuns(t *testing.T) {
 
 func TestLifecycleCommandsWriteCallerAttributionToCLILog(t *testing.T) {
 	nmHome := t.TempDir()
-	t.Setenv("NM_HOME", nmHome)
+	t.Setenv("NS_HOME", nmHome)
 
 	prevStop := daemonStopFn
 	prevStart := daemonStartFn
@@ -210,7 +210,7 @@ func createLifecycleGuardRuns(t *testing.T, p *paths.Paths) {
 // `daemon stop --force` killed a run mid-test-step.
 func TestDaemonStopForceRefusesRunExecutingAStep(t *testing.T) {
 	nmHome := t.TempDir()
-	t.Setenv("NM_HOME", nmHome)
+	t.Setenv("NS_HOME", nmHome)
 	seedLifecycleRunAtStep(t, paths.WithRoot(nmHome), "feature-executing", types.StepTest, types.StepStatusRunning)
 	stubDaemonAlive(t)
 	stopCalled := stubDaemonStop(t)
@@ -237,7 +237,7 @@ func TestDaemonStopForceRefusesRunExecutingAStep(t *testing.T) {
 
 func TestDaemonRestartForceRefusesRunExecutingAStep(t *testing.T) {
 	nmHome := t.TempDir()
-	t.Setenv("NM_HOME", nmHome)
+	t.Setenv("NS_HOME", nmHome)
 	seedLifecycleRunAtStep(t, paths.WithRoot(nmHome), "feature-executing", types.StepReview, types.StepStatusFixing)
 	stubDaemonAlive(t)
 	stopCalled := stubDaemonStop(t)
@@ -266,7 +266,7 @@ func TestDaemonRestartForceRefusesRunExecutingAStep(t *testing.T) {
 // recovery resumes it, so stopping the daemon is recoverable.
 func TestDaemonStopForceAllowsRunParkedAtAGate(t *testing.T) {
 	nmHome := t.TempDir()
-	t.Setenv("NM_HOME", nmHome)
+	t.Setenv("NS_HOME", nmHome)
 	seedLifecycleRunAtStep(t, paths.WithRoot(nmHome), "feature-parked", types.StepReview, types.StepStatusAwaitingApproval)
 	stubDaemonAlive(t)
 	stopCalled := stubDaemonStop(t)
@@ -285,7 +285,7 @@ func TestDaemonStopForceAllowsRunParkedAtAGate(t *testing.T) {
 
 func TestDaemonStopAbandonExecutingRunsOverridesExecutingGuard(t *testing.T) {
 	nmHome := t.TempDir()
-	t.Setenv("NM_HOME", nmHome)
+	t.Setenv("NS_HOME", nmHome)
 	seedLifecycleRunAtStep(t, paths.WithRoot(nmHome), "feature-executing", types.StepTest, types.StepStatusRunning)
 	stubDaemonAlive(t)
 	stopCalled := stubDaemonStop(t)
@@ -302,11 +302,11 @@ func TestDaemonStopAbandonExecutingRunsOverridesExecutingGuard(t *testing.T) {
 	}
 }
 
-// With no daemon serving this NM_HOME nothing can be mid-step, so leftover
+// With no daemon serving this NS_HOME nothing can be mid-step, so leftover
 // rows must not escalate into the executing refusal.
 func TestDaemonStopForceAllowsLeftoverRunsWhenDaemonIsDown(t *testing.T) {
 	nmHome := t.TempDir()
-	t.Setenv("NM_HOME", nmHome)
+	t.Setenv("NS_HOME", nmHome)
 	seedLifecycleRunAtStep(t, paths.WithRoot(nmHome), "feature-stale", types.StepTest, types.StepStatusRunning)
 	prev := daemonIsRunningFn
 	daemonIsRunningFn = func(*paths.Paths) (bool, error) { return false, nil }
@@ -328,7 +328,7 @@ func TestDaemonStopForceAllowsLeftoverRunsWhenDaemonIsDown(t *testing.T) {
 // is driving it right now.
 func TestDaemonStopForceRefusesPendingRunUnderLiveDaemon(t *testing.T) {
 	nmHome := t.TempDir()
-	t.Setenv("NM_HOME", nmHome)
+	t.Setenv("NS_HOME", nmHome)
 	seedPendingLifecycleRun(t, paths.WithRoot(nmHome), "feature-starting")
 	stubDaemonAlive(t)
 	stopCalled := stubDaemonStop(t)
@@ -350,7 +350,7 @@ func TestDaemonStopForceRefusesPendingRunUnderLiveDaemon(t *testing.T) {
 // step exactly like an unguarded `daemon stop`.
 func TestDaemonStartRefusesRunExecutingAStep(t *testing.T) {
 	nmHome := t.TempDir()
-	t.Setenv("NM_HOME", nmHome)
+	t.Setenv("NS_HOME", nmHome)
 	seedLifecycleRunAtStep(t, paths.WithRoot(nmHome), "feature-executing", types.StepTest, types.StepStatusRunning)
 	stubDaemonAlive(t)
 	startCalled := stubDaemonStart(t)
@@ -393,7 +393,7 @@ func TestDaemonStartProceedsWhenNoHealthyDaemonOwnsTheLeftoverRuns(t *testing.T)
 	} {
 		t.Run(name, func(t *testing.T) {
 			nmHome := t.TempDir()
-			t.Setenv("NM_HOME", nmHome)
+			t.Setenv("NS_HOME", nmHome)
 			seedLifecycleRunAtStep(t, paths.WithRoot(nmHome), "feature-stale", types.StepTest, types.StepStatusRunning)
 			prev := daemonIsRunningFn
 			daemonIsRunningFn = probe
@@ -429,7 +429,7 @@ func TestDaemonRestartAfterUncleanDeathDoesNotDemandAbandoningExecutingRuns(t *t
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(nmHome) })
-	t.Setenv("NM_HOME", nmHome)
+	t.Setenv("NS_HOME", nmHome)
 	p := paths.WithRoot(nmHome)
 	seedLifecycleRunAtStep(t, p, "feature-crashed", types.StepTest, types.StepStatusRunning)
 	seedUncleanDaemonDeath(t, p)

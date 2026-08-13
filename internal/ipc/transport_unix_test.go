@@ -5,7 +5,7 @@ package ipc_test
 import (
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/ipc"
 )
 
 // TestServe_SecondListenerForLiveSocketDoesNotStealIt is the regression test

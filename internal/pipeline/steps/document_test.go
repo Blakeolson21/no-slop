@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
-	"github.com/kunchenguid/no-mistakes/internal/config"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestDocumentStep_AgentManaged_FixesAndCommitsWithoutApproval(t *testing.T) {
@@ -46,7 +46,7 @@ func TestDocumentStep_AgentManaged_FixesAndCommitsWithoutApproval(t *testing.T) 
 	if status := gitStatusPorcelain(t, dir); status != "" {
 		t.Fatalf("expected clean worktree after doc commit, got %q", status)
 	}
-	if got := lastCommitMessage(t, dir); got != "no-mistakes(document): update README" {
+	if got := lastCommitMessage(t, dir); got != "no-slop(document): update README" {
 		t.Fatalf("last commit message = %q", got)
 	}
 	if sctx.Run.HeadSHA == headSHA {
@@ -73,7 +73,7 @@ func TestDocumentStep_AgentManaged_NormalizesMultilineCommitSummary(t *testing.T
 	if _, err := (&DocumentStep{}).Execute(sctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := lastCommitMessage(t, dir); got != "no-mistakes(document): update README and references" {
+	if got := lastCommitMessage(t, dir); got != "no-slop(document): update README and references" {
 		t.Fatalf("last commit message = %q", got)
 	}
 }
@@ -103,7 +103,7 @@ func TestDocumentStep_AgentManaged_AllowsDocCommentEdits(t *testing.T) {
 	if status := gitStatusPorcelain(t, dir); status != "" {
 		t.Fatalf("expected clean worktree after doc comment commit, got %q", status)
 	}
-	if got := lastCommitMessage(t, dir); got != "no-mistakes(document): update doc comment" {
+	if got := lastCommitMessage(t, dir); got != "no-slop(document): update doc comment" {
 		t.Fatalf("last commit message = %q", got)
 	}
 }
@@ -274,7 +274,7 @@ func TestDocumentStep_UserFix_PassesPreviousFindingsIntoPrompt(t *testing.T) {
 	if strings.Contains(prompt, "doc-1 =======") || strings.Contains(prompt, "<<<<<<< HEAD") {
 		t.Error("expected user-fix prompt to sanitize finding fields and merge markers")
 	}
-	if got := lastCommitMessage(t, dir); got != "no-mistakes(document): address config docs" {
+	if got := lastCommitMessage(t, dir); got != "no-slop(document): address config docs" {
 		t.Fatalf("last commit message = %q", got)
 	}
 }

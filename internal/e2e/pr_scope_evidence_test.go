@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 const staleTwoFileEvidence = "Inspected only final files: internal/example/flag.go and cmd/example/main.go."
@@ -97,8 +97,8 @@ func TestPRFinalScopeExcludesEarlierStepEvidence(t *testing.T) {
 	h := NewHarness(t, SetupOpts{Agent: "claude", Scenario: writeFinalPRScopeScenario(t)})
 	ctx := context.Background()
 
-	parentURL := "https://github.com/example/no-mistakes.git"
-	forkURL := "https://github.com/example-fork/no-mistakes.git"
+	parentURL := "https://github.com/example/no-slop.git"
+	forkURL := "https://github.com/example-fork/no-slop.git"
 	forkDir := filepath.Join(filepath.Dir(h.UpstreamDir), "fork.git")
 	if err := os.MkdirAll(forkDir, 0o755); err != nil {
 		t.Fatalf("mkdir fork: %v", err)
@@ -118,7 +118,7 @@ func TestPRFinalScopeExcludesEarlierStepEvidence(t *testing.T) {
 	ghLog := filepath.Join(filepath.Dir(h.AgentLog), "gh-final-pr-scope.log")
 	t.Setenv("FAKEAGENT_GH_MODE", "fork-pr")
 	t.Setenv("FAKEAGENT_GH_LOG", ghLog)
-	t.Setenv("FAKEAGENT_GH_PARENT", "example/no-mistakes")
+	t.Setenv("FAKEAGENT_GH_PARENT", "example/no-slop")
 
 	if out, err := h.Run("init", "--fork-url", forkURL); err != nil {
 		t.Fatalf("init with fork URL: %v\n%s", err, out)

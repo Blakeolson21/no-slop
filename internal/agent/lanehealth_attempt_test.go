@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/lanehealth"
+	"github.com/Blakeolson21/no-slop/internal/lanehealth"
 )
 
 // attemptReportingAgent models a real adapter: it reports its own attempts and

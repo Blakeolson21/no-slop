@@ -53,7 +53,7 @@ func TestClientTrackSendsUmamiEventPayload(t *testing.T) {
 	client, err := NewClient(Config{
 		Host:       server.URL,
 		WebsiteID:  "website-123",
-		App:        "no-mistakes",
+		App:        "no-slop",
 		Version:    "v1.2.3",
 		GOOS:       "darwin",
 		GOARCH:     "arm64",
@@ -85,11 +85,11 @@ func TestClientTrackSendsUmamiEventPayload(t *testing.T) {
 		if got.Payload.Name != "command" {
 			t.Fatalf("name = %q, want %q", got.Payload.Name, "command")
 		}
-		if got.Payload.URL != "app://no-mistakes/command" {
-			t.Fatalf("url = %q, want %q", got.Payload.URL, "app://no-mistakes/command")
+		if got.Payload.URL != "app://no-slop/command" {
+			t.Fatalf("url = %q, want %q", got.Payload.URL, "app://no-slop/command")
 		}
-		if got.Payload.Title != "no-mistakes CLI" {
-			t.Fatalf("title = %q, want %q", got.Payload.Title, "no-mistakes CLI")
+		if got.Payload.Title != "no-slop CLI" {
+			t.Fatalf("title = %q, want %q", got.Payload.Title, "no-slop CLI")
 		}
 		if got.Payload.Data["command"] != "init" {
 			t.Fatalf("data.command = %v, want %q", got.Payload.Data["command"], "init")
@@ -143,7 +143,7 @@ func TestClientPageviewSendsUmamiPageviewPayload(t *testing.T) {
 	client, err := NewClient(Config{
 		Host:       server.URL,
 		WebsiteID:  "website-123",
-		App:        "no-mistakes",
+		App:        "no-slop",
 		Version:    "v1.2.3",
 		GOOS:       "darwin",
 		GOARCH:     "arm64",
@@ -175,8 +175,8 @@ func TestClientPageviewSendsUmamiPageviewPayload(t *testing.T) {
 		if got.Payload.URL != "/tui" {
 			t.Fatalf("url = %q, want %q", got.Payload.URL, "/tui")
 		}
-		if got.Payload.Title != "no-mistakes CLI" {
-			t.Fatalf("title = %q, want %q", got.Payload.Title, "no-mistakes CLI")
+		if got.Payload.Title != "no-slop CLI" {
+			t.Fatalf("title = %q, want %q", got.Payload.Title, "no-slop CLI")
 		}
 		if got.Payload.Data["entrypoint"] != "attach" {
 			t.Fatalf("data.entrypoint = %v, want %q", got.Payload.Data["entrypoint"], "attach")

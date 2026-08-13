@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/shellenv"
+	"github.com/Blakeolson21/no-slop/internal/shellenv"
 )
 
 // GHThreadReader reads live GitHub issue and pull-request state through gh.

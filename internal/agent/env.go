@@ -1,9 +1,9 @@
 package agent
 
-import "github.com/kunchenguid/no-mistakes/internal/git"
+import "github.com/Blakeolson21/no-slop/internal/git"
 
 // GateRoleEnvVar is exported into every spawned gate agent's environment as an
-// coarse diagnostic marker that the process is a no-mistakes gate agent (a
+// coarse diagnostic marker that the process is a no-slop gate agent (a
 // review/fix/document/test/lint/rebase/pr/ci invocation), NOT a fleet operator.
 // It is defense in depth only: it can be removed, forged, or inherited, so
 // runtime authorization uses canonical managed Git identity plus authenticated
@@ -14,7 +14,10 @@ import "github.com/kunchenguid/no-mistakes/internal/git"
 // validating (see the ambient-authority incident). A cooperating harness reads
 // this marker and its fleet-lifecycle entrypoints fail closed. It is deliberately
 // coarse (`=1`): presence is the whole signal.
-const GateRoleEnvVar = "NO_MISTAKES_GATE"
+const (
+	GateRoleEnvVar       = "NS_GATE"
+	LegacyGateRoleEnvVar = "NO_MISTAKES_GATE"
+)
 
 // gitSafeEnv returns the environment for a spawned agent subprocess with git
 // forced into non-interactive mode. Agents shell out to git directly (for
@@ -29,5 +32,5 @@ const GateRoleEnvVar = "NO_MISTAKES_GATE"
 // dir must be the value assigned to cmd.Dir so PWD stays coupled to the working
 // directory; see git.NonInteractiveEnv for why this matters.
 func gitSafeEnv(dir string) []string {
-	return append(git.NonInteractiveEnv(dir), GateRoleEnvVar+"=1")
+	return append(git.NonInteractiveEnv(dir), GateRoleEnvVar+"=1", LegacyGateRoleEnvVar+"=1")
 }

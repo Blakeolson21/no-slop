@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/lanehealth"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/telemetry"
+	"github.com/Blakeolson21/no-slop/internal/lanehealth"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/telemetry"
 )
 
 // A lane parked by a quota cooldown is installed and looks healthy, so without
@@ -17,7 +17,7 @@ func TestDoctorReportsAQuotaExhaustedAgentLane(t *testing.T) {
 	defer restore()
 
 	home := t.TempDir()
-	t.Setenv("NM_HOME", home)
+	t.Setenv("NS_HOME", home)
 
 	binDir := t.TempDir()
 	writeFakeBinary(t, binDir, "codex")
@@ -59,7 +59,7 @@ func TestDoctorGateValidationNamesTheCooldownOnTheResolvedAgent(t *testing.T) {
 	defer restore()
 
 	home := t.TempDir()
-	t.Setenv("NM_HOME", home)
+	t.Setenv("NS_HOME", home)
 
 	binDir := t.TempDir()
 	writeFakeBinary(t, binDir, "codex")
@@ -100,7 +100,7 @@ func TestDoctorGateValidationStaysPlainForAHealthyAgent(t *testing.T) {
 	restore := telemetry.SetDefaultForTesting(&telemetryRecorder{})
 	defer restore()
 
-	t.Setenv("NM_HOME", t.TempDir())
+	t.Setenv("NS_HOME", t.TempDir())
 	binDir := t.TempDir()
 	writeFakeBinary(t, binDir, "codex")
 	t.Setenv("PATH", binDir)
@@ -134,7 +134,7 @@ func TestDoctorReportsAnExpiredMarkAsHealthy(t *testing.T) {
 	defer restore()
 
 	home := t.TempDir()
-	t.Setenv("NM_HOME", home)
+	t.Setenv("NS_HOME", home)
 
 	binDir := t.TempDir()
 	codexPath := writeFakeBinary(t, binDir, "codex")

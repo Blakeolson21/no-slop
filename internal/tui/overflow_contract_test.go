@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Blakeolson21/no-slop/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/types"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/kunchenguid/no-mistakes/internal/ipc"
-	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
 // The TUI is the only consumer that applies event payloads as deltas against a

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Blakeolson21/no-slop/internal/types"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/kunchenguid/no-mistakes/internal/types"
 	"github.com/muesli/termenv"
 )
 

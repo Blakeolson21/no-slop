@@ -39,30 +39,32 @@ func InstallUser() ([]string, error) {
 // not exist yet (a plain os.MkdirAll would fail with "file exists" on a dangling
 // symlink). Both logical bases stay readable afterward via the link.
 func Install(root string) ([]string, error) {
-	content := []byte(Markdown())
-	written := make([]string, 0, len(InstallBases))
+	renderings := []struct{ name, content string }{{Name, Markdown()}, {LegacyName, LegacyMarkdown()}}
+	written := make([]string, 0, len(InstallBases)*len(renderings))
 	for _, base := range InstallBases {
-		rel := filepath.Join(base, Name, "SKILL.md")
-		path := filepath.Join(root, rel)
-		// Resolve any symlink components to a real directory before creating
-		// it, so a dangling symlink in the path does not collide with MkdirAll.
-		realDir, err := resolveThroughSymlinks(filepath.Dir(path))
-		if err != nil {
-			return written, err
+		for _, rendering := range renderings {
+			rel := filepath.Join(base, rendering.name, "SKILL.md")
+			path := filepath.Join(root, rel)
+			// Resolve any symlink components to a real directory before creating
+			// it, so a dangling symlink in the path does not collide with MkdirAll.
+			realDir, err := resolveThroughSymlinks(filepath.Dir(path))
+			if err != nil {
+				return written, err
+			}
+			if err := os.MkdirAll(realDir, 0o755); err != nil {
+				return written, err
+			}
+			if err := os.WriteFile(filepath.Join(realDir, "SKILL.md"), []byte(rendering.content), 0o644); err != nil {
+				return written, err
+			}
+			written = append(written, rel)
 		}
-		if err := os.MkdirAll(realDir, 0o755); err != nil {
-			return written, err
-		}
-		if err := os.WriteFile(filepath.Join(realDir, "SKILL.md"), content, 0o644); err != nil {
-			return written, err
-		}
-		written = append(written, rel)
 	}
 	return written, nil
 }
 
 // Vendored reports the repo-relative paths of legacy vendored skill copies
-// under repoRoot. Older no-mistakes versions wrote SKILL.md into each
+// under repoRoot. Older no-slop versions wrote SKILL.md into each
 // initialized repo; init uses this to tell users those copies are no longer
 // needed. It never modifies the repo.
 func Vendored(repoRoot string) []string {

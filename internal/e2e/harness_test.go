@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/ipc"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestFixtureRootFromRepoRoot(t *testing.T) {
@@ -108,7 +108,7 @@ func TestDaemonStopDirFallsBackWhenWorkDirMoved(t *testing.T) {
 }
 
 func TestWaitForRunPrefersNewestRunOnBranch(t *testing.T) {
-	nmHome, err := os.MkdirTemp("/tmp", "nm-e2e-")
+	nmHome, err := os.MkdirTemp("/tmp", "ns-e2e-")
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
 	}

@@ -18,7 +18,7 @@ import (
 )
 
 // recordOpencode boots the real `opencode serve` server and drives it
-// the same way no-mistakes does: open SSE, POST /session, POST a message,
+// the same way no-slop does: open SSE, POST /session, POST a message,
 // wait for session.idle. Every byte read from the server is teed to disk
 // so the fake can replay the exact wire shape.
 //

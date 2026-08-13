@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/slop/engine"
-	"github.com/kunchenguid/no-mistakes/internal/slop/precheck"
-	"github.com/kunchenguid/no-mistakes/internal/slop/risk"
+	"github.com/Blakeolson21/no-slop/internal/slop/engine"
+	"github.com/Blakeolson21/no-slop/internal/slop/precheck"
+	"github.com/Blakeolson21/no-slop/internal/slop/risk"
 )
 
 func TestLoadGitChangesReturnsBaselineCurrentAndAddedContent(t *testing.T) {

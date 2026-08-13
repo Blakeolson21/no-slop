@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"os/exec"
 
-	"github.com/kunchenguid/no-mistakes/internal/bitbucket"
-	"github.com/kunchenguid/no-mistakes/internal/pipeline"
-	"github.com/kunchenguid/no-mistakes/internal/scm"
-	"github.com/kunchenguid/no-mistakes/internal/scm/azuredevops"
-	"github.com/kunchenguid/no-mistakes/internal/scm/github"
-	"github.com/kunchenguid/no-mistakes/internal/scm/gitlab"
+	"github.com/Blakeolson21/no-slop/internal/bitbucket"
+	"github.com/Blakeolson21/no-slop/internal/pipeline"
+	"github.com/Blakeolson21/no-slop/internal/scm"
+	"github.com/Blakeolson21/no-slop/internal/scm/azuredevops"
+	"github.com/Blakeolson21/no-slop/internal/scm/github"
+	"github.com/Blakeolson21/no-slop/internal/scm/gitlab"
 )
 
 // buildHost returns a scm.Host for the given provider, wired to sctx's

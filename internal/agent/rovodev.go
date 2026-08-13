@@ -123,7 +123,7 @@ func (a *rovodevAgent) Close() error {
 }
 
 func (a *rovodevAgent) createSession(ctx context.Context, baseURL string) (string, error) {
-	body := map[string]string{"custom_title": "no-mistakes"}
+	body := map[string]string{"custom_title": "no-slop"}
 	resp, err := doJSON(ctx, http.MethodPost, baseURL+"/v3/sessions/create", nil, body)
 	if err != nil {
 		return "", fmt.Errorf("rovodev create session: %w", err)

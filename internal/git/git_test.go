@@ -10,7 +10,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "no-mistakes-git-tests-")
+	dir, err := os.MkdirTemp("", "no-slop-git-tests-")
 	if err != nil {
 		panic(err)
 	}

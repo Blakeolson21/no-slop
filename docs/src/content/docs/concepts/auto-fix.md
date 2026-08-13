@@ -3,7 +3,7 @@ title: Auto-Fix Loop
 description: How the automatic fix loop works.
 ---
 
-When a pipeline step finds issues, `no-mistakes` can automatically ask the agent to fix them before pausing for your approval. This is controlled by the `auto_fix` configuration.
+When a pipeline step finds issues, `no-slop` can automatically ask the agent to fix them before pausing for your approval. This is controlled by the `auto_fix` configuration.
 
 ```mermaid
 flowchart TD
@@ -48,15 +48,15 @@ That deterministic rerun sits strictly before the agent rounds described above:
 3. When cancellation is the only remaining issue, a check with no authorized or outstanding rerun pauses for a decision without consuming an `auto_fix.ci` attempt.
 4. Every other failure escalates into the `auto_fix.ci` loop on its first observation.
 
-[`ci.rerun_transient`](/no-mistakes/reference/repo-config/#cirerun_transient) owns the budget, the exact classification, and every case that skips the rerun.
+[`ci.rerun_transient`](/no-slop/reference/repo-config/#cirerun_transient) owns the budget, the exact classification, and every case that skips the rerun.
 
 Nothing that survives a rerun falls into the agent loop either. A check the provider cancels again is still not a verdict on the code, so it pauses for a decision instead of spending a fix round on a run that never tested anything. A cancellation no rerun is going to replace - the default budget is `0` - reaches that same decision directly: the provider has published its conclusion and will not replace it, so waiting on it would never end. A rerun costs another CI run of that job, so the budget is deliberately small and is spent when the rerun is requested, which bounds the loop by construction. Each rerun is announced in the step log, so a run that is waiting on one says so instead of looking stalled. Reruns never cross a head change: if the published branch head no longer matches the commit the run delivered, the step pauses with the expected and observed commits rather than re-running checks against a revision it never produced.
 
 ## Configuration
 
-Per-step attempt limits come from the `auto_fix` config object; the [`auto_fix` field reference](/no-mistakes/reference/global-config/#auto_fix) owns the defaults, per-step meanings, and the legacy alias.
+Per-step attempt limits come from the `auto_fix` config object; the [`auto_fix` field reference](/no-slop/reference/global-config/#auto_fix) owns the defaults, per-step meanings, and the legacy alias.
 Setting a step to `0` disables the follow-up auto-fix loop, so the pipeline pauses for human input when that step finds issues; `auto_fix.review` defaults to `0`, so review findings require manual approval unless you opt in.
-Repo config overlays global config field by field - you can set `auto_fix.lint: 5` in a repo's `.no-mistakes.yaml` to override just that step while inheriting the rest from global.
+Repo config overlays global config field by field - you can set `auto_fix.lint: 5` in a repo's `.no-slop.yaml` to override just that step while inheriting the rest from global.
 
 ## Finding actions
 
@@ -66,7 +66,7 @@ Agent-driven findings now use an `action` field instead of `requires_human_revie
 - `ask-user` - intent-sensitive or ambiguous issues that pause for approval instead of entering the normal auto-fix loop
 - `no-op` - informational notes that do not need a fix
 
-If an agent or integration omits `action`, no-mistakes fails closed by treating the finding as `ask-user`.
+If an agent or integration omits `action`, no-slop fails closed by treating the finding as `ask-user`.
 An unclassified finding is never eligible for automatic fixing.
 
 `ask-user` is meant for findings that need human judgment - for example, questioning an intentional product or design choice, arguing that an intentional addition, removal, or guard should be undone, or reporting that the test step could not produce enough evidence for the available intent. Routine correctness, reliability, or security fixes still stay `auto-fix` even if the smallest fix reintroduces a small amount of previously deleted logic. Agents driving the AXI skill should relay `ask-user` findings to the user unless they have explicit `--yes` consent to attempt bounded automatic resolution.
@@ -92,12 +92,12 @@ That history includes which finding IDs were selected for a prior fix attempt, w
 On follow-up review passes, that history tells the agent not to re-report user-ignored findings unless the code now presents a materially different issue.
 
 After a user-triggered fix, the step re-runs and pauses again to show you the results (`fix_review` status). You can then approve, fix again, skip, or abort.
-TUI yolo mode approves the fix review automatically after its one fix round. AXI `--yes` funds up to 3 fix rounds per step and approves a fix review only when it is clean or contains only `no-op` findings. If an actionable finding cannot be selected or survives that budget, it leaves the run parked for explicit adjudication instead of silently approving it. An explicit approval can accept remaining actionable findings; the [step log](/no-mistakes/reference/cli/#no-mistakes-axi-logs) records that adjudication.
+TUI yolo mode approves the fix review automatically after its one fix round. AXI `--yes` funds up to 3 fix rounds per step and approves a fix review only when it is clean or contains only `no-op` findings. If an actionable finding cannot be selected or survives that budget, it leaves the run parked for explicit adjudication instead of silently approving it. An explicit approval can accept remaining actionable findings; the [step log](/no-slop/reference/cli/#no-slop-axi-logs) records that adjudication.
 
 ## Fix commits
 
 When the shared Review, Test, Document, or Lint fix path commits uncommitted changes, its subject comes from `commit.fix_message`.
-The [global config reference](/no-mistakes/reference/global-config/#commitfix_message) owns the template syntax, default, validation rules, size limits, and supported placeholders; the [repo config reference](/no-mistakes/reference/repo-config/#commitfix_message) owns the repository override and trust behavior.
+The [global config reference](/no-slop/reference/global-config/#commitfix_message) owns the template syntax, default, validation rules, size limits, and supported placeholders; the [repo config reference](/no-slop/reference/repo-config/#commitfix_message) owns the repository override and trust behavior.
 The pipeline validates the template, agent summary, predicted output size, and final rendered subject before `git add -A`, so a rejected value does not leave changes staged.
 The combined document-and-lint housekeeping pass runs in the Document step, so its documentation and safe lint fixes use the Document value for `{{.Step}}`; configured-command lint fixes use the Lint value.
 
@@ -106,7 +106,7 @@ It preserves and adopts legitimate forward commits made by an agent. If the agen
 An out-of-band backward or divergent reset aborts the run instead of dropping reviewed history.
 
 The template does not control commits created by the Rebase, CI, or Push steps.
-The CI step uses `no-mistakes: apply CI fixes`, and the Push step uses `no-mistakes: apply agent fixes` for remaining uncommitted changes.
+The CI step uses `no-slop: apply CI fixes`, and the Push step uses `no-slop: apply agent fixes` for remaining uncommitted changes.
 
 ## Step rounds
 
@@ -115,11 +115,11 @@ A round stores its findings, duration, any selected finding IDs and whether that
 That merged payload can include per-finding user notes and user-authored findings added from the TUI or AXI interface.
 AXI status uses the same round history and the persisted auto-fix limit to show the active fix attempt, for example `auto-fix 1/3` or `fix 2`.
 The step log records a marker when each automatic or user-triggered fix round starts.
-The full round history remains available in the run log. The generated PR keeps earlier evidence step-scoped and shows only compact step status in its Pipeline section; the [pipeline steps reference](/no-mistakes/reference/pipeline-steps/#pr) owns the PR body and size-limit contract.
+The full round history remains available in the run log. The generated PR keeps earlier evidence step-scoped and shows only compact step status in its Pipeline section; the [pipeline steps reference](/no-slop/reference/pipeline-steps/#pr) owns the PR body and size-limit contract.
 
 Round trigger types:
 - `initial` - first execution
 - `auto_fix` - triggered by the automatic fix loop
-- `auto_fix` - also used when you press `f` in the TUI or use `no-mistakes axi respond --action fix` to run a follow-up fix
+- `auto_fix` - also used when you press `f` in the TUI or use `no-slop axi respond --action fix` to run a follow-up fix
 
 Legacy `user_fix` rounds are still rendered as `auto-fix` in PR summaries for backward compatibility.

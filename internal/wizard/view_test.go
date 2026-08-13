@@ -233,7 +233,7 @@ func TestView_RendersTransientStatusInlineWithStep(t *testing.T) {
 	}{
 		{name: "agent", status: statAgent, want: "asking agent for a branch name"},
 		{name: "running", status: statRunning, result: "feat/wizard", want: "creating branch feat/wizard"},
-		{name: "confirm", status: statConfirm, want: "push main to no-mistakes gate?"},
+		{name: "confirm", status: statConfirm, want: "push main to no-slop gate?"},
 	}
 
 	for _, tt := range tests {

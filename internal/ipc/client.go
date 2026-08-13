@@ -7,12 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"os"
 	"sync"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/config"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/identity"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
 var dialNetworkWithTimeout = func(network, address string, timeout time.Duration) (net.Conn, error) {
@@ -43,7 +43,10 @@ func IsConnectTimeout(err error) bool {
 }
 
 func connectTimeout() time.Duration {
-	value := os.Getenv("NM_DAEMON_CONNECT_TIMEOUT")
+	value, err := identity.LookupEnv("NS_DAEMON_CONNECT_TIMEOUT", "NM_DAEMON_CONNECT_TIMEOUT")
+	if err != nil {
+		return config.DefaultDaemonConnectTimeout
+	}
 	if value == "" {
 		p, err := paths.New()
 		if err != nil {

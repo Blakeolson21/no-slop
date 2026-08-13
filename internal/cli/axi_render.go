@@ -8,10 +8,10 @@ import (
 
 	toon "github.com/toon-format/toon-go"
 
-	"github.com/kunchenguid/no-mistakes/internal/convergence"
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/ipc"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/convergence"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/types"
 	"github.com/spf13/cobra"
 )
 
@@ -485,10 +485,10 @@ func gateFields(gate stepView) []toon.Field {
 	gfields = append(gfields, toon.Field{Key: "findings", Value: rows})
 
 	help := []string{
-		"Run `no-mistakes axi respond --action approve` to accept this step and continue",
-		"Run `no-mistakes axi respond --action fix --findings <ids>` to have the pipeline fix the selected findings (do not edit files yourself)",
-		"Run `no-mistakes axi respond --action skip` to skip this step",
-		fmt.Sprintf("Run `no-mistakes axi logs --step %s --full` to read the full step log", gate.Name),
+		"Run `no-slop axi respond --action approve` to accept this step and continue",
+		"Run `no-slop axi respond --action fix --findings <ids>` to have the pipeline fix the selected findings (do not edit files yourself)",
+		"Run `no-slop axi respond --action skip` to skip this step",
+		fmt.Sprintf("Run `no-slop axi logs --step %s --full` to read the full step log", gate.Name),
 		"A long-running call is working, not stalled - background it if your harness needs to, but the run never advances past a gate on its own. Read every return; on a `gate:`, respond; loop until an `outcome:`.",
 		preserveGateFixCommitsGuidance,
 	}

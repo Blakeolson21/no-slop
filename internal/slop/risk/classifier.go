@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/slop/pathmatch"
-	"github.com/kunchenguid/no-mistakes/internal/slop/provenance"
+	"github.com/Blakeolson21/no-slop/internal/slop/pathmatch"
+	"github.com/Blakeolson21/no-slop/internal/slop/provenance"
 )
 
 // Tier names the validation depth selected for a change.

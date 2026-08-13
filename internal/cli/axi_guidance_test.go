@@ -11,21 +11,21 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/kunchenguid/no-mistakes/internal/gatecontext"
-	"github.com/kunchenguid/no-mistakes/internal/gateguidance"
-	"github.com/kunchenguid/no-mistakes/internal/ipc"
-	"github.com/kunchenguid/no-mistakes/internal/skill"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/gatecontext"
+	"github.com/Blakeolson21/no-slop/internal/gateguidance"
+	"github.com/Blakeolson21/no-slop/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/skill"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 // canonicalStaleMonitorPhrases are the load-bearing claims of the corrected
 // "PR fell behind / conflicted after checks pass" guidance: the live CI monitor
 // auto-rebases and re-pushes such a PR, so the agent runs no command and never
-// hand-rebases, and `no-mistakes rerun` is only the dead-monitor recovery.
+// hand-rebases, and `no-slop rerun` is only the dead-monitor recovery.
 var canonicalStaleMonitorPhrases = []string{
 	"never hand-rebase",
 	"re-pushes",
-	"no-mistakes rerun",
+	"no-slop rerun",
 }
 
 var canonicalPreserveGateFixPhrases = []string{
@@ -41,14 +41,14 @@ var canonicalYesFixBudgetPhrases = []string{
 
 var canonicalBranchSyncPhrases = []string{
 	"branch_sync",
-	"no-mistakes axi sync",
+	"no-slop axi sync",
 	"blocked",
 	"reset, stash, merge, rebase, force, or branch replacement",
 	// Guarded custody recovery for a terminal run whose pipeline commits were
 	// never published (v1.38.1 dogfood catch): the action, its next_action
 	// code, and the custody claim must stay on every guidance surface.
 	"recover_custody",
-	"no-mistakes axi sync --recover",
+	"no-slop axi sync --recover",
 	// The claim names custody, not preservation - a rebase-only head may no
 	// longer exist anywhere (the 2026-08-03 custody deadlock), so guidance
 	// must not promise the commits survived.

@@ -1,9 +1,17 @@
 #!/bin/sh
 set -e
 
-REPO="kunchenguid/no-mistakes"
-INSTALL_DIR="${NO_MISTAKES_INSTALL_DIR:-$HOME/.no-mistakes/bin}"
-LINK_DIR="${NO_MISTAKES_LINK_DIR:-}"
+REPO="Blakeolson21/no-slop"
+if [ -n "${NS_INSTALL_DIR:-}" ] && [ -n "${NO_MISTAKES_INSTALL_DIR:-}" ] && [ "$NS_INSTALL_DIR" != "$NO_MISTAKES_INSTALL_DIR" ]; then
+  echo "NS_INSTALL_DIR and NO_MISTAKES_INSTALL_DIR configure the same setting with different values" >&2
+  exit 2
+fi
+if [ -n "${NS_LINK_DIR:-}" ] && [ -n "${NO_MISTAKES_LINK_DIR:-}" ] && [ "$NS_LINK_DIR" != "$NO_MISTAKES_LINK_DIR" ]; then
+  echo "NS_LINK_DIR and NO_MISTAKES_LINK_DIR configure the same setting with different values" >&2
+  exit 2
+fi
+INSTALL_DIR="${NS_INSTALL_DIR:-${NO_MISTAKES_INSTALL_DIR:-$HOME/.no-mistakes/bin}}"
+LINK_DIR="${NS_LINK_DIR:-${NO_MISTAKES_LINK_DIR:-}}"
 
 if [ -z "$LINK_DIR" ]; then
   case ":$PATH:" in
@@ -12,8 +20,9 @@ if [ -z "$LINK_DIR" ]; then
   esac
 fi
 
-BIN_PATH="$INSTALL_DIR/no-mistakes"
-LINK_PATH="$LINK_DIR/no-mistakes"
+BIN_PATH="$INSTALL_DIR/no-slop"
+LINK_PATH="$LINK_DIR/no-slop"
+LEGACY_LINK_PATH="$LINK_DIR/no-mistakes"
 
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
@@ -35,13 +44,13 @@ if [ -z "$VERSION" ]; then
   exit 1
 fi
 
-FILENAME="no-mistakes-${VERSION}-${OS}-${ARCH}.tar.gz"
+FILENAME="no-slop-${VERSION}-${OS}-${ARCH}.tar.gz"
 URL="https://github.com/${REPO}/releases/download/${VERSION}/${FILENAME}"
 
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
-echo "Downloading no-mistakes ${VERSION} for ${OS}/${ARCH}..."
+echo "Downloading no-slop ${VERSION} for ${OS}/${ARCH}..."
 curl -fsSL "$URL" -o "${TMPDIR}/${FILENAME}"
 tar xzf "${TMPDIR}/${FILENAME}" -C "$TMPDIR"
 
@@ -50,7 +59,7 @@ if ! mkdir -p "$INSTALL_DIR"; then
   exit 1
 fi
 
-mv "${TMPDIR}/no-mistakes" "$BIN_PATH"
+mv "${TMPDIR}/no-slop" "$BIN_PATH"
 chmod 755 "$BIN_PATH" 2>/dev/null || true
 
 resolve_path() {
@@ -66,16 +75,21 @@ else
   if [ -w "$LINK_DIR" ] || (mkdir -p "$LINK_DIR" 2>/dev/null && [ -w "$LINK_DIR" ]); then
     rm -f "$LINK_PATH"
     ln -s "$BIN_PATH" "$LINK_PATH"
+    rm -f "$LEGACY_LINK_PATH"
+    ln -s "$BIN_PATH" "$LEGACY_LINK_PATH"
   else
     echo "Linking ${LINK_PATH} to ${BIN_PATH} (requires sudo)..."
     sudo mkdir -p "$LINK_DIR"
     sudo rm -f "$LINK_PATH"
     sudo ln -s "$BIN_PATH" "$LINK_PATH"
+    sudo rm -f "$LEGACY_LINK_PATH"
+    sudo ln -s "$BIN_PATH" "$LEGACY_LINK_PATH"
   fi
 fi
 
-echo "no-mistakes ${VERSION} installed to ${BIN_PATH}"
+echo "no-slop ${VERSION} installed to ${BIN_PATH}"
 echo "Command path: ${LINK_PATH} -> ${BIN_PATH}"
+echo "Compatibility alias: ${LEGACY_LINK_PATH} -> ${BIN_PATH}"
 
 "$BIN_PATH" daemon restart >/dev/null
 

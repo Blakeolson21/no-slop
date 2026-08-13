@@ -7,23 +7,23 @@ import (
 	"os"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
-// daemonProcessInfo describes a running `no-mistakes daemon run --root <root>`
+// daemonProcessInfo describes a running `no-slop daemon run --root <root>`
 // process discovered via the OS process list.
 type daemonProcessInfo struct {
 	PID  int
 	Root string // raw --root value exactly as it appeared on the command line
 }
 
-// daemonListDaemonProcesses enumerates no-mistakes managed-daemon processes. It
+// daemonListDaemonProcesses enumerates no-slop managed-daemon processes. It
 // is a package var so tests can stub the process list deterministically.
 var daemonListDaemonProcesses = listDaemonProcesses
 
 // errDaemonCollisionHealthy signals that Start refused to launch because a
 // healthy daemon for the same logical root is already running under a different
-// path spelling (e.g. a symlinked NM_HOME).
+// path spelling (e.g. a symlinked NS_HOME).
 var errDaemonCollisionHealthy = errors.New("daemon already running")
 
 // daemonProcessLineSplitter extracts a (pid, command line) pair from one line
@@ -31,7 +31,7 @@ var errDaemonCollisionHealthy = errors.New("daemon already running")
 type daemonProcessLineSplitter func(line string) (pid int, command string, ok bool)
 
 // parseDaemonProcessOutput walks a process listing and returns every line that
-// looks like `no-mistakes daemon run --root <root>`, extracting the pid and the
+// looks like `no-slop daemon run --root <root>`, extracting the pid and the
 // raw --root value. The splitter normalizes each platform's output into a pid
 // plus the full command line.
 func parseDaemonProcessOutput(output string, split daemonProcessLineSplitter) []daemonProcessInfo {
@@ -54,7 +54,7 @@ func parseDaemonProcessOutput(output string, split daemonProcessLineSplitter) []
 	return infos
 }
 
-// looksLikeDaemonRunCommand reports whether a command line is a no-mistakes
+// looksLikeDaemonRunCommand reports whether a command line is a no-slop
 // daemon invocation (`... daemon run ...`) with an explicit root.
 func looksLikeDaemonRunCommand(command string) bool {
 	tokens := splitCommandLineTokens(command)
@@ -124,9 +124,9 @@ func splitCommandLineTokens(command string) []string {
 	return tokens
 }
 
-// reconcileCollidingDaemons detects no-mistakes daemons already running for the
+// reconcileCollidingDaemons detects no-slop daemons already running for the
 // same logical root as p but started under a different path spelling (e.g. a
-// symlinked or relative NM_HOME). The socket-keyed health check in Start cannot
+// symlinked or relative NS_HOME). The socket-keyed health check in Start cannot
 // see those: paths.Paths stores the raw root string and derives its socket from
 // it, so two spellings of the same directory produce two different sockets.
 //

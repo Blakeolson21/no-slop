@@ -6,13 +6,13 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestParseSkipPushOptions(t *testing.T) {
 	got, err := parseSkipPushOptions([]string{
 		"ci.skip",
-		"no-mistakes.skip=test,lint",
+		"no-slop.skip=test,lint",
 	})
 	if err != nil {
 		t.Fatalf("parseSkipPushOptions() error = %v", err)
@@ -24,7 +24,7 @@ func TestParseSkipPushOptions(t *testing.T) {
 }
 
 func TestParseSkipPushOptionsRejectsUnknownStep(t *testing.T) {
-	_, err := parseSkipPushOptions([]string{"no-mistakes.skip=test,deploy"})
+	_, err := parseSkipPushOptions([]string{"no-slop.skip=test,deploy"})
 	if err == nil {
 		t.Fatal("expected unknown step to fail")
 	}
@@ -71,7 +71,7 @@ func TestNormalizeNotifyGatePathResolvesLegacyDotGate(t *testing.T) {
 
 func TestFormatSkipPushOptions(t *testing.T) {
 	got := formatSkipPushOptions([]types.StepName{types.StepTest, types.StepLint})
-	want := []string{"no-mistakes.skip=test,lint"}
+	want := []string{"no-slop.skip=test,lint"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("formatSkipPushOptions() = %v, want %v", got, want)
 	}
@@ -85,7 +85,7 @@ func TestIntentPushOptionRoundTrip(t *testing.T) {
 	if opt == "" {
 		t.Fatal("formatIntentPushOption returned empty for a non-empty intent")
 	}
-	got, err := parseIntentPushOptions([]string{"no-mistakes.skip=test", opt})
+	got, err := parseIntentPushOptions([]string{"no-slop.skip=test", opt})
 	if err != nil {
 		t.Fatalf("parseIntentPushOptions() error = %v", err)
 	}
@@ -101,7 +101,7 @@ func TestFormatIntentPushOptionEmpty(t *testing.T) {
 }
 
 func TestParseIntentPushOptionsNone(t *testing.T) {
-	got, err := parseIntentPushOptions([]string{"no-mistakes.skip=test", "ci.skip"})
+	got, err := parseIntentPushOptions([]string{"no-slop.skip=test", "ci.skip"})
 	if err != nil {
 		t.Fatalf("parseIntentPushOptions() error = %v", err)
 	}

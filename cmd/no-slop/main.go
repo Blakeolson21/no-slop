@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/cli"
-	"github.com/kunchenguid/no-mistakes/internal/daemon"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/telemetry"
-	"github.com/kunchenguid/no-mistakes/internal/update"
+	"github.com/Blakeolson21/no-slop/internal/cli"
+	"github.com/Blakeolson21/no-slop/internal/daemon"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/telemetry"
+	"github.com/Blakeolson21/no-slop/internal/update"
 )
 
 func main() {
@@ -26,7 +26,7 @@ func run() int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	} else if ok {
-		if err := os.Setenv("NM_HOME", root); err != nil {
+		if err := setStateRootEnv(root); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
@@ -41,7 +41,7 @@ func run() int {
 		return 1
 	} else if ok {
 		if root != "" {
-			if err := os.Setenv("NM_HOME", root); err != nil {
+			if err := setStateRootEnv(root); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				return 1
 			}
@@ -74,6 +74,13 @@ func run() int {
 	}()
 
 	return cli.Execute()
+}
+
+func setStateRootEnv(root string) error {
+	if err := os.Setenv("NS_HOME", root); err != nil {
+		return err
+	}
+	return os.Setenv("NM_HOME", root)
 }
 
 func writeDaemonRunError(stderr *os.File, err error) {

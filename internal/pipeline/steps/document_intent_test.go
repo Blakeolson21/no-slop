@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/config"
 )
 
 // The document step runs after review, is the last step to rewrite file

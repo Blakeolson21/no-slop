@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/telemetry"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/telemetry"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 // TestAxiMutationCommandsEmitPageviews verifies that state-changing axi
@@ -29,7 +29,7 @@ func TestAxiMutationCommandsEmitPageviews(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
-			t.Setenv("NM_HOME", t.TempDir())
+			t.Setenv("NS_HOME", t.TempDir())
 			chdir(t, tmpDir)
 
 			recorder := &telemetryRecorder{}
@@ -69,7 +69,7 @@ func TestAxiReadSurfacesEmitNoPageview(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
-			t.Setenv("NM_HOME", t.TempDir())
+			t.Setenv("NS_HOME", t.TempDir())
 			chdir(t, tmpDir)
 
 			recorder := &telemetryRecorder{}
@@ -104,7 +104,7 @@ func TestReadSurfaceTelemetryStaysBoundedUnderPolling(t *testing.T) {
 	for _, args := range cases {
 		t.Run(strings.Join(args, "-"), func(t *testing.T) {
 			tmpDir := t.TempDir()
-			t.Setenv("NM_HOME", t.TempDir())
+			t.Setenv("NS_HOME", t.TempDir())
 			chdir(t, tmpDir)
 
 			now := time.Unix(1_700_000_000, 0)
@@ -143,7 +143,7 @@ func TestReadSurfaceTelemetryStaysBoundedUnderPolling(t *testing.T) {
 // TUI pageview carries entrypoint/run_status.
 func TestAxiRunPageviewCarriesFlags(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("NM_HOME", t.TempDir())
+	t.Setenv("NS_HOME", t.TempDir())
 	chdir(t, tmpDir)
 
 	recorder := &telemetryRecorder{}
@@ -172,7 +172,7 @@ func TestAxiRunPageviewCarriesFlags(t *testing.T) {
 // ride on the now-removed pageview).
 func TestAxiLogsCommandEventCarriesStep(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("NM_HOME", t.TempDir())
+	t.Setenv("NS_HOME", t.TempDir())
 	chdir(t, tmpDir)
 
 	recorder := &telemetryRecorder{}
@@ -219,7 +219,7 @@ func TestRunStateFingerprintIncludesStepStatuses(t *testing.T) {
 
 func TestAxiLogsCommandEventSanitizesInvalidStep(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("NM_HOME", t.TempDir())
+	t.Setenv("NS_HOME", t.TempDir())
 	chdir(t, tmpDir)
 
 	recorder := &telemetryRecorder{}
@@ -239,7 +239,7 @@ func TestAxiLogsCommandEventSanitizesInvalidStep(t *testing.T) {
 
 func TestAxiRespondPageviewSanitizesInvalidAction(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("NM_HOME", t.TempDir())
+	t.Setenv("NS_HOME", t.TempDir())
 	chdir(t, tmpDir)
 
 	recorder := &telemetryRecorder{}

@@ -9,10 +9,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/ipc"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/telemetry"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/telemetry"
 )
 
 type recordedTelemetryEvent struct {
@@ -110,7 +110,7 @@ func TestInitTracksCommandTelemetry(t *testing.T) {
 
 func TestStatusTracksSoftFailureAsError(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("NM_HOME", t.TempDir())
+	t.Setenv("NS_HOME", t.TempDir())
 	chdir(t, tmpDir)
 
 	recorder := &telemetryRecorder{}
@@ -132,8 +132,8 @@ func TestStatusTracksSoftFailureAsError(t *testing.T) {
 
 func TestReadSurfaceTelemetryOptOutDoesNotPersistGate(t *testing.T) {
 	nmHome := t.TempDir()
-	t.Setenv("NM_HOME", nmHome)
-	t.Setenv("NO_MISTAKES_TELEMETRY", "off")
+	t.Setenv("NS_HOME", nmHome)
+	t.Setenv("NS_TELEMETRY", "off")
 
 	if err := trackReadSurface("status", nil, func() (string, string, error) {
 		return "repo|idle", "success", nil
@@ -159,8 +159,8 @@ func TestStatusFingerprintIncludesDisplayedRunHead(t *testing.T) {
 }
 
 func TestDoctorTracksFailedChecksAsError(t *testing.T) {
-	nmHome := filepath.Join(t.TempDir(), "missing-nm-home")
-	t.Setenv("NM_HOME", nmHome)
+	nmHome := filepath.Join(t.TempDir(), "missing-ns-home")
+	t.Setenv("NS_HOME", nmHome)
 	t.Setenv("PATH", "/nonexistent")
 
 	recorder := &telemetryRecorder{}
@@ -182,7 +182,7 @@ func TestDoctorTracksFailedChecksAsError(t *testing.T) {
 
 func TestAttachTracksTUIPageview(t *testing.T) {
 	nmHome := makeSocketSafeTempDir(t)
-	t.Setenv("NM_HOME", nmHome)
+	t.Setenv("NS_HOME", nmHome)
 	p := paths.WithRoot(nmHome)
 
 	d, err := db.Open(p.DB())

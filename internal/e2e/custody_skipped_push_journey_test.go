@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 // TestAxiCleanRebasedRunWithSkippedPushReturnsCustodyJourney reproduces the
@@ -89,7 +89,7 @@ func TestAxiCleanRebasedRunWithSkippedPushReturnsCustodyJourney(t *testing.T) {
 		"state: pipeline_owned",
 		"safety: blocked_pipeline_owned_recoverable",
 		"code: recover_custody",
-		"command: no-mistakes axi sync --recover",
+		"command: no-slop axi sync --recover",
 	} {
 		if !strings.Contains(checkOut, want) {
 			t.Errorf("sync --check output missing %q:\n%s", want, checkOut)
@@ -101,7 +101,7 @@ func TestAxiCleanRebasedRunWithSkippedPushReturnsCustodyJourney(t *testing.T) {
 	if err != nil {
 		t.Fatalf("custody recovery refused after a clean rebased run with push skipped: %v\n%s", err, recoverOut)
 	}
-	for _, want := range []string{"recovered: true", "state: custody_returned", "no-mistakes axi run --intent"} {
+	for _, want := range []string{"recovered: true", "state: custody_returned", "no-slop axi run --intent"} {
 		if !strings.Contains(recoverOut, want) {
 			t.Errorf("recover output missing %q:\n%s", want, recoverOut)
 		}

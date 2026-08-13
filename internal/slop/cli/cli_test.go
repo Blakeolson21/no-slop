@@ -14,10 +14,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/config"
-	slopcli "github.com/kunchenguid/no-mistakes/internal/slop/cli"
-	"github.com/kunchenguid/no-mistakes/internal/slop/engine"
-	"github.com/kunchenguid/no-mistakes/internal/slop/provenance"
+	"github.com/Blakeolson21/no-slop/internal/config"
+	slopcli "github.com/Blakeolson21/no-slop/internal/slop/cli"
+	"github.com/Blakeolson21/no-slop/internal/slop/engine"
+	"github.com/Blakeolson21/no-slop/internal/slop/provenance"
 )
 
 type emptyReviewer struct{ calls int }
@@ -237,9 +237,9 @@ func TestRunGateCanRefuseInlineLeakExemptions(t *testing.T) {
 	runGit(t, dir, "init", "-b", "main")
 	runGit(t, dir, "config", "user.email", "test@example.com")
 	runGit(t, dir, "config", "user.name", "Test")
-	writeFile(t, dir, ".no-mistakes.yaml", "slop:\n  leak_scan:\n    allow_exemptions: false\n")
+	writeFile(t, dir, ".no-slop.yaml", "slop:\n  leak_scan:\n    allow_exemptions: false\n")
 	writeFile(t, dir, "README.md", "# Project\n")
-	runGit(t, dir, "add", ".no-mistakes.yaml", "README.md")
+	runGit(t, dir, "add", ".no-slop.yaml", "README.md")
 	runGit(t, dir, "commit", "-m", "initial")
 	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
 	runGit(t, dir, "switch", "-c", "test/leak-fixtures")
@@ -294,9 +294,9 @@ func TestRunGateFailsClosedWhenConfiguredBlocklistIsMissing(t *testing.T) {
 	runGit(t, dir, "init", "-b", "main")
 	runGit(t, dir, "config", "user.email", "test@example.com")
 	runGit(t, dir, "config", "user.name", "Test")
-	writeFile(t, dir, ".no-mistakes.yaml", "slop:\n  leak_scan:\n    blocklist_file: missing-private-names\n")
+	writeFile(t, dir, ".no-slop.yaml", "slop:\n  leak_scan:\n    blocklist_file: missing-private-names\n")
 	writeFile(t, dir, "README.md", "# Project\n")
-	runGit(t, dir, "add", ".no-mistakes.yaml", "README.md")
+	runGit(t, dir, "add", ".no-slop.yaml", "README.md")
 	runGit(t, dir, "commit", "-m", "initial")
 	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
 	runGit(t, dir, "switch", "-c", "docs/readme")
@@ -332,7 +332,7 @@ func TestRunGateFailsClosedWhenDefaultOrConfiguredBlocklistIsUnreadable(t *testi
 			runGit(t, dir, "config", "user.email", "test@example.com")
 			runGit(t, dir, "config", "user.name", "Test")
 			if tc.config != "" {
-				writeFile(t, dir, ".no-mistakes.yaml", tc.config)
+				writeFile(t, dir, ".no-slop.yaml", tc.config)
 			}
 			if err := os.Mkdir(filepath.Join(dir, tc.blocklist), 0o755); err != nil {
 				t.Fatal(err)
@@ -340,7 +340,7 @@ func TestRunGateFailsClosedWhenDefaultOrConfiguredBlocklistIsUnreadable(t *testi
 			writeFile(t, dir, "README.md", "# Project\n")
 			runGit(t, dir, "add", "README.md")
 			if tc.config != "" {
-				runGit(t, dir, "add", ".no-mistakes.yaml")
+				runGit(t, dir, "add", ".no-slop.yaml")
 			}
 			runGit(t, dir, "commit", "-m", "initial")
 			base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
@@ -368,10 +368,10 @@ func TestRunGateAppendsProvenanceForBlockingFinding(t *testing.T) {
 	runGit(t, dir, "init", "-b", "main")
 	runGit(t, dir, "config", "user.email", "test@example.com")
 	runGit(t, dir, "config", "user.name", "Test")
-	writeFile(t, dir, ".no-mistakes.yaml", "slop:\n  data_dir: .review-history\n  leak_scan:\n    blocklist_file: .noslop-blocklist\n  test_count_floor: true\n")
+	writeFile(t, dir, ".no-slop.yaml", "slop:\n  data_dir: .review-history\n  leak_scan:\n    blocklist_file: .noslop-blocklist\n  test_count_floor: true\n")
 	writeFile(t, dir, ".noslop-blocklist", "# intentionally empty\n")
 	writeFile(t, dir, "calc_test.go", "package calc\nfunc TestPositive(t *testing.T) {}\nfunc TestNegative(t *testing.T) {}\n")
-	runGit(t, dir, "add", ".no-mistakes.yaml", ".noslop-blocklist", "calc_test.go")
+	runGit(t, dir, "add", ".no-slop.yaml", ".noslop-blocklist", "calc_test.go")
 	runGit(t, dir, "commit", "-m", "initial")
 	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
 	runGit(t, dir, "switch", "-c", "feature/calculator")
@@ -416,10 +416,10 @@ func TestRunGateConditionsDecisionOnConfiguredProvenanceStore(t *testing.T) {
 	runGit(t, dir, "init", "-b", "main")
 	runGit(t, dir, "config", "user.email", "test@example.com")
 	runGit(t, dir, "config", "user.name", "Test")
-	writeFile(t, dir, ".no-mistakes.yaml", "slop:\n  data_dir: .review-history\n  leak_scan:\n    blocklist_file: .noslop-blocklist\n")
+	writeFile(t, dir, ".no-slop.yaml", "slop:\n  data_dir: .review-history\n  leak_scan:\n    blocklist_file: .noslop-blocklist\n")
 	writeFile(t, dir, ".noslop-blocklist", "# intentionally empty\n")
 	writeFile(t, dir, "README.md", "# Project\n")
-	runGit(t, dir, "add", ".no-mistakes.yaml", ".noslop-blocklist", "README.md")
+	runGit(t, dir, "add", ".no-slop.yaml", ".noslop-blocklist", "README.md")
 	runGit(t, dir, "commit", "-m", "initial")
 	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
 	runGit(t, dir, "switch", "-c", "docs/readme")

@@ -1,7 +1,7 @@
 //go:build windows
 
 // Package winproc hardens child processes so Windows does not allocate a
-// visible console window for them. See issue #287: no-mistakes runs from a
+// visible console window for them. See issue #287: no-slop runs from a
 // console-less daemon, so every console child (agents, git, shell, provider
 // CLIs, helper commands) would otherwise get a fresh visible console window
 // for its lifetime. Harden keeps stdout/stderr pipes intact while suppressing

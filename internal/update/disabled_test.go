@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/buildinfo"
+	"github.com/Blakeolson21/no-slop/internal/buildinfo"
 )
 
 // The self-updater overwrites the running binary in place. This build carries
@@ -48,7 +48,7 @@ func stubAPI(t *testing.T) *atomic.Int64 {
 func seedUpgradeNotice(t *testing.T) {
 	t.Helper()
 	root := t.TempDir()
-	t.Setenv("NM_HOME", root)
+	t.Setenv("NS_HOME", root)
 
 	prev := buildinfo.Version
 	buildinfo.Version = "v1.41.2-no-slop-document-guard"
@@ -98,7 +98,7 @@ func TestRunRefusesAndMakesNoRequest(t *testing.T) {
 }
 
 // A --yes run must fail rather than report success, so an agent scripting
-// `no-mistakes update` sees a nonzero exit instead of a silent no-op.
+// `no-slop update` sees a nonzero exit instead of a silent no-op.
 func TestRunErrorExplainsHowToRebuild(t *testing.T) {
 	msg := ErrSelfUpdateDisabled.Error()
 	for _, want := range []string{"disabled", "go build", "Blakeolson21/no-slop"} {

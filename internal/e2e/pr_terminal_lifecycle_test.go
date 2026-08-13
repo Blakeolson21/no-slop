@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 // TestTerminalPRRunDisappearsFromActiveListing reproduces the operator-visible
@@ -54,7 +54,7 @@ func TestTerminalPRRunDisappearsFromActiveListing(t *testing.T) {
 			if err != nil {
 				t.Fatalf("runs: %v\n%s", err, out)
 			}
-			t.Logf("no-mistakes runs after %s PR observation:\n%s", state, out)
+			t.Logf("no-slop runs after %s PR observation:\n%s", state, out)
 			if !strings.Contains(out, "completed") || strings.Contains(out, "running") {
 				t.Fatalf("terminal PR remained visibly active:\n%s", out)
 			}

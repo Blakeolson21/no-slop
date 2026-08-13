@@ -1,9 +1,9 @@
 ---
 title: The Gate Model
-description: Architecture and data flow of no-mistakes.
+description: Architecture and data flow of no-slop.
 ---
 
-`no-mistakes` intercepts pushes by placing a local bare git repo between your
+`no-slop` intercepts pushes by placing a local bare git repo between your
 working repo and the configured push target. That bare repo is the gate.
 
 The point is not to hide Git. The point is to create one deliberate place where
@@ -13,7 +13,7 @@ validation can happen before a branch is shared.
 
 ```mermaid
 flowchart TD
-  repo["Working repo"] -->|"git push no-mistakes"| gate["Local bare gate repo"]
+  repo["Working repo"] -->|"git push no-slop"| gate["Local bare gate repo"]
   gate --> admission["pre-receive admission"]
   admission --> hook["post-receive notification"]
   admission --> daemon["Daemon"]
@@ -27,23 +27,23 @@ flowchart TD
   ipc --> axi["AXI clients"]
 ```
 
-## What `no-mistakes init` does
+## What `no-slop init` does
 
-When you run `no-mistakes init` in a repo:
+When you run `no-slop init` in a repo:
 
 1. It creates a local bare gate repo under `~/.no-mistakes/repos/<id>.git`.
 2. It installs a `pre-receive` admission hook and a `post-receive` notification hook in that gate repo.
 3. It enables Git push options for the gate repo.
 4. It best-effort isolates the gate repo's hooks path from shared local Git config writes when Git supports `config --worktree`.
-5. It adds a `no-mistakes` remote to your working repo that points at the gate.
+5. It adds a `no-slop` remote to your working repo that points at the gate.
 6. When `--fork-url` is supplied, it records that GitHub fork as the branch push target while keeping `origin` as the parent repository used for PR bases.
-7. It installs or refreshes the `/no-mistakes` agent skill at user level, into `~/.claude/skills/no-mistakes/SKILL.md` and `~/.agents/skills/no-mistakes/SKILL.md`, on a best-effort basis, following existing symlinks between the home `.claude` and `.agents` skill directories. It writes no skill files into the repo; if the repo still carries a vendored copy from an older version, `init` prints a notice that the copy can be removed.
+7. It installs or refreshes the `/no-slop` agent skill at user level, into `~/.claude/skills/no-slop/SKILL.md` and `~/.agents/skills/no-slop/SKILL.md`, on a best-effort basis, following existing symlinks between the home `.claude` and `.agents` skill directories. It writes no skill files into the repo; if the repo still carries a vendored copy from an older version, `init` prints a notice that the copy can be removed.
 8. It makes sure the daemon is running so incoming pushes can start runs.
 
 `init` is idempotent.
-If the repo is already initialized, it refreshes the existing gate instead of failing: managed hook installation, push-option support, hook-path isolation, gate and working remotes, origin/default-branch metadata, and the `/no-mistakes` agent skill are repaired or updated where needed.
-If the working repo was renamed or moved and the old path no longer exists, `init` reattaches the existing gate from the leftover `no-mistakes` remote, updates the stored working path, and preserves the repo ID plus run history.
-If the working repo was copied and the original path still exists, `init` treats the copy as a new repo and repoints the copied `no-mistakes` remote to a fresh gate.
+If the repo is already initialized, it refreshes the existing gate instead of failing: managed hook installation, push-option support, hook-path isolation, gate and working remotes, origin/default-branch metadata, and the `/no-slop` agent skill are repaired or updated where needed.
+If the working repo was renamed or moved and the old path no longer exists, `init` reattaches the existing gate from the leftover `no-slop` remote, updates the stored working path, and preserves the repo ID plus run history.
+If the working repo was copied and the original path still exists, `init` treats the copy as a new repo and repoints the copied `no-slop` remote to a fresh gate.
 If daemon startup fails during a refresh, `init` reports the error but does not eject the pre-existing gate.
 
 After init, your original `origin` still points at the real upstream remote.
@@ -52,25 +52,25 @@ That is a core design choice, not an implementation detail.
 
 ## How a push flows
 
-1. You run `git push no-mistakes <branch>`.
+1. You run `git push no-slop <branch>`.
 2. The gate repo's `pre-receive` hook asks the daemon to admit the update before Git changes any gate ref. An active validation-step descendant is refused, including a direct push that bypasses the CLI.
 3. Git writes an admitted push into the local bare gate repo.
 4. The gate repo's `post-receive` hook notifies the daemon.
 5. The daemon creates a detached worktree for this run.
 6. The pipeline runs in order: `intent -> rebase -> review -> test -> document -> lint -> push -> pr -> ci`.
-7. If a step pauses, you can attach with the TUI or use `no-mistakes axi respond` to approve, fix, or skip.
-   Use `no-mistakes axi abort` only when you mean to cancel the whole run.
+7. If a step pauses, you can attach with the TUI or use `no-slop axi respond` to approve, fix, or skip.
+   Use `no-slop axi abort` only when you mean to cancel the whole run.
    AXI run objects show `awaiting_agent: parked <duration>` while a non-terminal run is parked at that gate, so a supervising agent can distinguish a waiting run from active work in one status read.
    While a step is actively running or fixing, AXI run objects can also show `active_steps` with the active duration, latest activity, native agent PID, and current execution or fix round.
 8. After local checks pass, the push step forwards the branch to the configured push target only after verifying that the update will not discard unincorporated commits already on that target, and the PR step creates or updates the pull request.
    For GitHub fork routing, the push target is the fork and the PR base repository is the parent from `origin`.
 9. The CI step keeps watching the open PR until it is merged, closed, or its configured idle timeout elapses with no base-branch movement, and can auto-fix failures or merge conflicts when supported.
-   While it watches, the TUI and terminal title surface a `Checks passed` signal once checks are green and the PR is mergeable (or the trusted default-branch config declares [`no_ci: true`](/no-mistakes/reference/repo-config/#no_ci) and no checks are registered), and `no-mistakes axi` returns `outcome: checks-passed` with instructions to summarize the run and list any pipeline fixes, so agents stop and ask you to review and merge it. An empty forge response without that declaration stays not-ready.
+   While it watches, the TUI and terminal title surface a `Checks passed` signal once checks are green and the PR is mergeable (or the trusted default-branch config declares [`no_ci: true`](/no-slop/reference/repo-config/#no_ci) and no checks are registered), and `no-slop axi` returns `outcome: checks-passed` with instructions to summarize the run and list any pipeline fixes, so agents stop and ask you to review and merge it. An empty forge response without that declaration stays not-ready.
 
 **Key design decisions:**
 
-- **Named remote** - `origin` is never hijacked. You push to `no-mistakes` on purpose, so regular `git push` still works normally.
-- **Recursive-run containment** - managed gate identity and authenticated daemon peer ancestry prevent active validation steps from starting or controlling another pipeline. `NO_MISTAKES_GATE` is diagnostic evidence only, not authorization.
+- **Named remote** - `origin` is never hijacked. You push to `no-slop` on purpose, so regular `git push` still works normally.
+- **Recursive-run containment** - managed gate identity and authenticated daemon peer ancestry prevent active validation steps from starting or controlling another pipeline. `NS_GATE` is diagnostic evidence only, not authorization.
 - **Disposable worktrees** - each run happens in its own detached worktree under `~/.no-mistakes/worktrees/`. The daemon can safely modify files, run tests, and commit fixes without touching your working directory.
 - **Fixed pipeline** - the step order is opinionated and not configurable: `intent → rebase → review → test → document → lint → push → pr → ci`. What you _can_ configure is the commands each step runs, how many auto-fix attempts are allowed, and whether transcript-based intent extraction is used when intent is not supplied directly.
 - **Remote data-loss guard** - force-pushes are checked against the live push target and refused when they would discard commits the run did not incorporate.
@@ -79,7 +79,7 @@ That is a core design choice, not an implementation detail.
 
 ### Named remote
 
-The remote is explicit because trust matters. `no-mistakes` is an opt-in gate,
+The remote is explicit because trust matters. `no-slop` is an opt-in gate,
 not a trap door that silently rewires normal Git behavior.
 
 ### Bare gate repo
@@ -101,7 +101,7 @@ CLI would need to stay attached to every run.
 
 ### Disposable worktrees
 
-The worktree is where `no-mistakes` can safely rebase, run commands, let the
+The worktree is where `no-slop` can safely rebase, run commands, let the
 agent edit files, and commit fixes. Your day-to-day working tree stays clean.
 
 ## Component overview
@@ -114,11 +114,11 @@ validation step before mutation, including direct pushes, and safely omits run
 or phase details when authenticated ancestry cannot identify them uniquely.
 An existing custom `pre-receive` hook is preserved and runs after admission.
 
-When `git push no-mistakes <branch>` lands, the bare repo's `post-receive` hook
+When `git push no-slop <branch>` lands, the bare repo's `post-receive` hook
 fires. It resolves the gate to an absolute bare-repo path using Git's own view
 of the repository, falling back to the hook location if needed, then calls
-`no-mistakes daemon notify-push` with that gate path, ref name, old/new SHAs,
-and any Git push options such as `no-mistakes.skip=test,lint`.
+`no-slop daemon notify-push` with that gate path, ref name, old/new SHAs,
+and any Git push options such as `no-slop.skip=test,lint`.
 For compatibility with older managed hooks, `notify-push` also normalizes
 relative gate paths before handing them to the daemon.
 The post-receive hook never blocks an already admitted push - Git ignores its
@@ -131,24 +131,24 @@ A long-running background process that manages pipeline runs. It:
 
 - Listens on a Unix socket at `~/.no-mistakes/socket`
 - Writes its identity record to `~/.no-mistakes/daemon.pid`
-- Holds an exclusive OS lock on `~/.no-mistakes/daemon.lock` for its whole lifetime, so only one live daemon can own an `NM_HOME` at a time
+- Holds an exclusive OS lock on `~/.no-mistakes/daemon.lock` for its whole lifetime, so only one live daemon can own an `NS_HOME` at a time
 - Serializes concurrent pushes to the same branch (new push cancels the in-progress run)
 - Creates and cleans up worktrees
 - Scopes configured commands and one-shot agent subprocesses to the step lifetime by terminating remaining child processes on completion, failure, or cancellation
 - Persists state to SQLite
 - Streams events to connected TUI clients via IPC
 
-The installer prefers setting up the daemon as a managed background service, and `no-mistakes`, `init`, `attach`, and `rerun` make sure the daemon is running when needed.
-Bare `no-mistakes` then attaches to the active run on the current branch when one exists, or routes to the setup wizard when it needs to create a new branch/run.
+The installer prefers setting up the daemon as a managed background service, and `no-slop`, `init`, `attach`, and `rerun` make sure the daemon is running when needed.
+Bare `no-slop` then attaches to the active run on the current branch when one exists, or routes to the setup wizard when it needs to create a new branch/run.
 If managed service install or startup is unavailable or fails, startup falls back to a detached daemon process.
-`update` never touches the daemon in this build: self-update is disabled, so the binary is never replaced. Use `no-mistakes daemon restart` after rebuilding from source.
-You can also manage it explicitly with `no-mistakes daemon start|stop|restart|status`.
-[Daemon & Worktrees](/no-mistakes/concepts/daemon/#starting-and-stopping)
+`update` never touches the daemon in this build: self-update is disabled, so the binary is never replaced. Use `no-slop daemon restart` after rebuilding from source.
+You can also manage it explicitly with `no-slop daemon start|stop|restart|status`.
+[Daemon & Worktrees](/no-slop/concepts/daemon/#starting-and-stopping)
 owns the active-run guard, the scope of `--force` and `--yes`, and recursive
 validation-step containment for lifecycle commands.
 
 On startup, the daemon validates crash-recovery state before resuming work.
-[Daemon & Worktrees](/no-mistakes/concepts/daemon/#crash-recovery) owns the exact restart, parked-gate reconciliation, cleanup, and fail-closed behavior.
+[Daemon & Worktrees](/no-slop/concepts/daemon/#crash-recovery) owns the exact restart, parked-gate reconciliation, cleanup, and fail-closed behavior.
 
 ### Pipeline executor
 
@@ -183,15 +183,15 @@ Raw transcript text is not stored in this database.
 Legacy `user_fix` rounds are still read as `auto-fix` for backward compatibility.
 Run records also store the nullable `awaiting_agent_since` timestamp used only to render the AXI parked signal while a gate is waiting for the driving agent, plus accumulated `parked_ms` for local performance reporting.
 Each agent invocation records local-only purpose, provider/model metadata, session mode and a truncated session-identity hash, timing, failure category, and token usage; prompts, outputs, diffs, and credentials are never stored there.
-Use `no-mistakes stats --agents` for aggregates or `no-mistakes stats --run <id>` for a run timeline and parked time.
+Use `no-slop stats --agents` for aggregates or `no-slop stats --run <id>` for a run timeline and parked time.
 Repo records store the parent `upstream_url` and an optional `fork_url`; branch pushes use `fork_url` when present, while PR and CI provider context stays anchored to the parent.
-At the start of each run, no-mistakes best-effort refreshes those URLs from the working clone without changing any clone or gate remote.
+At the start of each run, no-slop best-effort refreshes those URLs from the working clone without changing any clone or gate remote.
 `origin` is the upstream authority, and an existing fork registration is refreshed only when exactly one other clone remote identifies the same fork repository.
 The two registered URLs are replaced atomically after validation; an unreadable, invalid, credential-bearing, or ambiguous remote, or a database failure, leaves the exact prior registration in place and does not stop the run.
 
 ## Local state
 
-Everything lives under `~/.no-mistakes/` by default. Set `NM_HOME` to relocate it.
+Everything lives under `~/.no-mistakes/` by default. Set `NS_HOME` to relocate it.
 
 | Path                             | Contents                                                                                                                |
 | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |

@@ -12,11 +12,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// TestNoMistakesRequiredWorkflowExemptsReleaseAutomation pins the exemption
+// TestNoSlopRequiredWorkflowExemptsReleaseAutomation pins the exemption
 // logic so the release pipeline (release-please via GITHUB_TOKEN) and
 // dependabot are never silently blocked by the gate.
-func TestNoMistakesRequiredWorkflowExemptsReleaseAutomation(t *testing.T) {
-	data, err := os.ReadFile(".github/workflows/no-mistakes-required.yml")
+func TestNoSlopRequiredWorkflowExemptsReleaseAutomation(t *testing.T) {
+	data, err := os.ReadFile(".github/workflows/no-slop-required.yml")
 	if err != nil {
 		t.Fatalf("read workflow: %v", err)
 	}
@@ -35,17 +35,17 @@ func TestNoMistakesRequiredWorkflowExemptsReleaseAutomation(t *testing.T) {
 	}
 }
 
-// TestNoMistakesRequiredWorkflowChecksSignatureMarker pins the exact signature
+// TestNoSlopRequiredWorkflowChecksSignatureMarker pins the exact signature
 // string the check greps for. It must match the literal line produced by
 // internal/pipeline/steps/prsummary.go when building the Pipeline section.
-func TestNoMistakesRequiredWorkflowChecksSignatureMarker(t *testing.T) {
-	data, err := os.ReadFile(".github/workflows/no-mistakes-required.yml")
+func TestNoSlopRequiredWorkflowChecksSignatureMarker(t *testing.T) {
+	data, err := os.ReadFile(".github/workflows/no-slop-required.yml")
 	if err != nil {
 		t.Fatalf("read workflow: %v", err)
 	}
 	content := string(data)
 
-	marker := "Updates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)"
+	marker := "Updates from [git push no-slop](https://github.com/Blakeolson21/no-slop)"
 	if !strings.Contains(content, marker) {
 		t.Fatalf("workflow must grep for the prsummary.go signature marker:\n  %s", marker)
 	}
@@ -59,11 +59,11 @@ func TestNoMistakesRequiredWorkflowChecksSignatureMarker(t *testing.T) {
 	}
 }
 
-// TestNoMistakesRequiredWorkflowReadsPRBodyViaEnv pins the shell-injection-safe
+// TestNoSlopRequiredWorkflowReadsPRBodyViaEnv pins the shell-injection-safe
 // pattern: the PR body must be piped through an env var, not interpolated
 // directly into the shell script body.
-func TestNoMistakesRequiredWorkflowReadsPRBodyViaEnv(t *testing.T) {
-	data, err := os.ReadFile(".github/workflows/no-mistakes-required.yml")
+func TestNoSlopRequiredWorkflowReadsPRBodyViaEnv(t *testing.T) {
+	data, err := os.ReadFile(".github/workflows/no-slop-required.yml")
 	if err != nil {
 		t.Fatalf("read workflow: %v", err)
 	}
@@ -77,11 +77,11 @@ func TestNoMistakesRequiredWorkflowReadsPRBodyViaEnv(t *testing.T) {
 	}
 }
 
-// TestNoMistakesRequiredWorkflowTriggersOnRelevantPREvents ensures the check
+// TestNoSlopRequiredWorkflowTriggersOnRelevantPREvents ensures the check
 // re-runs when the PR body is edited so a contributor cannot bypass by opening
 // clean then editing the body.
-func TestNoMistakesRequiredWorkflowTriggersOnRelevantPREvents(t *testing.T) {
-	data, err := os.ReadFile(".github/workflows/no-mistakes-required.yml")
+func TestNoSlopRequiredWorkflowTriggersOnRelevantPREvents(t *testing.T) {
+	data, err := os.ReadFile(".github/workflows/no-slop-required.yml")
 	if err != nil {
 		t.Fatalf("read workflow: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestNoMistakesRequiredWorkflowTriggersOnRelevantPREvents(t *testing.T) {
 	}
 }
 
-// TestNoMistakesRequiredWorkflowExecutesEveryBodyEvent reproduces the
+// TestNoSlopRequiredWorkflowExecutesEveryBodyEvent reproduces the
 // first-time-fork incident in which an opened event and two same-head body
 // edits became actionable together. The scheduler fixture implements GitHub's
 // documented one-running/one-pending concurrency limit, including pending-run
@@ -102,9 +102,9 @@ func TestNoMistakesRequiredWorkflowTriggersOnRelevantPREvents(t *testing.T) {
 // cancel-in-progress ordering observed in runs 29962844999, 29962943078, and
 // 29965243268. It then executes the workflow's real shell step for every job
 // that survives scheduling.
-func TestNoMistakesRequiredWorkflowExecutesEveryBodyEvent(t *testing.T) {
+func TestNoSlopRequiredWorkflowExecutesEveryBodyEvent(t *testing.T) {
 	workflow := loadRequiredWorkflow(t)
-	marker := "Updates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)"
+	marker := "Updates from [git push no-slop](https://github.com/Blakeolson21/no-slop)"
 	events := []requiredWorkflowEvent{
 		{Action: "opened", Body: "## Pipeline\n\n" + marker, HeadSHA: "same-head", PRNumber: 549, RunID: 29962844999, RunNumber: 586},
 		{Action: "edited", Body: "signature removed", HeadSHA: "same-head", PRNumber: 549, RunID: 29962943078, RunNumber: 587},
@@ -122,7 +122,7 @@ func TestNoMistakesRequiredWorkflowExecutesEveryBodyEvent(t *testing.T) {
 	}
 }
 
-func TestNoMistakesRequiredWorkflowPreservesHeadEventCoalescing(t *testing.T) {
+func TestNoSlopRequiredWorkflowPreservesHeadEventCoalescing(t *testing.T) {
 	workflow := loadRequiredWorkflow(t)
 	events := []requiredWorkflowEvent{
 		{Action: "opened", PRNumber: 549, RunID: 1001},
@@ -148,9 +148,9 @@ func TestNoMistakesRequiredWorkflowPreservesHeadEventCoalescing(t *testing.T) {
 	}
 }
 
-func TestNoMistakesRequiredWorkflowPublishesStableEventIdentity(t *testing.T) {
+func TestNoSlopRequiredWorkflowPublishesStableEventIdentity(t *testing.T) {
 	workflow := loadRequiredWorkflow(t)
-	if workflow.Jobs["check"].Name != "PR must be raised via no-mistakes" {
+	if workflow.Jobs["check"].Name != "PR must be raised via no-slop" {
 		t.Fatalf("required check name changed to %q", workflow.Jobs["check"].Name)
 	}
 
@@ -176,7 +176,7 @@ func TestNoMistakesRequiredWorkflowPublishesStableEventIdentity(t *testing.T) {
 	}
 }
 
-func TestNoMistakesRequiredWorkflowKeepsForkBoundaryReadOnly(t *testing.T) {
+func TestNoSlopRequiredWorkflowKeepsForkBoundaryReadOnly(t *testing.T) {
 	workflow := loadRequiredWorkflow(t)
 	if _, ok := workflow.On["pull_request"]; !ok {
 		t.Fatal("required workflow must retain the safe pull_request boundary")
@@ -193,7 +193,7 @@ func TestNoMistakesRequiredWorkflowKeepsForkBoundaryReadOnly(t *testing.T) {
 		}
 	}
 
-	data, err := os.ReadFile(".github/workflows/no-mistakes-required.yml")
+	data, err := os.ReadFile(".github/workflows/no-slop-required.yml")
 	if err != nil {
 		t.Fatalf("read workflow: %v", err)
 	}
@@ -248,7 +248,7 @@ type requiredWorkflowResult struct {
 
 func loadRequiredWorkflow(t *testing.T) requiredWorkflow {
 	t.Helper()
-	data, err := os.ReadFile(".github/workflows/no-mistakes-required.yml")
+	data, err := os.ReadFile(".github/workflows/no-slop-required.yml")
 	if err != nil {
 		t.Fatalf("read workflow: %v", err)
 	}

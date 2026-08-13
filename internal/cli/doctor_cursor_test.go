@@ -7,14 +7,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/telemetry"
+	"github.com/Blakeolson21/no-slop/internal/telemetry"
 )
 
 func TestDoctorACPAliasRequiresBothBinaries(t *testing.T) {
 	restore := telemetry.SetDefaultForTesting(&telemetryRecorder{})
 	defer restore()
 
-	t.Setenv("NM_HOME", t.TempDir())
+	t.Setenv("NS_HOME", t.TempDir())
 
 	binDir := t.TempDir()
 	writeFakeBinary(t, binDir, "cursor-agent")
@@ -35,7 +35,7 @@ func TestDoctorACPAliasDetectedWithBothBinaries(t *testing.T) {
 	restore := telemetry.SetDefaultForTesting(&telemetryRecorder{})
 	defer restore()
 
-	t.Setenv("NM_HOME", t.TempDir())
+	t.Setenv("NS_HOME", t.TempDir())
 
 	binDir := t.TempDir()
 	cursorPath := writeFakeBinary(t, binDir, "cursor-agent")

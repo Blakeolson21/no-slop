@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/buildinfo"
+	"github.com/Blakeolson21/no-slop/internal/buildinfo"
 )
 
 func TestDefaultUsesDotEnvInDevBuildWhenEnvMissing(t *testing.T) {
@@ -28,7 +28,7 @@ func TestDefaultUsesDotEnvInDevBuildWhenEnvMissing(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".env")
-	content := "NO_MISTAKES_UMAMI_HOST=https://dotenv.example\nNO_MISTAKES_UMAMI_WEBSITE_ID=website-from-dotenv\n"
+	content := "NS_UMAMI_HOST=https://dotenv.example\nNS_UMAMI_WEBSITE_ID=website-from-dotenv\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write .env: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestDefaultPrefersEnvVarsOverDotEnvAndEmbeddedConfig(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".env")
-	content := "NO_MISTAKES_UMAMI_HOST=https://dotenv.example\nNO_MISTAKES_UMAMI_WEBSITE_ID=website-from-dotenv\n"
+	content := "NS_UMAMI_HOST=https://dotenv.example\nNS_UMAMI_WEBSITE_ID=website-from-dotenv\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write .env: %v", err)
 	}
@@ -181,11 +181,11 @@ func TestDefaultDisablesTelemetryWhenEnvIsOff(t *testing.T) {
 	}()
 	buildinfo.TelemetryWebsiteID = "embedded-website"
 
-	t.Setenv("NO_MISTAKES_TELEMETRY", "off")
+	t.Setenv("NS_TELEMETRY", "off")
 	t.Setenv(umamiWebsiteIDEnv, "website-from-env")
 
 	if _, ok := Default().(*Client); ok {
-		t.Fatal("Default() should disable telemetry when NO_MISTAKES_TELEMETRY=off")
+		t.Fatal("Default() should disable telemetry when NS_TELEMETRY=off")
 	}
 }
 
@@ -203,7 +203,7 @@ func TestDefaultIgnoresDotEnvOutsideRepo(t *testing.T) {
 	t.Setenv(umamiWebsiteIDEnv, "")
 
 	parentDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(parentDir, ".env"), []byte("NO_MISTAKES_UMAMI_WEBSITE_ID=outside-repo\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(parentDir, ".env"), []byte("NS_UMAMI_WEBSITE_ID=outside-repo\n"), 0o644); err != nil {
 		t.Fatalf("write parent .env: %v", err)
 	}
 
@@ -234,7 +234,7 @@ func TestDefaultIgnoresDotEnvOutsideRepo(t *testing.T) {
 }
 
 func TestParseDotEnvStripsInlineCommentsFromUnquotedValues(t *testing.T) {
-	values := parseDotEnv([]byte("NO_MISTAKES_UMAMI_WEBSITE_ID=abc123 # dev\n"))
+	values := parseDotEnv([]byte("NS_UMAMI_WEBSITE_ID=abc123 # dev\n"))
 
 	if got := values[umamiWebsiteIDEnv]; got != "abc123" {
 		t.Fatalf("website ID = %q, want %q", got, "abc123")
@@ -242,7 +242,7 @@ func TestParseDotEnvStripsInlineCommentsFromUnquotedValues(t *testing.T) {
 }
 
 func TestParseDotEnvPreservesHashesInQuotedValues(t *testing.T) {
-	values := parseDotEnv([]byte("NO_MISTAKES_UMAMI_WEBSITE_ID=\"abc # dev\"\n"))
+	values := parseDotEnv([]byte("NS_UMAMI_WEBSITE_ID=\"abc # dev\"\n"))
 
 	if got := values[umamiWebsiteIDEnv]; got != "abc # dev" {
 		t.Fatalf("website ID = %q, want %q", got, "abc # dev")

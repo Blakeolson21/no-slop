@@ -1,4 +1,4 @@
-// Package e2e holds end-to-end tests that drive the real no-mistakes
+// Package e2e holds end-to-end tests that drive the real no-slop
 // binary against a temporary git repo and a fake agent. Tests live behind
 // the `e2e` build tag so they are excluded from `go test ./...` and only
 // run via `make e2e` (or `go test -tags=e2e ./internal/e2e/...`).

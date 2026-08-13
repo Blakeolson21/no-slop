@@ -92,7 +92,7 @@ func TestCommandTimeout_GivesHookRunningSubcommandsTheLongerCeiling(t *testing.T
 		name string
 		args []string
 	}{
-		{"commit", []string{"commit", "-m", "no-mistakes: apply agent fixes"}},
+		{"commit", []string{"commit", "-m", "no-slop: apply agent fixes"}},
 		{"commit behind -C", []string{"-C", "/tmp/repo", "commit", "-m", "msg"}},
 		{"commit behind --git-dir", []string{"--git-dir=/tmp/x.git", "commit", "-m", "msg"}},
 	} {

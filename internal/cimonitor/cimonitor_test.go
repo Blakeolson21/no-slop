@@ -152,7 +152,7 @@ func TestChecksPassed(t *testing.T) {
 // still make Ready true.
 func TestChecksPassed_PR607RealLogSequence(t *testing.T) {
 	// Verbatim prefix the agent saw when it emitted "checks green" for PR 607
-	// (see nm-pr607-merge-safety-diagnostic-r1). Grace had expired; Actions had
+	// (see ns-pr607-merge-safety-diagnostic-r1). Grace had expired; Actions had
 	// not yet registered any checks for head b2a0b85.
 	pr607Prefix := []string{
 		"monitoring CI for PR #607 (timeout: 4h0m0s)...",

@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/slop/leakscan"
-	"github.com/kunchenguid/no-mistakes/internal/slop/precheck"
-	"github.com/kunchenguid/no-mistakes/internal/slop/prose"
-	"github.com/kunchenguid/no-mistakes/internal/slop/testfloor"
+	"github.com/Blakeolson21/no-slop/internal/slop/leakscan"
+	"github.com/Blakeolson21/no-slop/internal/slop/precheck"
+	"github.com/Blakeolson21/no-slop/internal/slop/prose"
+	"github.com/Blakeolson21/no-slop/internal/slop/testfloor"
 )
 
 var unifiedHunk = regexp.MustCompile(`^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@`)

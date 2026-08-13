@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 // pipelineOwnedPRIntent is the reported class of acceptance criterion: a PR
@@ -109,8 +109,8 @@ func yamlDoubleQuoted(s string) string {
 // proceeds through PR ownership.
 func TestReviewPipelineOwnedPRCriterionDoesNotPark(t *testing.T) {
 	h := NewHarness(t, SetupOpts{Agent: "claude", Scenario: writePipelineOwnedPRScenario(t)})
-	parentURL := "https://github.com/example/no-mistakes.git"
-	forkURL := "https://github.com/example-fork/no-mistakes.git"
+	parentURL := "https://github.com/example/no-slop.git"
+	forkURL := "https://github.com/example-fork/no-slop.git"
 	forkDir := filepath.Join(filepath.Dir(h.UpstreamDir), "fork.git")
 	if err := os.MkdirAll(forkDir, 0o755); err != nil {
 		t.Fatalf("mkdir fork: %v", err)
@@ -129,7 +129,7 @@ func TestReviewPipelineOwnedPRCriterionDoesNotPark(t *testing.T) {
 	ghLog := filepath.Join(filepath.Dir(h.AgentLog), "gh-pipeline-owned-pr.log")
 	t.Setenv("FAKEAGENT_GH_MODE", "fork-pr")
 	t.Setenv("FAKEAGENT_GH_LOG", ghLog)
-	t.Setenv("FAKEAGENT_GH_PARENT", "example/no-mistakes")
+	t.Setenv("FAKEAGENT_GH_PARENT", "example/no-slop")
 
 	h.CommitChange("init-delivery", "seed.txt", "seed\n", "seed")
 	if out, err := h.Run("init", "--fork-url", forkURL); err != nil {
@@ -171,7 +171,7 @@ func TestReviewPipelineOwnedPRCriterionDoesNotPark(t *testing.T) {
 			t.Errorf("step %s status = %s, want completed", stepName, st.Status)
 		}
 	}
-	if completed.PRURL == nil || *completed.PRURL != "https://github.com/example/no-mistakes/pull/99" {
+	if completed.PRURL == nil || *completed.PRURL != "https://github.com/example/no-slop/pull/99" {
 		t.Fatalf("PR URL = %v, want created PR URL", completed.PRURL)
 	}
 	invocations := readGHStubInvocations(t, ghLog)

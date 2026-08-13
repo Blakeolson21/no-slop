@@ -8,7 +8,7 @@ NoSlop makes those patterns a first-class review contract. It classifies the cha
 
 When generating-agent provenance is supplied, NoSlop also conditions the policy on the last 10 changes from that lane and model. Repeated accepted findings can raise the tier, move affected lenses first, and enable mapped deterministic probes. Every decision prints the history rationale. Missing history keeps the v1 route and says so; unreadable history selects `full-adversarial`.
 
-This repository is an MIT-licensed fork of [kunchenguid/no-mistakes](https://github.com/kunchenguid/no-mistakes). The inherited `no-mistakes` gate remains available. The new `noslop gate` command is a front stage that can run before it or on its own.
+This repository is derived from [kunchenguid/no-mistakes](https://github.com/kunchenguid/no-mistakes) under the MIT License. The pipeline command is now canonically `no-slop`; `no-mistakes` remains a compatibility alias. The separate `noslop gate` policy engine can run before that pipeline or on its own.
 
 ## Three pillars
 
@@ -62,10 +62,10 @@ cd no-slop
 go build -o ./bin/noslop ./cmd/noslop
 ```
 
-The inherited gate can still be built separately:
+Build the pipeline CLI separately:
 
 ```sh
-go build -o ./bin/no-mistakes ./cmd/no-mistakes
+go build -o ./bin/no-slop ./cmd/no-slop
 ```
 
 ## Run
@@ -125,7 +125,7 @@ Exit code `0` means pass, `1` means findings blocked the gate, and `2` means the
 
 ## Configure
 
-NoSlop uses the existing `.no-mistakes.yaml` repository config shape:
+NoSlop uses the existing `.no-slop.yaml` repository config shape:
 
 ```yaml
 slop:
@@ -162,4 +162,4 @@ go build -o ./bin/noslop ./cmd/noslop
 
 ## License and credit
 
-MIT licensed. The gate foundation is derived from [no-mistakes](https://github.com/kunchenguid/no-mistakes) by Kun Chen.
+MIT licensed. The gate foundation is derived from [no-slop](https://github.com/Blakeolson21/no-slop) by Kun Chen.

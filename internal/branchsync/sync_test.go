@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	gitpkg "github.com/kunchenguid/no-mistakes/internal/git"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	gitpkg "github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 type syncFixture struct {
@@ -180,7 +180,7 @@ func TestInspectCachedPrePushAndPushInProgressAreNonSyncable(t *testing.T) {
 	if state.State != StatePipelineOwned || !strings.Contains(state.Error, "do not make local follow-up commits") {
 		t.Fatalf("pre-push state = %#v", state)
 	}
-	if state.NextAction == nil || state.NextAction.Code != "continue_active_run" || state.NextAction.Command != "no-mistakes axi status" {
+	if state.NextAction == nil || state.NextAction.Code != "continue_active_run" || state.NextAction.Command != "no-slop axi status" {
 		t.Fatalf("pre-push next action = %#v", state.NextAction)
 	}
 	if err := f.db.SetRunPushActive(active.ID, true); err != nil {
@@ -190,7 +190,7 @@ func TestInspectCachedPrePushAndPushInProgressAreNonSyncable(t *testing.T) {
 	if state.State != StatePushInProgress {
 		t.Fatalf("push-in-progress state = %#v", state)
 	}
-	if state.NextAction == nil || state.NextAction.Code != "continue_active_run" || state.NextAction.Command != "no-mistakes axi status" {
+	if state.NextAction == nil || state.NextAction.Code != "continue_active_run" || state.NextAction.Command != "no-slop axi status" {
 		t.Fatalf("push-in-progress next action = %#v", state.NextAction)
 	}
 	if err := f.db.SetRunPushActive(active.ID, false); err != nil {
@@ -225,7 +225,7 @@ func TestInspectCachedBehindPerformsNoFetchOrMutation(t *testing.T) {
 	if got := readOptional(t, filepath.Join(f.local, ".git", "FETCH_HEAD")); got != beforeFetchHead {
 		t.Fatal("cached inspection mutated FETCH_HEAD")
 	}
-	if _, err := gitpkg.Run(f.ctx, f.local, "show-ref", "--verify", "refs/no-mistakes/sync/"+f.run.ID); err == nil {
+	if _, err := gitpkg.Run(f.ctx, f.local, "show-ref", "--verify", "refs/no-slop/sync/"+f.run.ID); err == nil {
 		t.Fatal("cached inspection created a private fetch ref")
 	}
 }
@@ -825,6 +825,23 @@ func TestForkTargetNeverReadsParentOrigin(t *testing.T) {
 	state := f.service.Refresh(f.ctx)
 	if state.State != StateBehind || state.Target.Kind != "fork" || state.Remote.ObservedHead != f.pushed {
 		t.Fatalf("state = %#v", state)
+	}
+}
+
+func TestResolvePrivateRefAliasFindsLegacyAnchor(t *testing.T) {
+	repo := t.TempDir()
+	mustRun(t, repo, "init")
+	configureIdentity(t, repo)
+	mustWrite(t, filepath.Join(repo, "file.txt"), "anchored\n")
+	mustRun(t, repo, "add", "file.txt")
+	mustRun(t, repo, "commit", "-m", "anchor")
+	head := mustRun(t, repo, "rev-parse", "HEAD")
+	legacy := "refs/no-mistakes/recover/run-legacy"
+	mustRun(t, repo, "update-ref", legacy, head)
+
+	ref, sha, ok := resolvePrivateRefAlias(context.Background(), repo, "refs/no-slop/recover/run-legacy")
+	if !ok || ref != legacy || sha != head {
+		t.Fatalf("resolved = (%q, %q, %v), want (%q, %q, true)", ref, sha, ok, legacy, head)
 	}
 }
 

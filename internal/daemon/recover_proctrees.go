@@ -3,8 +3,8 @@ package daemon
 import (
 	"log/slog"
 
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/proctree"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/proctree"
 )
 
 // reapProcTreeRecordFunc is swapped in tests so the sweep can be exercised

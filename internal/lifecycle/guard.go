@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 // ActiveRuns returns all pending/running pipeline runs from the local state DB.
@@ -95,7 +95,7 @@ type ActiveRun struct {
 
 // ClassifyActiveRuns returns every pending/running run in the local state DB
 // annotated with its Activity. daemonRunning reports whether a daemon is
-// serving this NM_HOME; when no daemon is, nothing can be mid-step, because
+// serving this NS_HOME; when no daemon is, nothing can be mid-step, because
 // startup recovery is what reconciles the rows a dead daemon left behind. It
 // is consulted only once at least one active run exists, so the common
 // no-active-runs path never pays for a daemon health probe, and a nil

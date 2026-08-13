@@ -21,7 +21,7 @@ func replaceExecutable(target string, binaryData []byte) error {
 		removeQuarantine(target)
 		return nil
 	} else if runtime.GOOS == "darwin" {
-		return fmt.Errorf("self-update requires an atomic replace on macOS; reinstall no-mistakes so the PATH entry points at a user-owned binary, then retry update: %w", err)
+		return fmt.Errorf("self-update requires an atomic replace on macOS; reinstall no-slop so the PATH entry points at a user-owned binary, then retry update: %w", err)
 	}
 	if err := overwriteExecutable(target, binaryData, perm); err != nil {
 		return err

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/slop/provenance"
-	"github.com/kunchenguid/no-mistakes/internal/slop/risk"
+	"github.com/Blakeolson21/no-slop/internal/slop/provenance"
+	"github.com/Blakeolson21/no-slop/internal/slop/risk"
 )
 
 type historyReader struct {

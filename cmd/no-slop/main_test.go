@@ -8,25 +8,25 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/daemon"
+	"github.com/Blakeolson21/no-slop/internal/daemon"
 )
 
 func TestMain(m *testing.M) {
-	root, err := os.MkdirTemp("", "nm-main-test-")
+	root, err := os.MkdirTemp("", "ns-main-test-")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "create test NM_HOME: %v\n", err)
+		fmt.Fprintf(os.Stderr, "create test NS_HOME: %v\n", err)
 		os.Exit(1)
 	}
-	home, err := os.MkdirTemp("", "nm-main-home-")
+	home, err := os.MkdirTemp("", "ns-main-home-")
 	if err != nil {
 		_ = os.RemoveAll(root)
 		fmt.Fprintf(os.Stderr, "create test HOME: %v\n", err)
 		os.Exit(1)
 	}
-	_ = os.Setenv("NM_HOME", root)
+	_ = os.Setenv("NS_HOME", root)
 	_ = os.Setenv("HOME", home)
-	_ = os.Setenv("NO_MISTAKES_TELEMETRY", "off")
-	_ = os.Setenv("NO_MISTAKES_NO_UPDATE_CHECK", "1")
+	_ = os.Setenv("NS_TELEMETRY", "off")
+	_ = os.Setenv("NS_NO_UPDATE_CHECK", "1")
 
 	code := m.Run()
 
@@ -37,7 +37,7 @@ func TestMain(m *testing.M) {
 
 func TestCLILogWriterReturnsDiscardWhenLogsDirMissing(t *testing.T) {
 	nmHome := t.TempDir()
-	t.Setenv("NM_HOME", nmHome)
+	t.Setenv("NS_HOME", nmHome)
 
 	w := cliLogWriter()
 	if _, err := w.Write([]byte("hello\n")); err != nil {
@@ -55,7 +55,7 @@ func TestCLILogWriterReturnsDiscardWhenLogsDirMissing(t *testing.T) {
 
 func TestCLILogWriterAppendsToFileWhenLogsDirExists(t *testing.T) {
 	nmHome := t.TempDir()
-	t.Setenv("NM_HOME", nmHome)
+	t.Setenv("NS_HOME", nmHome)
 
 	logsDir := filepath.Join(nmHome, "logs")
 	if err := os.MkdirAll(logsDir, 0o755); err != nil {
@@ -140,7 +140,7 @@ func TestDaemonLogSinkRootFromArgs(t *testing.T) {
 
 func TestWriteDaemonRunErrorPreservesBootstrapSinkOwnership(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("NM_HOME", root)
+	t.Setenv("NS_HOME", root)
 	logDir := filepath.Join(root, "logs")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		t.Fatal(err)

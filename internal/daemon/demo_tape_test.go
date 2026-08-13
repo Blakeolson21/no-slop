@@ -12,7 +12,7 @@ func TestDemoTapeForcesDetachedDaemon(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read demo.tape: %v", err)
 	}
-	if !strings.Contains(string(data), `Env NM_TEST_START_DAEMON "1"`) {
+	if !strings.Contains(string(data), `Env NS_TEST_START_DAEMON "1"`) {
 		t.Fatal(`demo.tape must force detached daemon startup for demo mode`)
 	}
 }

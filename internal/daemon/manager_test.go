@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/git"
-	"github.com/kunchenguid/no-mistakes/internal/ipc"
-	"github.com/kunchenguid/no-mistakes/internal/pipeline"
-	"github.com/kunchenguid/no-mistakes/internal/telemetry"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/pipeline"
+	"github.com/Blakeolson21/no-slop/internal/telemetry"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 // --- RunManager integration tests ---
@@ -269,7 +269,7 @@ func TestPushReceivedConcurrentDifferentBranchRunsAvoidSharedConfigLock(t *testi
 	_, headSHA := setupTestGitRepo(t, p, d, repoID)
 
 	// Mirror a real gate: enable the per-worktree config isolation that
-	// `no-mistakes init` installs, which is what lets identity writes avoid the
+	// `no-slop init` installs, which is what lets identity writes avoid the
 	// shared config.lock.
 	if err := git.IsolateHooksPath(context.Background(), p.RepoDir(repoID)); err != nil {
 		t.Fatalf("isolate hooks path: %v", err)

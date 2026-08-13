@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	gitpkg "github.com/kunchenguid/no-mistakes/internal/git"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	pipelinepkg "github.com/kunchenguid/no-mistakes/internal/pipeline"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	gitpkg "github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	pipelinepkg "github.com/Blakeolson21/no-slop/internal/pipeline"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 type cancellationRaceStep struct {
@@ -47,7 +47,7 @@ func (s *cancellationRaceStep) Execute(sctx *pipelinepkg.StepContext) (*pipeline
 	if _, err := gitpkg.Run(sctx.Ctx, sctx.WorkDir, "add", "fix.txt"); err != nil {
 		return nil, err
 	}
-	if _, err := gitpkg.Run(sctx.Ctx, sctx.WorkDir, "commit", "-m", "no-mistakes(review): fix"); err != nil {
+	if _, err := gitpkg.Run(sctx.Ctx, sctx.WorkDir, "commit", "-m", "no-slop(review): fix"); err != nil {
 		return nil, err
 	}
 	head, err := gitpkg.HeadSHA(sctx.Ctx, sctx.WorkDir)
@@ -115,9 +115,9 @@ func newRecoverFixture(t *testing.T, status types.RunStatus) *recoverFixture {
 	mustRun(t, pipeline, "checkout", "feature/recover")
 	mustWrite(t, filepath.Join(pipeline, "fix.txt"), "pipeline fix\n")
 	mustRun(t, pipeline, "add", "fix.txt")
-	mustRun(t, pipeline, "commit", "-m", "no-mistakes(review): fix")
+	mustRun(t, pipeline, "commit", "-m", "no-slop(review): fix")
 	mustWrite(t, filepath.Join(pipeline, "fix.txt"), "pipeline fix 2\n")
-	mustRun(t, pipeline, "commit", "-am", "no-mistakes(lint): fix")
+	mustRun(t, pipeline, "commit", "-am", "no-slop(lint): fix")
 	preserved := mustRun(t, pipeline, "rev-parse", "HEAD")
 	mustRun(t, pipeline, "push", "origin", "HEAD:refs/heads/feature/recover")
 
@@ -155,7 +155,7 @@ func newRecoverFixture(t *testing.T, status types.RunStatus) *recoverFixture {
 	}
 }
 
-func (f *recoverFixture) anchorRef() string { return "refs/no-mistakes/recover/" + f.run.ID }
+func (f *recoverFixture) anchorRef() string { return "refs/no-slop/recover/" + f.run.ID }
 
 func (f *recoverFixture) custodyReturned() bool {
 	f.t.Helper()
@@ -205,7 +205,7 @@ func TestActivePrePushRunStaysBlockedWithoutRecovery(t *testing.T) {
 	if state.State != StatePipelineOwned || state.Safety != "blocked_pipeline_owned" {
 		t.Fatalf("active run state = %#v", state)
 	}
-	if state.NextAction == nil || state.NextAction.Code != "continue_active_run" || state.NextAction.Command != "no-mistakes axi status" {
+	if state.NextAction == nil || state.NextAction.Code != "continue_active_run" || state.NextAction.Command != "no-slop axi status" {
 		t.Fatalf("active run next action = %#v", state.NextAction)
 	}
 	if state.Pipeline.Status != "running" {
@@ -856,7 +856,7 @@ func TestActiveUnmovedRunBlocksAsPipelineOwnedWithoutRecovery(t *testing.T) {
 	if state.State != StatePipelineOwned || state.Safety != "blocked_pipeline_owned" {
 		t.Fatalf("active unmoved state = %s/%s error=%q", state.State, state.Safety, state.Error)
 	}
-	if state.NextAction == nil || state.NextAction.Code != "continue_active_run" || state.NextAction.Command != "no-mistakes axi status" {
+	if state.NextAction == nil || state.NextAction.Code != "continue_active_run" || state.NextAction.Command != "no-slop axi status" {
 		t.Fatalf("active unmoved next action = %#v", state.NextAction)
 	}
 	recovered := f.service.Recover(f.ctx, false)
@@ -1201,7 +1201,7 @@ func newRebasedRecoverFixtureWithPipelineWork(t *testing.T, status types.RunStat
 }
 
 func (f *recoverFixture) localAnchorRef() string {
-	return "refs/no-mistakes/recover-local/" + f.run.ID
+	return "refs/no-slop/recover-local/" + f.run.ID
 }
 
 // TestRecoverRebasedPreservedHeadAdoptsWithoutEscalating is the regression for
@@ -1218,7 +1218,7 @@ func TestRecoverRebasedPreservedHeadAdoptsWithoutEscalating(t *testing.T) {
 		t.Fatal("fixture did not leave the operator worktree at the submitted head")
 	}
 	// The bug's masking condition: neither head is an ancestor of the other.
-	mustRun(t, f.local, "fetch", "--no-tags", f.gate, "+refs/heads/feature/recover:refs/no-mistakes/test/preserved")
+	mustRun(t, f.local, "fetch", "--no-tags", f.gate, "+refs/heads/feature/recover:refs/no-slop/test/preserved")
 	if isAncestor(f.ctx, f.local, f.submitted, f.preserved) || isAncestor(f.ctx, f.local, f.preserved, f.submitted) {
 		t.Fatal("fixture is not a rebase divergence: one head is an ancestor of the other")
 	}
@@ -1298,7 +1298,7 @@ func TestRecoverRebasedPreservedHeadEscalatesWhenFixRoundsRewroteOperatorLines(t
 
 	f := newRebasedRecoverFixtureWithPipelineWork(t, types.RunCancelled, func(t *testing.T, pipelineDir string) {
 		mustWrite(t, filepath.Join(pipelineDir, "feature.txt"), "feature one\nfeature two guarded\n")
-		mustRun(t, pipelineDir, "commit", "-am", "no-mistakes(review): guard the second line")
+		mustRun(t, pipelineDir, "commit", "-am", "no-slop(review): guard the second line")
 	})
 
 	state := f.service.Recover(f.ctx, false)
@@ -1529,7 +1529,7 @@ func TestRecoverSquashedEquivalentPreservedHeadAdopts(t *testing.T) {
 	configureIdentity(t, pipeline)
 	mustRun(t, pipeline, "checkout", "feature/recover")
 	mustRun(t, pipeline, "reset", "--soft", "origin/main")
-	mustRun(t, pipeline, "commit", "-m", "no-mistakes(rebase): squashed feature")
+	mustRun(t, pipeline, "commit", "-m", "no-slop(rebase): squashed feature")
 	squashed := mustRun(t, pipeline, "rev-parse", "HEAD")
 	mustRun(t, pipeline, "push", "--force", "origin", "HEAD:refs/heads/feature/recover")
 	if err := f.db.UpdateRunHeadSHA(f.run.ID, squashed); err != nil {
@@ -1570,7 +1570,7 @@ func TestRecoverSquashedPreservedHeadStillEscalatesForDroppedLocalWork(t *testin
 	// The second of the operator's two lines never makes it into the squash.
 	mustWrite(t, filepath.Join(pipeline, "feature.txt"), "feature one\n")
 	mustRun(t, pipeline, "add", "feature.txt")
-	mustRun(t, pipeline, "commit", "-m", "no-mistakes(review): squashed without the second line")
+	mustRun(t, pipeline, "commit", "-m", "no-slop(review): squashed without the second line")
 	dropped := mustRun(t, pipeline, "rev-parse", "HEAD")
 	mustRun(t, pipeline, "push", "--force", "origin", "HEAD:refs/heads/feature/recover")
 	if err := f.db.UpdateRunHeadSHA(f.run.ID, dropped); err != nil {
@@ -1730,7 +1730,7 @@ func newStrandedFixture(t *testing.T) *recoverFixture {
 	mustRun(t, gate, "worktree", "add", "--detach", wt, submitted)
 	configureIdentity(t, wt)
 	mustWrite(t, filepath.Join(wt, "file.txt"), "feature, conflict resolved by the agent\n")
-	mustRun(t, wt, "commit", "-am", "no-mistakes(rebase): resolve conflicts")
+	mustRun(t, wt, "commit", "-am", "no-slop(rebase): resolve conflicts")
 	recorded := mustRun(t, wt, "rev-parse", "HEAD")
 	mustRun(t, gate, "worktree", "remove", "--force", wt)
 
@@ -1788,7 +1788,7 @@ func TestRecoverStrandedHeadIsPreservedNotAssumedAway(t *testing.T) {
 		t.Fatal("recovery mutated the gate branch")
 	}
 	// The staging ref used to hand the commit across must never be left behind.
-	if _, err := gitpkg.Run(f.ctx, f.gate, "rev-parse", "--verify", "refs/no-mistakes/custody-anchor/"+f.run.ID); err == nil {
+	if _, err := gitpkg.Run(f.ctx, f.gate, "rev-parse", "--verify", "refs/no-slop/custody-anchor/"+f.run.ID); err == nil {
 		t.Fatal("gate staging ref survived the recovery")
 	}
 	if !f.custodyReturned() {
@@ -1839,7 +1839,7 @@ func TestRecoverStrandedHeadKeepLocalEscapesDivergedLocal(t *testing.T) {
 	// does not contain it: that commit must be anchored, not left referenced by
 	// nothing. The stranded-head anchor does not cover it - they are different
 	// commits here, which is exactly what makes this caller different.
-	if got := mustRun(t, f.local, "rev-parse", "refs/no-mistakes/recover-abandoned/"+f.run.ID); got != f.submitted {
+	if got := mustRun(t, f.local, "rev-parse", "refs/no-slop/recover-abandoned/"+f.run.ID); got != f.submitted {
 		t.Fatalf("abandoned-head anchor = %s, want the submitted head %s", got, f.submitted)
 	}
 	if !f.custodyReturned() {
@@ -1866,7 +1866,7 @@ func TestRecoverKeepLocalDoesNotAnchorAContainedGateHead(t *testing.T) {
 	if got := mustRun(t, f.local, "rev-parse", f.anchorRef()); got != f.preserved {
 		t.Fatalf("recover anchor = %s, want %s", got, f.preserved)
 	}
-	if _, err := gitpkg.Run(f.ctx, f.local, "rev-parse", "--verify", "refs/no-mistakes/recover-abandoned/"+f.run.ID); err == nil {
+	if _, err := gitpkg.Run(f.ctx, f.local, "rev-parse", "--verify", "refs/no-slop/recover-abandoned/"+f.run.ID); err == nil {
 		t.Fatal("wrote a redundant abandonment anchor for an already-pinned gate head")
 	}
 }
@@ -1932,7 +1932,7 @@ func TestRecoverReportsTheAnchorHoldingWorkTheBranchLost(t *testing.T) {
 		// Two different commits are stranded here, and the branch carries
 		// neither: the pipeline head at the recover anchor, and the submitted
 		// head the operator reset past, which only the abandonment anchor holds.
-		abandoned := "refs/no-mistakes/recover-abandoned/" + f.run.ID
+		abandoned := "refs/no-slop/recover-abandoned/" + f.run.ID
 		if state.AbandonedAnchorRef != abandoned {
 			t.Fatalf("abandoned anchor = %q, want %s", state.AbandonedAnchorRef, abandoned)
 		}
@@ -2041,7 +2041,7 @@ func TestRecoverDoesNotCallASurvivingHeadLost(t *testing.T) {
 
 // TestRecoverAnchorFailureNamesTheAnchorAlreadyWritten covers the refusals
 // inside the anchor helpers themselves. The frozen-gate row rescues the
-// stranded pipeline head into refs/no-mistakes/recover/<run> before keep-local
+// stranded pipeline head into refs/no-slop/recover/<run> before keep-local
 // tries to anchor the gate head it is about to abandon, so a failure there must
 // name the ref that already holds the rescued commits instead of claiming
 // nothing was written - telling the operator the wrong ref, or none, is how the
@@ -2054,7 +2054,7 @@ func TestRecoverAnchorFailureNamesTheAnchorAlreadyWritten(t *testing.T) {
 
 	// A ref one level below the abandonment anchor makes Git refuse to create
 	// the anchor itself: the two names cannot coexist in the ref namespace.
-	blocker := "refs/no-mistakes/recover-abandoned/" + f.run.ID + "/blocker"
+	blocker := "refs/no-slop/recover-abandoned/" + f.run.ID + "/blocker"
 	mustRun(t, f.local, "update-ref", blocker, f.base)
 
 	state := f.service.Recover(f.ctx, true)
@@ -2098,7 +2098,7 @@ func TestRecoverKeepLocalRefusalLeavesNoAnchorBehind(t *testing.T) {
 	if state.Recovered || state.Safety != "blocked_recover_assumptions_changed" {
 		t.Fatalf("keep-local recover with a moving local head = %#v", state)
 	}
-	abandoned := "refs/no-mistakes/recover-abandoned/" + f.run.ID
+	abandoned := "refs/no-slop/recover-abandoned/" + f.run.ID
 	if _, err := gitpkg.Run(f.ctx, f.local, "rev-parse", "--verify", abandoned); err == nil {
 		t.Fatal("a refusal before the gate move left an abandonment anchor behind")
 	}
@@ -2136,7 +2136,7 @@ func TestRecoverKeepLocalGateRaceNamesTheAnchorItLeft(t *testing.T) {
 	if state.Recovered || state.Safety != "blocked_recover_gate_race" {
 		t.Fatalf("racing keep-local recover = %#v", state)
 	}
-	anchor := "refs/no-mistakes/recover-abandoned/" + f.run.ID
+	anchor := "refs/no-slop/recover-abandoned/" + f.run.ID
 	if got := mustRun(t, f.local, "rev-parse", anchor); got != f.submitted {
 		t.Fatalf("abandonment anchor = %s, want the submitted head %s", got, f.submitted)
 	}
@@ -2232,10 +2232,10 @@ func TestRecoverRebasedPipelineHeadReturnsCustody(t *testing.T) {
 	if got := mustRun(t, local, "rev-parse", "HEAD"); got != rebased {
 		t.Fatalf("local HEAD = %s, want the preserved rebased head %s", got, rebased)
 	}
-	if got := mustRun(t, local, "rev-parse", "refs/no-mistakes/recover-local/"+run.ID); got != submitted {
+	if got := mustRun(t, local, "rev-parse", "refs/no-slop/recover-local/"+run.ID); got != submitted {
 		t.Fatalf("pre-recovery local head anchor = %s, want %s", got, submitted)
 	}
-	if got := mustRun(t, local, "rev-parse", "refs/no-mistakes/recover/"+run.ID); got != rebased {
+	if got := mustRun(t, local, "rev-parse", "refs/no-slop/recover/"+run.ID); got != rebased {
 		t.Fatalf("preserved anchor = %s, want %s", got, rebased)
 	}
 	if got := readOptional(t, filepath.Join(local, "other.txt")); got != "other\n" {

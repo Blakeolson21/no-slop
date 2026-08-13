@@ -11,14 +11,19 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/Blakeolson21/no-slop/internal/identity"
 )
 
 const (
-	defaultAPIBaseURL = "https://api.bitbucket.org"
-	envEmail          = "NO_MISTAKES_BITBUCKET_EMAIL"
-	envToken          = "NO_MISTAKES_BITBUCKET_API_TOKEN"
-	envAPIBaseURL     = "NO_MISTAKES_BITBUCKET_API_BASE_URL"
-	maxStepLogBytes   = 32 * 1024
+	defaultAPIBaseURL   = "https://api.bitbucket.org"
+	envEmail            = "NS_BITBUCKET_EMAIL"
+	legacyEnvEmail      = "NO_MISTAKES_BITBUCKET_EMAIL"
+	envToken            = "NS_BITBUCKET_API_TOKEN"
+	legacyEnvToken      = "NO_MISTAKES_BITBUCKET_API_TOKEN"
+	envAPIBaseURL       = "NS_BITBUCKET_API_BASE_URL"
+	legacyEnvAPIBaseURL = "NO_MISTAKES_BITBUCKET_API_BASE_URL"
+	maxStepLogBytes     = 32 * 1024
 )
 
 type RepoRef struct {
@@ -63,15 +68,24 @@ type Client struct {
 }
 
 func NewClientFromEnv(env []string) (*Client, error) {
-	email := lookupEnv(env, envEmail)
+	email, err := identity.LookupEnvSlice(env, envEmail, legacyEnvEmail)
+	if err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(email) == "" {
 		return nil, fmt.Errorf("missing %s", envEmail)
 	}
-	token := lookupEnv(env, envToken)
+	token, err := identity.LookupEnvSlice(env, envToken, legacyEnvToken)
+	if err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(token) == "" {
 		return nil, fmt.Errorf("missing %s", envToken)
 	}
-	baseURL := lookupEnv(env, envAPIBaseURL)
+	baseURL, err := identity.LookupEnvSlice(env, envAPIBaseURL, legacyEnvAPIBaseURL)
+	if err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(baseURL) == "" {
 		baseURL = defaultAPIBaseURL
 	}

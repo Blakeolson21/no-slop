@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/e2edaemon"
+	"github.com/Blakeolson21/no-slop/internal/e2edaemon"
 )
 
 // TestMain recovers any stale temporary-daemon inventory left by a prior

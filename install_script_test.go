@@ -17,7 +17,7 @@ func TestInstallScriptInstallsUserOwnedBinaryAndPathSymlink(t *testing.T) {
 	skipInstallScriptTestsOnWindows(t)
 
 	home := t.TempDir()
-	archivePath := filepath.Join(t.TempDir(), "no-mistakes-v1.2.3-darwin-arm64.tar.gz")
+	archivePath := filepath.Join(t.TempDir(), "no-slop-v1.2.3-darwin-arm64.tar.gz")
 	binaryScript := "#!/bin/sh\nexit 0\n"
 	makeInstallArchive(t, archivePath, binaryScript)
 	fakeBin := makeFakeInstallCommands(t)
@@ -30,8 +30,9 @@ func TestInstallScriptInstallsUserOwnedBinaryAndPathSymlink(t *testing.T) {
 		"FAKE_RELEASE_ARCHIVE": archivePath,
 	})
 
-	realBin := filepath.Join(home, ".no-mistakes", "bin", "no-mistakes")
+	realBin := filepath.Join(home, ".no-mistakes", "bin", "no-slop")
 	assertFileContent(t, realBin, binaryScript)
+	assertSymlinkTarget(t, filepath.Join(localBin, "no-slop"), realBin)
 	assertSymlinkTarget(t, filepath.Join(localBin, "no-mistakes"), realBin)
 }
 
@@ -39,7 +40,7 @@ func TestInstallScriptReplacesExistingPathEntryWithSymlink(t *testing.T) {
 	skipInstallScriptTestsOnWindows(t)
 
 	home := t.TempDir()
-	archivePath := filepath.Join(t.TempDir(), "no-mistakes-v1.2.3-darwin-arm64.tar.gz")
+	archivePath := filepath.Join(t.TempDir(), "no-slop-v1.2.3-darwin-arm64.tar.gz")
 	binaryScript := "#!/bin/sh\nexit 0\n"
 	makeInstallArchive(t, archivePath, binaryScript)
 	fakeBin := makeFakeInstallCommands(t)
@@ -47,17 +48,17 @@ func TestInstallScriptReplacesExistingPathEntryWithSymlink(t *testing.T) {
 	if err := os.MkdirAll(linkDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	oldPath := filepath.Join(linkDir, "no-mistakes")
+	oldPath := filepath.Join(linkDir, "no-slop")
 	if err := os.WriteFile(oldPath, []byte("old-binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	runInstallScript(t, home, fakeBin, map[string]string{
 		"FAKE_RELEASE_ARCHIVE": archivePath,
-		"NO_MISTAKES_LINK_DIR": linkDir,
+		"NS_LINK_DIR":          linkDir,
 	})
 
-	realBin := filepath.Join(home, ".no-mistakes", "bin", "no-mistakes")
+	realBin := filepath.Join(home, ".no-mistakes", "bin", "no-slop")
 	assertFileContent(t, realBin, binaryScript)
 	assertSymlinkTarget(t, oldPath, realBin)
 }
@@ -66,9 +67,9 @@ func TestInstallScriptRestartsDaemonAfterInstall(t *testing.T) {
 	skipInstallScriptTestsOnWindows(t)
 
 	home := t.TempDir()
-	archivePath := filepath.Join(t.TempDir(), "no-mistakes-v1.2.3-darwin-arm64.tar.gz")
+	archivePath := filepath.Join(t.TempDir(), "no-slop-v1.2.3-darwin-arm64.tar.gz")
 	callLog := filepath.Join(t.TempDir(), "calls.log")
-	makeInstallArchive(t, archivePath, "#!/bin/sh\nprintf '%s\n' \"$*\" >> \"$NO_MISTAKES_CALL_LOG\"\n")
+	makeInstallArchive(t, archivePath, "#!/bin/sh\nprintf '%s\n' \"$*\" >> \"$NS_CALL_LOG\"\n")
 	fakeBin := makeFakeInstallCommands(t)
 	localBin := filepath.Join(home, ".local", "bin")
 	if err := os.MkdirAll(localBin, 0o755); err != nil {
@@ -77,7 +78,7 @@ func TestInstallScriptRestartsDaemonAfterInstall(t *testing.T) {
 
 	runInstallScript(t, home, fakeBin, map[string]string{
 		"FAKE_RELEASE_ARCHIVE": archivePath,
-		"NO_MISTAKES_CALL_LOG": callLog,
+		"NS_CALL_LOG":          callLog,
 	})
 
 	data, err := os.ReadFile(callLog)
@@ -93,9 +94,9 @@ func TestInstallScriptFailsWhenDaemonRestartFails(t *testing.T) {
 	skipInstallScriptTestsOnWindows(t)
 
 	home := t.TempDir()
-	archivePath := filepath.Join(t.TempDir(), "no-mistakes-v1.2.3-darwin-arm64.tar.gz")
+	archivePath := filepath.Join(t.TempDir(), "no-slop-v1.2.3-darwin-arm64.tar.gz")
 	callLog := filepath.Join(t.TempDir(), "calls.log")
-	makeInstallArchive(t, archivePath, "#!/bin/sh\nprintf '%s\n' \"$*\" >> \"$NO_MISTAKES_CALL_LOG\"\nif [ \"$1\" = \"daemon\" ] && [ \"$2\" = \"restart\" ]; then\n  exit 23\nfi\n")
+	makeInstallArchive(t, archivePath, "#!/bin/sh\nprintf '%s\n' \"$*\" >> \"$NS_CALL_LOG\"\nif [ \"$1\" = \"daemon\" ] && [ \"$2\" = \"restart\" ]; then\n  exit 23\nfi\n")
 	fakeBin := makeFakeInstallCommands(t)
 	localBin := filepath.Join(home, ".local", "bin")
 	if err := os.MkdirAll(localBin, 0o755); err != nil {
@@ -104,7 +105,7 @@ func TestInstallScriptFailsWhenDaemonRestartFails(t *testing.T) {
 
 	output, err := runInstallScriptCommand(t, home, fakeBin, map[string]string{
 		"FAKE_RELEASE_ARCHIVE": archivePath,
-		"NO_MISTAKES_CALL_LOG": callLog,
+		"NS_CALL_LOG":          callLog,
 	})
 	if err == nil {
 		t.Fatalf("install.sh should fail when daemon restart fails\n%s", output)
@@ -125,7 +126,7 @@ func TestPowerShellInstallScriptChecksDaemonRestartFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	if !strings.Contains(text, "$restart = Start-Process -FilePath \"$installDir\\no-mistakes.exe\" -ArgumentList @(") {
+	if !strings.Contains(text, "$restart = Start-Process -FilePath \"$installDir\\no-slop.exe\" -ArgumentList @(") {
 		t.Fatal("install.ps1 should run daemon restart in a way that exposes the exit code")
 	}
 	if !strings.Contains(text, "-Wait -PassThru") {
@@ -202,7 +203,7 @@ func makeInstallArchive(t *testing.T, archivePath, binaryContent string) {
 	gz := gzip.NewWriter(file)
 	tw := tar.NewWriter(gz)
 	data := []byte(binaryContent)
-	hdr := &tar.Header{Name: "no-mistakes", Mode: 0o755, Size: int64(len(data))}
+	hdr := &tar.Header{Name: "no-slop", Mode: 0o755, Size: int64(len(data))}
 	if err := tw.WriteHeader(hdr); err != nil {
 		t.Fatal(err)
 	}

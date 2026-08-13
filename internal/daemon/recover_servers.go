@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
 // orphanStartTimeTolerance bounds the acceptable difference between the
@@ -34,7 +34,7 @@ type daemonPIDFile struct {
 // stale PID files.
 //
 // Safety rules:
-//   - If another no-mistakes daemon is still running, skip everything so
+//   - If another no-slop daemon is still running, skip everything so
 //     we don't kill that daemon's live servers.
 //   - For each PID file, require the recorded StartedAt to match the
 //     process's actual start time within orphanStartTimeTolerance. If not,

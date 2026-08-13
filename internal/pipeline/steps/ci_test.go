@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
-	"github.com/kunchenguid/no-mistakes/internal/cimonitor"
-	"github.com/kunchenguid/no-mistakes/internal/config"
-	"github.com/kunchenguid/no-mistakes/internal/scm"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/cimonitor"
+	"github.com/Blakeolson21/no-slop/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/scm"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestCIStep_PendingChecksUseAdaptivePollIntervals(t *testing.T) {
@@ -2196,7 +2196,7 @@ func TestCIStep_GreenChecksAtAdvancedHeadAreRecognizedWhileRunTracksOlderHead(t 
 	// pipeline fix commit does mid-run.
 	os.WriteFile(filepath.Join(dir, "fix.txt"), []byte("pipeline fix"), 0o644)
 	gitCmd(t, dir, "add", "-A")
-	gitCmd(t, dir, "commit", "-m", "no-mistakes(document): align docs")
+	gitCmd(t, dir, "commit", "-m", "no-slop(document): align docs")
 	gitCmd(t, dir, "push", "origin", "feature")
 	advanced := gitCmd(t, dir, "rev-parse", "HEAD")
 	if advanced == headSHA {
@@ -2452,7 +2452,7 @@ func TestCIStep_ResolvedRerunDoesNotParkALaterGreenHead(t *testing.T) {
 					t.Fatal(err)
 				}
 				gitCmd(t, dir, "add", "-A")
-				gitCmd(t, dir, "commit", "-m", "no-mistakes(ci): apply fixes")
+				gitCmd(t, dir, "commit", "-m", "no-slop(ci): apply fixes")
 				gitCmd(t, dir, "push", "origin", "feature")
 				advancedHeadSHA = gitCmd(t, dir, "rev-parse", "HEAD")
 				sctx.Run.HeadSHA = advancedHeadSHA

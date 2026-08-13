@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/slop/provenance"
+	"github.com/Blakeolson21/no-slop/internal/slop/provenance"
 )
 
 func TestFileStoreAppendsVersionedRecordsAndReturnsRecentLaneModelHistory(t *testing.T) {

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/shellenv"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/shellenv"
 )
 
 // Retry parameters for `launchctl bootstrap` after a preceding bootout.
@@ -53,15 +53,22 @@ func installLaunchAgent(p *paths.Paths, exe string) error {
 // launchd (it will exit on SIGTERM). Any error is best-effort: if there's
 // no legacy plist or launchctl refuses, we proceed with the scoped install.
 func cleanupLegacyLaunchAgent(p *paths.Paths) {
-	path := legacyLaunchAgentPath()
-	data, err := os.ReadFile(path)
-	if err != nil || !serviceDefinitionMatchesRoot(data, p) {
-		return
+	for _, legacy := range []struct {
+		label string
+		path  string
+	}{
+		{legacyScopedLaunchdServiceLabel(p), legacyScopedLaunchAgentPath(p)},
+		{legacyLaunchdServiceLabel, legacyLaunchAgentPath()},
+	} {
+		data, err := os.ReadFile(legacy.path)
+		if err != nil || !serviceDefinitionMatchesRoot(data, p) {
+			continue
+		}
+		if domain, err := launchdDomainTarget(); err == nil {
+			_, _ = serviceCommandRunner("launchctl", "bootout", domain+"/"+legacy.label)
+		}
+		_ = os.Remove(legacy.path)
 	}
-	if domain, err := launchdDomainTarget(); err == nil {
-		_, _ = serviceCommandRunner("launchctl", "bootout", domain+"/"+legacyLaunchdServiceLabel)
-	}
-	_ = os.Remove(path)
 }
 
 func startLaunchAgent(p *paths.Paths) error {
@@ -135,6 +142,31 @@ func stopLaunchAgent(p *paths.Paths) error {
 	return nil
 }
 
+func stopLegacyLaunchAgent(p *paths.Paths) (bool, error) {
+	domain, err := launchdDomainTarget()
+	if err != nil {
+		return false, err
+	}
+	for _, legacy := range []struct {
+		label string
+		path  string
+	}{
+		{legacyScopedLaunchdServiceLabel(p), legacyScopedLaunchAgentPath(p)},
+		{legacyLaunchdServiceLabel, legacyLaunchAgentPath()},
+	} {
+		data, readErr := os.ReadFile(legacy.path)
+		if readErr != nil || !serviceDefinitionMatchesRoot(data, p) {
+			continue
+		}
+		output, stopErr := serviceCommandRunner("launchctl", "bootout", domain+"/"+legacy.label)
+		if stopErr != nil && !launchctlBootoutServiceNotLoaded(stopErr, output) {
+			return true, fmt.Errorf("launchctl bootout legacy service: %w", stopErr)
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
 func removeLaunchAgent(p *paths.Paths) error {
 	err := os.Remove(launchAgentPath(p))
 	if err != nil && !os.IsNotExist(err) {
@@ -166,6 +198,11 @@ func launchAgentPath(p *paths.Paths) string {
 func legacyLaunchAgentPath() string {
 	home, _ := serviceUserHomeDir()
 	return filepath.Join(home, "Library", "LaunchAgents", legacyLaunchdServiceLabel+".plist")
+}
+
+func legacyScopedLaunchAgentPath(p *paths.Paths) string {
+	home, _ := serviceUserHomeDir()
+	return filepath.Join(home, "Library", "LaunchAgents", legacyScopedLaunchdServiceLabel(p)+".plist")
 }
 
 func launchdDomainTarget() (string, error) {

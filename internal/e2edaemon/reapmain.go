@@ -11,12 +11,23 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/kunchenguid/no-mistakes/internal/e2edaemon"
+	"github.com/Blakeolson21/no-slop/internal/e2edaemon"
+	"github.com/Blakeolson21/no-slop/internal/identity"
 )
 
 func main() {
-	if os.Getenv("NM_E2E_REAP_ABANDONED") == "1" {
-		for _, err := range e2edaemon.ReapAbandoned(os.Getenv("NM_E2E_DAEMON_INVENTORY_PARENT"), os.Getenv(e2edaemon.EnvInventory)) {
+	reapAbandoned, reapErr := identity.EnvEnabled("NS_E2E_REAP_ABANDONED", "NM_E2E_REAP_ABANDONED")
+	if reapErr != nil {
+		fmt.Fprintf(os.Stderr, "e2e-reap: %v\n", reapErr)
+		return
+	}
+	if reapAbandoned {
+		parent, err := identity.LookupEnv("NS_E2E_DAEMON_INVENTORY_PARENT", "NM_E2E_DAEMON_INVENTORY_PARENT")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "e2e-reap: %v\n", err)
+			return
+		}
+		for _, err := range e2edaemon.ReapAbandoned(parent, e2edaemon.DirFromEnv()) {
 			fmt.Fprintf(os.Stderr, "e2e-reap: %v\n", err)
 		}
 		return
@@ -32,7 +43,8 @@ func main() {
 			fmt.Fprintf(os.Stderr, "e2e-reap: %s\n", e)
 		}
 	}
-	if os.Getenv("NM_E2E_REAP_VERBOSE") == "1" {
+	verbose, _ := identity.EnvEnabled("NS_E2E_REAP_VERBOSE", "NM_E2E_REAP_VERBOSE")
+	if verbose {
 		fmt.Fprintf(os.Stderr, "e2e-reap: entries=%d stopped=%d killed=%d removed=%d skipped=%d\n",
 			result.Entries, result.Stopped, result.Killed, result.Removed, result.Skipped)
 	}

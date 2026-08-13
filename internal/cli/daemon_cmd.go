@@ -8,12 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/daemon"
-	"github.com/kunchenguid/no-mistakes/internal/gatecontext"
-	"github.com/kunchenguid/no-mistakes/internal/ipc"
-	"github.com/kunchenguid/no-mistakes/internal/lifecycle"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/daemon"
+	"github.com/Blakeolson21/no-slop/internal/gatecontext"
+	"github.com/Blakeolson21/no-slop/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/lifecycle"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/types"
 	"github.com/spf13/cobra"
 )
 
@@ -28,7 +28,7 @@ var (
 func newDaemonCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "daemon",
-		Short: "Manage the no-mistakes daemon",
+		Short: "Manage the no-slop daemon",
 	}
 
 	cmd.AddCommand(newDaemonStartCmd())
@@ -162,7 +162,7 @@ func normalizeNotifyGatePath(gate string) (string, error) {
 func parseSkipPushOptions(options []string) ([]types.StepName, error) {
 	var steps []types.StepName
 	for _, option := range options {
-		value, ok := strings.CutPrefix(option, "no-mistakes.skip=")
+		value, ok := strings.CutPrefix(option, "no-slop.skip=")
 		if !ok {
 			continue
 		}
@@ -193,7 +193,7 @@ func parseSkipSteps(value string) ([]types.StepName, error) {
 // intentPushOptionPrefix carries an agent-supplied intent through a git push.
 // The value is base64-encoded so multi-line or special-character intents
 // survive the push-option transport (which is line-oriented).
-const intentPushOptionPrefix = "no-mistakes.intent="
+const intentPushOptionPrefix = "no-slop.intent="
 
 // formatIntentPushOption encodes intent as a single push option, or returns ""
 // when there is no intent to carry.
@@ -230,7 +230,7 @@ func formatSkipPushOptions(steps []types.StepName) []string {
 	for _, step := range dedupeSteps(steps) {
 		parts = append(parts, string(step))
 	}
-	return []string{"no-mistakes.skip=" + strings.Join(parts, ",")}
+	return []string{"no-slop.skip=" + strings.Join(parts, ",")}
 }
 
 func validStep(step types.StepName) bool {
@@ -422,7 +422,7 @@ func refuseExecutingRuns(action, scopeNote string, runs []lifecycle.ActiveRun, a
 	if len(executing) == 0 {
 		return nil
 	}
-	return fmt.Errorf("refusing %s because %d active pipeline %s executing a step right now; %sstopping the daemon cancels the step and strands the run's pipeline commits in the local gate. Wait for the step to finish or park at a gate, end the run with `no-mistakes axi abort --run <id>`, or pass --abandon-executing-runs to fail it deliberately\n%s",
+	return fmt.Errorf("refusing %s because %d active pipeline %s executing a step right now; %sstopping the daemon cancels the step and strands the run's pipeline commits in the local gate. Wait for the step to finish or park at a gate, end the run with `no-slop axi abort --run <id>`, or pass --abandon-executing-runs to fail it deliberately\n%s",
 		action, len(executing), runNoun(len(executing)), scopeNote, lifecycle.ExecutingRunList(executing))
 }
 
@@ -473,14 +473,17 @@ func newDaemonRunCmd() *cobra.Command {
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if root != "" {
+				if err := os.Setenv("NS_HOME", root); err != nil {
+					return fmt.Errorf("set NS_HOME: %w", err)
+				}
 				if err := os.Setenv("NM_HOME", root); err != nil {
-					return fmt.Errorf("set NM_HOME: %w", err)
+					return fmt.Errorf("set NM_HOME compatibility alias: %w", err)
 				}
 			}
 			return daemonRun()
 		},
 	}
 
-	cmd.Flags().StringVar(&root, "root", "", "override no-mistakes data directory")
+	cmd.Flags().StringVar(&root, "root", "", "override no-slop data directory")
 	return cmd
 }

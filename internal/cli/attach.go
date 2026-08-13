@@ -7,14 +7,14 @@ import (
 	"os"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/daemon"
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/ipc"
-	"github.com/kunchenguid/no-mistakes/internal/telemetry"
-	"github.com/kunchenguid/no-mistakes/internal/tui"
-	"github.com/kunchenguid/no-mistakes/internal/types"
-	"github.com/kunchenguid/no-mistakes/internal/update"
-	"github.com/kunchenguid/no-mistakes/internal/wizard"
+	"github.com/Blakeolson21/no-slop/internal/daemon"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/telemetry"
+	"github.com/Blakeolson21/no-slop/internal/tui"
+	"github.com/Blakeolson21/no-slop/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/update"
+	"github.com/Blakeolson21/no-slop/internal/wizard"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
@@ -23,7 +23,7 @@ var runTUI = tui.Run
 var terminalInteractive = isInteractive
 
 // attachRun is the shared logic for attaching to a pipeline run. It's used by
-// both the root command (bare `no-mistakes`) and the `attach` subcommand.
+// both the root command (bare `no-slop`) and the `attach` subcommand.
 func attachRun(ctx context.Context, w io.Writer, runID string, rootDefault bool, autoYes bool, skipSteps []types.StepName) error {
 	p, d, err := openResources()
 	if err != nil {
@@ -89,7 +89,7 @@ func attachRun(ctx context.Context, w io.Writer, runID string, rootDefault bool,
 	}
 
 	if run == nil {
-		// No active run - if the user ran bare `no-mistakes` in their repo
+		// No active run - if the user ran bare `no-slop` in their repo
 		// from a TTY, offer the interactive setup wizard instead of just
 		// dumping a hint. `-y` auto-accepts the wizard; when a TTY is
 		// available we keep the wizard visible, otherwise we fall back to the
@@ -197,16 +197,16 @@ func printNoActiveRun(w io.Writer, d *db.DB, repoID string) {
 				fmt.Fprintf(w, "  %-12s %-20s %s  %s%s\n", runStatusStyle(r.Status), r.Branch, sDim.Render(sha), sDim.Render(age), pr)
 			}
 			if len(runs) > recentRunsLimit {
-				fmt.Fprintf(w, "  %s\n", sDim.Render(fmt.Sprintf("(%d more - run 'no-mistakes runs' to see all)", len(runs)-recentRunsLimit)))
+				fmt.Fprintf(w, "  %s\n", sDim.Render(fmt.Sprintf("(%d more - run 'no-slop runs' to see all)", len(runs)-recentRunsLimit)))
 			}
 			fmt.Fprintln(w)
 			fmt.Fprintf(w, "  %s\n", sDim.Render("Start a new pipeline:"))
-			fmt.Fprintf(w, "  %s\n", sBold.Render("git push no-mistakes <branch>"))
+			fmt.Fprintf(w, "  %s\n", sBold.Render("git push no-slop <branch>"))
 			return
 		}
 	}
 	fmt.Fprintf(w, "  %s\n", sDim.Render("No active run. Push through the gate to start a pipeline:"))
-	fmt.Fprintf(w, "  %s\n", sBold.Render("git push no-mistakes <branch>"))
+	fmt.Fprintf(w, "  %s\n", sBold.Render("git push no-slop <branch>"))
 }
 
 func formatAge(unixSec int64) string {

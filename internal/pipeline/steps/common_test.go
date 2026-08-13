@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
-	"github.com/kunchenguid/no-mistakes/internal/config"
-	"github.com/kunchenguid/no-mistakes/internal/git"
-	"github.com/kunchenguid/no-mistakes/internal/pipeline"
-	"github.com/kunchenguid/no-mistakes/internal/scm"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/pipeline"
+	"github.com/Blakeolson21/no-slop/internal/scm"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestCopyDirContents_PreservesGitRepo(t *testing.T) {
@@ -648,7 +648,7 @@ func TestCommitAgentFixes_AdoptsSelfCommitPlusDirtyChanges(t *testing.T) {
 	if err := commitAgentFixes(sctx, types.StepReview, "wrap up", "fallback"); err != nil {
 		t.Fatal(err)
 	}
-	if got := lastCommitMessage(t, dir); got != "no-mistakes(review): wrap up" {
+	if got := lastCommitMessage(t, dir); got != "no-slop(review): wrap up" {
 		t.Errorf("commit message = %q, want driver fix commit on top of agent commit", got)
 	}
 	wantHead := gitCmd(t, dir, "rev-parse", "HEAD")
@@ -900,7 +900,7 @@ func TestRenderFixMessage_NeverCarriesAThreadStatusGlyph(t *testing.T) {
 			t.Fatalf("rendered subject %q contains thread-status glyph %q", subject, glyph)
 		}
 	}
-	if want := "no-mistakes(review): Correct capability catalog and source-backed claims"; subject != want {
+	if want := "no-slop(review): Correct capability catalog and source-backed claims"; subject != want {
 		t.Fatalf("rendered subject = %q, want %q", subject, want)
 	}
 }
@@ -943,7 +943,7 @@ func TestExecuteFixMode_StripsThreadStatusFooterFromCommittedSubject(t *testing.
 			if want := "Correct capability catalog and source-backed claims"; summary != want {
 				t.Fatalf("fix summary = %q, want %q", summary, want)
 			}
-			wantSubject := fmt.Sprintf("no-mistakes(%s): Correct capability catalog and source-backed claims", stepName)
+			wantSubject := fmt.Sprintf("no-slop(%s): Correct capability catalog and source-backed claims", stepName)
 			got := lastCommitMessage(t, dir)
 			t.Logf("git log -1 --pretty=%%s: %s", got)
 			if got != wantSubject {
@@ -1015,7 +1015,7 @@ func TestCommitAgentFixes_UsesFallbackSummary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := lastCommitMessage(t, dir); got != "no-mistakes(lint): fallback lint fix" {
+	if got := lastCommitMessage(t, dir); got != "no-slop(lint): fallback lint fix" {
 		t.Errorf("commit message = %q, want fallback-based message", got)
 	}
 }

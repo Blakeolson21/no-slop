@@ -11,10 +11,12 @@ import (
 )
 
 func TestPreReceiveHookScript(t *testing.T) {
-	script := preReceiveHookScript("/opt/No Mistakes/no-mistakes")
+	script := preReceiveHookScript("/opt/No Mistakes/no-slop")
 	for _, want := range []string{
 		"#!/bin/sh",
-		"NM_BIN='/opt/No Mistakes/no-mistakes'",
+		"NS_BIN='/opt/No Mistakes/no-slop'",
+		"command -v no-mistakes",
+		"NS_HOOK_HELPER=1 NM_HOOK_HELPER=1",
 		"git rev-parse --absolute-git-dir",
 		"daemon admit-push --gate \"$GATE_DIR\"",
 		"gate push refused before ref mutation",
@@ -83,15 +85,15 @@ func TestGateConfigCurrentRejectsMissingOrTamperedAdmissionHook(t *testing.T) {
 }
 
 func TestPostReceiveHookScript(t *testing.T) {
-	script := postReceiveHookScript("/opt/No Mistakes/no-mistakes")
+	script := postReceiveHookScript("/opt/No Mistakes/no-slop")
 
 	// should be a shell script
 	if !strings.HasPrefix(script, "#!/bin/sh\n") {
 		t.Fatal("hook should start with #!/bin/sh")
 	}
 
-	if !strings.Contains(script, "NM_BIN='/opt/No Mistakes/no-mistakes'") {
-		t.Fatal("hook should embed the no-mistakes executable path")
+	if !strings.Contains(script, "NS_BIN='/opt/No Mistakes/no-slop'") {
+		t.Fatal("hook should embed the no-slop executable path")
 	}
 
 	// should read oldrev newrev refname
@@ -123,11 +125,14 @@ func TestPostReceiveHookScript(t *testing.T) {
 	if strings.Contains(script, "eval") {
 		t.Fatal("hook should not use eval to read push options")
 	}
-	if !strings.Contains(script, "\"$NM_BIN\" daemon notify-push") {
+	if !strings.Contains(script, "\"$NS_BIN\" daemon notify-push") {
 		t.Fatal("hook should execute the embedded binary path")
 	}
-	if !strings.Contains(script, "command -v no-mistakes") {
+	if !strings.Contains(script, "command -v no-slop") {
 		t.Fatal("hook should fall back to PATH when baked-in path doesn't exist")
+	}
+	if !strings.Contains(script, "command -v no-mistakes") {
+		t.Fatal("hook should fall back to the legacy binary during the compatibility window")
 	}
 	if strings.Contains(script, ">/dev/null 2>&1 || true") {
 		t.Fatal("hook should not silently swallow notify-push errors (issue #122)")
@@ -143,7 +148,7 @@ func TestPostReceiveHookScript(t *testing.T) {
 	if !strings.Contains(script, "Pipeline started") {
 		t.Fatal("hook should print pipeline started message")
 	}
-	if !strings.Contains(script, "no-mistakes") {
+	if !strings.Contains(script, "no-slop") {
 		t.Fatal("hook should mention the command name")
 	}
 	if !strings.Contains(script, "|__| |_/") {
@@ -168,7 +173,7 @@ func TestShellSingleQuote(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"plain", "/usr/bin/no-mistakes", "'/usr/bin/no-mistakes'"},
+		{"plain", "/usr/bin/no-slop", "'/usr/bin/no-slop'"},
 		{"spaces", "/opt/No Mistakes/bin", "'/opt/No Mistakes/bin'"},
 		{"single_quote", "/opt/it's/bin", "'/opt/it'\"'\"'s/bin'"},
 		{"multiple_quotes", "a'b'c", "'a'\"'\"'b'\"'\"'c'"},
@@ -185,9 +190,18 @@ func TestShellSingleQuote(t *testing.T) {
 }
 
 func TestPostReceiveHookScriptWithQuotedPath(t *testing.T) {
-	script := postReceiveHookScript("/opt/it's here/no-mistakes")
-	if !strings.Contains(script, "NM_BIN='/opt/it'\"'\"'s here/no-mistakes'") {
+	script := postReceiveHookScript("/opt/it's here/no-slop")
+	if !strings.Contains(script, "NS_BIN='/opt/it'\"'\"'s here/no-slop'") {
 		t.Fatal("hook should correctly escape single quotes in the executable path")
+	}
+}
+
+func TestManagedHookRecognitionAcceptsLegacyMarkers(t *testing.T) {
+	if !isManagedPreReceiveHook([]byte("# no-mistakes pre-receive hook\nno-mistakes daemon admit-push\n")) {
+		t.Fatal("legacy pre-receive hook must be recognized for in-place upgrade")
+	}
+	if !isManagedPostReceiveHook([]byte("# no-mistakes post-receive hook\nno-mistakes daemon notify-push\n")) {
+		t.Fatal("legacy post-receive hook must be recognized for in-place upgrade")
 	}
 }
 
@@ -203,7 +217,7 @@ func TestPostReceiveHookScriptDoesNotEvaluatePushOptions(t *testing.T) {
 	}
 
 	argsPath := filepath.Join(base, "args.txt")
-	fakeBin := filepath.Join(base, "fake-no-mistakes")
+	fakeBin := filepath.Join(base, "fake-no-slop")
 	fakeScript := "#!/bin/sh\nprintf '%s\n' \"$@\" > " + shellSingleQuote(argsPath) + "\nexit 0\n"
 	if err := os.WriteFile(fakeBin, []byte(fakeScript), 0o755); err != nil {
 		t.Fatal(err)
@@ -351,10 +365,10 @@ func TestPostReceiveHook_ResolvesAbsoluteGateDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Fake no-mistakes binary: record the notify-push argv so we can inspect
+	// Fake no-slop binary: record the notify-push argv so we can inspect
 	// the --gate value the hook actually computed.
 	argsPath := filepath.Join(base, "args.txt")
-	fakeBin := filepath.Join(base, "fake-no-mistakes")
+	fakeBin := filepath.Join(base, "fake-no-slop")
 	fakeScript := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + shellSingleQuote(argsPath) + "\nexit 0\n"
 	if err := os.WriteFile(fakeBin, []byte(fakeScript), 0o755); err != nil {
 		t.Fatal(err)
@@ -418,7 +432,7 @@ func TestPostReceiveHook_FallsBackToHookLocationForGateDir(t *testing.T) {
 	}
 
 	argsPath := filepath.Join(base, "args.txt")
-	fakeBin := filepath.Join(base, "fake-no-mistakes")
+	fakeBin := filepath.Join(base, "fake-no-slop")
 	fakeScript := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + shellSingleQuote(argsPath) + "\nexit 0\n"
 	if err := os.WriteFile(fakeBin, []byte(fakeScript), 0o755); err != nil {
 		t.Fatal(err)
@@ -525,9 +539,9 @@ func TestPostReceiveHook_SurfacesNotifyFailures(t *testing.T) {
 		t.Fatalf("commit: %v: %s", err, out)
 	}
 
-	// Fake no-mistakes binary that always fails notify-push with a
+	// Fake no-slop binary that always fails notify-push with a
 	// distinctive marker on stderr.
-	fakeBin := filepath.Join(base, "fake-no-mistakes")
+	fakeBin := filepath.Join(base, "fake-no-slop")
 	fakeScript := "#!/bin/sh\necho 'TESTMARKER notify failed' >&2\nexit 7\n"
 	if err := os.WriteFile(fakeBin, []byte(fakeScript), 0o755); err != nil {
 		t.Fatal(err)

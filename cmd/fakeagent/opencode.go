@@ -17,7 +17,7 @@ import (
 )
 
 // runOpencode boots a long-running HTTP server that mimics OpenCode's
-// REST + SSE surface. It blocks until the parent (no-mistakes' agent
+// REST + SSE surface. It blocks until the parent (no-slop' agent
 // package) signals shutdown. The OpenCode wire format is documented in
 // internal/agent/opencode_types.go.
 func runOpencode(args []string, scenario *Scenario) int {

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/slop/leakscan"
+	"github.com/Blakeolson21/no-slop/internal/slop/leakscan"
 )
 
 func TestScanFindsSecretShapeWithoutEchoingSecret(t *testing.T) {

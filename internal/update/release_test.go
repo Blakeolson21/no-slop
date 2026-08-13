@@ -73,8 +73,8 @@ func TestFetchLatestRelease_SendsAuthorizationHeaderFromEnvToken(t *testing.T) {
 	defer server.Close()
 
 	u := &updater{
-		appName:        "no-mistakes",
-		repo:           "kunchenguid/no-mistakes",
+		appName:        "no-slop",
+		repo:           "kunchenguid/no-slop",
 		currentVersion: "v1.2.2",
 		apiBaseURL:     server.URL,
 		httpClient:     server.Client(),
@@ -130,31 +130,31 @@ func TestDownloadAsset_SendsAuthorizationHeaderFromEnvToken(t *testing.T) {
 
 func TestPickReleaseAssets(t *testing.T) {
 	assets := []releaseAsset{
-		{Name: "no-mistakes-v1.2.3-darwin-arm64.tar.gz", BrowserDownloadURL: "https://example.com/archive"},
+		{Name: "no-slop-v1.2.3-darwin-arm64.tar.gz", BrowserDownloadURL: "https://example.com/archive"},
 		{Name: "checksums.txt", BrowserDownloadURL: "https://example.com/checksums"},
 		{Name: "ignored.txt", BrowserDownloadURL: "https://example.com/ignored"},
 	}
 
-	archive, checksums, err := pickReleaseAssets("no-mistakes", "v1.2.3", assets, platformSpec{GOOS: "darwin", GOARCH: "arm64"})
+	archive, checksums, err := pickReleaseAssets("no-slop", "v1.2.3", assets, platformSpec{GOOS: "darwin", GOARCH: "arm64"})
 	if err != nil {
 		t.Fatalf("pickReleaseAssets error = %v", err)
 	}
-	if archive.Name != "no-mistakes-v1.2.3-darwin-arm64.tar.gz" {
+	if archive.Name != "no-slop-v1.2.3-darwin-arm64.tar.gz" {
 		t.Fatalf("archive = %q", archive.Name)
 	}
 	if checksums.Name != "checksums.txt" {
 		t.Fatalf("checksums = %q", checksums.Name)
 	}
 
-	_, _, err = pickReleaseAssets("no-mistakes", "v1.2.3", assets[:1], platformSpec{GOOS: "darwin", GOARCH: "arm64"})
+	_, _, err = pickReleaseAssets("no-slop", "v1.2.3", assets[:1], platformSpec{GOOS: "darwin", GOARCH: "arm64"})
 	if err == nil {
 		t.Fatal("pickReleaseAssets should fail when checksums asset is missing")
 	}
 }
 
 func TestParseChecksums(t *testing.T) {
-	archiveName := "no-mistakes-v1.2.3-darwin-arm64.tar.gz"
-	data := []byte("abc123  no-mistakes-v1.2.3-darwin-arm64.tar.gz\ndef456  other.tar.gz\n")
+	archiveName := "no-slop-v1.2.3-darwin-arm64.tar.gz"
+	data := []byte("abc123  no-slop-v1.2.3-darwin-arm64.tar.gz\ndef456  other.tar.gz\n")
 
 	checksums, err := parseChecksums(data)
 	if err != nil {

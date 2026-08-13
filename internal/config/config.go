@@ -15,8 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/types"
-	"github.com/kunchenguid/no-mistakes/internal/winproc"
+	"github.com/Blakeolson21/no-slop/internal/identity"
+	"github.com/Blakeolson21/no-slop/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/winproc"
 	"gopkg.in/yaml.v3"
 )
 
@@ -28,7 +29,7 @@ import (
 // ci.go), so an actively-rebased PR keeps its monitor. The value is
 // deliberately long because a green PR can legitimately wait days on a
 // dependency PR or on review; a torn-down or abandoned run is reaped
-// explicitly via `no-mistakes axi abort --run <id>` rather than by a short
+// explicitly via `no-slop axi abort --run <id>` rather than by a short
 // timeout.
 const (
 	// DefaultCITimeout is the monitor's idle timeout when ci_timeout is unset.
@@ -108,7 +109,7 @@ type globalConfigRaw struct {
 	Test                 TestRaw             `yaml:"test"`
 }
 
-// RepoConfig represents .no-mistakes.yaml in a repo root.
+// RepoConfig represents .no-slop.yaml in a repo root.
 type RepoConfig struct {
 	Agent          types.AgentName   `yaml:"agent"`
 	Agents         []types.AgentName `yaml:"-"`
@@ -117,7 +118,7 @@ type RepoConfig struct {
 	// AllowRepoCommands opts in to honoring the code-executing selection
 	// fields (commands.{test,lint,format} and agent) from a contributor's
 	// pushed branch instead of the trusted default-branch copy. It is read
-	// ONLY from the trusted default-branch copy of .no-mistakes.yaml (never
+	// ONLY from the trusted default-branch copy of .no-slop.yaml (never
 	// the pushed SHA), so a contributor cannot self-enable. Default false:
 	// the pushed branch controls nothing that executes.
 	AllowRepoCommands bool       `yaml:"allow_repo_commands"`
@@ -128,13 +129,13 @@ type RepoConfig struct {
 	Test              TestRaw    `yaml:"test"`
 	// Document carries the repository's documentation placement policy. It
 	// steers the document step's gate prompt, so it is honored ONLY from the
-	// trusted default-branch copy of .no-mistakes.yaml (see
+	// trusted default-branch copy of .no-slop.yaml (see
 	// EffectiveRepoConfig): a contributor's pushed branch must not be able to
 	// weaken documentation rules for its own review.
 	Document DocumentRaw `yaml:"document"`
 	// Review carries the repository's review-step settings. Its
 	// path_instructions steer the review gate prompt, so they are honored
-	// ONLY from the trusted default-branch copy of .no-mistakes.yaml (see
+	// ONLY from the trusted default-branch copy of .no-slop.yaml (see
 	// EffectiveRepoConfig), regardless of allow_repo_commands: a contributor's
 	// pushed branch must not be able to inject or weaken the guidance that
 	// reviews it.
@@ -145,7 +146,7 @@ type RepoConfig struct {
 	// agent-orchestration repos (e.g. firstmate) whose project instructions
 	// would otherwise install a fleet-captain identity on a gate agent. It is a
 	// SECURITY boundary honored ONLY from the trusted default-branch copy of
-	// .no-mistakes.yaml (see EffectiveRepoConfig and the daemon's
+	// .no-slop.yaml (see EffectiveRepoConfig and the daemon's
 	// assertGateTrustedConfigReadable): a contributor's pushed branch must not be
 	// able to turn it off (or on). Default false; a plain bool so a missing key
 	// or a YAML/JSON null is falsy and preserves current loading.
@@ -153,7 +154,7 @@ type RepoConfig struct {
 	// NoCI declares that this repository intentionally has no CI. When true and
 	// the forge reports zero checks, the CI monitor treats that empty result as
 	// all-checks-passed. It is a readiness boundary honored ONLY from the trusted
-	// default-branch copy of .no-mistakes.yaml (see EffectiveRepoConfig): a
+	// default-branch copy of .no-slop.yaml (see EffectiveRepoConfig): a
 	// contributor's pushed branch must not self-declare no-CI and bypass checks.
 	// Default false - absence means CI is expected, and an unproven empty check
 	// list remains not-ready regardless of elapsed time. If checks still appear,
@@ -275,7 +276,7 @@ const (
 // Bounds on review.path_instructions.
 //
 // The injected text lands in the review prompt, which is already the largest
-// gate prompt no-mistakes builds, and an oversized prompt fails the agent
+// gate prompt no-slop builds, and an oversized prompt fails the agent
 // invocation outright instead of degrading. The budget is therefore validated
 // when the config is parsed - before a run starts - rather than truncated
 // silently at review time.
@@ -634,7 +635,7 @@ func resolvePathInstructions(entries []PathInstruction) []PathInstruction {
 }
 
 // defaultConfigYAML is the template written when no global config file exists.
-const defaultConfigYAML = `# no-mistakes global configuration
+const defaultConfigYAML = `# no-slop global configuration
 
 # Agent to use for code generation. This may also be an ordered fallback list,
 # for example: agent: [codex, claude]
@@ -658,7 +659,7 @@ agent: auto
 # advances; each base advance re-arms this timer, so an actively-updated green PR
 # keeps its monitor. Set to "unlimited", "none", "off", "never", or any
 # non-positive duration to monitor until the PR is merged, closed, or the run is
-# aborted with: no-mistakes axi abort --run <id>
+# aborted with: no-slop axi abort --run <id>
 ci_timeout: "168h"
 
 # AXI status marks a running/fixing step as quiet when no step log or native
@@ -720,9 +721,9 @@ ci:
 # Auto-fix commit subject template. Available variables: {{.Step}} and {{.Summary}}.
 # Repo config may override this value.
 # commit:
-#   fix_message: "no-mistakes({{.Step}}): {{.Summary}}"
+#   fix_message: "no-slop({{.Step}}): {{.Summary}}"
 
-# User-intent extraction. When you push a branch, no-mistakes can read recent
+# User-intent extraction. When you push a branch, no-slop can read recent
 # transcripts from your local agent (Claude Code, Codex, OpenCode, Rovo Dev, Pi,
 # Copilot CLI), pick the session that produced the change, summarize the user
 # intent, and feed it to review, test, document, lint, and PR agents so they
@@ -741,7 +742,7 @@ intent:
 # test:
 #   evidence:
 #     store_in_repo: true
-#     dir: .no-mistakes/evidence
+#     dir: .no-slop/evidence
 `
 
 // defaultBinary maps agent names to their default binary names.
@@ -1110,7 +1111,7 @@ var agentArgsOverrideAgents = map[string]bool{
 	string(types.AgentCopilot):  true,
 }
 
-// reservedAgentArgs lists flags that no-mistakes manages internally and that
+// reservedAgentArgs lists flags that no-slop manages internally and that
 // users cannot override through agent_args_override. A flag is matched by its
 // bare form (e.g. "--color") as well as the "--color=value" form.
 var reservedAgentArgs = map[string]map[string]bool{
@@ -1180,7 +1181,7 @@ func validateAgentArgsOverride(override map[string][]string) error {
 				base = arg[:idx]
 			}
 			if reserved[base] {
-				return fmt.Errorf("invalid agent_args_override.%s[%d]: %q is managed by no-mistakes and cannot be overridden", name, i, arg)
+				return fmt.Errorf("invalid agent_args_override.%s[%d]: %q is managed by no-slop and cannot be overridden", name, i, arg)
 			}
 		}
 	}
@@ -1334,12 +1335,29 @@ func parsePositiveDuration(name, value string) (time.Duration, error) {
 	return d, nil
 }
 
-// LoadRepo reads per-repo config from dir/.no-mistakes.yaml.
+// LoadRepo reads per-repo config from the canonical .no-slop.yaml name or the
+// legacy .no-mistakes.yaml alias.
 // Returns zero-value config if file doesn't exist.
 func LoadRepo(dir string) (*RepoConfig, error) {
 	cfg := &RepoConfig{}
 
-	path := filepath.Join(dir, ".no-mistakes.yaml")
+	canonicalPath := filepath.Join(dir, identity.RepoConfigName)
+	legacyPath := filepath.Join(dir, identity.LegacyRepoConfigName)
+	canonicalExists, err := fileExists(canonicalPath)
+	if err != nil {
+		return nil, fmt.Errorf("read repo config: %w", err)
+	}
+	legacyExists, err := fileExists(legacyPath)
+	if err != nil {
+		return nil, fmt.Errorf("read repo config: %w", err)
+	}
+	if canonicalExists && legacyExists {
+		return nil, fmt.Errorf("%s and %s name the same repo config; keep only one", identity.RepoConfigName, identity.LegacyRepoConfigName)
+	}
+	path := canonicalPath
+	if !canonicalExists {
+		path = legacyPath
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -1351,8 +1369,19 @@ func LoadRepo(dir string) (*RepoConfig, error) {
 	return parseRepoConfig(data)
 }
 
+func fileExists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	return false, err
+}
+
 // LoadRepoFromBytes parses per-repo config from raw YAML bytes. It is the
-// trusted-config entry point: callers that read .no-mistakes.yaml from a
+// trusted-config entry point: callers that read .no-slop.yaml from a
 // specific git ref (e.g. the default branch) use this to avoid honoring a
 // contributor's checked-out copy.
 func LoadRepoFromBytes(data []byte) (*RepoConfig, error) {
@@ -1424,7 +1453,7 @@ func validateSlopRaw(slop SlopRaw) error {
 // This deliberately also runs on the PUSHED copy, even though EffectiveRepoConfig
 // discards a pushed review block: the trusted-copy read
 // (assertGateTrustedConfigReadable in internal/daemon) aborts EVERY run whose
-// default-branch .no-mistakes.yaml fails these checks, so a branch carrying an
+// default-branch .no-slop.yaml fails these checks, so a branch carrying an
 // invalid block has to fail here, before it merges, rather than brick the
 // repository's pipeline afterwards. Do not scope this to the trusted copy.
 func validateReviewRaw(review ReviewRaw) error {
@@ -1532,7 +1561,7 @@ func validatePathInstructionGlob(pattern string) error {
 // fields are forced empty (Agent "" and nil Agents inherit the global agent;
 // Commands{} yields built-in defaults) rather than falling back to the pushed
 // branch - this blocks the supply-chain vector for repos that ship
-// .no-mistakes.yaml only on feature branches.
+// .no-slop.yaml only on feature branches.
 //
 // Non-executing fields (ignore patterns, auto-fix, commit, intent, test) are
 // always taken from the pushed copy, matching prior behavior, since they cannot
@@ -1643,12 +1672,12 @@ func applyIntentOverrides(dst *Intent, src *IntentRaw) {
 }
 
 // testDefaults returns the default test-step settings. Evidence storage is
-// opt-in (off by default); when enabled it lands under .no-mistakes/evidence.
+// opt-in (off by default); when enabled it lands under .no-slop/evidence.
 func testDefaults() Test {
 	return Test{
 		Evidence: Evidence{
 			StoreInRepo: false,
-			Dir:         ".no-mistakes/evidence",
+			Dir:         ".no-slop/evidence",
 		},
 	}
 }

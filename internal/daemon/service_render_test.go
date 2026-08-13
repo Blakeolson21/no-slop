@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/shellenv"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/shellenv"
 )
 
 func TestServiceDefinitionMatchesRootRejectsPrefixOnlyMatch(t *testing.T) {
@@ -20,20 +20,20 @@ func TestServiceDefinitionMatchesRootRejectsPrefixOnlyMatch(t *testing.T) {
 	p := paths.WithRoot(root)
 	other := paths.WithRoot(otherRoot)
 
-	if serviceDefinitionMatchesRoot([]byte(renderLaunchAgent("/opt/no-mistakes/bin/no-mistakes", other, home)), p) {
+	if serviceDefinitionMatchesRoot([]byte(renderLaunchAgent("/opt/no-slop/bin/no-slop", other, home)), p) {
 		t.Fatal("expected launch agent root prefix collision to be rejected")
 	}
-	if serviceDefinitionMatchesRoot([]byte(renderSystemdUnit("/usr/local/bin/no-mistakes", other, home)), p) {
+	if serviceDefinitionMatchesRoot([]byte(renderSystemdUnit("/usr/local/bin/no-slop", other, home)), p) {
 		t.Fatal("expected systemd root prefix collision to be rejected")
 	}
 	if serviceDefinitionMatchesRoot([]byte(`<Task><Exec><Command>C:\nm.exe</Command><Arguments>`+buildWindowsTaskCommand(`C:\nm.exe`, otherRoot)+`</Arguments></Exec></Task>`), p) {
 		t.Fatal("expected windows task root prefix collision to be rejected")
 	}
 
-	if !serviceDefinitionMatchesRoot([]byte(renderLaunchAgent("/opt/no-mistakes/bin/no-mistakes", p, home)), p) {
+	if !serviceDefinitionMatchesRoot([]byte(renderLaunchAgent("/opt/no-slop/bin/no-slop", p, home)), p) {
 		t.Fatal("expected exact launch agent root match")
 	}
-	if !serviceDefinitionMatchesRoot([]byte(renderSystemdUnit("/usr/local/bin/no-mistakes", p, home)), p) {
+	if !serviceDefinitionMatchesRoot([]byte(renderSystemdUnit("/usr/local/bin/no-slop", p, home)), p) {
 		t.Fatal("expected exact systemd root match")
 	}
 	if !serviceDefinitionMatchesRoot([]byte(`<Task><Exec><Command>C:\nm.exe</Command><Arguments>`+buildWindowsTaskCommand(`C:\nm.exe`, root)+`</Arguments></Exec></Task>`), p) {
@@ -50,7 +50,7 @@ func TestRenderLaunchAgentIncludesManagedPath(t *testing.T) {
 	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm"))
 	home := "/Users/test"
 
-	plist := renderLaunchAgent("/opt/no-mistakes/bin/no-mistakes", p, home)
+	plist := renderLaunchAgent("/opt/no-slop/bin/no-slop", p, home)
 
 	if !strings.Contains(plist, "<key>PATH</key>") {
 		t.Fatalf("expected PATH entry in launchd plist, got:\n%s", plist)
@@ -81,7 +81,7 @@ func TestRenderSystemdUnitIncludesManagedPath(t *testing.T) {
 	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm"))
 	home := "/home/test"
 
-	unit := renderSystemdUnit("/usr/local/bin/no-mistakes", p, home)
+	unit := renderSystemdUnit("/usr/local/bin/no-slop", p, home)
 	pathValue := extractSystemdEnvironmentValue(t, unit, "PATH")
 	for _, want := range []string{
 		"/opt/homebrew/bin",
@@ -105,14 +105,14 @@ func TestManagedServicesRouteRawOutputToBootstrapSink(t *testing.T) {
 	t.Parallel()
 	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm home"))
 
-	plist := renderLaunchAgent("/opt/no-mistakes/bin/no-mistakes", p, "/Users/test")
+	plist := renderLaunchAgent("/opt/no-slop/bin/no-slop", p, "/Users/test")
 	for _, key := range []string{"StandardOutPath", "StandardErrorPath"} {
 		if got := extractPlistValue(t, plist, key); got != p.DaemonBootstrapLog() {
 			t.Errorf("launchd %s = %q, want %q", key, got, p.DaemonBootstrapLog())
 		}
 	}
 
-	unit := renderSystemdUnit("/usr/local/bin/no-mistakes", p, "/home/test")
+	unit := renderSystemdUnit("/usr/local/bin/no-slop", p, "/home/test")
 	want := "append:" + p.DaemonBootstrapLog()
 	for _, directive := range []string{"StandardOutput=" + strconv.Quote(want), "StandardError=" + strconv.Quote(want)} {
 		if !strings.Contains(unit, directive) {

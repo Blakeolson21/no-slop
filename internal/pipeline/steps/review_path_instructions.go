@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/config"
 )
 
 // pathInstructionBlock is one trusted rule that matched the change, together

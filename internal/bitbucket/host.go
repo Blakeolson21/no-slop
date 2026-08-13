@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/scm"
+	"github.com/Blakeolson21/no-slop/internal/scm"
 )
 
 // Host implements scm.Host for Bitbucket using the REST API client.

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
-	"github.com/kunchenguid/no-mistakes/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/config"
 )
 
 func TestLintStep_FixMode_CommitsChanges(t *testing.T) {
@@ -67,7 +67,7 @@ func TestLintStep_FixMode_CommitsChanges(t *testing.T) {
 	if status := gitStatusPorcelain(t, dir); status != "" {
 		t.Fatalf("expected clean worktree after fix commit, got %q", status)
 	}
-	if got := lastCommitMessage(t, dir); got != "no-mistakes(lint): fix lint issues" {
+	if got := lastCommitMessage(t, dir); got != "no-slop(lint): fix lint issues" {
 		t.Fatalf("last commit message = %q", got)
 	}
 }
@@ -93,7 +93,7 @@ func TestLintStep_FixMode_UsesFallbackSummaryWhenStructuredSummaryMalformed(t *t
 		t.Fatal(err)
 	}
 
-	if got := lastCommitMessage(t, dir); got != "no-mistakes(lint): fix lint issues" {
+	if got := lastCommitMessage(t, dir); got != "no-slop(lint): fix lint issues" {
 		t.Fatalf("last commit message = %q", got)
 	}
 }
@@ -132,7 +132,7 @@ func TestLintStep_NoConfiguredLint_CommitsAgentFixesWithoutApproval(t *testing.T
 	if status := gitStatusPorcelain(t, dir); status != "" {
 		t.Fatalf("expected clean worktree after lint fix commit, got %q", status)
 	}
-	if got := lastCommitMessage(t, dir); got != "no-mistakes(lint): format code" {
+	if got := lastCommitMessage(t, dir); got != "no-slop(lint): format code" {
 		t.Fatalf("last commit message = %q", got)
 	}
 }

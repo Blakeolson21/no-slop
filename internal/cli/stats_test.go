@@ -4,16 +4,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/types"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/types"
 	"github.com/muesli/termenv"
 )
 
 func TestStatsCommandRendersAllRepoDashboard(t *testing.T) {
 	nmHome := makeSocketSafeTempDir(t)
-	t.Setenv("NM_HOME", nmHome)
+	t.Setenv("NS_HOME", nmHome)
 	p := paths.WithRoot(nmHome)
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
@@ -50,7 +50,7 @@ func TestStatsCommandRendersAllRepoDashboard(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"╭─ git push no-mistakes",
+		"╭─ git push no-slop",
 		"_  _ ____    _  _ _ ____ ___ ____ _  _ ____ ____",
 		"Total changes",
 		"Rescued changes",
@@ -71,7 +71,7 @@ func TestStatsCommandRendersAllRepoDashboard(t *testing.T) {
 		}
 	}
 	assertOrder(t, out, "Total changes", "Rescued changes", "Rescue rate", "Mistakes", "Reported", "Fixed")
-	for _, notWant := range []string{"Saved", "Rescue runs", "Mistakes fixed", "auto-fix", "caught in review", "╭─ no-mistakes"} {
+	for _, notWant := range []string{"Saved", "Rescue runs", "Mistakes fixed", "auto-fix", "caught in review", "╭─ no-slop"} {
 		if strings.Contains(out, notWant) {
 			t.Fatalf("stats output should not contain %q:\n%s", notWant, out)
 		}
@@ -113,7 +113,7 @@ func TestStatsDashboardCapsTopReposAndUsesPipelineStepOrder(t *testing.T) {
 func TestStatsDashboardTopBorderShowsGitPushNoMistakes(t *testing.T) {
 	out := renderStatsDashboard(&db.Stats{})
 	firstLine := strings.Split(out, "\n")[0]
-	if !strings.Contains(firstLine, "git push no-mistakes") {
+	if !strings.Contains(firstLine, "git push no-slop") {
 		t.Fatalf("top border should include eyebrow, got %q", firstLine)
 	}
 }

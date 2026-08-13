@@ -415,7 +415,7 @@ func TestBuildACPStructuredPrompt(t *testing.T) {
 		got := buildACPStructuredPrompt(prompt, schema)
 
 		promptIdx := strings.Index(got, prompt)
-		headerIdx := strings.Index(got, "## no-mistakes final output contract")
+		headerIdx := strings.Index(got, "## no-slop final output contract")
 		schemaIdx := strings.Index(got, string(schema))
 
 		if promptIdx < 0 {
@@ -435,7 +435,7 @@ func TestBuildACPStructuredPrompt(t *testing.T) {
 	t.Run("exact output for known input", func(t *testing.T) {
 		got := buildACPStructuredPrompt("P", json.RawMessage(`{}`))
 		want := "P\n\n" +
-			"## no-mistakes final output contract\n\n" +
+			"## no-slop final output contract\n\n" +
 			"When the task is complete, your final assistant message must be a single JSON object that matches this JSON Schema. " +
 			"Return only the JSON object. Do not wrap it in Markdown fences. Do not include prose before or after the JSON.\n\n" +
 			"{}"
@@ -446,7 +446,7 @@ func TestBuildACPStructuredPrompt(t *testing.T) {
 
 	t.Run("empty prompt still prepends header", func(t *testing.T) {
 		got := buildACPStructuredPrompt("", json.RawMessage(`{}`))
-		if !strings.HasPrefix(got, "\n\n## no-mistakes final output contract") {
+		if !strings.HasPrefix(got, "\n\n## no-slop final output contract") {
 			t.Errorf("empty prompt should still lead into contract header, got: %q", got)
 		}
 	})

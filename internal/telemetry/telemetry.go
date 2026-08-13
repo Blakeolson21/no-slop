@@ -17,19 +17,31 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/buildinfo"
+	"github.com/Blakeolson21/no-slop/internal/buildinfo"
+	"github.com/Blakeolson21/no-slop/internal/identity"
 )
 
 const (
 	defaultHostname = "cli"
-	defaultTitle    = "no-mistakes CLI"
+	defaultTitle    = "no-slop CLI"
 	defaultPath     = "/api/send"
 	defaultHost     = "https://a.kunchenguid.com"
 
-	umamiHostEnv      = "NO_MISTAKES_UMAMI_HOST"
-	umamiWebsiteIDEnv = "NO_MISTAKES_UMAMI_WEBSITE_ID"
-	telemetryEnv      = "NO_MISTAKES_TELEMETRY"
+	umamiHostEnv            = "NS_UMAMI_HOST"
+	legacyUmamiHostEnv      = "NO_MISTAKES_UMAMI_HOST"
+	umamiWebsiteIDEnv       = "NS_UMAMI_WEBSITE_ID"
+	legacyUmamiWebsiteIDEnv = "NO_MISTAKES_UMAMI_WEBSITE_ID"
+	telemetryEnv            = "NS_TELEMETRY"
+	legacyTelemetryEnv      = "NO_MISTAKES_TELEMETRY"
 )
+
+func identityEnv(canonical, legacy string) string {
+	value, err := identity.LookupEnv(canonical, legacy)
+	if err != nil {
+		return ""
+	}
+	return value
+}
 
 type Fields map[string]any
 
@@ -94,7 +106,7 @@ func NewClient(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("website ID is required")
 	}
 	if cfg.App == "" {
-		cfg.App = "no-mistakes"
+		cfg.App = "no-slop"
 	}
 	if cfg.Version == "" {
 		cfg.Version = buildinfo.CurrentVersion()
@@ -142,7 +154,7 @@ func Default() Sink {
 	client, err := NewClient(Config{
 		Host:      host,
 		WebsiteID: websiteID,
-		App:       "no-mistakes",
+		App:       "no-slop",
 		Version:   buildinfo.CurrentVersion(),
 		GOOS:      runtime.GOOS,
 		GOARCH:    runtime.GOARCH,
@@ -296,7 +308,7 @@ func (c *Client) send(ctx context.Context, payload []byte) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", fmt.Sprintf("no-mistakes/%s telemetry", c.version))
+	req.Header.Set("User-Agent", fmt.Sprintf("no-slop/%s telemetry", c.version))
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -328,7 +340,7 @@ func normalizeEndpoint(host string) (string, error) {
 
 func eventURL(app, name string) string {
 	if app == "" {
-		app = "no-mistakes"
+		app = "no-slop"
 	}
 	if name == "" {
 		return "app://" + app
@@ -355,7 +367,7 @@ func normalizePagePath(path string) string {
 }
 
 func defaultWebsiteID() string {
-	websiteID := strings.TrimSpace(os.Getenv(umamiWebsiteIDEnv))
+	websiteID := strings.TrimSpace(identityEnv(umamiWebsiteIDEnv, legacyUmamiWebsiteIDEnv))
 
 	if buildChannel(buildinfo.CurrentVersion()) == "dev" && websiteID == "" {
 		values := loadDotEnvValues()
@@ -370,7 +382,7 @@ func defaultWebsiteID() string {
 }
 
 func defaultHostValue() string {
-	host := strings.TrimSpace(os.Getenv(umamiHostEnv))
+	host := strings.TrimSpace(identityEnv(umamiHostEnv, legacyUmamiHostEnv))
 
 	if buildChannel(buildinfo.CurrentVersion()) == "dev" && host == "" {
 		values := loadDotEnvValues()
@@ -388,7 +400,7 @@ func defaultHostValue() string {
 }
 
 func telemetryDisabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(telemetryEnv))) {
+	switch strings.ToLower(strings.TrimSpace(identityEnv(telemetryEnv, legacyTelemetryEnv))) {
 	case "0", "false", "off":
 		return true
 	default:

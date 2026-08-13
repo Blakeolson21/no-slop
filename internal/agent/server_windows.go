@@ -5,7 +5,7 @@ package agent
 import (
 	"os/exec"
 
-	"github.com/kunchenguid/no-mistakes/internal/winproc"
+	"github.com/Blakeolson21/no-slop/internal/winproc"
 )
 
 // configureManagedServerCmd suppresses the visible console window Windows would

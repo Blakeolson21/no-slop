@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"time"
+
+	"github.com/Blakeolson21/no-slop/internal/identity"
 )
 
 // Slot is a held concurrency permit for one temporary E2E daemon owner.
@@ -17,7 +19,10 @@ type Slot struct {
 
 // MaxConcurrent returns the configured concurrency cap.
 func MaxConcurrent() int {
-	raw := os.Getenv(EnvMaxConcurrent)
+	raw, err := identity.LookupEnv(EnvMaxConcurrent, LegacyEnvMaxConcurrent)
+	if err != nil {
+		return DefaultMaxConcurrent
+	}
 	if raw == "" {
 		return DefaultMaxConcurrent
 	}

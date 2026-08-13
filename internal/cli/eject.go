@@ -3,16 +3,16 @@ package cli
 import (
 	"fmt"
 
-	"github.com/kunchenguid/no-mistakes/internal/gate"
-	"github.com/kunchenguid/no-mistakes/internal/safeurl"
+	"github.com/Blakeolson21/no-slop/internal/gate"
+	"github.com/Blakeolson21/no-slop/internal/safeurl"
 	"github.com/spf13/cobra"
 )
 
 func newEjectCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "eject",
-		Short: "Remove no-mistakes gate from the current repository",
-		Long: `Removes the "no-mistakes" git remote, deletes the bare repo and worktrees,
+		Short: "Remove no-slop gate from the current repository",
+		Long: `Removes the "no-slop" git remote, deletes the bare repo and worktrees,
 and removes the repo record from the database.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

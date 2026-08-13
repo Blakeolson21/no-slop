@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
-	"github.com/kunchenguid/no-mistakes/internal/slop/lenses"
+	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/slop/lenses"
 )
 
-// AgentReviewer adapts an existing no-mistakes agent to the NoSlop reviewer
+// AgentReviewer adapts an existing no-slop agent to the NoSlop reviewer
 // seam.
 type AgentReviewer struct {
 	ag      agent.Agent

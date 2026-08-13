@@ -23,7 +23,7 @@ type ExtractParams struct {
 	// HomeDir overrides the user's home directory. Empty means use os.UserHomeDir.
 	HomeDir string
 	// OriginCWD is the user's actual repo directory. The caller is responsible
-	// for passing the original working path, NOT the no-mistakes worktree.
+	// for passing the original working path, NOT the no-slop worktree.
 	OriginCWD string
 	// DiffFiles is the repo-relative file set used for matching and scoring.
 	DiffFiles []string

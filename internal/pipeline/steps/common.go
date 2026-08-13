@@ -3,8 +3,8 @@ package steps
 import (
 	"encoding/json"
 
-	"github.com/kunchenguid/no-mistakes/internal/pipeline"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/pipeline"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 // Finding represents a single code review or lint finding.
@@ -124,7 +124,7 @@ var reviewFindingsSchema = json.RawMessage(`{
 }`)
 
 // AllSteps returns the fixed pipeline step sequence.
-// When NM_DEMO=1, it returns mock steps for demo recordings.
+// When NS_DEMO=1, it returns mock steps for demo recordings.
 func AllSteps() []pipeline.Step {
 	if IsDemoMode() {
 		return DemoSteps()

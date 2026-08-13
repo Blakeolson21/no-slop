@@ -11,8 +11,8 @@ func TestTestEvidenceDefaults(t *testing.T) {
 	if got.Evidence.StoreInRepo {
 		t.Error("default StoreInRepo should be false (opt-in)")
 	}
-	if got.Evidence.Dir != ".no-mistakes/evidence" {
-		t.Errorf("default Dir = %q, want .no-mistakes/evidence", got.Evidence.Dir)
+	if got.Evidence.Dir != ".no-slop/evidence" {
+		t.Errorf("default Dir = %q, want .no-slop/evidence", got.Evidence.Dir)
 	}
 }
 
@@ -26,7 +26,7 @@ func TestTestEvidenceMerge_GlobalEnable(t *testing.T) {
 		t.Error("global enable should propagate")
 	}
 	// Default dir preserved when not overridden.
-	if cfg.Test.Evidence.Dir != ".no-mistakes/evidence" {
+	if cfg.Test.Evidence.Dir != ".no-slop/evidence" {
 		t.Errorf("dir = %q, want default", cfg.Test.Evidence.Dir)
 	}
 }
@@ -52,7 +52,7 @@ func TestTestEvidenceMerge_BlankDirIgnored(t *testing.T) {
 	repo := &RepoConfig{Test: TestRaw{Evidence: EvidenceRaw{Dir: &blank}}}
 
 	cfg := Merge(&GlobalConfig{}, repo)
-	if cfg.Test.Evidence.Dir != ".no-mistakes/evidence" {
+	if cfg.Test.Evidence.Dir != ".no-slop/evidence" {
 		t.Errorf("blank dir should fall back to default, got %q", cfg.Test.Evidence.Dir)
 	}
 }
@@ -90,7 +90,7 @@ test:
   evidence:
     store_in_repo: true
 `
-	if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte(yaml), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".no-slop.yaml"), []byte(yaml), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 

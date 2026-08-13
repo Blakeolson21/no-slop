@@ -100,7 +100,7 @@ func TestPiAgent_BuildPromptIncludesSchema(t *testing.T) {
 	if !strings.Contains(prompt, "do a thing") {
 		t.Errorf("prompt missing user prompt: %s", prompt)
 	}
-	if !strings.Contains(prompt, "no-mistakes final output contract") {
+	if !strings.Contains(prompt, "no-slop final output contract") {
 		t.Errorf("prompt missing contract header: %s", prompt)
 	}
 	if !strings.Contains(prompt, "summary") {

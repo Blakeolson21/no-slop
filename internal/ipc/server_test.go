@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/ipc"
 )
 
 // socketPath returns a short socket path to stay within macOS 104-byte limit.

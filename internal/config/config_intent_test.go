@@ -104,7 +104,7 @@ func TestLoadRepoConfig_IntentParsed(t *testing.T) {
 intent:
   enabled: false
 `
-	if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte(yaml), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".no-slop.yaml"), []byte(yaml), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 

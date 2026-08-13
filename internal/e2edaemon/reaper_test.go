@@ -19,7 +19,7 @@ func labRoot(t *testing.T) string {
 	if st, err := os.Stat("/private/tmp"); err == nil && st.IsDir() {
 		base = "/private/tmp"
 	}
-	dir, err := os.MkdirTemp(base, "nm-e2e-own-test-*")
+	dir, err := os.MkdirTemp(base, "ns-e2e-own-test-*")
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
 	}
@@ -37,15 +37,15 @@ func buildTestNMBin(t *testing.T) string {
 		t.Fatalf("repo root: %v", err)
 	}
 	outDir := t.TempDir()
-	bin := filepath.Join(outDir, "no-mistakes")
+	bin := filepath.Join(outDir, "no-slop")
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
 	}
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/no-mistakes")
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/no-slop")
 	cmd.Dir = repoRoot
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("build no-mistakes: %v\n%s", err, out)
+		t.Fatalf("build no-slop: %v\n%s", err, out)
 	}
 	return bin
 }
@@ -84,10 +84,10 @@ func startDetachedTestDaemon(t *testing.T, bin, nmHome string) int {
 	}
 	cmd := exec.Command(bin, "daemon", "run", "--root", nmHome)
 	cmd.Env = append(os.Environ(),
-		"NM_HOME="+nmHome,
+		"NS_HOME="+nmHome,
 		"NM_TEST_START_DAEMON=1",
-		"NO_MISTAKES_TELEMETRY=off",
-		"NO_MISTAKES_NO_UPDATE_CHECK=1",
+		"NS_TELEMETRY=off",
+		"NS_NO_UPDATE_CHECK=1",
 	)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
@@ -106,10 +106,10 @@ func startDetachedTestDaemon(t *testing.T, bin, nmHome string) int {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			status := exec.CommandContext(ctx, bin, "daemon", "status")
 			status.Env = append(os.Environ(),
-				"NM_HOME="+nmHome,
+				"NS_HOME="+nmHome,
 				"NM_TEST_START_DAEMON=1",
-				"NO_MISTAKES_TELEMETRY=off",
-				"NO_MISTAKES_NO_UPDATE_CHECK=1",
+				"NS_TELEMETRY=off",
+				"NS_NO_UPDATE_CHECK=1",
 			)
 			out, _ := status.CombinedOutput()
 			cancel()
@@ -166,7 +166,7 @@ func TestReapAll_NormalCompletion(t *testing.T) {
 	t.Setenv(EnvInventory, filepath.Join(lab, "inv"))
 	safetyReap(t)
 	bin := buildTestNMBin(t)
-	nmHome := filepath.Join(lab, "nm-e2e-normal", "nmhome")
+	nmHome := filepath.Join(lab, "ns-e2e-normal", "nmhome")
 	pid := startDetachedTestDaemon(t, bin, nmHome)
 
 	inv, err := Open()
@@ -198,7 +198,7 @@ func TestReapAll_CallerInterrupt(t *testing.T) {
 	t.Setenv(EnvInventory, filepath.Join(lab, "inv"))
 	safetyReap(t)
 	bin := buildTestNMBin(t)
-	nmHome := filepath.Join(lab, "nm-e2e-interrupt", "nmhome")
+	nmHome := filepath.Join(lab, "ns-e2e-interrupt", "nmhome")
 	pid := startDetachedTestDaemon(t, bin, nmHome)
 
 	inv, err := Open()
@@ -227,7 +227,7 @@ func TestReapAll_Timeout(t *testing.T) {
 	t.Setenv(EnvInventory, filepath.Join(lab, "inv"))
 	safetyReap(t)
 	bin := buildTestNMBin(t)
-	nmHome := filepath.Join(lab, "nm-e2e-timeout", "nmhome")
+	nmHome := filepath.Join(lab, "ns-e2e-timeout", "nmhome")
 	pid := startDetachedTestDaemon(t, bin, nmHome)
 
 	inv, err := Open()
@@ -262,7 +262,7 @@ func TestReapAll_ChildSIGKILL_WrapperReaps(t *testing.T) {
 	t.Setenv(EnvInventory, invDir)
 	safetyReap(t)
 	bin := buildTestNMBin(t)
-	nmHome := filepath.Join(lab, "nm-e2e-sigkill", "nmhome")
+	nmHome := filepath.Join(lab, "ns-e2e-sigkill", "nmhome")
 
 	cmd := exec.Command(os.Args[0], "-test.run=^TestReapAll_ChildSIGKILL_WrapperReaps$", "-test.count=1")
 	cmd.Env = append(os.Environ(),
@@ -347,10 +347,10 @@ func runSigkillChildHelper() {
 	}
 	cmd := exec.Command(bin, "daemon", "run", "--root", nmHome)
 	cmd.Env = append(os.Environ(),
-		"NM_HOME="+nmHome,
+		"NS_HOME="+nmHome,
 		"NM_TEST_START_DAEMON=1",
-		"NO_MISTAKES_TELEMETRY=off",
-		"NO_MISTAKES_NO_UPDATE_CHECK=1",
+		"NS_TELEMETRY=off",
+		"NS_NO_UPDATE_CHECK=1",
 	)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
@@ -397,7 +397,7 @@ func TestReapAll_StaleInventoryRecovery(t *testing.T) {
 	t.Setenv(EnvInventory, filepath.Join(lab, "inv"))
 	safetyReap(t)
 	bin := buildTestNMBin(t)
-	nmHome := filepath.Join(lab, "nm-e2e-stale", "nmhome")
+	nmHome := filepath.Join(lab, "ns-e2e-stale", "nmhome")
 	_ = startDetachedTestDaemon(t, bin, nmHome)
 
 	inv, err := Open()
@@ -421,14 +421,14 @@ func TestReapAll_DoesNotTouchSharedDaemon(t *testing.T) {
 	lab := labRoot(t)
 	t.Setenv(EnvInventory, filepath.Join(lab, "inv"))
 
-	sharedHome := filepath.Join(mustUserHome(t), ".no-mistakes")
+	sharedHome := filepath.Join(mustUserHome(t), ".no-slop")
 	before, _ := FindDaemonsForRoot(sharedHome)
 
 	inv, err := Open()
 	if err != nil {
 		t.Fatal(err)
 	}
-	tempHome := filepath.Join(lab, "nm-e2e-safe", "nmhome")
+	tempHome := filepath.Join(lab, "ns-e2e-safe", "nmhome")
 	_ = os.MkdirAll(tempHome, 0o700)
 	if err := inv.Register("safe", tempHome, "", 0, os.Getpid()); err != nil {
 		t.Fatal(err)

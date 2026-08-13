@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/safeurl"
-	"github.com/kunchenguid/no-mistakes/internal/winproc"
+	"github.com/Blakeolson21/no-slop/internal/safeurl"
+	"github.com/Blakeolson21/no-slop/internal/winproc"
 )
 
 // EmptyTreeSHA is the well-known SHA of an empty tree in git.
@@ -52,7 +52,7 @@ func Output(ctx context.Context, dir string, args ...string) (string, error) {
 // RunBare executes Git against exactly bareDir. Unlike Run, it never falls
 // back to cwd-based repository discovery when bareDir is malformed. Gate
 // recovery uses this after structural validation so an invalid directory under
-// NM_HOME cannot discover or mutate an ancestor worktree.
+// NS_HOME cannot discover or mutate an ancestor worktree.
 func RunBare(ctx context.Context, bareDir string, args ...string) (string, error) {
 	out, err := OutputBare(ctx, bareDir, args...)
 	return strings.TrimSpace(out), err

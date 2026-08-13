@@ -23,8 +23,8 @@ func ProcessAlive(pid int) (bool, error) {
 	return processAlive(pid)
 }
 
-// MatchesDaemonRoot reports whether pid's argv is a no-mistakes daemon run
-// for exactly the given NM_HOME root (bounded ownership check).
+// MatchesDaemonRoot reports whether pid's argv is a no-slop daemon run
+// for exactly the given NS_HOME root (bounded ownership check).
 func MatchesDaemonRoot(pid int, nmHome string) bool {
 	cmd, err := processCommandLine(pid)
 	if err != nil || cmd == "" {

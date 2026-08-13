@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/lanehealth"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/telemetry"
+	"github.com/Blakeolson21/no-slop/internal/lanehealth"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/telemetry"
 )
 
 // A fallback lane configured as an explicit acp:<target> records its cooldown
@@ -20,7 +20,7 @@ func TestDoctorReportsAQuotaExhaustedExplicitACPTargetLane(t *testing.T) {
 	restore := telemetry.SetDefaultForTesting(&telemetryRecorder{})
 	defer restore()
 
-	t.Setenv("NM_HOME", t.TempDir())
+	t.Setenv("NS_HOME", t.TempDir())
 
 	binDir := t.TempDir()
 	writeFakeBinary(t, binDir, "claude")
@@ -65,7 +65,7 @@ func TestDoctorReportsAMarkedAliasLaneExactlyOnce(t *testing.T) {
 	restore := telemetry.SetDefaultForTesting(&telemetryRecorder{})
 	defer restore()
 
-	t.Setenv("NM_HOME", t.TempDir())
+	t.Setenv("NS_HOME", t.TempDir())
 
 	binDir := t.TempDir()
 	writeFakeBinary(t, binDir, "cursor-agent")

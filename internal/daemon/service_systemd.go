@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
 func installSystemdUserService(p *paths.Paths, exe string) error {
@@ -39,14 +39,21 @@ func installSystemdUserService(p *paths.Paths, exe string) error {
 }
 
 func cleanupLegacySystemdUnit(p *paths.Paths) {
-	path := legacySystemdUserServicePath()
-	data, err := os.ReadFile(path)
-	if err != nil || !serviceDefinitionMatchesRoot(data, p) {
-		return
+	for _, legacy := range []struct {
+		name string
+		path string
+	}{
+		{legacyScopedSystemdServiceName(p), legacyScopedSystemdUserServicePath(p)},
+		{legacySystemdServiceName, legacySystemdUserServicePath()},
+	} {
+		data, err := os.ReadFile(legacy.path)
+		if err != nil || !serviceDefinitionMatchesRoot(data, p) {
+			continue
+		}
+		_, _ = serviceCommandRunner("systemctl", "--user", "stop", legacy.name)
+		_, _ = serviceCommandRunner("systemctl", "--user", "disable", legacy.name)
+		_ = os.Remove(legacy.path)
 	}
-	_, _ = serviceCommandRunner("systemctl", "--user", "stop", legacySystemdServiceName)
-	_, _ = serviceCommandRunner("systemctl", "--user", "disable", legacySystemdServiceName)
-	_ = os.Remove(path)
 }
 
 func startSystemdUserService(p *paths.Paths) error {
@@ -73,6 +80,26 @@ func stopSystemdUserService(p *paths.Paths) error {
 	return nil
 }
 
+func stopLegacySystemdUserService(p *paths.Paths) (bool, error) {
+	for _, legacy := range []struct {
+		name string
+		path string
+	}{
+		{legacyScopedSystemdServiceName(p), legacyScopedSystemdUserServicePath(p)},
+		{legacySystemdServiceName, legacySystemdUserServicePath()},
+	} {
+		data, readErr := os.ReadFile(legacy.path)
+		if readErr != nil || !serviceDefinitionMatchesRoot(data, p) {
+			continue
+		}
+		if _, err := serviceCommandRunner("systemctl", "--user", "stop", legacy.name); err != nil {
+			return true, fmt.Errorf("systemctl stop legacy service: %w", err)
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
 func systemdUserServicePath(p *paths.Paths) string {
 	home, err := serviceUserHomeDir()
 	if err != nil {
@@ -84,6 +111,11 @@ func systemdUserServicePath(p *paths.Paths) string {
 func legacySystemdUserServicePath() string {
 	home, _ := serviceUserHomeDir()
 	return filepath.Join(home, ".config", "systemd", "user", legacySystemdServiceName)
+}
+
+func legacyScopedSystemdUserServicePath(p *paths.Paths) string {
+	home, _ := serviceUserHomeDir()
+	return filepath.Join(home, ".config", "systemd", "user", legacyScopedSystemdServiceName(p))
 }
 
 // renderSystemdUnit renders the systemd unit, resolving the proxy environment
@@ -116,7 +148,7 @@ func renderSystemdUnitWithProxyEnv(exe string, p *paths.Paths, home string, prox
 		envLines = append(envLines, systemdEnvironmentLine(kv[0], kv[1]))
 	}
 	return fmt.Sprintf(`[Unit]
-Description=no-mistakes background daemon
+Description=no-slop background daemon
 
 [Service]
 Type=simple

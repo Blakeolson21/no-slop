@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
 // logLifecycleInvocation records who invoked a destructive lifecycle command.

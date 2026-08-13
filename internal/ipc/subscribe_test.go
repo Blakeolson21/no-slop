@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/ipc"
 )
 
 func TestSubscribeServerError(t *testing.T) {

@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/Blakeolson21/no-slop/internal/buildinfo"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/identity"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/kunchenguid/no-mistakes/internal/buildinfo"
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/git"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/muesli/termenv"
 	"github.com/spf13/cobra"
 )
@@ -55,7 +56,7 @@ func newRootCmd() *cobra.Command {
 	var skipValue string
 
 	cmd := &cobra.Command{
-		Use:     "no-mistakes",
+		Use:     identity.CommandName,
 		Short:   "Local Git proxy that validates code before pushing to the configured target",
 		Version: buildinfo.String(),
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
@@ -122,14 +123,14 @@ func findRepo(d *db.DB) (*db.Repo, error) {
 	// Try the main worktree root (handles git worktrees).
 	mainRoot, err := git.FindMainRepoRoot(".")
 	if err != nil || mainRoot == gitRoot {
-		return nil, fmt.Errorf("repo not initialized (run 'no-mistakes init' first)")
+		return nil, fmt.Errorf("repo not initialized (run 'no-slop init' first)")
 	}
 	repo, err = d.GetRepoByPath(mainRoot)
 	if err != nil {
 		return nil, fmt.Errorf("get repo: %w", err)
 	}
 	if repo == nil {
-		return nil, fmt.Errorf("repo not initialized (run 'no-mistakes init' first)")
+		return nil, fmt.Errorf("repo not initialized (run 'no-slop init' first)")
 	}
 	return repo, nil
 }

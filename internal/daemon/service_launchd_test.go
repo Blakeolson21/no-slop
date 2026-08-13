@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
 func TestStartInstallsLaunchAgentAndBootstrapsManagedDaemon(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +24,7 @@ func TestStartInstallsLaunchAgentAndBootstrapsManagedDaemon(t *testing.T) {
 	runtimeGOOS = "darwin"
 	serviceUserHomeDir = func() (string, error) { return home, nil }
 	serviceCurrentUser = func() (*user.User, error) { return &user.User{Uid: "501"}, nil }
-	serviceExecutablePath = func() (string, error) { return "/opt/no-mistakes/bin/no-mistakes", nil }
+	serviceExecutablePath = func() (string, error) { return "/opt/no-slop/bin/no-slop", nil }
 
 	var commands []string
 	serviceCommandRunner = func(name string, args ...string) ([]byte, error) {
@@ -48,7 +48,7 @@ func TestStartInstallsLaunchAgentAndBootstrapsManagedDaemon(t *testing.T) {
 	}
 	text := string(data)
 	for _, want := range []string{
-		"<string>/opt/no-mistakes/bin/no-mistakes</string>",
+		"<string>/opt/no-slop/bin/no-slop</string>",
 		"<string>daemon</string>",
 		"<string>run</string>",
 		"<string>--root</string>",
@@ -86,7 +86,7 @@ func TestStartInstallsLaunchAgentAndBootstrapsManagedDaemon(t *testing.T) {
 // detached-fallback path in Start() short-circuits on an install where
 // bootstrap/kickstart failed and the service was never loaded.
 func TestStopLaunchAgentTreatsBootoutNotLoadedAsSuccess(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	home := t.TempDir()
 
 	cleanup := stubServiceRuntime(t)
@@ -107,7 +107,7 @@ func TestStopLaunchAgentTreatsBootoutNotLoadedAsSuccess(t *testing.T) {
 }
 
 func TestInstallLaunchAgentKeepsLegacyPlistOnScopedWriteFailure(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestInstallLaunchAgentKeepsLegacyPlistOnScopedWriteFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := installLaunchAgent(p, "/opt/no-mistakes/bin/no-mistakes")
+	err := installLaunchAgent(p, "/opt/no-slop/bin/no-slop")
 	if err == nil {
 		t.Fatal("installLaunchAgent should fail when scoped plist path is a directory")
 	}
@@ -147,7 +147,7 @@ func TestInstallLaunchAgentKeepsLegacyPlistOnScopedWriteFailure(t *testing.T) {
 // which breaks auto-start on reboot and was the reason the #143 PATH fix
 // never actually reached the user's launchd daemon.
 func TestStartLaunchAgentRetriesBootstrapOnEPROGRESS(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestStartLaunchAgentRetriesBootstrapOnEPROGRESS(t *testing.T) {
 // genuine failures (bad plist, missing binary, permissions) surface fast
 // rather than being silently retried for 10 seconds.
 func TestStartLaunchAgentDoesNotRetryNonBusyBootstrapErrors(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func TestStartLaunchAgentDoesNotRetryNonBusyBootstrapErrors(t *testing.T) {
 }
 
 func TestInstallLaunchAgentDoesNotRemoveLegacyPlistForDifferentRoot(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -248,8 +248,8 @@ func TestInstallLaunchAgentDoesNotRemoveLegacyPlistForDifferentRoot(t *testing.T
 	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	otherRoot := filepath.Join(t.TempDir(), "other-nm-home")
-	legacyPlist := renderLaunchAgent("/opt/no-mistakes/bin/no-mistakes", paths.WithRoot(otherRoot), home)
+	otherRoot := filepath.Join(t.TempDir(), "other-ns-home")
+	legacyPlist := renderLaunchAgent("/opt/no-slop/bin/no-slop", paths.WithRoot(otherRoot), home)
 	if err := os.WriteFile(legacyPath, []byte(legacyPlist), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +260,7 @@ func TestInstallLaunchAgentDoesNotRemoveLegacyPlistForDifferentRoot(t *testing.T
 		return nil, nil
 	}
 
-	if err := installLaunchAgent(p, "/opt/no-mistakes/bin/no-mistakes"); err != nil {
+	if err := installLaunchAgent(p, "/opt/no-slop/bin/no-slop"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(legacyPath); err != nil {
@@ -277,7 +277,7 @@ func TestRenderLaunchAgentForwardsProxyEnv(t *testing.T) {
 	}
 	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:7897")
 
-	plist := renderLaunchAgent("/opt/no-mistakes/bin/no-mistakes", paths.WithRoot(t.TempDir()), "/home/u")
+	plist := renderLaunchAgent("/opt/no-slop/bin/no-slop", paths.WithRoot(t.TempDir()), "/home/u")
 	for _, want := range []string{
 		"<key>HTTPS_PROXY</key>",
 		"<string>http://127.0.0.1:7897</string>",
@@ -302,7 +302,7 @@ func TestRenderLaunchAgentForwardsEveryProxyEnvKey(t *testing.T) {
 		proxyEnv = append(proxyEnv, [2]string{key, "val-" + key})
 	}
 
-	plist := renderLaunchAgentWithProxyEnv("/opt/no-mistakes/bin/no-mistakes", paths.WithRoot(t.TempDir()), "/home/u", proxyEnv)
+	plist := renderLaunchAgentWithProxyEnv("/opt/no-slop/bin/no-slop", paths.WithRoot(t.TempDir()), "/home/u", proxyEnv)
 	for _, key := range proxyEnvKeys {
 		fragment := "<key>" + key + "</key>\n    <string>val-" + key + "</string>"
 		if !strings.Contains(plist, fragment) {

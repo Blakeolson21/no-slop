@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 // Agent is the interface for running AI agent tasks.
@@ -801,7 +801,7 @@ func (u *TokenUsage) Add(other TokenUsage) {
 
 // New creates an agent by name with the given binary path.
 // For native agents, extraArgs are user CLI flags from agent_args_override that
-// are injected into the underlying tool's argv ahead of no-mistakes' managed flags.
+// are injected into the underlying tool's argv ahead of no-slop' managed flags.
 // ACP agents and aliases ignore extraArgs; use NewWithOptions to provide
 // registry overrides.
 func New(name types.AgentName, bin string, extraArgs []string) (Agent, error) {

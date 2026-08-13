@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 // writeStubAcpx writes a stub acpx binary that records its argv (one arg per
