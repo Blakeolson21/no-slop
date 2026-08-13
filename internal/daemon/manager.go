@@ -282,7 +282,11 @@ func laneHealthStore(health *lanehealth.Store) agent.LaneHealthStore {
 }
 
 func newPipelineAgent(ctx context.Context, cfg *config.Config, lookPath func(string) (string, error), health *lanehealth.Store) (agent.Agent, error) {
-	if steps.IsDemoMode() {
+	demoMode, err := steps.DemoMode()
+	if err != nil {
+		return nil, err
+	}
+	if demoMode {
 		return agent.NewNoop(), nil
 	}
 	if err := cfg.ResolveAgent(ctx, lookPath); err != nil {
@@ -912,7 +916,13 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 
 	// Create agent. In demo mode, skip resolution and use a no-op agent.
 	var ag agent.Agent
-	if steps.IsDemoMode() {
+	demoMode, err := steps.DemoMode()
+	if err != nil {
+		m.db.UpdateRunError(run.ID, err.Error())
+		trackStartFailure("demo_mode")
+		return "", err
+	}
+	if demoMode {
 		ag = agent.NewNoop()
 	} else {
 		if err := cfg.ResolveAgent(ctx, exec.LookPath); err != nil {
@@ -948,7 +958,7 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 		"agent":       string(cfg.Agent),
 		"branch_role": branchRole,
 		"step_count":  len(execSteps),
-		"demo_mode":   steps.IsDemoMode(),
+		"demo_mode":   demoMode,
 	})
 
 	// Create executor with event broadcast.

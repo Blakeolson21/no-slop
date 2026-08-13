@@ -80,6 +80,14 @@ func TestRepoNameIsNotUpstream(t *testing.T) {
 	}
 }
 
+func TestValidateEnvRejectsConflictingAliases(t *testing.T) {
+	t.Setenv(noUpdateCheckEnv, "1")
+	t.Setenv(legacyNoUpdateCheckEnv, "0")
+	if err := ValidateEnv(); err == nil {
+		t.Fatal("ValidateEnv() should reject conflicting update-check aliases")
+	}
+}
+
 func TestRunRefusesAndMakesNoRequest(t *testing.T) {
 	hits := stubAPI(t)
 
@@ -115,7 +123,9 @@ func TestMaybeNotifyAndCheckIsSilent(t *testing.T) {
 	seedUpgradeNotice(t)
 
 	var stderr bytes.Buffer
-	MaybeNotifyAndCheck([]string{"axi", "run"}, &stderr)
+	if err := MaybeNotifyAndCheck([]string{"axi", "run"}, &stderr); err != nil {
+		t.Fatalf("MaybeNotifyAndCheck() error = %v", err)
+	}
 
 	if stderr.Len() != 0 {
 		t.Fatalf("MaybeNotifyAndCheck() wrote an upgrade notice: %q", stderr.String())

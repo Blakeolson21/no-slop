@@ -124,33 +124,34 @@ func NewClient(cfg Config) (*Client, error) {
 	}, nil
 }
 
-func Default() Sink {
+func Default() (Sink, error) {
 	defaultMu.Lock()
 	defer defaultMu.Unlock()
 
 	if defaultSink != nil {
-		return defaultSink
+		return defaultSink, nil
 	}
 	disabled, err := telemetryDisabled()
-	if err != nil || disabled {
+	if err != nil {
+		return nil, err
+	}
+	if disabled {
 		defaultSink = noopSink{}
-		return defaultSink
+		return defaultSink, nil
 	}
 
 	websiteID, err := defaultWebsiteID()
 	if err != nil {
-		defaultSink = noopSink{}
-		return defaultSink
+		return nil, err
 	}
 	if websiteID == "" {
 		defaultSink = noopSink{}
-		return defaultSink
+		return defaultSink, nil
 	}
 
 	host, err := defaultHostValue()
 	if err != nil {
-		defaultSink = noopSink{}
-		return defaultSink
+		return nil, err
 	}
 	client, err := NewClient(Config{
 		Host:      host,
@@ -162,11 +163,24 @@ func Default() Sink {
 	})
 	if err != nil {
 		defaultSink = noopSink{}
-		return defaultSink
+		return defaultSink, nil
 	}
 
 	defaultSink = client
-	return defaultSink
+	return defaultSink, nil
+}
+
+func ValidateDefaultConfig() error {
+	if _, err := telemetryDisabled(); err != nil {
+		return err
+	}
+	if _, err := defaultWebsiteID(); err != nil {
+		return err
+	}
+	if _, err := defaultHostValue(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func SetDefaultForTesting(sink Sink) func() {
@@ -186,20 +200,36 @@ func SetDefaultForTesting(sink Sink) func() {
 }
 
 func Track(name string, fields Fields) {
-	Default().Track(name, fields)
+	sink, err := Default()
+	if err != nil {
+		return
+	}
+	sink.Track(name, fields)
 }
 
 func Pageview(path string, fields Fields) {
-	Default().Pageview(path, fields)
+	sink, err := Default()
+	if err != nil {
+		return
+	}
+	sink.Pageview(path, fields)
 }
 
 func Enabled() bool {
-	_, disabled := Default().(noopSink)
+	sink, err := Default()
+	if err != nil {
+		return false
+	}
+	_, disabled := sink.(noopSink)
 	return !disabled
 }
 
 func Close(ctx context.Context) error {
-	return Default().Close(ctx)
+	sink, err := Default()
+	if err != nil {
+		return err
+	}
+	return sink.Close(ctx)
 }
 
 func (c *Client) Track(name string, fields Fields) {
@@ -376,7 +406,10 @@ func defaultWebsiteID() (string, error) {
 
 	if buildChannel(buildinfo.CurrentVersion()) == "dev" && websiteID == "" {
 		values := loadDotEnvValues()
-		websiteID = strings.TrimSpace(values[umamiWebsiteIDEnv])
+		websiteID, err = lookupDotEnv(values, umamiWebsiteIDEnv, legacyUmamiWebsiteIDEnv)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	if websiteID == "" {
@@ -395,7 +428,10 @@ func defaultHostValue() (string, error) {
 
 	if buildChannel(buildinfo.CurrentVersion()) == "dev" && host == "" {
 		values := loadDotEnvValues()
-		host = strings.TrimSpace(values[umamiHostEnv])
+		host, err = lookupDotEnv(values, umamiHostEnv, legacyUmamiHostEnv)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	if host == "" {
@@ -419,6 +455,18 @@ func telemetryDisabled() (bool, error) {
 	default:
 		return false, nil
 	}
+}
+
+func lookupDotEnv(values map[string]string, canonical, legacy string) (string, error) {
+	canonicalValue := strings.TrimSpace(values[canonical])
+	legacyValue := strings.TrimSpace(values[legacy])
+	if canonicalValue != "" && legacyValue != "" && canonicalValue != legacyValue {
+		return "", fmt.Errorf("%s and legacy alias %s configure the same setting with different values", canonical, legacy)
+	}
+	if canonicalValue != "" {
+		return canonicalValue, nil
+	}
+	return legacyValue, nil
 }
 
 func loadDotEnvValues() map[string]string {

@@ -127,7 +127,7 @@ jobs:
           IDENTITY_HASH="$(printf '%s\n' "$IDENTITIES" | awk 'NR==1 {print $2}')"
 
           codesign --force --timestamp --options runtime \
-            --identifier com.kunchenguid.no-slop \
+            --identifier com.kunchenguid.no-mistakes \
             --keychain "$KEYCHAIN_PATH" \
             --sign "$IDENTITY_HASH" \
             "dist/no-slop"
@@ -156,7 +156,7 @@ jobs:
           printf '%s\n' "$SIG"
           grep -q 'Authority=Developer ID Application' <<<"$SIG"
           grep -q "TeamIdentifier=$TEAM_ID" <<<"$SIG"
-          grep -q 'Identifier=com.kunchenguid.no-slop' <<<"$SIG"
+          grep -q 'Identifier=com.kunchenguid.no-mistakes' <<<"$SIG"
           if grep -qi 'adhoc' <<<"$SIG"; then
             echo "::error::signature is ad-hoc" >&2; exit 1
           fi
@@ -179,7 +179,7 @@ jobs:
           # The Team ID starts with a digit so codesign quotes it, but accept the
           # unquoted form too so a codesign quirk cannot fail a valid release.
           grep -Eq "leaf\[subject.OU][[:space:]]*=[[:space:]]*\"?$TEAM_ID\"?" <<<"$DR"
-          grep -q 'identifier "com.kunchenguid.no-slop"' <<<"$DR"
+          grep -q 'identifier "com.kunchenguid.no-mistakes"' <<<"$DR"
           if grep -q 'cdhash H' <<<"$DR"; then
             echo "::error::designated requirement is content-based (cdhash), not identity-based" >&2; exit 1
           fi

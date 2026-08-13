@@ -71,9 +71,6 @@ func run() int {
 		return 1
 	}
 
-	// Redirect slog to a file for interactive CLI commands so logs never
-	// leak into user-facing output. The daemon process sets up its own
-	// file-based logger before reaching this point.
 	slog.SetDefault(slog.New(slog.NewTextHandler(cliLogWriter(), nil)))
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
@@ -151,8 +148,6 @@ func daemonRunRootFromArgs(args []string) (string, bool, error) {
 	return "", false, nil
 }
 
-// cliLogWriter returns a writer for CLI logs. Falls back to io.Discard
-// if the log file cannot be opened (e.g. before first init).
 func cliLogWriter() io.Writer {
 	p, err := paths.New()
 	if err != nil {

@@ -898,7 +898,9 @@ func TestUpdaterMaybeNotifyAndCheck(t *testing.T) {
 		},
 	}
 
-	u.maybeNotifyAndCheck([]string{"status"})
+	if err := u.maybeNotifyAndCheck([]string{"status"}); err != nil {
+		t.Fatalf("maybeNotifyAndCheck() error = %v", err)
+	}
 
 	if !strings.Contains(stderr.String(), "A new version of no-slop is available: v1.2.2 -> v1.2.3") {
 		t.Fatalf("stderr = %q", stderr.String())
@@ -909,7 +911,9 @@ func TestUpdaterMaybeNotifyAndCheck(t *testing.T) {
 
 	stderr.Reset()
 	spawned = false
-	u.maybeNotifyAndCheck([]string{"update"})
+	if err := u.maybeNotifyAndCheck([]string{"update"}); err != nil {
+		t.Fatalf("maybeNotifyAndCheck(update) error = %v", err)
+	}
 	if stderr.Len() != 0 {
 		t.Fatalf("update command should not notify, got %q", stderr.String())
 	}
@@ -924,7 +928,9 @@ func TestUpdaterMaybeNotifyAndCheck(t *testing.T) {
 	for _, versionArgs := range [][]string{{"--version"}, {"-v"}} {
 		stderr.Reset()
 		spawned = false
-		u.maybeNotifyAndCheck(versionArgs)
+		if err := u.maybeNotifyAndCheck(versionArgs); err != nil {
+			t.Fatalf("maybeNotifyAndCheck(%v) error = %v", versionArgs, err)
+		}
 		if stderr.Len() != 0 {
 			t.Fatalf("%v should not notify, got %q", versionArgs, stderr.String())
 		}

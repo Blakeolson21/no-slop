@@ -53,6 +53,14 @@ func TestCLILogWriterReturnsDiscardWhenLogsDirMissing(t *testing.T) {
 	}
 }
 
+func TestRunRejectsIdentityAliasConflict(t *testing.T) {
+	t.Setenv("NS_TELEMETRY", "off")
+	t.Setenv("NO_MISTAKES_TELEMETRY", "on")
+	if got := run(); got != 1 {
+		t.Fatalf("run() = %d, want 1", got)
+	}
+}
+
 func TestCLILogWriterAppendsToFileWhenLogsDirExists(t *testing.T) {
 	nmHome := t.TempDir()
 	t.Setenv("NS_HOME", nmHome)

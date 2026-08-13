@@ -31,6 +31,14 @@ func TestIsDemoMode(t *testing.T) {
 	}
 }
 
+func TestValidateDemoModeConfigRejectsConflictingAliases(t *testing.T) {
+	t.Setenv("NS_DEMO", "1")
+	t.Setenv("NM_DEMO", "0")
+	if err := ValidateDemoModeConfig(); err == nil {
+		t.Fatal("ValidateDemoModeConfig() should reject conflicting aliases")
+	}
+}
+
 func TestDemoSteps(t *testing.T) {
 	withoutDemoSleep(t)
 

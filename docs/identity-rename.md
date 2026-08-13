@@ -9,7 +9,7 @@ old process and a new process open the same database and socket.
 
 | Surface | Canonical identity | Compatibility identity | Stage 1 to 3 behavior |
 | --- | --- | --- | --- |
-| Main command | `no-slop` | `no-mistakes` | Both binaries are built from `cmd/no-slop` and expose identical commands and help. |
+| Main command | `no-slop` | `no-mistakes` | Both binaries expose identical commands and help. |
 | Short identity | `ns` | `nm` | New plumbing uses `ns`; retained `nm` spellings are compatibility aliases only. |
 | Smart-run wrapper | `ns-smart-run` | `nm-smart-run` | The installed wrapper flip is a stage 4 operator action. Both names must target the same wrapper during rollout. |
 | Repository config | `.no-slop.yaml` | `.no-mistakes.yaml` | Either file loads. A repository containing both is refused because they configure one logical setting. |
@@ -22,16 +22,17 @@ old process and a new process open the same database and socket.
 | Private Git refs | `refs/no-slop/...` | `refs/no-mistakes/...` | New operations write canonical refs. Recorded legacy ref names remain valid data and are not deleted by this stage. |
 | Agent gate marker | `NS_GATE` | `NO_MISTAKES_GATE` | New subprocesses receive both values. Presence of either is the same coarse diagnostic signal; authorization never trusts this marker alone. |
 | Bitbucket credentials | `NS_BITBUCKET_EMAIL`, `NS_BITBUCKET_API_TOKEN`, `NS_BITBUCKET_API_BASE_URL` | corresponding `NO_MISTAKES_*` names | Either generation works. Conflicting pairs are refused. |
-| Telemetry settings | `NS_TELEMETRY`, `NS_UMAMI_HOST`, `NS_UMAMI_WEBSITE_ID` | corresponding `NO_MISTAKES_*` names | Either generation works. Conflicts disable telemetry instead of choosing an identity. |
-| Update suppression | `NS_NO_UPDATE_CHECK` | `NO_MISTAKES_NO_UPDATE_CHECK` | Either generation works. Conflicts fail safe by suppressing the check. |
-| IPC timeout | `NS_DAEMON_CONNECT_TIMEOUT` | `NM_DAEMON_CONNECT_TIMEOUT` | Either generation works. Conflicts use the safe configured default instead of choosing one value. |
-| Demo mode | `NS_DEMO` | `NM_DEMO` | Either generation works. Conflicts leave demo mode off. |
+| Telemetry settings | `NS_TELEMETRY`, `NS_UMAMI_HOST`, `NS_UMAMI_WEBSITE_ID` | corresponding `NO_MISTAKES_*` names | Either generation works, including dev `.env` fallback for host and website ID. Conflicting pairs are refused. |
+| Update suppression | `NS_NO_UPDATE_CHECK` | `NO_MISTAKES_NO_UPDATE_CHECK` | Either generation works. Conflicting pairs are refused. |
+| IPC timeout | `NS_DAEMON_CONNECT_TIMEOUT` | `NM_DAEMON_CONNECT_TIMEOUT` | Either generation works. Conflicting pairs are refused. |
+| Demo mode | `NS_DEMO` | `NM_DEMO` | Either generation works. Conflicting pairs are refused. |
 | Unix installer | `NS_INSTALL_DIR`, `NS_LINK_DIR` | `NO_MISTAKES_INSTALL_DIR`, `NO_MISTAKES_LINK_DIR` | The installer rejects conflicting pairs, installs `no-slop`, and creates `no-mistakes` as an alias to the same file. Its default install root remains `~/.no-mistakes/bin`. |
 | Windows installer | `NS_INSTALL_DIR` | `NO_MISTAKES_INSTALL_DIR` | The installer rejects conflicting values and installs identical `no-slop.exe` and `no-mistakes.exe` entry points under the old default directory. |
 | Managed services | `com.kunchenguid.no-slop.daemon*`, `no-slop-daemon*` | prior `com.kunchenguid.no-mistakes.daemon*`, `no-mistakes-daemon*` | Install and cleanup recognize old service artifacts so an upgrade cannot leave two daemons serving one root. |
 | Agent skill | `/no-slop`, `skills/no-slop/SKILL.md` | `/no-mistakes`, `skills/no-mistakes/SKILL.md` | Init installs generated canonical and compatibility skills with the same operating contract. |
 | Release assets and workflow | `no-slop-<version>-<os>-<arch>` and `no-slop-required.yml` | old archives and workflow name | New releases and required-workflow references use the canonical identity. Compatibility binary packaging remains explicit. |
-| Go module and source entry point | `github.com/Blakeolson21/no-slop`, `cmd/no-slop` | former module and `cmd/no-mistakes` | Source imports and the canonical build path use the renamed repository. The legacy executable is built from the canonical entry point. |
+| macOS signing identifier | unchanged permanent identifier | `com.kunchenguid.no-mistakes` | The binary and UI names are renamed, but Developer ID signing keeps the old executable identifier so macOS permission grants survive upgrades. |
+| Go module and source entry point | `github.com/Blakeolson21/no-slop`, `cmd/no-slop` | former module and `cmd/no-mistakes` | Source imports and the canonical build path use the renamed repository. The legacy source entry point remains a buildable alias. |
 | User-facing strings and documentation | `no-slop`, `.no-slop.yaml`, `NS_*` | old examples only where documenting compatibility | CLI output, logs, docs, and examples lead with the canonical identity while state paths continue to show `~/.no-mistakes`. |
 | Configuration keys | existing unprefixed YAML keys | same keys | No duplicate renamed key namespace is introduced. File-name aliases resolve before YAML decoding, so one logical repository config cannot be supplied twice. |
 

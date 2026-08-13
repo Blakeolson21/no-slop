@@ -126,7 +126,7 @@ var reviewFindingsSchema = json.RawMessage(`{
 // AllSteps returns the fixed pipeline step sequence.
 // When NS_DEMO=1, it returns mock steps for demo recordings.
 func AllSteps() []pipeline.Step {
-	if IsDemoMode() {
+	if demoMode, err := DemoMode(); err == nil && demoMode {
 		return DemoSteps()
 	}
 	return []pipeline.Step{

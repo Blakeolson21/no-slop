@@ -38,7 +38,7 @@ INSTALL_BIN := $(shell go env GOPATH)/bin/no-slop
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/no-slop ./cmd/no-slop
-	go build -ldflags "$(LDFLAGS)" -o bin/no-mistakes ./cmd/no-slop
+	go build -ldflags "$(LDFLAGS)" -o bin/no-mistakes ./cmd/no-mistakes
 	go build -o bin/noslop ./cmd/noslop
 
 dist:

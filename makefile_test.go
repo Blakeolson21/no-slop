@@ -21,7 +21,7 @@ func TestMakeBuildProducesCanonicalAndLegacyGateBinaries(t *testing.T) {
 	if !strings.Contains(output, "-o bin/no-slop ./cmd/no-slop") {
 		t.Fatalf("make build output missing canonical no-slop binary:\n%s", output)
 	}
-	if !strings.Contains(output, "-o bin/no-mistakes ./cmd/no-slop") {
+	if !strings.Contains(output, "-o bin/no-mistakes ./cmd/no-mistakes") {
 		t.Fatalf("make build output missing no-mistakes compatibility binary:\n%s", output)
 	}
 }

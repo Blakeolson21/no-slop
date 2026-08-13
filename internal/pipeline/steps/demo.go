@@ -30,8 +30,17 @@ var demoWait = func(ctx context.Context, d time.Duration) bool {
 
 // IsDemoMode returns true when NS_DEMO or its NM_DEMO compatibility alias is set.
 func IsDemoMode() bool {
-	enabled, err := identity.EnvEnabled("NS_DEMO", "NM_DEMO")
-	return err == nil && enabled
+	enabled, _ := DemoMode()
+	return enabled
+}
+
+func DemoMode() (bool, error) {
+	return identity.EnvEnabled("NS_DEMO", "NM_DEMO")
+}
+
+func ValidateDemoModeConfig() error {
+	_, err := DemoMode()
+	return err
 }
 
 // DemoSteps returns mock pipeline steps for demo recordings.

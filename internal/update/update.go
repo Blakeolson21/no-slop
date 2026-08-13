@@ -120,9 +120,13 @@ binary in GOBIN instead.`)
 // GitHub API. See the repoName comment for why it is false.
 var selfUpdateEnabled = false
 
-func updateCheckDisabled() bool {
-	disabled, err := identity.EnvEnabled(noUpdateCheckEnv, legacyNoUpdateCheckEnv)
-	return err != nil || disabled
+func updateCheckDisabled() (bool, error) {
+	return identity.EnvEnabled(noUpdateCheckEnv, legacyNoUpdateCheckEnv)
+}
+
+func ValidateEnv() error {
+	_, err := updateCheckDisabled()
+	return err
 }
 
 func Run(ctx context.Context, stdout, stderr io.Writer, opts RunOptions) error {
@@ -146,9 +150,13 @@ func MaybeHandleBackgroundCheck(args []string) (bool, error) {
 	if len(args) != 2 || args[0] != backgroundFlag {
 		return false, nil
 	}
+	disabled, err := updateCheckDisabled()
+	if err != nil {
+		return true, err
+	}
 	// Still report the flag as handled so a stray background invocation exits
 	// quietly instead of falling through to the CLI as an unknown command.
-	if !selfUpdateEnabled {
+	if !selfUpdateEnabled || disabled {
 		return true, nil
 	}
 	u, err := defaultUpdater(io.Discard, io.Discard)
@@ -159,18 +167,22 @@ func MaybeHandleBackgroundCheck(args []string) (bool, error) {
 	return true, u.refreshCache(context.Background())
 }
 
-func MaybeNotifyAndCheck(args []string, stderr io.Writer) {
+func MaybeNotifyAndCheck(args []string, stderr io.Writer) error {
+	disabled, err := updateCheckDisabled()
+	if err != nil {
+		return err
+	}
 	// Without this guard every command would spawn a background probe and print
 	// an upgrade notice inviting the reader to run the very command that would
 	// destroy this build's local patches.
-	if !selfUpdateEnabled {
-		return
+	if !selfUpdateEnabled || disabled {
+		return nil
 	}
 	u, err := defaultUpdater(io.Discard, stderr)
 	if err != nil {
-		return
+		return err
 	}
-	u.maybeNotifyAndCheck(args)
+	return u.maybeNotifyAndCheck(args)
 }
 
 func CachedLatestVersion() string {
@@ -226,16 +238,20 @@ func (u *updater) refreshCache(ctx context.Context) error {
 	})
 }
 
-func (u *updater) maybeNotifyAndCheck(args []string) {
-	if u.disableBackground || isDevVersion(u.currentVersion) || updateCheckDisabled() {
-		return
+func (u *updater) maybeNotifyAndCheck(args []string) error {
+	disabled, err := updateCheckDisabled()
+	if err != nil {
+		return err
+	}
+	if u.disableBackground || isDevVersion(u.currentVersion) || disabled {
+		return nil
 	}
 	// Informational commands must be side-effect-free probes: `update` and the
 	// background refresh must not re-enter it, and a version query (`--version`
 	// / `-v`) must never print a notice or spawn a background refresh so that
 	// supervision scripts can call it as an innocuous health check (#401).
 	if len(args) > 0 && (args[0] == "update" || args[0] == backgroundFlag || args[0] == "--version" || args[0] == "-v") {
-		return
+		return nil
 	}
 	cache := readCache(u.cachePath)
 	if cache != nil {
@@ -247,10 +263,12 @@ func (u *updater) maybeNotifyAndCheck(args []string) {
 	if cacheStale(cache, u.currentVersion, u.now()) && u.spawnBackground != nil {
 		_ = u.spawnBackground(u.currentVersion)
 	}
+	return nil
 }
 
 func (u *updater) cachedLatestVersion() string {
-	if u == nil || u.disableBackground || isDevVersion(u.currentVersion) || updateCheckDisabled() {
+	disabled, err := updateCheckDisabled()
+	if err != nil || u == nil || u.disableBackground || isDevVersion(u.currentVersion) || disabled {
 		return ""
 	}
 	cache := readCache(u.cachePath)

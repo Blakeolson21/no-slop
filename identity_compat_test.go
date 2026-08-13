@@ -26,10 +26,16 @@ func TestCanonicalAndLegacyBinaryInvocationsHaveParity(t *testing.T) {
 	}
 	canonical := filepath.Join(dir, "no-slop"+ext)
 	legacy := filepath.Join(dir, "no-mistakes"+ext)
-	for _, output := range []string{canonical, legacy} {
-		cmd := exec.Command("go", "build", "-o", output, "./cmd/no-slop")
+	for _, build := range []struct {
+		output string
+		pkg    string
+	}{
+		{canonical, "./cmd/no-slop"},
+		{legacy, "./cmd/no-mistakes"},
+	} {
+		cmd := exec.Command("go", "build", "-o", build.output, build.pkg)
 		if data, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("build %s: %v\n%s", filepath.Base(output), err, data)
+			t.Fatalf("build %s from %s: %v\n%s", filepath.Base(build.output), build.pkg, err, data)
 		}
 	}
 
@@ -56,10 +62,16 @@ func TestLiveRunStateSurvivesLegacyDaemonAndCanonicalBinary(t *testing.T) {
 	dir := t.TempDir()
 	canonical := filepath.Join(dir, "no-slop")
 	legacy := filepath.Join(dir, "no-mistakes")
-	for _, output := range []string{canonical, legacy} {
-		cmd := exec.Command("go", "build", "-o", output, "./cmd/no-slop")
+	for _, build := range []struct {
+		output string
+		pkg    string
+	}{
+		{canonical, "./cmd/no-slop"},
+		{legacy, "./cmd/no-mistakes"},
+	} {
+		cmd := exec.Command("go", "build", "-o", build.output, build.pkg)
 		if data, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("build %s: %v\n%s", filepath.Base(output), err, data)
+			t.Fatalf("build %s from %s: %v\n%s", filepath.Base(build.output), build.pkg, err, data)
 		}
 	}
 

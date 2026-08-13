@@ -181,7 +181,7 @@ Override the telemetry collection host.
 | Type    | `URL`                       |
 | Default | `https://a.kunchenguid.com` |
 
-When set, telemetry sends events to this host's `/api/send` endpoint. If it is unset in a dev build, `no-slop` also checks a repo-local `.env` file for `NS_UMAMI_HOST`. If no runtime value is found, it falls back to any host embedded at build time and then the default self-hosted Umami instance.
+When set, telemetry sends events to this host's `/api/send` endpoint. `NO_MISTAKES_UMAMI_HOST` is the compatibility alias and conflicting values are refused. If it is unset in a dev build, `no-slop` also checks a repo-local `.env` file for either spelling. If no runtime value is found, it falls back to any host embedded at build time and then the default self-hosted Umami instance.
 
 ## `NS_UMAMI_WEBSITE_ID`
 
@@ -192,7 +192,7 @@ Override or enable the telemetry website ID.
 | Type    | `string`                                                                |
 | Default | embedded in Makefile and release builds; unset in unembedded dev builds |
 
-When set, telemetry uses this website ID at runtime. If it is unset in a dev build, `no-slop` also checks a repo-local `.env` file for `NS_UMAMI_WEBSITE_ID`. If no runtime value is found, it falls back to any website ID embedded at build time.
+When set, telemetry uses this website ID at runtime. `NO_MISTAKES_UMAMI_WEBSITE_ID` is the compatibility alias and conflicting values are refused. If it is unset in a dev build, `no-slop` also checks a repo-local `.env` file for either spelling. If no runtime value is found, it falls back to any website ID embedded at build time.
 
 When telemetry is enabled, `no-slop` sends command, run, approval, fix, and wizard events, completed step events with `awaiting_approval`, `fix_review`, or `failed` status, and pageviews for the human surfaces `/wizard` and `/tui` and the state-changing agent surfaces `/axi/run`, `/axi/respond`, and `/axi/abort` to Umami.
 Mutation pageviews are sent alongside command events, so command status and duration remain available.
@@ -233,7 +233,7 @@ Disable telemetry collection.
 | Type    | `0`, `false`, or `off` to disable; anything else to leave enabled |
 | Default | unset                                                             |
 
-When set to a disabling value, telemetry stays off even if a runtime or embedded website ID is available.
+When set to a disabling value, telemetry stays off even if a runtime or embedded website ID is available. `NO_MISTAKES_TELEMETRY` is the compatibility alias and conflicting values are refused.
 
 ## Environment the daemon sees
 
