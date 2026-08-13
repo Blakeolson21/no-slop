@@ -2184,12 +2184,17 @@ func TestRecoverRebasedPipelineHeadReturnsCustody(t *testing.T) {
 
 	gate := filepath.Join(root, "gate.git")
 	mustRun(t, root, "init", "--bare", gate)
+	// A linked worktree shares the gate's config, so the gate has to carry the
+	// checkout settings BEFORE it materializes one. Settling core.autocrlf
+	// afterwards leaves files Git wrote under an inherited system
+	// core.autocrlf=true (the Git for Windows default) reading as unstaged
+	// changes, which is enough to refuse the rebase below.
+	configureIdentity(t, gate)
 	mustRun(t, local, "push", gate, "refs/heads/main:refs/heads/main", "refs/heads/feature/recover:refs/heads/feature/recover")
 	mustRun(t, local, "checkout", "feature/recover")
 
 	wt := filepath.Join(root, "pipeline-wt")
 	mustRun(t, gate, "worktree", "add", "--detach", wt, submitted)
-	configureIdentity(t, wt)
 	mustRun(t, wt, "rebase", "refs/heads/main")
 	rebased := mustRun(t, wt, "rev-parse", "HEAD")
 	// The rebase step's adoption: the rebased head reaches the gate branch ref.

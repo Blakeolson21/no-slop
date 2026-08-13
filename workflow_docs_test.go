@@ -38,7 +38,10 @@ func TestNoSlopTaxonomyLivesInPublishedDocsSite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read published NoSlop taxonomy: %v", err)
 	}
-	if !strings.HasPrefix(string(taxonomy), "---\ntitle: NoSlop Taxonomy\n") {
+	// A Windows checkout under core.autocrlf=true materializes the doc with
+	// CRLF, so a line-spanning assertion has to read the line endings as
+	// formatting rather than content.
+	if !strings.HasPrefix(normalizeEOL(string(taxonomy)), "---\ntitle: NoSlop Taxonomy\n") {
 		t.Fatalf("NoSlop taxonomy is missing docs-site front matter")
 	}
 
@@ -57,6 +60,10 @@ func TestNoSlopTaxonomyLivesInPublishedDocsSite(t *testing.T) {
 	if !strings.Contains(string(reference), "[NoSlop taxonomy](./slop-taxonomy/)") {
 		t.Fatalf("repo config reference does not link to the published taxonomy")
 	}
+}
+
+func normalizeEOL(content string) string {
+	return strings.ReplaceAll(content, "\r\n", "\n")
 }
 
 func TestNoSlopProvenanceDocsStateAdvisoryTrustBoundary(t *testing.T) {
