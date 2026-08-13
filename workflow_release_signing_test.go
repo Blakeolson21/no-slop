@@ -257,6 +257,12 @@ func uploadStepIndex(j *wfJob) int {
 	return wfStepIndex(j.Steps, "gh release upload")
 }
 
+func workflowJobPublishesLegacyArchive(j *wfJob, ext string) bool {
+	build := wfStepIndex(j.Steps, "LEGACY_ARCHIVE=", "no-mistakes-${TAG}-${GOOS}-${GOARCH}"+ext)
+	upload := wfStepIndex(j.Steps, "gh release upload", "$LEGACY_ARCHIVE")
+	return build >= 0 && upload >= 0 && build < upload
+}
+
 // TestReleaseWorkflowSignsDarwinArtifactsWithDeveloperID is the primary
 // reproduction/regression: it fails on any workflow that can publish an ad-hoc
 // or unsigned macOS artifact.
@@ -551,20 +557,35 @@ func TestReleaseWorkflowPreservesArtifactContract(t *testing.T) {
 }
 
 func TestReleaseWorkflowPublishesLegacyArchiveAliases(t *testing.T) {
-	data, err := os.ReadFile(".github/workflows/release.yml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(data)
-	for _, want := range []string{
-		"no-mistakes-${TAG}-${GOOS}-${GOARCH}.tar.gz",
-		"no-mistakes-${TAG}-${GOOS}-${GOARCH}.zip",
-		`gh release upload "$TAG" "$ARCHIVE" "$LEGACY_ARCHIVE"`,
-		"sha256sum no-slop-* no-mistakes-*",
-	} {
-		if !strings.Contains(text, want) {
-			t.Errorf("release workflow missing compatibility artifact contract %q", want)
+	wf := loadReleaseWorkflowDoc(t)
+
+	for _, arch := range signingDarwinArches {
+		job := wf.darwinJobForArch(arch)
+		if job == nil {
+			t.Fatalf("no darwin build job for %s", arch)
 		}
+		if !workflowJobPublishesLegacyArchive(job, ".tar.gz") {
+			t.Errorf("darwin/%s job %q must upload the legacy tar archive alias", arch, job.name)
+		}
+	}
+
+	lw := wf.nonDarwinBuildJob()
+	if lw == nil {
+		t.Fatal("no linux/windows build job found")
+	}
+	if !workflowJobPublishesLegacyArchive(lw, ".tar.gz") {
+		t.Errorf("linux/windows job %q must upload the legacy tar archive alias", lw.name)
+	}
+	if !workflowJobPublishesLegacyArchive(lw, ".zip") {
+		t.Errorf("linux/windows job %q must upload the legacy zip archive alias", lw.name)
+	}
+
+	checksums := wf.jobByRunContains("sha256sum", "checksums.txt")
+	if checksums == nil {
+		t.Fatal("no checksums job found")
+	}
+	if !wfContainsAll(checksums.allRun(), "no-slop-*", "no-mistakes-*") {
+		t.Error("checksums job must include canonical and legacy archive aliases")
 	}
 }
 

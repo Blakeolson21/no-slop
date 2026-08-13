@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -20,6 +21,24 @@ func TestParseSkipPushOptions(t *testing.T) {
 	want := []types.StepName{types.StepTest, types.StepLint}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("parseSkipPushOptions() = %v, want %v", got, want)
+	}
+}
+
+func TestParseSkipPushOptionsAcceptsLegacyAlias(t *testing.T) {
+	got, err := parseSkipPushOptions([]string{"no-mistakes.skip=lint,test"})
+	if err != nil {
+		t.Fatalf("parseSkipPushOptions() error = %v", err)
+	}
+	want := []types.StepName{types.StepLint, types.StepTest}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parseSkipPushOptions() = %v, want %v", got, want)
+	}
+}
+
+func TestParseSkipPushOptionsRejectsConflictingAliases(t *testing.T) {
+	_, err := parseSkipPushOptions([]string{"no-slop.skip=test", "no-mistakes.skip=lint"})
+	if err == nil {
+		t.Fatal("expected conflicting skip aliases to fail")
 	}
 }
 
@@ -91,6 +110,27 @@ func TestIntentPushOptionRoundTrip(t *testing.T) {
 	}
 	if got != intent {
 		t.Fatalf("round-trip mismatch:\n got %q\nwant %q", got, intent)
+	}
+}
+
+func TestParseIntentPushOptionsAcceptsLegacyAlias(t *testing.T) {
+	intent := "legacy invocation parity"
+	opt := "no-mistakes.intent=" + base64.StdEncoding.EncodeToString([]byte(intent))
+	got, err := parseIntentPushOptions([]string{opt})
+	if err != nil {
+		t.Fatalf("parseIntentPushOptions() error = %v", err)
+	}
+	if got != intent {
+		t.Fatalf("parseIntentPushOptions() = %q, want %q", got, intent)
+	}
+}
+
+func TestParseIntentPushOptionsRejectsConflictingAliases(t *testing.T) {
+	canonical := formatIntentPushOption("canonical")
+	legacy := "no-mistakes.intent=" + base64.StdEncoding.EncodeToString([]byte("legacy"))
+	_, err := parseIntentPushOptions([]string{canonical, legacy})
+	if err == nil {
+		t.Fatal("expected conflicting intent aliases to fail")
 	}
 }
 

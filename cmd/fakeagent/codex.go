@@ -145,7 +145,7 @@ func extractCodexOutputSchema(args []string) string {
 // filterStructuredToSchema drops fields from structured that are not
 // declared as properties on the top-level object schema at schemaPath.
 // Real codex would not emit undeclared fields under --output-schema, so
-// mirroring that behaviour keeps the fake consistent with no-slop'
+// mirroring that behavior keeps the fake consistent with no-slop'
 // additionalProperties:false validation. schemaPath == "" is a no-op.
 func filterStructuredToSchema(structured map[string]any, schemaPath string) (map[string]any, error) {
 	if schemaPath == "" {

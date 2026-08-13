@@ -189,6 +189,65 @@ func TestDefaultDisablesTelemetryWhenEnvIsOff(t *testing.T) {
 	}
 }
 
+func TestDefaultRejectsConflictingTelemetryAliases(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+	}{
+		{
+			name: "telemetry flag",
+			env: map[string]string{
+				telemetryEnv:       "off",
+				legacyTelemetryEnv: "on",
+			},
+		},
+		{
+			name: "host",
+			env: map[string]string{
+				umamiHostEnv:       "https://canonical.example",
+				legacyUmamiHostEnv: "https://legacy.example",
+			},
+		},
+		{
+			name: "website id",
+			env: map[string]string{
+				umamiWebsiteIDEnv:       "canonical-site",
+				legacyUmamiWebsiteIDEnv: "legacy-site",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prevSink := defaultSink
+			defaultSink = nil
+			defer func() { defaultSink = prevSink }()
+
+			prevHost := buildinfo.TelemetryHost
+			prevWebsiteID := buildinfo.TelemetryWebsiteID
+			defer func() {
+				buildinfo.TelemetryHost = prevHost
+				buildinfo.TelemetryWebsiteID = prevWebsiteID
+			}()
+			buildinfo.TelemetryHost = "https://embedded.example"
+			buildinfo.TelemetryWebsiteID = "embedded-website"
+
+			for _, key := range []string{
+				telemetryEnv, legacyTelemetryEnv,
+				umamiHostEnv, legacyUmamiHostEnv,
+				umamiWebsiteIDEnv, legacyUmamiWebsiteIDEnv,
+			} {
+				t.Setenv(key, "")
+			}
+			for key, value := range tc.env {
+				t.Setenv(key, value)
+			}
+
+			if _, ok := Default().(*Client); ok {
+				t.Fatal("Default() should disable telemetry when canonical and legacy aliases conflict")
+			}
+		})
+	}
+}
+
 func TestDefaultIgnoresDotEnvOutsideRepo(t *testing.T) {
 	prevSink := defaultSink
 	defaultSink = nil

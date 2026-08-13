@@ -159,19 +159,41 @@ func normalizeNotifyGatePath(gate string) (string, error) {
 	return filepath.Clean(abs), nil
 }
 
+const (
+	skipPushOptionPrefix       = "no-slop.skip="
+	legacySkipPushOptionPrefix = "no-mistakes.skip="
+)
+
 func parseSkipPushOptions(options []string) ([]types.StepName, error) {
-	var steps []types.StepName
+	var canonicalSteps []types.StepName
+	var legacySteps []types.StepName
 	for _, option := range options {
-		value, ok := strings.CutPrefix(option, "no-slop.skip=")
-		if !ok {
+		var value string
+		switch {
+		case strings.HasPrefix(option, skipPushOptionPrefix):
+			value = strings.TrimPrefix(option, skipPushOptionPrefix)
+			parsed, err := parseSkipSteps(value)
+			if err != nil {
+				return nil, err
+			}
+			canonicalSteps = append(canonicalSteps, parsed...)
+		case strings.HasPrefix(option, legacySkipPushOptionPrefix):
+			value = strings.TrimPrefix(option, legacySkipPushOptionPrefix)
+			parsed, err := parseSkipSteps(value)
+			if err != nil {
+				return nil, err
+			}
+			legacySteps = append(legacySteps, parsed...)
+		default:
 			continue
 		}
-		parsed, err := parseSkipSteps(value)
-		if err != nil {
-			return nil, err
-		}
-		steps = append(steps, parsed...)
 	}
+	canonicalSteps = dedupeSteps(canonicalSteps)
+	legacySteps = dedupeSteps(legacySteps)
+	if len(canonicalSteps) > 0 && len(legacySteps) > 0 && !sameStepSet(canonicalSteps, legacySteps) {
+		return nil, fmt.Errorf("conflicting %s and %s push options", strings.TrimSuffix(skipPushOptionPrefix, "="), strings.TrimSuffix(legacySkipPushOptionPrefix, "="))
+	}
+	steps := append(canonicalSteps, legacySteps...)
 	return dedupeSteps(steps), nil
 }
 
@@ -193,7 +215,10 @@ func parseSkipSteps(value string) ([]types.StepName, error) {
 // intentPushOptionPrefix carries an agent-supplied intent through a git push.
 // The value is base64-encoded so multi-line or special-character intents
 // survive the push-option transport (which is line-oriented).
-const intentPushOptionPrefix = "no-slop.intent="
+const (
+	intentPushOptionPrefix       = "no-slop.intent="
+	legacyIntentPushOptionPrefix = "no-mistakes.intent="
+)
 
 // formatIntentPushOption encodes intent as a single push option, or returns ""
 // when there is no intent to carry.
@@ -207,19 +232,43 @@ func formatIntentPushOption(intent string) string {
 // parseIntentPushOptions extracts and decodes the intent push option, if any.
 // The last occurrence wins.
 func parseIntentPushOptions(options []string) (string, error) {
-	intent := ""
+	canonicalIntent := ""
+	legacyIntent := ""
+	canonicalSeen := false
+	legacySeen := false
 	for _, option := range options {
-		encoded, ok := strings.CutPrefix(option, intentPushOptionPrefix)
-		if !ok {
+		var encoded string
+		switch {
+		case strings.HasPrefix(option, intentPushOptionPrefix):
+			encoded = strings.TrimPrefix(option, intentPushOptionPrefix)
+			decoded, err := base64.StdEncoding.DecodeString(encoded)
+			if err != nil {
+				return "", fmt.Errorf("decode intent push option: %w", err)
+			}
+			canonicalIntent = string(decoded)
+			canonicalSeen = true
+		case strings.HasPrefix(option, legacyIntentPushOptionPrefix):
+			encoded = strings.TrimPrefix(option, legacyIntentPushOptionPrefix)
+			decoded, err := base64.StdEncoding.DecodeString(encoded)
+			if err != nil {
+				return "", fmt.Errorf("decode intent push option: %w", err)
+			}
+			legacyIntent = string(decoded)
+			legacySeen = true
+		default:
 			continue
 		}
-		decoded, err := base64.StdEncoding.DecodeString(encoded)
-		if err != nil {
-			return "", fmt.Errorf("decode intent push option: %w", err)
-		}
-		intent = string(decoded)
 	}
-	return intent, nil
+	if canonicalSeen && legacySeen && canonicalIntent != legacyIntent {
+		return "", fmt.Errorf("conflicting %s and %s push options", strings.TrimSuffix(intentPushOptionPrefix, "="), strings.TrimSuffix(legacyIntentPushOptionPrefix, "="))
+	}
+	if canonicalSeen {
+		return canonicalIntent, nil
+	}
+	if legacySeen {
+		return legacyIntent, nil
+	}
+	return "", nil
 }
 
 func formatSkipPushOptions(steps []types.StepName) []string {
@@ -253,6 +302,22 @@ func dedupeSteps(steps []types.StepName) []types.StepName {
 		out = append(out, step)
 	}
 	return out
+}
+
+func sameStepSet(a, b []types.StepName) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[types.StepName]bool, len(a))
+	for _, step := range a {
+		seen[step] = true
+	}
+	for _, step := range b {
+		if !seen[step] {
+			return false
+		}
+	}
+	return true
 }
 
 func newDaemonStartCmd() *cobra.Command {

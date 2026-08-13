@@ -70,7 +70,9 @@ REAL_INSTALL_DIR="$(resolve_path "$INSTALL_DIR")"
 REAL_LINK_DIR="$(resolve_path "$LINK_DIR" 2>/dev/null || echo "")"
 
 if [ -n "$REAL_INSTALL_DIR" ] && [ "$REAL_INSTALL_DIR" = "$REAL_LINK_DIR" ]; then
-  echo "Install dir and link dir resolve to the same path; skipping symlink."
+  rm -f "$LEGACY_LINK_PATH"
+  ln -s "$BIN_PATH" "$LEGACY_LINK_PATH"
+  echo "Install dir and link dir resolve to the same path; canonical command is already installed."
 else
   if [ -w "$LINK_DIR" ] || (mkdir -p "$LINK_DIR" 2>/dev/null && [ -w "$LINK_DIR" ]); then
     rm -f "$LINK_PATH"

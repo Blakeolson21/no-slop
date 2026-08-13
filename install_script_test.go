@@ -63,6 +63,27 @@ func TestInstallScriptReplacesExistingPathEntryWithSymlink(t *testing.T) {
 	assertSymlinkTarget(t, oldPath, realBin)
 }
 
+func TestInstallScriptCreatesLegacyAliasWhenLinkDirIsInstallDir(t *testing.T) {
+	skipInstallScriptTestsOnWindows(t)
+
+	home := t.TempDir()
+	archivePath := filepath.Join(t.TempDir(), "no-slop-v1.2.3-darwin-arm64.tar.gz")
+	binaryScript := "#!/bin/sh\nexit 0\n"
+	makeInstallArchive(t, archivePath, binaryScript)
+	fakeBin := makeFakeInstallCommands(t)
+	installDir := filepath.Join(home, ".no-mistakes", "bin")
+
+	runInstallScript(t, home, fakeBin, map[string]string{
+		"FAKE_RELEASE_ARCHIVE": archivePath,
+		"NS_INSTALL_DIR":       installDir,
+		"NS_LINK_DIR":          installDir,
+	})
+
+	realBin := filepath.Join(installDir, "no-slop")
+	assertFileContent(t, realBin, binaryScript)
+	assertSymlinkTarget(t, filepath.Join(installDir, "no-mistakes"), realBin)
+}
+
 func TestInstallScriptRestartsDaemonAfterInstall(t *testing.T) {
 	skipInstallScriptTestsOnWindows(t)
 

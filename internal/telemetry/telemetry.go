@@ -35,14 +35,6 @@ const (
 	legacyTelemetryEnv      = "NO_MISTAKES_TELEMETRY"
 )
 
-func identityEnv(canonical, legacy string) string {
-	value, err := identity.LookupEnv(canonical, legacy)
-	if err != nil {
-		return ""
-	}
-	return value
-}
-
 type Fields map[string]any
 
 type Sink interface {
@@ -139,18 +131,27 @@ func Default() Sink {
 	if defaultSink != nil {
 		return defaultSink
 	}
-	if telemetryDisabled() {
+	disabled, err := telemetryDisabled()
+	if err != nil || disabled {
 		defaultSink = noopSink{}
 		return defaultSink
 	}
 
-	websiteID := defaultWebsiteID()
+	websiteID, err := defaultWebsiteID()
+	if err != nil {
+		defaultSink = noopSink{}
+		return defaultSink
+	}
 	if websiteID == "" {
 		defaultSink = noopSink{}
 		return defaultSink
 	}
 
-	host := defaultHostValue()
+	host, err := defaultHostValue()
+	if err != nil {
+		defaultSink = noopSink{}
+		return defaultSink
+	}
 	client, err := NewClient(Config{
 		Host:      host,
 		WebsiteID: websiteID,
@@ -366,8 +367,12 @@ func normalizePagePath(path string) string {
 	return "/" + path
 }
 
-func defaultWebsiteID() string {
-	websiteID := strings.TrimSpace(identityEnv(umamiWebsiteIDEnv, legacyUmamiWebsiteIDEnv))
+func defaultWebsiteID() (string, error) {
+	websiteID, err := identity.LookupEnv(umamiWebsiteIDEnv, legacyUmamiWebsiteIDEnv)
+	if err != nil {
+		return "", err
+	}
+	websiteID = strings.TrimSpace(websiteID)
 
 	if buildChannel(buildinfo.CurrentVersion()) == "dev" && websiteID == "" {
 		values := loadDotEnvValues()
@@ -378,11 +383,15 @@ func defaultWebsiteID() string {
 		websiteID = strings.TrimSpace(buildinfo.TelemetryWebsiteID)
 	}
 
-	return websiteID
+	return websiteID, nil
 }
 
-func defaultHostValue() string {
-	host := strings.TrimSpace(identityEnv(umamiHostEnv, legacyUmamiHostEnv))
+func defaultHostValue() (string, error) {
+	host, err := identity.LookupEnv(umamiHostEnv, legacyUmamiHostEnv)
+	if err != nil {
+		return "", err
+	}
+	host = strings.TrimSpace(host)
 
 	if buildChannel(buildinfo.CurrentVersion()) == "dev" && host == "" {
 		values := loadDotEnvValues()
@@ -396,15 +405,19 @@ func defaultHostValue() string {
 		host = defaultHost
 	}
 
-	return host
+	return host, nil
 }
 
-func telemetryDisabled() bool {
-	switch strings.ToLower(strings.TrimSpace(identityEnv(telemetryEnv, legacyTelemetryEnv))) {
+func telemetryDisabled() (bool, error) {
+	value, err := identity.LookupEnv(telemetryEnv, legacyTelemetryEnv)
+	if err != nil {
+		return false, err
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "0", "false", "off":
-		return true
+		return true, nil
 	default:
-		return false
+		return false, nil
 	}
 }
 

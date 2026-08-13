@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Blakeolson21/no-slop/internal/db"
+	pipelinesteps "github.com/Blakeolson21/no-slop/internal/pipeline/steps"
+	"github.com/Blakeolson21/no-slop/internal/types"
 	"gopkg.in/yaml.v3"
 )
 
@@ -16,46 +19,36 @@ import (
 // logic so the release pipeline (release-please via GITHUB_TOKEN) and
 // dependabot are never silently blocked by the gate.
 func TestNoSlopRequiredWorkflowExemptsReleaseAutomation(t *testing.T) {
-	data, err := os.ReadFile(".github/workflows/no-slop-required.yml")
-	if err != nil {
-		t.Fatalf("read workflow: %v", err)
-	}
-	content := string(data)
-
+	workflow := loadRequiredWorkflow(t)
 	exempt := []string{
 		"github-actions[bot]",
 		"dependabot[bot]",
 		"release-please[bot]",
 	}
 	for _, login := range exempt {
-		needle := "github.event.pull_request.user.login != '" + login + "'"
-		if !strings.Contains(content, needle) {
-			t.Errorf("workflow must exempt %q via %q", login, needle)
+		if requiredWorkflowJobRunsForAuthor(t, workflow, login) {
+			t.Errorf("workflow check job runs for exempt author %q", login)
 		}
+	}
+	if !requiredWorkflowJobRunsForAuthor(t, workflow, "human-contributor") {
+		t.Fatal("workflow check job should run for a non-exempt contributor")
 	}
 }
 
-// TestNoSlopRequiredWorkflowChecksSignatureMarker pins the exact signature
-// string the check greps for. It must match the literal line produced by
-// internal/pipeline/steps/prsummary.go when building the Pipeline section.
+// TestNoSlopRequiredWorkflowChecksSignatureMarker executes the workflow check
+// against the generated PR body emitted by the pipeline summary builder.
 func TestNoSlopRequiredWorkflowChecksSignatureMarker(t *testing.T) {
-	data, err := os.ReadFile(".github/workflows/no-slop-required.yml")
-	if err != nil {
-		t.Fatalf("read workflow: %v", err)
+	workflow := loadRequiredWorkflow(t)
+	got := executeRequiredWorkflowFixture(t, workflow, []requiredWorkflowEvent{
+		{Action: "opened", Body: generatedPipelineBody(t), HeadSHA: "head", PRNumber: 1, RunID: 1, RunNumber: 1},
+		{Action: "edited", Body: "body without a generated pipeline section", HeadSHA: "head", PRNumber: 1, RunID: 2, RunNumber: 2},
+	})
+	want := []requiredWorkflowResult{
+		{RunID: 1, RunNumber: 1, Action: "opened", Executed: true, Conclusion: "success"},
+		{RunID: 2, RunNumber: 2, Action: "edited", Executed: true, Conclusion: "failure"},
 	}
-	content := string(data)
-
-	marker := "Updates from [git push no-slop](https://github.com/Blakeolson21/no-slop)"
-	if !strings.Contains(content, marker) {
-		t.Fatalf("workflow must grep for the prsummary.go signature marker:\n  %s", marker)
-	}
-
-	summary, err := os.ReadFile("internal/pipeline/steps/prsummary.go")
-	if err != nil {
-		t.Fatalf("read prsummary.go: %v", err)
-	}
-	if !strings.Contains(string(summary), marker) {
-		t.Fatalf("prsummary.go no longer writes the expected marker; update both files in sync")
+	if !slices.Equal(got, want) {
+		t.Fatalf("workflow check results =\n  %v\nwant\n  %v", got, want)
 	}
 }
 
@@ -63,17 +56,20 @@ func TestNoSlopRequiredWorkflowChecksSignatureMarker(t *testing.T) {
 // pattern: the PR body must be piped through an env var, not interpolated
 // directly into the shell script body.
 func TestNoSlopRequiredWorkflowReadsPRBodyViaEnv(t *testing.T) {
-	data, err := os.ReadFile(".github/workflows/no-slop-required.yml")
-	if err != nil {
-		t.Fatalf("read workflow: %v", err)
+	workflow := loadRequiredWorkflow(t)
+	step := requiredWorkflowCheckStep(t, workflow)
+	if got := step.Env["PR_BODY"]; got != "${{ github.event.pull_request.body }}" {
+		t.Fatalf("PR_BODY env expression = %q, want pull request body expression", got)
 	}
-	content := string(data)
+	if strings.Contains(step.Run, "github.event.pull_request.body") {
+		t.Fatalf("workflow must not interpolate the PR body expression directly into run script")
+	}
 
-	if !strings.Contains(content, "PR_BODY: ${{ github.event.pull_request.body }}") {
-		t.Errorf("workflow must expose PR body via the PR_BODY env var")
-	}
-	if strings.Contains(content, "${{ github.event.pull_request.body }}\n          run:") {
-		t.Errorf("workflow must not interpolate PR body directly into run: script (injection risk)")
+	got := executeRequiredWorkflowFixture(t, workflow, []requiredWorkflowEvent{
+		{Action: "opened", Body: generatedPipelineBody(t) + "\n$(exit 42)\n`exit 42`", HeadSHA: "head", PRNumber: 1, RunID: 10, RunNumber: 10},
+	})
+	if got[0].Conclusion != "success" {
+		t.Fatalf("env-carried PR body with shell metacharacters concluded %q, want success", got[0].Conclusion)
 	}
 }
 
@@ -81,16 +77,15 @@ func TestNoSlopRequiredWorkflowReadsPRBodyViaEnv(t *testing.T) {
 // re-runs when the PR body is edited so a contributor cannot bypass by opening
 // clean then editing the body.
 func TestNoSlopRequiredWorkflowTriggersOnRelevantPREvents(t *testing.T) {
-	data, err := os.ReadFile(".github/workflows/no-slop-required.yml")
-	if err != nil {
-		t.Fatalf("read workflow: %v", err)
-	}
-	content := string(data)
-
+	workflow := loadRequiredWorkflow(t)
+	got := requiredWorkflowPullRequestTypes(t, workflow)
 	for _, typ := range []string{"opened", "edited", "synchronize", "reopened"} {
-		if !strings.Contains(content, typ) {
+		if !got[typ] {
 			t.Errorf("workflow must trigger on pull_request type %q", typ)
 		}
+	}
+	if len(got) != 4 {
+		t.Fatalf("pull_request types = %v, want exactly opened/edited/synchronize/reopened", got)
 	}
 }
 
@@ -104,11 +99,11 @@ func TestNoSlopRequiredWorkflowTriggersOnRelevantPREvents(t *testing.T) {
 // that survives scheduling.
 func TestNoSlopRequiredWorkflowExecutesEveryBodyEvent(t *testing.T) {
 	workflow := loadRequiredWorkflow(t)
-	marker := "Updates from [git push no-slop](https://github.com/Blakeolson21/no-slop)"
+	pipelineBody := generatedPipelineBody(t)
 	events := []requiredWorkflowEvent{
-		{Action: "opened", Body: "## Pipeline\n\n" + marker, HeadSHA: "same-head", PRNumber: 549, RunID: 29962844999, RunNumber: 586},
+		{Action: "opened", Body: pipelineBody, HeadSHA: "same-head", PRNumber: 549, RunID: 29962844999, RunNumber: 586},
 		{Action: "edited", Body: "signature removed", HeadSHA: "same-head", PRNumber: 549, RunID: 29962943078, RunNumber: 587},
-		{Action: "edited", Body: "## Pipeline\n\n" + marker, HeadSHA: "same-head", PRNumber: 549, RunID: 29965243268, RunNumber: 588},
+		{Action: "edited", Body: pipelineBody, HeadSHA: "same-head", PRNumber: 549, RunID: 29965243268, RunNumber: 588},
 	}
 
 	got := executeRequiredWorkflowFixture(t, workflow, events)
@@ -193,16 +188,15 @@ func TestNoSlopRequiredWorkflowKeepsForkBoundaryReadOnly(t *testing.T) {
 		}
 	}
 
-	data, err := os.ReadFile(".github/workflows/no-slop-required.yml")
-	if err != nil {
-		t.Fatalf("read workflow: %v", err)
-	}
-	lower := strings.ToLower(string(data))
-	if strings.Contains(lower, "secrets.") {
-		t.Fatal("required workflow must not expose secrets to fork runs")
-	}
-	if strings.Contains(lower, "actions/checkout") {
-		t.Fatal("required workflow must not check out or execute fork code")
+	for _, job := range workflow.Jobs {
+		for _, step := range job.Steps {
+			if requiredWorkflowStepReferences(step, "secrets.") {
+				t.Fatal("required workflow must not expose secrets to fork runs")
+			}
+			if strings.Contains(strings.ToLower(step.Uses), "actions/checkout") {
+				t.Fatal("required workflow must not check out fork code")
+			}
+		}
 	}
 }
 
@@ -221,12 +215,16 @@ type requiredWorkflowConcurrency struct {
 
 type requiredWorkflowJob struct {
 	Name  string                 `yaml:"name"`
+	If    string                 `yaml:"if"`
 	Steps []requiredWorkflowStep `yaml:"steps"`
 }
 
 type requiredWorkflowStep struct {
-	Name string `yaml:"name"`
-	Run  string `yaml:"run"`
+	Name string            `yaml:"name"`
+	Uses string            `yaml:"uses"`
+	Run  string            `yaml:"run"`
+	Env  map[string]string `yaml:"env"`
+	With map[string]string `yaml:"with"`
 }
 
 type requiredWorkflowEvent struct {
@@ -257,6 +255,97 @@ func loadRequiredWorkflow(t *testing.T) requiredWorkflow {
 		t.Fatalf("parse workflow: %v", err)
 	}
 	return workflow
+}
+
+func generatedPipelineBody(t *testing.T) string {
+	t.Helper()
+	body, _ := pipelinesteps.BuildPipelineSummary([]*db.StepResult{
+		{ID: "review", StepName: types.StepReview, Status: types.StepStatusCompleted},
+	}, map[string][]*db.StepRound{
+		"review": []*db.StepRound{{Round: 1, Trigger: "initial"}},
+	})
+	if strings.TrimSpace(body) == "" {
+		t.Fatal("pipeline summary builder returned an empty PR body")
+	}
+	return body
+}
+
+func requiredWorkflowCheckStep(t *testing.T, workflow requiredWorkflow) requiredWorkflowStep {
+	t.Helper()
+	job, ok := workflow.Jobs["check"]
+	if !ok {
+		t.Fatal("workflow has no check job")
+	}
+	if len(job.Steps) != 1 {
+		t.Fatalf("check job has %d steps, want 1", len(job.Steps))
+	}
+	return job.Steps[0]
+}
+
+func requiredWorkflowJobRunsForAuthor(t *testing.T, workflow requiredWorkflow, login string) bool {
+	t.Helper()
+	job, ok := workflow.Jobs["check"]
+	if !ok {
+		t.Fatal("workflow has no check job")
+	}
+	for _, term := range strings.Split(job.If, "&&") {
+		term = strings.TrimSpace(term)
+		const prefix = "github.event.pull_request.user.login != '"
+		exempt, ok := strings.CutPrefix(term, prefix)
+		if !ok {
+			t.Fatalf("fixture cannot evaluate job condition term %q", term)
+		}
+		exempt, ok = strings.CutSuffix(exempt, "'")
+		if !ok {
+			t.Fatalf("fixture cannot evaluate job condition term %q", term)
+		}
+		if login == exempt {
+			return false
+		}
+	}
+	return true
+}
+
+func requiredWorkflowPullRequestTypes(t *testing.T, workflow requiredWorkflow) map[string]bool {
+	t.Helper()
+	raw, ok := workflow.On["pull_request"]
+	if !ok {
+		t.Fatal("workflow has no pull_request trigger")
+	}
+	trigger, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("pull_request trigger has type %T, want map", raw)
+	}
+	rawTypes, ok := trigger["types"].([]any)
+	if !ok {
+		t.Fatalf("pull_request trigger types has type %T, want list", trigger["types"])
+	}
+	out := make(map[string]bool, len(rawTypes))
+	for _, rawType := range rawTypes {
+		typ, ok := rawType.(string)
+		if !ok {
+			t.Fatalf("pull_request trigger type has type %T, want string", rawType)
+		}
+		out[typ] = true
+	}
+	return out
+}
+
+func requiredWorkflowStepReferences(step requiredWorkflowStep, needle string) bool {
+	needle = strings.ToLower(needle)
+	fields := []string{step.Name, step.Uses, step.Run}
+	for key, value := range step.Env {
+		fields = append(fields, key, value)
+	}
+	for key, value := range step.With {
+		fields = append(fields, key, value)
+	}
+	for _, field := range fields {
+		if strings.Contains(strings.ToLower(field), needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func executeRequiredWorkflowFixture(t *testing.T, workflow requiredWorkflow, events []requiredWorkflowEvent) []requiredWorkflowResult {

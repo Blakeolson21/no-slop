@@ -64,11 +64,15 @@ func TestDialConnectTimeoutFailsFastAndNamesSocket(t *testing.T) {
 func TestConnectTimeoutAcceptsLegacyAliasAndRejectsConflict(t *testing.T) {
 	t.Setenv("NS_DAEMON_CONNECT_TIMEOUT", "")
 	t.Setenv("NM_DAEMON_CONNECT_TIMEOUT", "41ms")
-	if got := connectTimeout(); got != 41*time.Millisecond {
+	got, err := connectTimeout()
+	if err != nil {
+		t.Fatalf("connectTimeout() error = %v", err)
+	}
+	if got != 41*time.Millisecond {
 		t.Fatalf("legacy timeout = %v, want 41ms", got)
 	}
 	t.Setenv("NS_DAEMON_CONNECT_TIMEOUT", "42ms")
-	if got := connectTimeout(); got != 3*time.Second {
-		t.Fatalf("conflicting aliases = %v, want safe default", got)
+	if _, err := connectTimeout(); err == nil {
+		t.Fatal("expected conflicting timeout aliases to fail")
 	}
 }
