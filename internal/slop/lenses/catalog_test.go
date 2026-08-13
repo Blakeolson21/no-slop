@@ -19,6 +19,7 @@ func TestCatalogDefinesEveryV1LensForReviewerPrompts(t *testing.T) {
 		"asserted-followup-without-artifact",
 		"fail-open-default",
 		"rule-applied-in-one-place-not-sibling",
+		"redundant-comment",
 	}
 	catalog := lenses.Catalog()
 	names := lenses.Names()

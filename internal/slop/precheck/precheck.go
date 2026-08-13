@@ -5,11 +5,16 @@ package precheck
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/scanner"
+	"go/token"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // File contains the revision views needed by deterministic lens checks.
@@ -17,6 +22,7 @@ import (
 // blank, matching the representation used by the leak scanner.
 type File struct {
 	Path            string
+	BaselinePath    string
 	AddedContent    string
 	BaselineContent string
 	CurrentContent  string
@@ -40,7 +46,34 @@ var (
 	versionPathPattern  = regexp.MustCompile(`["']/v([0-9]+)/([^"']+)["']`)
 	durableReference    = regexp.MustCompile(`(?i)(https?://|#[0-9]+\b|\b[A-Z][A-Z0-9]+-[0-9]+\b|\b(?:issue|ticket|approval)\s+(?:id|ref(?:erence)?)\s*[:#]?\s*[A-Za-z0-9-]+)`)
 	errorContextPattern = regexp.MustCompile(`(?i)\berr(?:or)?s?\b|deadlineexceeded|timeout|unreadable|notexist`)
+	declarationPattern  = regexp.MustCompile(`^(?:func\s+(?:\([^)]*\)\s*)?|type\s+|(?:var|const)\s+)([A-Za-z_][A-Za-z0-9_]*)\b`)
+	declarationBlock    = regexp.MustCompile(`^(?:type|var|const)\s*\($`)
 )
+
+type lexedSourceLine struct {
+	comments []lexedComment
+	code     string
+}
+
+type lexedComment struct {
+	standalone bool
+	commentID  int
+	body       string
+}
+
+// docFillerWords carry no information beyond the declaration they document, so
+// a doc comment built only from them plus the declaration's own words restates
+// the name rather than explaining it.
+var docFillerWords = map[string]bool{
+	"are": true, "behavior": true, "behaviour": true, "case": true, "cases": true,
+	"check": true, "checks": true, "do": true, "does": true, "ensure": true,
+	"ensures": true, "for": true, "function": true, "given": true, "handle": true,
+	"handles": true, "helper": true, "here": true, "if": true, "in": true,
+	"is": true, "it": true, "its": true, "method": true, "new": true,
+	"of": true, "report": true, "reports": true, "test": true, "tests": true,
+	"that": true, "used": true, "using": true, "value": true, "values": true,
+	"verifies": true, "when": true, "whether": true, "with": true,
+}
 
 // Scan runs every conservative lens pre-check. Intent is optional; only the
 // scope-expansion check uses it, and it emits nothing when intent is absent.
@@ -48,6 +81,7 @@ func Scan(files []File, intent string) []Finding {
 	var findings []Finding
 	findings = append(findings, detectScopeExpansion(files, intent)...)
 	for _, file := range files {
+		findings = append(findings, detectRedundantComment(file)...)
 		sibling := detectSiblingRule(file)
 		workaround := detectCommentDefendedWorkaround(file)
 		findings = append(findings, sibling...)
@@ -61,6 +95,470 @@ func Scan(files []File, intent string) []Finding {
 		}
 	}
 	return uniqueSorted(findings)
+}
+
+func detectRedundantComment(file File) []Finding {
+	var findings []Finding
+	current := splitLines(file.CurrentContent)
+	lexed, declarations := lexSource(file.Path, current)
+	baselinePath := file.BaselinePath
+	if baselinePath == "" {
+		baselinePath = file.Path
+	}
+	baseline, _ := lexSource(baselinePath, splitLines(file.BaselineContent))
+	for _, block := range commentBlocks(file.AddedContent, lexed, baseline) {
+		description := ""
+		switch {
+		case hasRepeatedPhrase(block.text, declarations[block.lastLine]):
+			description = "comment repeats a phrase internally"
+		case docCommentRepeatsDeclarationName(block.text, declarations[block.lastLine]):
+			description = "doc comment adds no information beyond the declaration name"
+		case block.standalone && commentRestatesNextCode(block.text, current, lexed, block.lastLine):
+			description = "comment restates the adjacent code"
+		}
+		if description != "" {
+			findings = append(findings, Finding{
+				Lens:        "redundant-comment",
+				Path:        file.Path,
+				Line:        block.line,
+				Description: description,
+			})
+		}
+	}
+	return findings
+}
+
+type commentBlock struct {
+	line       int
+	lastLine   int
+	text       string
+	standalone bool
+}
+
+// commentBlocks groups contiguous comment lines into the single comment a
+// reader sees. Judging each line on its own misreads a wrapped doc comment: its
+// first line often holds nothing but the declaration name, and its later lines
+// are sentence fragments that never document the code beneath the block. Only
+// blocks the change actually touched are returned, reported at their first
+// added line.
+func commentBlocks(addedContent string, lines, baseline []lexedSourceLine) []commentBlock {
+	added := make(map[int]bool)
+	for _, line := range addedContentLines(addedContent) {
+		added[line.number] = true
+	}
+	baselineComments := countCommentBlocks(baseline)
+	current := allCommentBlocks(lines)
+	for _, block := range current {
+		if firstAddedLine(block, added) != 0 || baselineComments[block.text] == 0 {
+			continue
+		}
+		baselineComments[block.text]--
+	}
+	var blocks []commentBlock
+	for _, block := range current {
+		line := firstAddedLine(block, added)
+		if line == 0 {
+			continue
+		}
+		existed := false
+		if block.text != "" && baselineComments[block.text] > 0 {
+			baselineComments[block.text]--
+			existed = true
+		}
+		block.line = line
+		if block.text != "" && !existed {
+			blocks = append(blocks, block)
+		}
+	}
+	return blocks
+}
+
+func countCommentBlocks(lines []lexedSourceLine) map[string]int {
+	counts := make(map[string]int)
+	for _, block := range allCommentBlocks(lines) {
+		if block.text != "" {
+			counts[block.text]++
+		}
+	}
+	return counts
+}
+
+func addedContentLines(content string) []sourceLine {
+	return addedLines(File{AddedContent: content})
+}
+
+func firstAddedLine(block commentBlock, added map[int]bool) int {
+	for number := block.line; number <= block.lastLine; number++ {
+		if added[number] {
+			return number
+		}
+	}
+	return 0
+}
+
+func allCommentBlocks(lines []lexedSourceLine) []commentBlock {
+	type fragment struct {
+		line int
+		lexedComment
+	}
+	var fragments []fragment
+	for index, line := range lines {
+		for _, comment := range line.comments {
+			fragments = append(fragments, fragment{line: index + 1, lexedComment: comment})
+		}
+	}
+	var blocks []commentBlock
+	for index := 0; index < len(fragments); index++ {
+		current := fragments[index]
+		block := commentBlock{line: current.line, lastLine: current.line, standalone: current.standalone}
+		for {
+			if !isCodeSample(current.body) {
+				if block.text != "" {
+					block.text += "\n"
+				}
+				block.text += strings.TrimSpace(current.body)
+			}
+			if index+1 >= len(fragments) {
+				break
+			}
+			next := fragments[index+1]
+			if next.standalone != block.standalone || block.standalone && next.line != current.line+1 || !block.standalone && next.commentID != current.commentID {
+				break
+			}
+			index++
+			current = next
+			block.lastLine = current.line
+		}
+		block.text = strings.TrimSpace(block.text)
+		if block.text != "" {
+			blocks = append(blocks, block)
+		}
+	}
+	return blocks
+}
+
+// docCommentRepeatsDeclarationName reports a doc comment whose every
+// informative word is already spelled by the declaration it documents. Go's
+// convention is that a doc comment opens with the declaration name, so merely
+// naming the declaration is not the signal; adding nothing else is.
+func docCommentRepeatsDeclarationName(comment, declarationName string) bool {
+	if declarationName == "" {
+		return false
+	}
+	nameWords := identifierWords(declarationName)
+	derived := 0
+	informative := 0
+	for _, word := range meaningfulWords(comment) {
+		if docFillerWords[word] {
+			continue
+		}
+		informative++
+		if nameWords[word] {
+			derived++
+		}
+	}
+	return derived > 0 && derived == informative
+}
+
+func commentRestatesNextCode(comment string, lines []string, lexed []lexedSourceLine, after int) bool {
+	code := adjacentCodeLine(lines, lexed, after)
+	if code == "" || isDeclaration(code) {
+		return false
+	}
+	commentWords := meaningfulWords(comment)
+	if len(commentWords) < 2 {
+		return false
+	}
+	codeWords := make(map[string]bool)
+	for _, word := range wordTokens(code) {
+		codeWords[word] = true
+	}
+	compact := strings.Join(strings.Fields(code), "")
+	if strings.Contains(compact, "++") || strings.Contains(compact, "+=") {
+		codeWords["increment"] = true
+	}
+	if strings.Contains(compact, "--") || strings.Contains(compact, "-=") {
+		codeWords["decrement"] = true
+	}
+	for _, word := range commentWords {
+		if !codeWords[word] {
+			return false
+		}
+	}
+	return true
+}
+
+// adjacentCodeLine returns the code a comment documents: the next non-comment
+// line reached without crossing a blank line. A blank line ends the comment's
+// attachment, so a standalone note is never read as documenting whatever
+// declaration happens to appear further down the file.
+func adjacentCodeLine(lines []string, lexed []lexedSourceLine, after int) string {
+	for number := after + 1; number <= len(lines); number++ {
+		candidate := strings.TrimSpace(lines[number-1])
+		if candidate == "" {
+			return ""
+		}
+		if len(lexed[number-1].comments) == 0 {
+			return candidate
+		}
+		if lexed[number-1].code != "" {
+			return lexed[number-1].code
+		}
+	}
+	return ""
+}
+
+func isDeclaration(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	return declarationPattern.MatchString(trimmed) || declarationBlock.MatchString(trimmed)
+}
+
+// identifierWords splits a declaration name into the words a doc comment could
+// legitimately reuse: the whole lowercased name plus its camelCase, snake_case,
+// and acronym parts, so "TestRejectsEmptyInput" also spells "empty" and "input".
+func identifierWords(name string) map[string]bool {
+	words := map[string]bool{strings.ToLower(name): true}
+	var current []rune
+	flush := func() {
+		if len(current) > 0 {
+			words[strings.ToLower(string(current))] = true
+			current = nil
+		}
+	}
+	runes := []rune(name)
+	for index, letter := range runes {
+		switch {
+		case letter == '_':
+			flush()
+			continue
+		case unicode.IsUpper(letter) && index > 0:
+			previous := runes[index-1]
+			next := rune(0)
+			if index+1 < len(runes) {
+				next = runes[index+1]
+			}
+			if !unicode.IsUpper(previous) || unicode.IsLower(next) {
+				flush()
+			}
+		}
+		current = append(current, letter)
+	}
+	flush()
+	return words
+}
+
+func meaningfulWords(value string) []string {
+	stop := map[string]bool{
+		"a": true, "an": true, "and": true, "as": true, "the": true,
+		"this": true, "to": true, "we": true,
+	}
+	var result []string
+	for _, word := range wordTokens(value) {
+		if !stop[word] {
+			result = append(result, word)
+		}
+	}
+	return result
+}
+
+func lexSource(path string, lines []string) ([]lexedSourceLine, map[int]string) {
+	result := make([]lexedSourceLine, len(lines))
+	declarations := make(map[int]string)
+	if !strings.EqualFold(filepath.Ext(path), ".go") {
+		return result, declarations
+	}
+	content := strings.Join(lines, "\n")
+	files := token.NewFileSet()
+	file := files.AddFile(path, -1, len(content))
+	var lexer scanner.Scanner
+	lexer.Init(file, []byte(content), nil, scanner.ScanComments)
+	type commentRange struct {
+		start int
+		end   int
+	}
+	ranges := make([][]commentRange, len(lines))
+	commentID := 0
+	for {
+		position, kind, literal := lexer.Scan()
+		if kind == token.EOF {
+			break
+		}
+		if kind != token.COMMENT {
+			continue
+		}
+		commentID++
+		start := files.PositionFor(position, false)
+		if start.Line < 1 || start.Line > len(lines) || start.Column < 1 || start.Column > len(lines[start.Line-1])+1 {
+			continue
+		}
+		parts := strings.Split(literal, "\n")
+		for offset, part := range parts {
+			line := start.Line + offset
+			if line > len(result) {
+				break
+			}
+			if strings.HasPrefix(part, "//") {
+				part = strings.TrimPrefix(part, "//")
+			} else {
+				if offset == 0 {
+					part = strings.TrimPrefix(part, "/*")
+				}
+				if offset == len(parts)-1 {
+					part = strings.TrimSuffix(part, "*/")
+				}
+			}
+			rangeStart := 0
+			if offset == 0 {
+				rangeStart = start.Column - 1
+			}
+			rangeEnd := len(lines[line-1])
+			if offset == len(parts)-1 {
+				rangeEnd = rangeStart + len(parts[offset])
+			}
+			ranges[line-1] = append(ranges[line-1], commentRange{start: rangeStart, end: rangeEnd})
+			result[line-1].comments = append(result[line-1].comments, lexedComment{commentID: commentID, body: blockBody(part)})
+		}
+	}
+	for index, source := range lines {
+		var code strings.Builder
+		cursor := 0
+		for _, span := range ranges[index] {
+			if span.start > cursor {
+				code.WriteString(source[cursor:span.start])
+			}
+			if span.end > cursor {
+				cursor = span.end
+			}
+		}
+		code.WriteString(source[cursor:])
+		result[index].code = strings.TrimSpace(code.String())
+	}
+	inline := make(map[int]bool)
+	for _, line := range result {
+		if line.code == "" {
+			continue
+		}
+		for _, comment := range line.comments {
+			inline[comment.commentID] = true
+		}
+	}
+	for line := range result {
+		for index := range result[line].comments {
+			result[line].comments[index].standalone = !inline[result[line].comments[index].commentID]
+		}
+	}
+	declarationFiles := token.NewFileSet()
+	parsed, err := parser.ParseFile(declarationFiles, path, content, parser.ParseComments)
+	lineOffset := 0
+	if err != nil {
+		declarationFiles = token.NewFileSet()
+		parsed, err = parser.ParseFile(declarationFiles, path, "package precheck\n"+content, parser.ParseComments)
+		lineOffset = 1
+	}
+	if err == nil {
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			switch declaration := node.(type) {
+			case *ast.FuncDecl:
+				addDeclaration(declarations, declarationFiles, declaration.Doc, declaration.Name.Name, lineOffset)
+			case *ast.GenDecl:
+				if len(declaration.Specs) == 1 {
+					addDeclaration(declarations, declarationFiles, declaration.Doc, specName(declaration.Specs[0]), lineOffset)
+				}
+			case *ast.TypeSpec:
+				addDeclaration(declarations, declarationFiles, declaration.Doc, declaration.Name.Name, lineOffset)
+			case *ast.ValueSpec:
+				addDeclaration(declarations, declarationFiles, declaration.Doc, valueSpecName(declaration), lineOffset)
+			}
+			return true
+		})
+	}
+	return result, declarations
+}
+
+func addDeclaration(declarations map[int]string, files *token.FileSet, comment *ast.CommentGroup, name string, lineOffset int) {
+	if comment == nil || name == "" {
+		return
+	}
+	line := files.PositionFor(comment.End(), false).Line - lineOffset
+	declarations[line] = name
+}
+
+func specName(spec ast.Spec) string {
+	switch declaration := spec.(type) {
+	case *ast.TypeSpec:
+		return declaration.Name.Name
+	case *ast.ValueSpec:
+		return valueSpecName(declaration)
+	}
+	return ""
+}
+
+func valueSpecName(declaration *ast.ValueSpec) string {
+	names := make([]string, 0, len(declaration.Names))
+	for _, name := range declaration.Names {
+		if name.Name != "_" {
+			names = append(names, name.Name)
+		}
+	}
+	return strings.Join(names, "_")
+}
+
+func blockBody(value string) string {
+	marker := strings.IndexFunc(value, func(letter rune) bool {
+		return !unicode.IsSpace(letter)
+	})
+	if marker >= 0 && value[marker] == '*' {
+		return value[marker+1:]
+	}
+	return value
+}
+
+// isCodeSample reports an indented line inside a comment, which is how Go doc
+// comments and Markdown-style comments mark an embedded command or code block.
+// Its repeated tokens are the sample's own syntax, not restated prose.
+func isCodeSample(body string) bool {
+	return strings.HasPrefix(body, "\t") || strings.HasPrefix(body, "    ")
+}
+
+// hasRepeatedPhrase looks for a substantive clause restated at the end of the
+// next clause. Shorter windows and phrases embedded in different qualifications
+// are not a source shape specific enough to block on.
+func hasRepeatedPhrase(comment, declarationName string) bool {
+	var clauses [][]string
+	for _, clause := range strings.FieldsFunc(comment, func(letter rune) bool {
+		return letter == ';' || letter == '.' || letter == '!' || letter == '?' || letter == '\n'
+	}) {
+		words := meaningfulWords(clause)
+		if len(words) >= 4 {
+			clauses = append(clauses, words)
+		}
+	}
+	for index := 1; index < len(clauses); index++ {
+		previous, current := clauses[index-1], clauses[index]
+		declarationWords := identifierWords(declarationName)
+		if equalWords(previous, current) || len(previous) == len(current)+1 && declarationWords[previous[0]] && equalWords(previous[1:], current) {
+			return true
+		}
+	}
+	return false
+}
+
+func equalWords(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func wordTokens(value string) []string {
+	return strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_'
+	})
 }
 
 func detectVacuousCheck(file File) []Finding {
@@ -220,15 +718,22 @@ func detectScopeExpansion(files []File, intent string) []Finding {
 		return nil
 	}
 	for _, file := range files {
-		if strings.TrimSpace(file.BaselineContent) != "" || strings.TrimSpace(file.CurrentContent) == "" {
+		if strings.TrimSpace(file.CurrentContent) == "" {
 			continue
 		}
 		path := strings.ToLower(filepath.ToSlash(file.Path))
+		baselinePath := file.BaselinePath
+		if baselinePath == "" {
+			baselinePath = file.Path
+		}
+		baselinePath = strings.ToLower(filepath.ToSlash(baselinePath))
 		runtimeFile := isRuntimePath(path)
-		schemaFile := strings.Contains(path, "migration") || filepath.Ext(path) == ".sql"
-		unrequested := (strings.Contains(lowerIntent, "without adding runtime behavior") && runtimeFile) ||
-			(strings.Contains(lowerIntent, "without changing the database schema") && schemaFile) ||
-			(strings.Contains(lowerIntent, " only") && len(files) > 1 && runtimeFile && !pathNamedInIntent(path, lowerIntent))
+		schemaFile := isSchemaPath(path)
+		newRuntimeScope := runtimeFile && (strings.TrimSpace(file.BaselineContent) == "" || !isRuntimePath(baselinePath))
+		newSchemaScope := schemaFile && (strings.TrimSpace(file.BaselineContent) == "" || !isSchemaPath(baselinePath))
+		unrequested := (strings.Contains(lowerIntent, "without adding runtime behavior") && newRuntimeScope) ||
+			(strings.Contains(lowerIntent, "without changing the database schema") && newSchemaScope) ||
+			(strings.Contains(lowerIntent, " only") && len(files) > 1 && newRuntimeScope && !pathNamedInIntent(path, lowerIntent))
 		if !unrequested {
 			continue
 		}
@@ -635,12 +1140,24 @@ func nextNonblankLine(lines []string, after int) int {
 }
 
 func isRuntimePath(path string) bool {
+	path = strings.ToLower(filepath.ToSlash(path))
+	if strings.HasPrefix(path, "docs/") || strings.HasPrefix(path, "examples/") {
+		return false
+	}
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".go", ".py", ".rb", ".java", ".kt", ".rs", ".js", ".jsx", ".ts", ".tsx", ".sql":
 		return !isTestPath(path)
 	default:
 		return false
 	}
+}
+
+func isSchemaPath(path string) bool {
+	path = strings.ToLower(filepath.ToSlash(path))
+	if strings.HasPrefix(path, "docs/") || strings.HasPrefix(path, "examples/") || isTestPath(path) {
+		return false
+	}
+	return strings.Contains(path, "migration") || filepath.Ext(path) == ".sql"
 }
 
 func pathNamedInIntent(path, intent string) bool {

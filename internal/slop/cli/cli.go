@@ -64,6 +64,7 @@ func runEvaluate(args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("evaluate", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	corpusRoot := flags.String("corpus", "", "directory containing recorded corpus cases")
+	caseSetPath := flags.String("case-set", "", "optional case-set manifest for a historical capture")
 	unconditionedPath := flags.String("unconditioned-results", "", "captured unconditioned policy findings")
 	conditionedPath := flags.String("conditioned-results", "", "captured conditioned policy findings")
 	if err := flags.Parse(args); err != nil {
@@ -78,6 +79,12 @@ func runEvaluate(args []string, stdout, stderr io.Writer) error {
 	cases, err := corpus.Load(*corpusRoot)
 	if err != nil {
 		return err
+	}
+	if strings.TrimSpace(*caseSetPath) != "" {
+		cases, err = corpus.LoadCaseSet(*caseSetPath, cases)
+		if err != nil {
+			return err
+		}
 	}
 	unconditioned, err := corpus.LoadResults(*unconditionedPath)
 	if err != nil {
@@ -486,5 +493,5 @@ func printResult(stdout io.Writer, result engine.Result) {
 func writeUsage(output io.Writer) {
 	fmt.Fprintln(output, "NoSlop is the reviewer that knows the author is an AI.")
 	fmt.Fprintln(output, "usage: noslop gate [--repo DIR] [--base REF] [--head REF] [--intent TEXT] [--tier TIER] [--force-tier] [--thread URL] [--blocklist FILE] [--provider NAME] [--model NAME] [--reasoning-effort LEVEL] [--lane-id ID] [--change-class CLASS]")
-	fmt.Fprintln(output, "       noslop evaluate --corpus DIR --unconditioned-results FILE --conditioned-results FILE")
+	fmt.Fprintln(output, "       noslop evaluate --corpus DIR [--case-set FILE] --unconditioned-results FILE --conditioned-results FILE")
 }

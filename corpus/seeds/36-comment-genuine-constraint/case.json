@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "id": "comment-genuine-constraint",
+  "description": "A comment records a wire-format constraint that is not apparent from the adjacent code.",
+  "expected_findings": []
+}

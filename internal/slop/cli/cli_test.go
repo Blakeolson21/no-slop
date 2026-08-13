@@ -3,7 +3,10 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -672,6 +675,57 @@ func TestRunEvaluateAttributesReplayedResultSources(t *testing.T) {
 			t.Errorf("output missing %q:\n%s", want, stdout.String())
 		}
 	}
+}
+
+func TestRunEvaluateUsesExplicitHistoricalCaseSet(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	caseJSON := `{"schema_version":1,"id":"case-a","description":"original","expected_findings":[]}`
+	caseDiff := "--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n-old\n+new\n"
+	writeFile(t, root, "case-a/case.json", caseJSON)
+	writeFile(t, root, "case-a/change.diff", caseDiff)
+	writeFile(t, root, "case-b/case.json", `{"schema_version":1,"id":"case-b","description":"later","expected_findings":[]}`)
+	writeFile(t, root, "case-b/change.diff", "--- a/b.go\n+++ b/b.go\n@@ -1 +1 @@\n-old\n+new\n")
+	digest := caseSetDigest("case-a", []byte(caseJSON), []byte(caseDiff))
+	writeFile(t, root, "historical.json", fmt.Sprintf(`{"schema_version":1,"name":"historical","content_sha256":"%x","case_ids":["case-a"]}`, digest))
+	writeFile(t, root, "unconditioned.json", `{"schema_version":1,"policy":"unconditioned","cases":[{"case_id":"case-a","findings":[]}]}`)
+	writeFile(t, root, "conditioned.json", `{"schema_version":1,"policy":"conditioned","cases":[{"case_id":"case-a","findings":[]}]}`)
+
+	args := []string{
+		"evaluate",
+		"--corpus", root,
+		"--unconditioned-results", filepath.Join(root, "unconditioned.json"),
+		"--conditioned-results", filepath.Join(root, "conditioned.json"),
+	}
+	var stdout, stderr bytes.Buffer
+	if exitCode := slopcli.Run(context.Background(), args, &stdout, &stderr, slopcli.Options{}); exitCode != 2 || !strings.Contains(stderr.String(), `results are missing case "case-b"`) {
+		t.Fatalf("unselected exit = %d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
+	}
+
+	args = append(args, "--case-set", filepath.Join(root, "historical.json"))
+	stdout.Reset()
+	stderr.Reset()
+	if exitCode := slopcli.Run(context.Background(), args, &stdout, &stderr, slopcli.Options{}); exitCode != 0 {
+		t.Fatalf("selected exit = %d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
+	}
+}
+
+func caseSetDigest(id string, caseJSON, diff []byte) [sha256.Size]byte {
+	var snapshot bytes.Buffer
+	writeDigestFrame(&snapshot, caseJSON)
+	writeDigestFrame(&snapshot, diff)
+	var aggregate bytes.Buffer
+	writeDigestFrame(&aggregate, []byte(id))
+	writeDigestFrame(&aggregate, snapshot.Bytes())
+	return sha256.Sum256(aggregate.Bytes())
+}
+
+func writeDigestFrame(buffer *bytes.Buffer, value []byte) {
+	var size [8]byte
+	binary.BigEndian.PutUint64(size[:], uint64(len(value)))
+	buffer.Write(size[:])
+	buffer.Write(value)
 }
 
 func runGit(t *testing.T, dir string, args ...string) string {

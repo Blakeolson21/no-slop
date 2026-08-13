@@ -1,1 +1,8 @@
+# Recorded corpus captures are byte snapshots, not editable source: a case-set
+# manifest under corpus/case-sets pins a SHA-256 over the exact bytes of each
+# case.json and change.diff, so any checkout that rewrites line endings breaks
+# that pin. core.autocrlf=true is the Git for Windows default, which is how a
+# Windows checkout silently produced CRLF bytes and failed the digest. Mark the
+# tree binary so Git never converts it in either direction.
+corpus/** -text
 corpus/seeds/**/change.diff whitespace=-space-before-tab

@@ -3,6 +3,7 @@ package risk
 
 import (
 	"fmt"
+	"go/build/constraint"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -33,6 +34,7 @@ const (
 // FileChange is the classifier's path-level input.
 type FileChange struct {
 	Path            string
+	BaselinePath    string
 	Status          ChangeStatus
 	Added           int
 	Deleted         int
@@ -285,7 +287,9 @@ func classifyNovelty(files []FileChange) Axis {
 	if allPaths(files, func(name string) bool { return !sourcePath(name) }) {
 		return Axis{Score: 1, Reason: "change adjusts non-runtime artifacts"}
 	}
-	if allChanges(files, func(file FileChange) bool { return file.Status == Renamed }) {
+	if allChanges(files, func(file FileChange) bool {
+		return file.Status == Renamed && relocationPreservesCategory(file)
+	}) {
 		return Axis{Score: 0, Reason: "change is a mechanical rename"}
 	}
 	if allChanges(files, mechanicallyEquivalent) {
@@ -301,9 +305,9 @@ type sourceToken struct {
 
 func mechanicallyEquivalent(file FileChange) bool {
 	if file.Status == Renamed {
-		return true
+		return relocationPreservesCategory(file)
 	}
-	if file.Status != Modified || !sourcePath(file.Path) || file.BaselineContent == "" || file.CurrentContent == "" {
+	if file.Status != Modified || !relocationPreservesCategory(file) || !fileMatchesPath(file, sourcePath) || file.BaselineContent == "" || file.CurrentContent == "" || !sameBuildConstraints(file) {
 		return false
 	}
 	baseline := sourceTokens(file.BaselineContent)
@@ -345,6 +349,58 @@ func mechanicallyEquivalent(file FileChange) bool {
 		reverse[right.text] = left.text
 	}
 	return changed || file.BaselineContent != file.CurrentContent
+}
+
+func relocationPreservesCategory(file FileChange) bool {
+	if file.BaselinePath == "" {
+		return true
+	}
+	if pathCategory(file.Path) != pathCategory(file.BaselinePath) || filepath.Ext(file.Path) != filepath.Ext(file.BaselinePath) {
+		return false
+	}
+	if !sourcePath(file.Path) {
+		return true
+	}
+	return false
+}
+
+func sameBuildConstraints(file FileChange) bool {
+	if filepath.Ext(file.Path) != ".go" || filepath.Ext(file.BaselinePath) != ".go" && file.BaselinePath != "" {
+		return true
+	}
+	baseline, baselineOK := buildConstraintSignature(file.BaselineContent)
+	current, currentOK := buildConstraintSignature(file.CurrentContent)
+	return baselineOK && currentOK && baseline == current
+}
+
+func buildConstraintSignature(content string) (string, bool) {
+	var expressions []string
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "package ") {
+			break
+		}
+		if !constraint.IsGoBuild(line) && !constraint.IsPlusBuild(line) {
+			continue
+		}
+		expression, err := constraint.Parse(line)
+		if err != nil {
+			return "", false
+		}
+		expressions = append(expressions, expression.String())
+	}
+	return strings.Join(expressions, "\n"), true
+}
+
+func pathCategory(path string) int {
+	switch {
+	case isTestOrDocsPath(path):
+		return 1
+	case sourcePath(path):
+		return 2
+	default:
+		return 0
+	}
 }
 
 func identifierControlsCallTarget(baseline, current []sourceToken, index int) bool {
@@ -447,7 +503,7 @@ func classifyReversibility(change ChangeSet, configured []string) Axis {
 
 func anyPath(files []FileChange, predicate func(string) bool) bool {
 	for _, file := range files {
-		if predicate(file.Path) {
+		if fileMatchesPath(file, predicate) {
 			return true
 		}
 	}
@@ -456,11 +512,15 @@ func anyPath(files []FileChange, predicate func(string) bool) bool {
 
 func allPaths(files []FileChange, predicate func(string) bool) bool {
 	for _, file := range files {
-		if !predicate(file.Path) {
+		if !predicate(file.Path) || file.BaselinePath != "" && !predicate(file.BaselinePath) {
 			return false
 		}
 	}
 	return true
+}
+
+func fileMatchesPath(file FileChange, predicate func(string) bool) bool {
+	return predicate(file.Path) || file.BaselinePath != "" && predicate(file.BaselinePath)
 }
 
 func allChanges(files []FileChange, predicate func(FileChange) bool) bool {
@@ -528,13 +588,13 @@ func dependencyPath(lower string) bool {
 }
 
 func markdownOnly(files []FileChange) bool {
-	for _, file := range files {
-		ext := strings.ToLower(filepath.Ext(file.Path))
+	return allPaths(files, func(path string) bool {
+		ext := strings.ToLower(filepath.Ext(path))
 		if ext != ".md" && ext != ".mdx" {
 			return false
 		}
-	}
-	return true
+		return true
+	})
 }
 
 // String renders the tier and all axis reasons. The decision is intentionally

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "redundant-comment-repeated-phrase",
+  "description": "A newly added comment repeats a multi-word phrase within the same comment.",
+  "expected_findings": [
+    {
+      "lens": "redundant-comment",
+      "path": "cache.go",
+      "line": 3,
+      "description": "the comment repeats a phrase internally"
+    }
+  ]
+}

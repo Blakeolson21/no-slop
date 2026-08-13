@@ -32,7 +32,7 @@ A Markdown-only diff routes to `leak-scan-only` unless it matches a configured h
 
 ### AI-slop lenses
 
-The reviewer receives eight named lenses:
+The reviewer receives nine named lenses:
 
 - `vacuous-check`
 - `test-capitulation`
@@ -42,6 +42,7 @@ The reviewer receives eight named lenses:
 - `asserted-followup-without-artifact`
 - `fail-open-default`
 - `rule-applied-in-one-place-not-sibling`
+- `redundant-comment`
 
 Every finding carries its lens name. [The taxonomy](docs/src/content/docs/reference/slop-taxonomy.md) defines the failure, reviewer guidance, and available mechanical pre-check for each lens.
 

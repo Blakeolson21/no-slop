@@ -4,8 +4,11 @@ package corpus
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -38,6 +41,7 @@ type Case struct {
 	ExpectedFindings []Finding `json:"expected_findings"`
 	Diff             []byte    `json:"-"`
 	Directory        string    `json:"-"`
+	snapshotContent  []byte
 }
 
 // CaseResult contains one policy's findings for one corpus case.
@@ -65,6 +69,13 @@ type Score struct {
 type Comparison struct {
 	Unconditioned Score
 	Conditioned   Score
+}
+
+type CaseSet struct {
+	SchemaVersion int      `json:"schema_version"`
+	Name          string   `json:"name"`
+	CaseIDs       []string `json:"case_ids"`
+	ContentSHA256 string   `json:"content_sha256"`
 }
 
 // Load reads every immediate case directory in stable name order.
@@ -116,8 +127,8 @@ func Load(root string) ([]Case, error) {
 			return nil, fmt.Errorf("load corpus case %q: duplicate id %q", entry.Name(), testCase.ID)
 		}
 		seenIDs[testCase.ID] = true
-		if len(testCase.ExpectedFindings) == 0 {
-			return nil, fmt.Errorf("load corpus case %q: expected_findings must not be empty", entry.Name())
+		if testCase.ExpectedFindings == nil {
+			return nil, fmt.Errorf("load corpus case %q: expected_findings is required", entry.Name())
 		}
 		for _, finding := range testCase.ExpectedFindings {
 			if !knownLenses[finding.Lens] {
@@ -135,6 +146,7 @@ func Load(root string) ([]Case, error) {
 			return nil, fmt.Errorf("load corpus case %q: recorded diff is empty", entry.Name())
 		}
 		testCase.Directory = dir
+		testCase.snapshotContent = framedSnapshot(encoded, testCase.Diff)
 		cases = append(cases, testCase)
 	}
 	if len(cases) == 0 {
@@ -163,6 +175,74 @@ func LoadResults(path string) (Results, error) {
 		return Results{}, fmt.Errorf("load policy results: policy is required")
 	}
 	return results, nil
+}
+
+func LoadCaseSet(path string, cases []Case) ([]Case, error) {
+	encoded, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("load case set: %w", err)
+	}
+	var set CaseSet
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&set); err != nil {
+		return nil, fmt.Errorf("load case set: decode: %w", err)
+	}
+	if set.SchemaVersion != CurrentSchemaVersion {
+		return nil, fmt.Errorf("load case set: unsupported schema version %d", set.SchemaVersion)
+	}
+	if strings.TrimSpace(set.Name) == "" {
+		return nil, fmt.Errorf("load case set: name is required")
+	}
+	if len(set.CaseIDs) == 0 {
+		return nil, fmt.Errorf("load case set: case_ids is required")
+	}
+	if len(set.ContentSHA256) != sha256.Size*2 {
+		return nil, fmt.Errorf("load case set %q: content_sha256 must be a SHA-256 digest", set.Name)
+	}
+	byID := make(map[string]Case, len(cases))
+	for _, testCase := range cases {
+		byID[testCase.ID] = testCase
+	}
+	selected := make([]Case, 0, len(set.CaseIDs))
+	seen := make(map[string]bool, len(set.CaseIDs))
+	digest := sha256.New()
+	for _, id := range set.CaseIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return nil, fmt.Errorf("load case set %q: empty case id", set.Name)
+		}
+		if seen[id] {
+			return nil, fmt.Errorf("load case set %q: duplicate case %q", set.Name, id)
+		}
+		seen[id] = true
+		testCase, ok := byID[id]
+		if !ok {
+			return nil, fmt.Errorf("load case set %q: unknown case %q", set.Name, id)
+		}
+		selected = append(selected, testCase)
+		writeFramed(digest, []byte(testCase.ID))
+		writeFramed(digest, testCase.snapshotContent)
+	}
+	actual := fmt.Sprintf("%x", digest.Sum(nil))
+	if !strings.EqualFold(actual, set.ContentSHA256) {
+		return nil, fmt.Errorf("load case set %q: content SHA-256 is %s, want %s", set.Name, actual, set.ContentSHA256)
+	}
+	return selected, nil
+}
+
+func framedSnapshot(caseJSON, diff []byte) []byte {
+	var framed bytes.Buffer
+	writeFramed(&framed, caseJSON)
+	writeFramed(&framed, diff)
+	return framed.Bytes()
+}
+
+func writeFramed(writer io.Writer, value []byte) {
+	var size [8]byte
+	binary.BigEndian.PutUint64(size[:], uint64(len(value)))
+	_, _ = writer.Write(size[:])
+	_, _ = writer.Write(value)
 }
 
 // Compare scores captured conditioned and unconditioned policy findings.

@@ -1,0 +1,13 @@
+diff --git a/packet.go b/packet.go
+new file mode 100644
+index 0000000..6666666
+--- /dev/null
++++ b/packet.go
+@@ -0,0 +1,7 @@
++package packet
++
++func encode(payload []byte) []byte {
++	// Preserve the raw byte order: signatures cover the wire representation.
++	encoded := append([]byte(nil), payload...)
++	return encoded
++}

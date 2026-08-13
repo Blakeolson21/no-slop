@@ -16,6 +16,7 @@ import (
 // Change contains the revision content each mechanical check needs.
 type Change struct {
 	Path            string
+	BaselinePath    string
 	Status          risk.ChangeStatus
 	Added           int
 	Deleted         int
@@ -136,6 +137,7 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 	for _, file := range input.Files {
 		riskFiles = append(riskFiles, risk.FileChange{
 			Path:            file.Path,
+			BaselinePath:    file.BaselinePath,
 			Status:          file.Status,
 			Added:           file.Added,
 			Deleted:         file.Deleted,
@@ -270,6 +272,7 @@ func runLensPrecheck(files []Change, intent string) []Finding {
 	for _, file := range files {
 		input = append(input, precheck.File{
 			Path:            file.Path,
+			BaselinePath:    file.BaselinePath,
 			AddedContent:    file.AddedContent,
 			BaselineContent: file.BaselineContent,
 			CurrentContent:  file.CurrentContent,
@@ -337,7 +340,11 @@ func runTestFloor(files []Change) []Finding {
 	baseline := make([]testfloor.File, 0, len(files))
 	current := make([]testfloor.File, 0, len(files))
 	for _, file := range files {
-		baseline = append(baseline, testfloor.File{Path: file.Path, Content: file.BaselineContent})
+		baselinePath := file.BaselinePath
+		if baselinePath == "" {
+			baselinePath = file.Path
+		}
+		baseline = append(baseline, testfloor.File{Path: baselinePath, Content: file.BaselineContent})
 		current = append(current, testfloor.File{Path: file.Path, Content: file.CurrentContent})
 	}
 	floor := testfloor.Compare(baseline, current)

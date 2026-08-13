@@ -87,6 +87,16 @@ Reviewer guidance: Find explicit/configured paths, transports, providers, platfo
 
 Mechanical pre-check: Detect an explicit path failing beside a configured path returning empty success, one transport denying beside another allowing, and one versioned route gaining validation while its equivalent sibling remains unvalidated.
 
+## Redundant comment
+
+Name: `redundant-comment`
+
+Description: A comment repeats itself or says only what the adjacent code already states.
+
+Reviewer guidance: A comment should state only what the code cannot. Flag repeated phrases within one comment, comments whose words merely restate the next code line, and doc comments that add no information beyond the adjacent declaration name. Naming the declaration is conventional and is not by itself redundant. Preserve comments that record genuine constraints, rationale, invariants, or external requirements that the implementation cannot express.
+
+Mechanical pre-check: On Go comment blocks the change touched, detect a substantive clause repeated as the next clause or after the adjacent declaration name, standalone comments whose every meaningful word occurs in the adjacent code line, and a doc comment whose every informative word is already spelled by the declaration it documents. Repetition embedded in different constraints, contrasts, or qualifications stays out of the mechanical blocker. Go syntax associates documentation with functions, methods, and grouped or ungrouped type, variable, and constant declarations, including declarations that introduce multiple names. Inline comments participate only in internal-phrase detection. Contiguous standalone comment lines are judged as the one comment a reader sees, a blank line ends a comment's attachment to the code below it, and indented code samples inside a comment are excluded. Naming the declaration is not itself the signal, because Go's own convention is that a doc comment opens with the declaration name. Operator normalization treats increment and decrement wording as equivalent to their compound-assignment forms. Existing comments are not scanned merely because adjacent code changed. Git-added comments remain mechanically scanned at every tier. The loader does not infer lineage from matching comment text; only Git-reported renames link different paths.
+
 ## Mandatory leak and identity scan
 
 The leak and identity scan is an artifact-wide mechanical check, not a reviewer-only lens. It runs at every tier before any optional reviewer or test command.
@@ -101,6 +111,6 @@ NoSlop ships generic placeholder entries only. It does not ship any operator's a
 
 ## Provenance conditioning
 
-Provenance history does not add a ninth lens. It changes the policy applied to the same catalog. When one generating lane and model accumulates three net accepted findings for a lens in its last 10 changes, NoSlop raises the tier by one level and reviews repeated lenses first. Repeated `test-capitulation` findings can also enable the configurable test-count floor when its static repository setting is off; the other conservative lens pre-checks always run.
+Provenance history does not add another lens. It changes the policy applied to the same catalog. When one generating lane and model accumulates three net accepted findings for a lens in its last 10 changes, NoSlop raises the tier by one level and reviews repeated lenses first. Repeated `test-capitulation` findings can also enable the configurable test-count floor when its static repository setting is off; the other conservative lens pre-checks always run.
 
 No matching history preserves the unconditioned v1 route and prints that default. Unreadable or malformed history selects `full-adversarial` because the policy could not establish that a lighter tier is safe. A lower `--tier` that contradicts provenance is refused unless the operator also supplies `--force-tier`; the output prints both the escalation and any forced override.

@@ -253,6 +253,210 @@ func TestClassifyMechanicalReasonDescribesEvidenceWithoutAssertingRenameIntent(t
 	}
 }
 
+func TestClassifyModifiedRenameIncludesBaselinePathRisk(t *testing.T) {
+	t.Parallel()
+
+	decision, err := risk.Classify(risk.ChangeSet{
+		Branch:        "docs/policy",
+		DefaultBranch: "main",
+		Files: []risk.FileChange{{
+			Path:            "docs/policy.md",
+			BaselinePath:    "internal/auth/policy.go",
+			Status:          risk.Modified,
+			Added:           1,
+			Deleted:         1,
+			BaselineContent: "package auth\nfunc Allow() bool { return false }\n",
+			CurrentContent:  "# Authentication policy\n",
+		}},
+	}, risk.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Tier == risk.TierLeakScanOnly {
+		t.Fatalf("tier = %q, want review for source-to-docs modified rename: %+v", decision.Tier, decision)
+	}
+	if decision.BlastRadius.Score != 3 {
+		t.Fatalf("blast radius = %+v, want high-reach authentication source", decision.BlastRadius)
+	}
+}
+
+func TestClassifyCrossCategoryRenamesRequireReview(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name string
+		file risk.FileChange
+	}{
+		{
+			name: "exact rename",
+			file: risk.FileChange{
+				Path:         "docs/worker.md",
+				BaselinePath: "internal/worker.go",
+				Status:       risk.Renamed,
+			},
+		},
+		{
+			name: "identifier-equivalent modified rename",
+			file: risk.FileChange{
+				Path:            "docs/worker.md",
+				BaselinePath:    "internal/worker.go",
+				Status:          risk.Modified,
+				Added:           1,
+				Deleted:         1,
+				BaselineContent: "package worker\nfunc run(task string) string { return task }\n",
+				CurrentContent:  "package worker\nfunc execute(job string) string { return job }\n",
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			decision, err := risk.Classify(risk.ChangeSet{
+				Branch:        "docs/worker",
+				DefaultBranch: "main",
+				Files:         []risk.FileChange{testCase.file},
+			}, risk.Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Novelty.Score != 2 {
+				t.Fatalf("novelty = %+v, want cross-category change", decision.Novelty)
+			}
+			if decision.Tier == risk.TierLeakScanOnly {
+				t.Fatalf("tier = %q, want reviewer tier: %+v", decision.Tier, decision)
+			}
+		})
+	}
+}
+
+func TestClassifyCrossLanguageRenameRequiresReview(t *testing.T) {
+	t.Parallel()
+
+	for _, file := range []risk.FileChange{
+		{
+			Path:         "internal/worker.py",
+			BaselinePath: "internal/worker.go",
+			Status:       risk.Renamed,
+		},
+		{
+			Path:            "internal/worker.py",
+			BaselinePath:    "internal/worker.go",
+			Status:          risk.Modified,
+			BaselineContent: "func run(task string) string { return task }\n",
+			CurrentContent:  "func execute(job string) string { return job }\n",
+		},
+	} {
+		decision, err := risk.Classify(risk.ChangeSet{
+			Branch:        "refactor/worker",
+			DefaultBranch: "main",
+			Files:         []risk.FileChange{file},
+		}, risk.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.Novelty.Score != 2 || decision.Tier == risk.TierLeakScanOnly {
+			t.Fatalf("decision = %+v, want cross-language rename reviewed", decision)
+		}
+	}
+}
+
+func TestClassifyGoRenameRequiresPreservedPackageAndBuildSelection(t *testing.T) {
+	t.Parallel()
+
+	for _, file := range []risk.FileChange{
+		{
+			Path:         "internal/archive/worker.go",
+			BaselinePath: "internal/worker.go",
+			Status:       risk.Renamed,
+		},
+		{
+			Path:         "internal/worker_windows.go",
+			BaselinePath: "internal/worker.go",
+			Status:       risk.Renamed,
+		},
+		{
+			Path:         "internal/worker_windows_test.go",
+			BaselinePath: "internal/worker_test.go",
+			Status:       risk.Renamed,
+		},
+		{
+			Path:         "internal/_worker.go",
+			BaselinePath: "internal/worker.go",
+			Status:       risk.Renamed,
+		},
+		{
+			Path:         "internal/worker.GO",
+			BaselinePath: "internal/worker.go",
+			Status:       risk.Renamed,
+		},
+		{
+			Path:         "internal/worker_Windows.go",
+			BaselinePath: "internal/worker_windows.go",
+			Status:       risk.Renamed,
+		},
+		{
+			Path:            "internal/archive/worker.go",
+			BaselinePath:    "internal/worker.go",
+			Status:          risk.Modified,
+			BaselineContent: "package worker\nfunc run(task string) string { return task }\n",
+			CurrentContent:  "package worker\nfunc execute(job string) string { return job }\n",
+		},
+	} {
+		decision, err := risk.Classify(risk.ChangeSet{
+			Branch:        "refactor/worker",
+			DefaultBranch: "main",
+			Files:         []risk.FileChange{file},
+		}, risk.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.Novelty.Score != 2 || decision.Tier == risk.TierLeakScanOnly {
+			t.Fatalf("decision = %+v, want build-participation change reviewed", decision)
+		}
+	}
+}
+
+func TestClassifyChangedGoBuildConstraintRequiresReview(t *testing.T) {
+	t.Parallel()
+
+	decision, err := risk.Classify(risk.ChangeSet{
+		Branch:        "refactor/worker",
+		DefaultBranch: "main",
+		Files: []risk.FileChange{{
+			Path:            "internal/worker.go",
+			Status:          risk.Modified,
+			BaselineContent: "//go:build linux\n\npackage worker\nfunc run(task string) string { return task }\n",
+			CurrentContent:  "//go:build darwin\n\npackage worker\nfunc run(task string) string { return task }\n",
+		}},
+	}, risk.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Novelty.Score != 2 || decision.Tier == risk.TierLeakScanOnly {
+		t.Fatalf("decision = %+v, want build-constraint change reviewed", decision)
+	}
+}
+
+func TestClassifySamePackageGoRenameRequiresReview(t *testing.T) {
+	t.Parallel()
+
+	decision, err := risk.Classify(risk.ChangeSet{
+		Branch:        "refactor/worker",
+		DefaultBranch: "main",
+		Files: []risk.FileChange{{
+			Path:         "internal/runner.go",
+			BaselinePath: "internal/worker.go",
+			Status:       risk.Renamed,
+		}},
+	}, risk.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Novelty.Score != 2 || decision.Tier == risk.TierLeakScanOnly {
+		t.Fatalf("decision = %+v, want Go rename reviewed", decision)
+	}
+}
+
 func TestClassifyCallTargetAndArgumentSwapAsChangedLogic(t *testing.T) {
 	t.Parallel()
 

@@ -5,9 +5,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/slop/engine"
+	"github.com/kunchenguid/no-mistakes/internal/slop/precheck"
 	"github.com/kunchenguid/no-mistakes/internal/slop/risk"
 )
 
@@ -54,7 +57,7 @@ func TestLoadGitChangesRecognizesExactRename(t *testing.T) {
 	gitRun(t, dir, "init", "-b", "main")
 	gitRun(t, dir, "config", "user.email", "test@example.com")
 	gitRun(t, dir, "config", "user.name", "Test")
-	writeFixture(t, dir, "old.go", "package sample\n\nfunc value() int { return 1 }\n")
+	writeFixture(t, dir, "old.go", "package sample\n\nfunc increment(i int) int {\n\t// increment i\n\ti += 1\n\treturn i\n}\n")
 	gitRun(t, dir, "add", "old.go")
 	gitRun(t, dir, "commit", "-m", "base")
 	base := gitRun(t, dir, "rev-parse", "HEAD")
@@ -75,6 +78,203 @@ func TestLoadGitChangesRecognizesExactRename(t *testing.T) {
 	}
 	if change.BaselineContent != change.CurrentContent {
 		t.Fatalf("rename content differs: baseline %q current %q", change.BaselineContent, change.CurrentContent)
+	}
+	if change.AddedContent != "" {
+		t.Fatalf("rename added content = %q, want empty", change.AddedContent)
+	}
+	findings := precheck.Scan([]precheck.File{{
+		Path:            change.Path,
+		AddedContent:    change.AddedContent,
+		BaselineContent: change.BaselineContent,
+		CurrentContent:  change.CurrentContent,
+	}}, "")
+	if len(findings) != 0 {
+		t.Fatalf("exact rename produced findings: %+v", findings)
+	}
+}
+
+func TestLoadGitChangesPreservesModifiedRenameIdentity(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-b", "main")
+	gitRun(t, dir, "config", "user.email", "test@example.com")
+	gitRun(t, dir, "config", "user.name", "Test")
+	writeFixture(t, dir, "old.go", "package sample\n\nfunc increment(i int) int {\n\t// increment i\n\ti += 1\n\treturn i\n}\n\nfunc value() int { return 1 }\n")
+	gitRun(t, dir, "add", "old.go")
+	gitRun(t, dir, "commit", "-m", "base")
+	base := gitRun(t, dir, "rev-parse", "HEAD")
+	gitRun(t, dir, "mv", "old.go", "new.go")
+	writeFixture(t, dir, "new.go", "package sample\n\nfunc increment(i int) int {\n\t// increment i\n\ti += 1\n\treturn i\n}\n\nfunc value() int { return 2 }\n")
+	gitRun(t, dir, "add", "new.go")
+	gitRun(t, dir, "commit", "-m", "rename and edit")
+	head := gitRun(t, dir, "rev-parse", "HEAD")
+
+	changes, err := engine.LoadGitChanges(context.Background(), dir, base, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 1 {
+		t.Fatalf("changes = %+v, want one modified rename", changes)
+	}
+	change := changes[0]
+	if change.Status != risk.Modified || change.Path != "new.go" || change.BaselinePath != "old.go" || change.Added != 1 || change.Deleted != 1 {
+		t.Fatalf("change = %+v, want one-line modified rename", change)
+	}
+	if strings.Contains(change.AddedContent, "increment i") {
+		t.Fatalf("added content rescanned unchanged comment: %q", change.AddedContent)
+	}
+	if findings := precheck.Scan([]precheck.File{{Path: change.Path, AddedContent: change.AddedContent, BaselineContent: change.BaselineContent, CurrentContent: change.CurrentContent}}, ""); len(findings) != 0 {
+		t.Fatalf("modified rename produced findings: %+v", findings)
+	}
+}
+
+func TestLoadGitChangesScansLowSimilarityAdditionsAsAdded(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-b", "main")
+	gitRun(t, dir, "config", "user.email", "test@example.com")
+	gitRun(t, dir, "config", "user.name", "Test")
+	var baseline strings.Builder
+	baseline.WriteString("package sample\n\nfunc f() {}\n\n// normalize key before lookup; normalize key before lookup.\n")
+	for index := 0; index < 40; index++ {
+		baseline.WriteString("const old")
+		baseline.WriteString(strconv.Itoa(index))
+		baseline.WriteString(" = \"old value ")
+		baseline.WriteString(strconv.Itoa(index))
+		baseline.WriteString("\"\n")
+	}
+	writeFixture(t, dir, "legacy/old.go", baseline.String())
+	gitRun(t, dir, "add", "legacy/old.go")
+	gitRun(t, dir, "commit", "-m", "base")
+	base := gitRun(t, dir, "rev-parse", "HEAD")
+
+	gitRun(t, dir, "rm", "legacy/old.go")
+	var current strings.Builder
+	current.WriteString("package sample\n\nfunc f() {}\n\n// normalize key before lookup; normalize key before lookup.\n")
+	for index := 0; index < 520; index++ {
+		current.WriteString("var replacement")
+		current.WriteString(strconv.Itoa(index))
+		current.WriteString(" = []byte{1, 2, 3, ")
+		current.WriteString(strconv.Itoa(index))
+		current.WriteString("}\n")
+	}
+	writeFixture(t, dir, "modern/new.go", current.String())
+	writeFixture(t, dir, "aaa.go", "package sample\n\nfunc f(value int) int { return value + 1 }\n\n// normalize key before lookup; normalize key before lookup.\nvar unrelated = true\n")
+	gitRun(t, dir, "add", "modern/new.go")
+	gitRun(t, dir, "add", "aaa.go")
+	gitRun(t, dir, "commit", "-m", "rewrite and rename")
+	head := gitRun(t, dir, "rev-parse", "HEAD")
+
+	changes, err := engine.LoadGitChanges(context.Background(), dir, base, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 3 {
+		t.Fatalf("changes = %+v, want deletion and two additions", changes)
+	}
+	var added *engine.Change
+	var precheckFiles []precheck.File
+	for index := range changes {
+		change := &changes[index]
+		if change.Status == risk.Added && change.Path == "modern/new.go" {
+			added = change
+		}
+		precheckFiles = append(precheckFiles, precheck.File{
+			Path:           change.Path,
+			AddedContent:   change.AddedContent,
+			CurrentContent: change.CurrentContent,
+		})
+	}
+	if added == nil || added.BaselinePath != "" || added.Added < 500 {
+		t.Fatalf("changes = %+v, want cross-directory low-similarity addition", changes)
+	}
+	findings := precheck.Scan(precheckFiles, "")
+	if len(findings) != 2 || findings[0].Lens != "redundant-comment" || findings[0].Path != "aaa.go" || findings[1].Path != "modern/new.go" {
+		t.Fatalf("findings = %+v, want every matching added comment scanned", findings)
+	}
+}
+
+func TestLoadGitChangesCountsAddedPrefixOperators(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-b", "main")
+	gitRun(t, dir, "config", "user.email", "test@example.com")
+	gitRun(t, dir, "config", "user.name", "Test")
+	writeFixture(t, dir, "README.md", "base\n")
+	gitRun(t, dir, "add", "README.md")
+	gitRun(t, dir, "commit", "-m", "base")
+	base := gitRun(t, dir, "rev-parse", "HEAD")
+
+	var source strings.Builder
+	source.WriteString("let counter = 0;\n")
+	for index := 0; index < 500; index++ {
+		source.WriteString("++counter;\n")
+	}
+	writeFixture(t, dir, "counter.js", source.String())
+	gitRun(t, dir, "add", "counter.js")
+	gitRun(t, dir, "commit", "-m", "add counter")
+	head := gitRun(t, dir, "rev-parse", "HEAD")
+
+	changes, err := engine.LoadGitChanges(context.Background(), dir, base, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 1 || changes[0].Added != 501 {
+		t.Fatalf("changes = %+v, want all prefix-operator lines counted", changes)
+	}
+	decision, err := risk.Classify(risk.ChangeSet{
+		Branch:        "feature/counter",
+		DefaultBranch: "main",
+		Files: []risk.FileChange{{
+			Path:    changes[0].Path,
+			Status:  changes[0].Status,
+			Added:   changes[0].Added,
+			Deleted: changes[0].Deleted,
+		}},
+	}, risk.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Tier != risk.TierFullAdversarial {
+		t.Fatalf("decision = %+v, want substantial source addition routed full", decision)
+	}
+}
+
+func TestLoadGitChangesPreservesLeadingBlankLineCoordinates(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-b", "main")
+	gitRun(t, dir, "config", "user.email", "test@example.com")
+	gitRun(t, dir, "config", "user.name", "Test")
+	writeFixture(t, dir, "sample.go", "\n\npackage sample\nfunc normalizeKey(value string) string { return value }\n")
+	gitRun(t, dir, "add", "sample.go")
+	gitRun(t, dir, "commit", "-m", "base")
+	base := gitRun(t, dir, "rev-parse", "HEAD")
+
+	writeFixture(t, dir, "sample.go", "\n\npackage sample\n// normalizeKey removes ASCII padding before lookup; removes ASCII padding before lookup.\nfunc normalizeKey(value string) string { return value }\n")
+	gitRun(t, dir, "add", "sample.go")
+	gitRun(t, dir, "commit", "-m", "comment")
+	head := gitRun(t, dir, "rev-parse", "HEAD")
+
+	changes, err := engine.LoadGitChanges(context.Background(), dir, base, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 1 || !strings.HasPrefix(changes[0].CurrentContent, "\n\npackage sample") {
+		t.Fatalf("current content lost leading blank lines: %+v", changes)
+	}
+	findings := precheck.Scan([]precheck.File{{
+		Path:            changes[0].Path,
+		AddedContent:    changes[0].AddedContent,
+		BaselineContent: changes[0].BaselineContent,
+		CurrentContent:  changes[0].CurrentContent,
+	}}, "")
+	if len(findings) != 1 || findings[0].Lens != "redundant-comment" || findings[0].Line != 4 {
+		t.Fatalf("findings = %+v, want redundant comment on physical line 4", findings)
 	}
 }
 
