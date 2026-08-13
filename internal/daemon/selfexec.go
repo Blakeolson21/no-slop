@@ -24,7 +24,7 @@ var daemonProcessStartTime = processStartTime
 var daemonKillPID = killPID
 var daemonEndpointUsesRegularFile = func() bool { return runtime.GOOS == "windows" }
 
-func daemonStartTimeout() time.Duration {
+func daemonStartTimeout() (time.Duration, error) {
 	// Login-shell environment resolution alone has a 30s safety budget. A
 	// production readiness deadline must cover that cold work plus exclusive
 	// recovery, while remaining bounded for genuine startup failures.
@@ -38,7 +38,7 @@ func daemonStartTimeout() time.Duration {
 // pending/racing connections fail as immediately as a Unix domain socket
 // unlink does, so the health check can keep reporting an ambiguous error
 // for longer after a graceful shutdown request has already succeeded.
-func daemonStopTimeout() time.Duration {
+func daemonStopTimeout() (time.Duration, error) {
 	fallback := 5 * time.Second
 	if runtimeGOOS == "windows" {
 		fallback = 15 * time.Second
@@ -46,23 +46,37 @@ func daemonStopTimeout() time.Duration {
 	return durationFromEnv("NS_TEST_DAEMON_STOP_TIMEOUT", "NM_TEST_DAEMON_STOP_TIMEOUT", fallback)
 }
 
-func daemonStartPollInterval() time.Duration {
+func daemonStartPollInterval() (time.Duration, error) {
 	return durationFromEnv("NS_TEST_DAEMON_START_POLL_INTERVAL", "NM_TEST_DAEMON_START_POLL_INTERVAL", 100*time.Millisecond)
 }
 
-func durationFromEnv(canonical, legacy string, fallback time.Duration) time.Duration {
+func durationFromEnv(canonical, legacy string, fallback time.Duration) (time.Duration, error) {
 	value, err := identity.LookupEnv(canonical, legacy)
 	if err != nil {
-		return fallback
+		return 0, err
 	}
 	if value == "" {
-		return fallback
+		return fallback, nil
 	}
 	d, err := time.ParseDuration(value)
 	if err != nil || d <= 0 {
-		return fallback
+		return fallback, nil
 	}
-	return d
+	return d, nil
+}
+
+func ValidateControlEnv() error {
+	for _, pair := range [][2]string{
+		{"NS_TEST_DAEMON_START_TIMEOUT", "NM_TEST_DAEMON_START_TIMEOUT"},
+		{"NS_TEST_DAEMON_STOP_TIMEOUT", "NM_TEST_DAEMON_STOP_TIMEOUT"},
+		{"NS_TEST_DAEMON_START_POLL_INTERVAL", "NM_TEST_DAEMON_START_POLL_INTERVAL"},
+		{"NS_TEST_START_DAEMON", "NM_TEST_START_DAEMON"},
+	} {
+		if _, err := identity.LookupEnv(pair[0], pair[1]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Start installs or refreshes the managed daemon service when supported and
@@ -141,7 +155,11 @@ func Start(p *paths.Paths) error {
 // users to run `daemon restart` explicitly. No-op on Windows and when the
 // service manager is bypassed (i.e., under `go test`).
 func reinstallManagedServiceIfChanged(p *paths.Paths) (bool, error) {
-	if serviceManagerBypassed() {
+	bypassed, err := serviceManagerBypassed()
+	if err != nil {
+		return false, err
+	}
+	if bypassed {
 		return false, nil
 	}
 	exe, err := serviceExecutablePath()
@@ -390,8 +408,14 @@ func waitForDaemonStart(p *paths.Paths, pid int, startedAt time.Time) error {
 }
 
 func waitForDaemonStartWithProcess(p *paths.Paths, proc *os.Process, exitCh <-chan error, pid int, startedAt time.Time, launch managedServiceLaunch) error {
-	timeout := daemonStartTimeout()
-	pollInterval := daemonStartPollInterval()
+	timeout, err := daemonStartTimeout()
+	if err != nil {
+		return fmt.Errorf("resolve daemon start timeout: %w", err)
+	}
+	pollInterval, err := daemonStartPollInterval()
+	if err != nil {
+		return fmt.Errorf("resolve daemon start poll interval: %w", err)
+	}
 	deadline := time.Now().Add(timeout)
 	managedPID := 0
 	nextManagedProbe := time.Time{}
@@ -835,7 +859,11 @@ func waitForDaemonStop(p *paths.Paths, instance daemonInstance) error {
 	if cleanupIfRecordedDaemonProvablyGone(p) {
 		return nil
 	}
-	deadline := time.Now().Add(daemonStopTimeout())
+	timeout, err := daemonStopTimeout()
+	if err != nil {
+		return fmt.Errorf("resolve daemon stop timeout: %w", err)
+	}
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		alive, err := daemonHealthCheck(p)
 		if err == nil && !alive {

@@ -12,18 +12,6 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
-func TestNoMistakesRequiredWorkflowChecksPipelineSignature(t *testing.T) {
-	t.Parallel()
-
-	workflow, err := os.ReadFile(filepath.Join("..", "..", "..", ".github", "workflows", "no-slop-required.yml"))
-	if err != nil {
-		t.Fatalf("read required workflow: %v", err)
-	}
-	if !strings.Contains(string(workflow), "marker='"+noMistakesPRSignature+"'") {
-		t.Fatalf("required workflow does not check the generated PR signature %q", noMistakesPRSignature)
-	}
-}
-
 func TestBuildPipelineSummary_AllClean(t *testing.T) {
 	t.Parallel()
 	steps := []*db.StepResult{

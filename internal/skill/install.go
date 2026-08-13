@@ -70,9 +70,11 @@ func Install(root string) ([]string, error) {
 func Vendored(repoRoot string) []string {
 	var found []string
 	for _, base := range InstallBases {
-		rel := filepath.Join(base, Name, "SKILL.md")
-		if _, err := os.Stat(filepath.Join(repoRoot, rel)); err == nil {
-			found = append(found, rel)
+		for _, name := range []string{Name, LegacyName} {
+			rel := filepath.Join(base, name, "SKILL.md")
+			if _, err := os.Stat(filepath.Join(repoRoot, rel)); err == nil {
+				found = append(found, rel)
+			}
 		}
 	}
 	return found

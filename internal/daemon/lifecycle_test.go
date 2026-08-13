@@ -119,7 +119,11 @@ func TestDaemonStartTimeoutCoversColdProductionWork(t *testing.T) {
 	runtimeGOOS = "windows"
 	t.Cleanup(func() { runtimeGOOS = oldGOOS })
 
-	if got := daemonStartTimeout(); got != 45*time.Second {
+	got, err := daemonStartTimeout()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 45*time.Second {
 		t.Fatalf("daemonStartTimeout() = %v, want 45s", got)
 	}
 }

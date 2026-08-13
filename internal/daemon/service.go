@@ -57,7 +57,11 @@ const (
 )
 
 func managedDaemonLaunch(p *paths.Paths) (managedServiceLaunch, error) {
-	if serviceManagerBypassed() || runtimeGOOS != "windows" {
+	bypassed, err := serviceManagerBypassed()
+	if err != nil {
+		return managedServiceLaunch{}, err
+	}
+	if bypassed || runtimeGOOS != "windows" {
 		return managedServiceLaunch{}, nil
 	}
 	observation, err := inspectWindowsManagedDaemon(p)
@@ -68,7 +72,11 @@ func managedDaemonLaunch(p *paths.Paths) (managedServiceLaunch, error) {
 }
 
 func managedDaemonServiceState(p *paths.Paths, launch managedServiceLaunch) (managedServiceState, error) {
-	if serviceManagerBypassed() {
+	bypassed, err := serviceManagerBypassed()
+	if err != nil {
+		return managedServiceUnknown, err
+	}
+	if bypassed {
 		return managedServiceUnknown, nil
 	}
 	switch runtimeGOOS {
@@ -269,12 +277,15 @@ func writeFileAtomic(path string, content []byte, mode os.FileMode) error {
 // and tear down a live daemon. Tests that specifically want to exercise the
 // managed path (service_test.go) override serviceManagerBypassed via
 // stubServiceRuntime.
-func defaultServiceManagerBypassed() bool {
+func defaultServiceManagerBypassed() (bool, error) {
 	testStart, err := identity.EnvEnabled("NS_TEST_START_DAEMON", "NM_TEST_START_DAEMON")
-	if err == nil && testStart {
-		return true
+	if err != nil {
+		return false, err
 	}
-	return testing.Testing()
+	if testStart {
+		return true, nil
+	}
+	return testing.Testing(), nil
 }
 
 // serviceInstanceSuffix returns a short stable suffix derived from p.Root()
@@ -358,7 +369,11 @@ func legacyScopedWindowsTaskName(p *paths.Paths) string {
 }
 
 func installManagedService(p *paths.Paths) (bool, error) {
-	if serviceManagerBypassed() {
+	bypassed, err := serviceManagerBypassed()
+	if err != nil {
+		return false, err
+	}
+	if bypassed {
 		return false, nil
 	}
 	exe, err := serviceExecutablePath()
@@ -382,7 +397,11 @@ func installManagedServiceWithExecutable(p *paths.Paths, exe string) (bool, erro
 }
 
 func startManagedService(p *paths.Paths) (bool, error) {
-	if serviceManagerBypassed() {
+	bypassed, err := serviceManagerBypassed()
+	if err != nil {
+		return false, err
+	}
+	if bypassed {
 		return false, nil
 	}
 	switch runtimeGOOS {
@@ -398,7 +417,11 @@ func startManagedService(p *paths.Paths) (bool, error) {
 }
 
 func restartManagedService(p *paths.Paths) (bool, error) {
-	if serviceManagerBypassed() {
+	bypassed, err := serviceManagerBypassed()
+	if err != nil {
+		return false, err
+	}
+	if bypassed {
 		return false, nil
 	}
 	switch runtimeGOOS {
@@ -412,7 +435,11 @@ func restartManagedService(p *paths.Paths) (bool, error) {
 }
 
 func reloadManagedServiceDefinition(p *paths.Paths) error {
-	if serviceManagerBypassed() {
+	bypassed, err := serviceManagerBypassed()
+	if err != nil {
+		return err
+	}
+	if bypassed {
 		return nil
 	}
 	switch runtimeGOOS {
@@ -426,10 +453,18 @@ func reloadManagedServiceDefinition(p *paths.Paths) error {
 }
 
 func stopManagedService(p *paths.Paths) (bool, error) {
-	if serviceManagerBypassed() {
+	bypassed, err := serviceManagerBypassed()
+	if err != nil {
+		return false, err
+	}
+	if bypassed {
 		return false, nil
 	}
-	if !managedServiceInstalled(p) {
+	installed, err := managedServiceInstalled(p)
+	if err != nil {
+		return false, err
+	}
+	if !installed {
 		switch runtimeGOOS {
 		case "darwin":
 			return stopLegacyLaunchAgent(p)
@@ -460,7 +495,8 @@ func stopManagedService(p *paths.Paths) (bool, error) {
 // install in Start() begin from a clean slate. No-op on platforms without an
 // equivalent and when the service manager is bypassed.
 func resetFailedManagedService(p *paths.Paths) {
-	if serviceManagerBypassed() {
+	bypassed, err := serviceManagerBypassed()
+	if err != nil || bypassed {
 		return
 	}
 	switch runtimeGOOS {
@@ -469,24 +505,28 @@ func resetFailedManagedService(p *paths.Paths) {
 	}
 }
 
-func managedServiceInstalled(p *paths.Paths) bool {
-	if serviceManagerBypassed() {
-		return false
+func managedServiceInstalled(p *paths.Paths) (bool, error) {
+	bypassed, err := serviceManagerBypassed()
+	if err != nil {
+		return false, err
+	}
+	if bypassed {
+		return false, nil
 	}
 	switch runtimeGOOS {
 	case "darwin":
 		_, err := os.Stat(launchAgentPath(p))
-		return err == nil
+		return err == nil, nil
 	case "linux":
 		_, err := os.Stat(systemdUserServicePath(p))
-		return err == nil
+		return err == nil, nil
 	case "windows":
 		if p == nil {
-			return false
+			return false, nil
 		}
 		_, err := serviceCommandRunner("schtasks", "/Query", "/TN", windowsTaskName(p))
-		return err == nil
+		return err == nil, nil
 	default:
-		return false
+		return false, nil
 	}
 }

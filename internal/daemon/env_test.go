@@ -110,3 +110,16 @@ func TestPrepareDaemonEnvironment_LogsPathSummary(t *testing.T) {
 		t.Fatalf("expected full PATH in log for debuggability, got %q", out)
 	}
 }
+
+func TestValidateControlEnvRejectsConflictingAliases(t *testing.T) {
+	t.Setenv("NS_TEST_DAEMON_START_TIMEOUT", "1s")
+	t.Setenv("NM_TEST_DAEMON_START_TIMEOUT", "2s")
+
+	err := ValidateControlEnv()
+	if err == nil {
+		t.Fatal("expected conflicting daemon control aliases to fail")
+	}
+	if !strings.Contains(err.Error(), "same setting with different values") {
+		t.Fatalf("ValidateControlEnv error = %v", err)
+	}
+}

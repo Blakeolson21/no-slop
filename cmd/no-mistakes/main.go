@@ -88,6 +88,9 @@ func validateIdentityAliasConflicts() error {
 	if err := update.ValidateEnv(); err != nil {
 		return err
 	}
+	if err := daemon.ValidateControlEnv(); err != nil {
+		return err
+	}
 	return pipelinesteps.ValidateDemoModeConfig()
 }
 

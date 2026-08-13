@@ -1059,10 +1059,14 @@ func TestManagedServiceInstalledRequiresMatchingRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if managedServiceInstalled(p) {
+	if installed, err := managedServiceInstalled(p); err != nil {
+		t.Fatal(err)
+	} else if installed {
 		t.Fatal("expected mismatched launch agent root to be ignored")
 	}
-	if !managedServiceInstalled(paths.WithRoot(otherRoot)) {
+	if installed, err := managedServiceInstalled(paths.WithRoot(otherRoot)); err != nil {
+		t.Fatal(err)
+	} else if !installed {
 		t.Fatal("expected matching launch agent root to be detected")
 	}
 }
@@ -1255,7 +1259,11 @@ func TestStopManagedServiceFindsLegacyScopedWindowsTask(t *testing.T) {
 // previously caused TestStopNotRunningIsNoop to tear down the live
 // LaunchAgent-managed daemon on macOS.
 func TestDefaultServiceManagerBypassedIsTrueUnderGoTest(t *testing.T) {
-	if !defaultServiceManagerBypassed() {
+	bypassed, err := defaultServiceManagerBypassed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bypassed {
 		t.Fatal("defaultServiceManagerBypassed() must return true under `go test` so daemon tests cannot reach real launchctl/systemctl/schtasks state")
 	}
 }
@@ -1477,7 +1485,7 @@ func TestStopDoesNotTouchManagedDaemonOwnedByDifferentNMHome(t *testing.T) {
 	// test binary compiled from a codebase that predates or lacks the
 	// bypass, which is exactly the failure mode observed in pipeline
 	// worktrees rebased onto older main branches.
-	serviceManagerBypassed = func() bool { return false }
+	serviceManagerBypassed = func() (bool, error) { return false, nil }
 
 	home := t.TempDir()
 	serviceUserHomeDir = func() (string, error) { return home, nil }
@@ -1740,7 +1748,7 @@ func stubServiceRuntime(t *testing.T) func() {
 	oldInspectManagedDaemonService := inspectManagedDaemonService
 	oldHealthCheck := daemonHealthCheck
 	oldServiceBypass := serviceManagerBypassed
-	serviceManagerBypassed = func() bool { return false }
+	serviceManagerBypassed = func() (bool, error) { return false, nil }
 	prepareManagedDaemonLaunch = func(*paths.Paths) (managedServiceLaunch, error) {
 		return managedServiceLaunch{}, nil
 	}

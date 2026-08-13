@@ -302,15 +302,19 @@ func TestVendored(t *testing.T) {
 	t.Run("both_copies", func(t *testing.T) {
 		root := t.TempDir()
 		for _, base := range InstallBases {
-			dir := filepath.Join(root, base, Name)
-			mkdirAll(t, dir)
-			if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("legacy"), 0o644); err != nil {
-				t.Fatal(err)
+			for _, name := range []string{Name, LegacyName} {
+				dir := filepath.Join(root, base, name)
+				mkdirAll(t, dir)
+				if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("legacy"), 0o644); err != nil {
+					t.Fatal(err)
+				}
 			}
 		}
 		want := []string{
 			filepath.Join(".claude", "skills", Name, "SKILL.md"),
+			filepath.Join(".claude", "skills", LegacyName, "SKILL.md"),
 			filepath.Join(".agents", "skills", Name, "SKILL.md"),
+			filepath.Join(".agents", "skills", LegacyName, "SKILL.md"),
 		}
 		got := Vendored(root)
 		if len(got) != len(want) {
@@ -325,13 +329,13 @@ func TestVendored(t *testing.T) {
 
 	t.Run("single_copy", func(t *testing.T) {
 		root := t.TempDir()
-		dir := filepath.Join(root, ".agents", "skills", Name)
+		dir := filepath.Join(root, ".agents", "skills", LegacyName)
 		mkdirAll(t, dir)
 		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("legacy"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		got := Vendored(root)
-		if len(got) != 1 || got[0] != filepath.Join(".agents", "skills", Name, "SKILL.md") {
+		if len(got) != 1 || got[0] != filepath.Join(".agents", "skills", LegacyName, "SKILL.md") {
 			t.Errorf("Vendored = %v, want only the .agents copy", got)
 		}
 	})

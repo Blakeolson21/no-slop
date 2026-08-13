@@ -57,21 +57,25 @@ type Inventory struct {
 
 // DirFromEnv returns the inventory directory from NS_E2E_DAEMON_INVENTORY,
 // or a stable per-user temp default when unset.
-func DirFromEnv() string {
+func DirFromEnv() (string, error) {
 	dir, err := identity.LookupEnv(EnvInventory, LegacyEnvInventory)
 	if err != nil {
-		return ""
+		return "", err
 	}
 	if dir != "" {
-		return dir
+		return dir, nil
 	}
-	return filepath.Join(os.TempDir(), "no-slop-e2e-daemon-inventory")
+	return filepath.Join(os.TempDir(), "no-slop-e2e-daemon-inventory"), nil
 }
 
 // Open returns an Inventory rooted at DirFromEnv(), creating the directory
 // with mode 0700 when needed.
 func Open() (*Inventory, error) {
-	return OpenDir(DirFromEnv())
+	dir, err := DirFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	return OpenDir(dir)
 }
 
 // OpenDir opens (or creates) an inventory directory.

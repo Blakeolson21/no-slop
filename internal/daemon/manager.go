@@ -540,7 +540,7 @@ func branchFromRef(ref string) string {
 	return strings.TrimPrefix(ref, "refs/heads/")
 }
 
-// loadTrustedRepoConfig reads .no-slop.yaml from the trusted
+// loadTrustedRepoConfig reads the repo config alias pair from the trusted
 // default-branch commit (trustedSHA - the exact SHA startRun just fetched and
 // resolved) in the worktree and parses it. Reading at a pinned SHA, rather
 // than the origin/<defaultBranch> remote-tracking ref, closes the stale-ref
@@ -559,7 +559,7 @@ func loadTrustedRepoConfig(ctx context.Context, wtDir, trustedSHA, runID string)
 		// potentially stale origin/<defaultBranch> ref.
 		return nil
 	}
-	content, configName, present, err := readTrustedRepoConfig(ctx, wtDir, trustedSHA)
+	contents, err := readTrustedRepoConfig(ctx, wtDir, trustedSHA)
 	if err != nil {
 		// Path absent on the default branch is the common "repo has no
 		// trusted commands" case; log at debug so it isn't noisy. Other
@@ -568,39 +568,72 @@ func loadTrustedRepoConfig(ctx context.Context, wtDir, trustedSHA, runID string)
 		slog.Debug("trusted repo config: not present on default branch", "run_id", runID, "sha", trustedSHA, "error", err)
 		return nil
 	}
-	if !present {
+	if !contents.present() {
 		return nil
 	}
-	trusted, err := config.LoadRepoFromBytes([]byte(content))
+	trusted, _, err := contents.parse()
 	if err != nil {
-		slog.Warn("trusted repo config: parse failed; commands/agent from pushed branch will be disabled", "run_id", runID, "sha", trustedSHA, "config", configName, "error", err)
+		slog.Warn("trusted repo config: parse failed; commands/agent from pushed branch will be disabled", "run_id", runID, "sha", trustedSHA, "config", contents.configName(), "error", err)
 		return nil
 	}
 	return trusted
 }
 
-func readTrustedRepoConfig(ctx context.Context, wtDir, trustedSHA string) (content, configName string, present bool, err error) {
-	var found []string
-	for _, name := range []string{identity.RepoConfigName, identity.LegacyRepoConfigName} {
-		entry, listErr := git.Run(ctx, wtDir, "ls-tree", trustedSHA, "--", name)
+type trustedRepoConfigContents struct {
+	canonical        string
+	legacy           string
+	canonicalPresent bool
+	legacyPresent    bool
+	readName         string
+}
+
+func (c trustedRepoConfigContents) present() bool {
+	return c.canonicalPresent || c.legacyPresent
+}
+
+func (c trustedRepoConfigContents) configName() string {
+	if c.canonicalPresent && c.legacyPresent {
+		return identity.RepoConfigName + " and " + identity.LegacyRepoConfigName
+	}
+	if c.canonicalPresent {
+		return identity.RepoConfigName
+	}
+	if c.legacyPresent {
+		return identity.LegacyRepoConfigName
+	}
+	return ""
+}
+
+func (c trustedRepoConfigContents) parse() (*config.RepoConfig, bool, error) {
+	return config.LoadRepoFromAliasBytes([]byte(c.canonical), c.canonicalPresent, []byte(c.legacy), c.legacyPresent)
+}
+
+func readTrustedRepoConfig(ctx context.Context, wtDir, trustedSHA string) (trustedRepoConfigContents, error) {
+	var contents trustedRepoConfigContents
+	for _, candidate := range []struct {
+		name string
+		set  func(string)
+		mark func()
+	}{
+		{name: identity.RepoConfigName, set: func(s string) { contents.canonical = s }, mark: func() { contents.canonicalPresent = true }},
+		{name: identity.LegacyRepoConfigName, set: func(s string) { contents.legacy = s }, mark: func() { contents.legacyPresent = true }},
+	} {
+		entry, listErr := git.Run(ctx, wtDir, "ls-tree", trustedSHA, "--", candidate.name)
 		if listErr != nil {
-			return "", "", false, listErr
+			return contents, listErr
 		}
-		if entry != "" {
-			found = append(found, name)
+		if entry == "" {
+			continue
 		}
+		candidate.mark()
+		contents.readName = candidate.name
+		content, showErr := git.ShowFile(ctx, wtDir, trustedSHA, candidate.name)
+		if showErr != nil {
+			return contents, showErr
+		}
+		candidate.set(content)
 	}
-	if len(found) == 0 {
-		return "", "", false, nil
-	}
-	if len(found) > 1 {
-		return "", "", false, fmt.Errorf("%s and %s name the same trusted repo config; keep only one", identity.RepoConfigName, identity.LegacyRepoConfigName)
-	}
-	content, err = git.ShowFile(ctx, wtDir, trustedSHA, found[0])
-	if err != nil {
-		return "", found[0], true, err
-	}
-	return content, found[0], true, nil
+	return contents, nil
 }
 
 // assertGateTrustedConfigReadable fails a run LOUD when the trusted
@@ -629,18 +662,22 @@ func assertGateTrustedConfigReadable(ctx context.Context, wtDir, defaultBranch, 
 	if _, err := git.Run(ctx, wtDir, "rev-parse", "-q", "--verify", trustedSHA+"^{commit}"); err != nil {
 		return fmt.Errorf("cannot evaluate disable_project_settings: trusted default-branch commit %s is not readable: %w", trustedSHA, err)
 	}
-	content, configName, present, err := readTrustedRepoConfig(ctx, wtDir, trustedSHA)
+	contents, err := readTrustedRepoConfig(ctx, wtDir, trustedSHA)
 	if err != nil {
-		if present {
+		if contents.present() {
+			configName := contents.readName
+			if configName == "" {
+				configName = contents.configName()
+			}
 			return fmt.Errorf("cannot evaluate disable_project_settings: trusted %s at %s is present but not readable: %w", configName, trustedSHA, err)
 		}
 		return fmt.Errorf("cannot evaluate disable_project_settings: trusted default-branch tree at %s is not readable: %w", trustedSHA, err)
 	}
-	if !present {
+	if !contents.present() {
 		return nil
 	}
-	if _, err := config.LoadRepoFromBytes([]byte(content)); err != nil {
-		return fmt.Errorf("cannot evaluate disable_project_settings: trusted %s at %s is present but unparseable: %w", configName, trustedSHA, err)
+	if _, _, err := contents.parse(); err != nil {
+		return fmt.Errorf("cannot evaluate disable_project_settings: trusted %s at %s is present but unparseable: %w", contents.configName(), trustedSHA, err)
 	}
 	return nil
 }

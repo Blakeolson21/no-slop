@@ -61,6 +61,14 @@ func TestRunRejectsIdentityAliasConflict(t *testing.T) {
 	}
 }
 
+func TestRunRejectsDaemonControlAliasConflict(t *testing.T) {
+	t.Setenv("NS_TEST_DAEMON_STOP_TIMEOUT", "1s")
+	t.Setenv("NM_TEST_DAEMON_STOP_TIMEOUT", "2s")
+	if got := run(); got != 1 {
+		t.Fatalf("run() = %d, want 1", got)
+	}
+}
+
 func TestCLILogWriterAppendsToFileWhenLogsDirExists(t *testing.T) {
 	nmHome := t.TempDir()
 	t.Setenv("NS_HOME", nmHome)

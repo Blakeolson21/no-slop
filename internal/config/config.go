@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"time"
@@ -1343,41 +1344,22 @@ func LoadRepo(dir string) (*RepoConfig, error) {
 
 	canonicalPath := filepath.Join(dir, identity.RepoConfigName)
 	legacyPath := filepath.Join(dir, identity.LegacyRepoConfigName)
-	canonicalExists, err := fileExists(canonicalPath)
+	canonicalData, canonicalExists, err := readRepoConfigFile(canonicalPath)
 	if err != nil {
 		return nil, fmt.Errorf("read repo config: %w", err)
 	}
-	legacyExists, err := fileExists(legacyPath)
+	legacyData, legacyExists, err := readRepoConfigFile(legacyPath)
 	if err != nil {
 		return nil, fmt.Errorf("read repo config: %w", err)
 	}
-	if canonicalExists && legacyExists {
-		return nil, fmt.Errorf("%s and %s name the same repo config; keep only one", identity.RepoConfigName, identity.LegacyRepoConfigName)
-	}
-	path := canonicalPath
-	if !canonicalExists {
-		path = legacyPath
-	}
-	data, err := os.ReadFile(path)
+	loaded, present, err := resolveRepoConfigAliases(canonicalData, canonicalExists, legacyData, legacyExists)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return cfg, nil
-		}
-		return nil, fmt.Errorf("read repo config: %w", err)
+		return nil, err
 	}
-
-	return parseRepoConfig(data)
-}
-
-func fileExists(path string) (bool, error) {
-	_, err := os.Stat(path)
-	if err == nil {
-		return true, nil
+	if !present {
+		return cfg, nil
 	}
-	if errors.Is(err, fs.ErrNotExist) {
-		return false, nil
-	}
-	return false, err
+	return loaded, nil
 }
 
 // LoadRepoFromBytes parses per-repo config from raw YAML bytes. It is the
@@ -1386,6 +1368,55 @@ func fileExists(path string) (bool, error) {
 // contributor's checked-out copy.
 func LoadRepoFromBytes(data []byte) (*RepoConfig, error) {
 	return parseRepoConfig(data)
+}
+
+func LoadRepoFromAliasBytes(canonicalData []byte, canonicalExists bool, legacyData []byte, legacyExists bool) (*RepoConfig, bool, error) {
+	return resolveRepoConfigAliases(canonicalData, canonicalExists, legacyData, legacyExists)
+}
+
+func readRepoConfigFile(path string) ([]byte, bool, error) {
+	data, err := os.ReadFile(path)
+	if err == nil {
+		return data, true, nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, false, nil
+	}
+	return nil, false, err
+}
+
+func resolveRepoConfigAliases(canonicalData []byte, canonicalExists bool, legacyData []byte, legacyExists bool) (*RepoConfig, bool, error) {
+	switch {
+	case canonicalExists && legacyExists:
+		canonicalCfg, canonicalErr := parseRepoConfig(canonicalData)
+		legacyCfg, legacyErr := parseRepoConfig(legacyData)
+		if canonicalErr != nil || legacyErr != nil {
+			return nil, true, repoConfigAliasParseError(canonicalErr, legacyErr)
+		}
+		if !reflect.DeepEqual(canonicalCfg, legacyCfg) {
+			return nil, true, fmt.Errorf("%s and %s name the same repo config with different values", identity.RepoConfigName, identity.LegacyRepoConfigName)
+		}
+		return canonicalCfg, true, nil
+	case canonicalExists:
+		cfg, err := parseRepoConfig(canonicalData)
+		return cfg, true, err
+	case legacyExists:
+		cfg, err := parseRepoConfig(legacyData)
+		return cfg, true, err
+	default:
+		return nil, false, nil
+	}
+}
+
+func repoConfigAliasParseError(canonicalErr, legacyErr error) error {
+	switch {
+	case canonicalErr != nil && legacyErr != nil:
+		return fmt.Errorf("%s and %s name the same repo config but both are unparseable: %s: %v; %s: %v", identity.RepoConfigName, identity.LegacyRepoConfigName, identity.RepoConfigName, canonicalErr, identity.LegacyRepoConfigName, legacyErr)
+	case canonicalErr != nil:
+		return fmt.Errorf("%s and %s name the same repo config but %s is unparseable: %w", identity.RepoConfigName, identity.LegacyRepoConfigName, identity.RepoConfigName, canonicalErr)
+	default:
+		return fmt.Errorf("%s and %s name the same repo config but %s is unparseable: %w", identity.RepoConfigName, identity.LegacyRepoConfigName, identity.LegacyRepoConfigName, legacyErr)
+	}
 }
 
 func parseRepoConfig(data []byte) (*RepoConfig, error) {

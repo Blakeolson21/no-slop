@@ -27,7 +27,7 @@ import (
 // the Developer ID designated requirement that lets macOS permissions survive
 // `no-slop update`.
 const (
-	signingIdentifier = "com.kunchenguid.no-mistakes"
+	signingIdentifier = "com.kunchenguid.no-slop"
 	signingTeamID     = "9T2J7MNUP9"
 
 	cscLinkSecret    = "CSC_LINK"

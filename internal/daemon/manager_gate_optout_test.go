@@ -15,6 +15,14 @@ import (
 // given .no-slop.yaml (empty string => no file), plus a linked worktree with
 // origin/main fetched, and returns (wtDir, trustedSHA).
 func gateOptOutWorktree(t *testing.T, repoYAML string) (string, string) {
+	files := map[string]string{}
+	if repoYAML != "" {
+		files[".no-slop.yaml"] = repoYAML
+	}
+	return gateOptOutWorktreeFiles(t, files)
+}
+
+func gateOptOutWorktreeFiles(t *testing.T, files map[string]string) (string, string) {
 	t.Helper()
 	ctx := context.Background()
 	src := filepath.Join(t.TempDir(), "src")
@@ -28,8 +36,8 @@ func gateOptOutWorktree(t *testing.T, repoYAML string) (string, string) {
 	if err := os.WriteFile(filepath.Join(src, "README.md"), []byte("# t\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if repoYAML != "" {
-		if err := os.WriteFile(filepath.Join(src, ".no-slop.yaml"), []byte(repoYAML), 0o644); err != nil {
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(src, name), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -80,6 +88,34 @@ func TestAssertGateTrustedConfigReadable_PresentAndParseableIsOK(t *testing.T) {
 	got := loadTrustedRepoConfig(context.Background(), wt, sha, "run")
 	if got == nil || !got.DisableProjectSettings {
 		t.Errorf("trusted config must carry disable_project_settings=true, got %+v", got)
+	}
+}
+
+func TestTrustedRepoConfigAcceptsIdenticalAliases(t *testing.T) {
+	wt, sha := gateOptOutWorktreeFiles(t, map[string]string{
+		".no-slop.yaml":     "disable_project_settings: true\n",
+		".no-mistakes.yaml": "disable_project_settings: true\n",
+	})
+	if err := assertGateTrustedConfigReadable(context.Background(), wt, "main", sha); err != nil {
+		t.Fatalf("identical trusted config aliases must not abort: %v", err)
+	}
+	got := loadTrustedRepoConfig(context.Background(), wt, sha, "run")
+	if got == nil || !got.DisableProjectSettings {
+		t.Fatalf("trusted alias config = %+v, want disable_project_settings=true", got)
+	}
+}
+
+func TestTrustedRepoConfigRejectsDivergentAliases(t *testing.T) {
+	wt, sha := gateOptOutWorktreeFiles(t, map[string]string{
+		".no-slop.yaml":     "disable_project_settings: true\n",
+		".no-mistakes.yaml": "disable_project_settings: false\n",
+	})
+	err := assertGateTrustedConfigReadable(context.Background(), wt, "main", sha)
+	if err == nil {
+		t.Fatal("divergent trusted config aliases must abort")
+	}
+	if !strings.Contains(err.Error(), "same repo config with different values") {
+		t.Fatalf("abort error = %v, want divergent-alias refusal", err)
 	}
 }
 

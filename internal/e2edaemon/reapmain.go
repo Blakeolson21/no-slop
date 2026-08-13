@@ -16,6 +16,11 @@ import (
 )
 
 func main() {
+	inventoryDir, dirErr := e2edaemon.DirFromEnv()
+	if dirErr != nil {
+		fmt.Fprintf(os.Stderr, "e2e-reap: %v\n", dirErr)
+		return
+	}
 	reapAbandoned, reapErr := identity.EnvEnabled("NS_E2E_REAP_ABANDONED", "NM_E2E_REAP_ABANDONED")
 	if reapErr != nil {
 		fmt.Fprintf(os.Stderr, "e2e-reap: %v\n", reapErr)
@@ -27,12 +32,12 @@ func main() {
 			fmt.Fprintf(os.Stderr, "e2e-reap: %v\n", err)
 			return
 		}
-		for _, err := range e2edaemon.ReapAbandoned(parent, e2edaemon.DirFromEnv()) {
+		for _, err := range e2edaemon.ReapAbandoned(parent, inventoryDir) {
 			fmt.Fprintf(os.Stderr, "e2e-reap: %v\n", err)
 		}
 		return
 	}
-	inv, err := e2edaemon.Open()
+	inv, err := e2edaemon.OpenDir(inventoryDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "e2e-reap: open inventory: %v\n", err)
 		os.Exit(0) // best-effort; never fail the suite wrapper hard
@@ -43,7 +48,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "e2e-reap: %s\n", e)
 		}
 	}
-	verbose, _ := identity.EnvEnabled("NS_E2E_REAP_VERBOSE", "NM_E2E_REAP_VERBOSE")
+	verbose, verboseErr := identity.EnvEnabled("NS_E2E_REAP_VERBOSE", "NM_E2E_REAP_VERBOSE")
+	if verboseErr != nil {
+		fmt.Fprintf(os.Stderr, "e2e-reap: %v\n", verboseErr)
+		return
+	}
 	if verbose {
 		fmt.Fprintf(os.Stderr, "e2e-reap: entries=%d stopped=%d killed=%d removed=%d skipped=%d\n",
 			result.Entries, result.Stopped, result.Killed, result.Removed, result.Skipped)

@@ -12,7 +12,7 @@ old process and a new process open the same database and socket.
 | Main command | `no-slop` | `no-mistakes` | Both binaries expose identical commands and help. |
 | Short identity | `ns` | `nm` | New plumbing uses `ns`; retained `nm` spellings are compatibility aliases only. |
 | Smart-run wrapper | `ns-smart-run` | `nm-smart-run` | The installed wrapper flip is a stage 4 operator action. Both names must target the same wrapper during rollout. |
-| Repository config | `.no-slop.yaml` | `.no-mistakes.yaml` | Either file loads. A repository containing both is refused because they configure one logical setting. |
+| Repository config | `.no-slop.yaml` | `.no-mistakes.yaml` | Either file loads. Both files together are accepted only when their parsed settings match. |
 | State-root environment | `NS_HOME` | `NM_HOME` | Either selects the same root. Equal duplicate values are accepted and different values are refused. |
 | Default physical state | `~/.no-mistakes/` | same path | Deliberately unchanged in this release. This includes `state.sqlite`, `socket`, `daemon.pid`, `daemon.lock`, `config.yaml`, `repos/`, `worktrees/`, `logs/`, `servers/`, and `proctrees/`. |
 | Git gate remote | `no-slop` | `no-mistakes` | Init maintains both remotes at the same bare repository. Eject removes both. |
@@ -31,10 +31,10 @@ old process and a new process open the same database and socket.
 | Managed services | `com.kunchenguid.no-slop.daemon*`, `no-slop-daemon*` | prior `com.kunchenguid.no-mistakes.daemon*`, `no-mistakes-daemon*` | Install and cleanup recognize old service artifacts so an upgrade cannot leave two daemons serving one root. |
 | Agent skill | `/no-slop`, `skills/no-slop/SKILL.md` | `/no-mistakes`, `skills/no-mistakes/SKILL.md` | Init installs generated canonical and compatibility skills with the same operating contract. |
 | Release assets and workflow | `no-slop-<version>-<os>-<arch>` and `no-slop-required.yml` | old archives and workflow name | New releases and required-workflow references use the canonical identity. Compatibility binary packaging remains explicit. |
-| macOS signing identifier | unchanged permanent identifier | `com.kunchenguid.no-mistakes` | The binary and UI names are renamed, but Developer ID signing keeps the old executable identifier so macOS permission grants survive upgrades. |
+| macOS signing identifier | `com.kunchenguid.no-slop` | `com.kunchenguid.no-mistakes` | Developer ID signing uses the renamed executable identifier in this owner-approved phase; the compatibility reset is intentional. |
 | Go module and source entry point | `github.com/Blakeolson21/no-slop`, `cmd/no-slop` | former module and `cmd/no-mistakes` | Source imports and the canonical build path use the renamed repository. The legacy source entry point remains a buildable alias. |
 | User-facing strings and documentation | `no-slop`, `.no-slop.yaml`, `NS_*` | old examples only where documenting compatibility | CLI output, logs, docs, and examples lead with the canonical identity while state paths continue to show `~/.no-mistakes`. |
-| Configuration keys | existing unprefixed YAML keys | same keys | No duplicate renamed key namespace is introduced. File-name aliases resolve before YAML decoding, so one logical repository config cannot be supplied twice. |
+| Configuration keys | existing unprefixed YAML keys | same keys | No duplicate renamed key namespace is introduced. File-name aliases resolve before YAML decoding, and divergent duplicate files are refused. |
 
 The E2E-only process controls follow the same rule. Their canonical names are
 `NS_TEST_START_DAEMON`, `NS_TEST_DAEMON_START_TIMEOUT`,

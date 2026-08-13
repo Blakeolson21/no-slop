@@ -91,7 +91,7 @@ func TestLoadRepo_AcceptsLegacyFileName(t *testing.T) {
 	}
 }
 
-func TestLoadRepo_RejectsTwoNamesForSameConfig(t *testing.T) {
+func TestLoadRepo_AcceptsIdenticalConfigAliases(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{".no-slop.yaml", ".no-mistakes.yaml"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("agent: codex\n"), 0o644); err != nil {
@@ -99,8 +99,40 @@ func TestLoadRepo_RejectsTwoNamesForSameConfig(t *testing.T) {
 		}
 	}
 
-	if _, err := LoadRepo(dir); err == nil || !strings.Contains(err.Error(), "same repo config") {
-		t.Fatalf("LoadRepo error = %v, want duplicate-alias refusal", err)
+	cfg, err := LoadRepo(dir)
+	if err != nil {
+		t.Fatalf("LoadRepo: %v", err)
+	}
+	if cfg.Agent != types.AgentCodex {
+		t.Fatalf("agent = %q, want %q", cfg.Agent, types.AgentCodex)
+	}
+}
+
+func TestLoadRepo_RejectsDivergentConfigAliases(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".no-slop.yaml"), []byte("agent: codex\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte("agent: claude\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadRepo(dir); err == nil || !strings.Contains(err.Error(), "same repo config with different values") {
+		t.Fatalf("LoadRepo error = %v, want divergent-alias refusal", err)
+	}
+}
+
+func TestLoadRepo_RejectsAliasPairParseFailure(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".no-slop.yaml"), []byte("agent: codex\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte("agent: : : {{bad\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadRepo(dir); err == nil || !strings.Contains(err.Error(), ".no-mistakes.yaml is unparseable") {
+		t.Fatalf("LoadRepo error = %v, want legacy parse refusal", err)
 	}
 }
 

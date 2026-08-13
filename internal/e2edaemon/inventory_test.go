@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -223,6 +224,33 @@ func TestConcurrencySlotCap(t *testing.T) {
 		t.Fatalf("slot after release: %v", err)
 	}
 	s3.Release()
+}
+
+func TestOpenRejectsConflictingInventoryAliases(t *testing.T) {
+	t.Setenv(EnvInventory, filepath.Join(t.TempDir(), "canonical"))
+	t.Setenv(LegacyEnvInventory, filepath.Join(t.TempDir(), "legacy"))
+
+	if _, err := Open(); err == nil {
+		t.Fatal("expected conflicting inventory aliases to fail")
+	} else if !strings.Contains(err.Error(), "same setting with different values") {
+		t.Fatalf("Open error = %v", err)
+	}
+}
+
+func TestAcquireSlotRejectsConflictingMaxAliases(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(EnvMaxConcurrent, "1")
+	t.Setenv(LegacyEnvMaxConcurrent, "2")
+	inv, err := OpenDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := inv.AcquireSlot(10 * time.Millisecond); err == nil {
+		t.Fatal("expected conflicting max aliases to fail")
+	} else if !strings.Contains(err.Error(), "same setting with different values") {
+		t.Fatalf("AcquireSlot error = %v", err)
+	}
 }
 
 func TestReapAllRefusesSharedRoot(t *testing.T) {
