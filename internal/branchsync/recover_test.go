@@ -388,6 +388,31 @@ func TestRecoverIdempotentAfterSuccessRejectsPrivateRefAliasConflict(t *testing.
 	}
 }
 
+func TestRecoverRejectsLegacyRecoverAnchorConflictBeforeStamping(t *testing.T) {
+	t.Parallel()
+
+	f := newRecoverFixture(t, types.RunCancelled)
+	legacyRef := strings.Replace(f.anchorRef(), "refs/no-slop/", "refs/no-mistakes/", 1)
+	mustRun(t, f.local, "update-ref", legacyRef, f.base)
+
+	state := f.service.Recover(f.ctx, false)
+	if state.Recovered || state.Changed || state.Safety != "blocked_recover_preserve_failed" {
+		t.Fatalf("recover with legacy anchor conflict = %#v", state)
+	}
+	if f.custodyReturned() {
+		t.Fatal("custody was stamped after legacy anchor conflict")
+	}
+	if _, err := gitpkg.Run(f.ctx, f.local, "rev-parse", "--verify", f.anchorRef()+"^{commit}"); err == nil {
+		t.Fatal("canonical recover anchor should not be written after legacy conflict")
+	}
+	if got := mustRun(t, f.local, "rev-parse", legacyRef+"^{commit}"); got != f.base {
+		t.Fatalf("legacy recover anchor = %s, want %s", got, f.base)
+	}
+	if got := mustRun(t, f.local, "rev-parse", "HEAD"); got != f.submitted {
+		t.Fatalf("HEAD = %s, want unchanged submitted head %s", got, f.submitted)
+	}
+}
+
 // TestRecoverWorktreeAlreadyAtPreservedHeadReturnsCustodyWithoutMutation
 // covers the equal cell: nothing to reconcile, custody return only.
 func TestRecoverWorktreeAlreadyAtPreservedHeadReturnsCustodyWithoutMutation(t *testing.T) {

@@ -639,6 +639,8 @@ func (s *Service) Recover(ctx context.Context, keepLocal bool) State {
 		return blockedPrivateRefConflict(state, err)
 	} else if ok && existing == preserved {
 		anchored = true
+	} else if ok && existing != preserved {
+		return blockedPlan(state, StatePipelineOwned, "blocked_recover_preserve_failed", "the preserved pipeline commits could not be anchored locally; no files or refs were changed")
 	}
 	// A gate branch still at the run's SUBMITTED head means the pipeline never
 	// adopted anything past submission: every step that advances the run head
