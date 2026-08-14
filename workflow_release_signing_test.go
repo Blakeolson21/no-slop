@@ -501,8 +501,7 @@ func TestReleaseWorkflowCleansUpKeychainAlways(t *testing.T) {
 }
 
 // TestReleaseWorkflowPreservesArtifactContract pins the installer/updater and
-// checksum contracts: per-arch tarball names, an unchanged linux/windows path,
-// and finalize still publishing a prerelease.
+// checksum contracts: per-arch tarball names and an unchanged linux/windows path.
 func TestReleaseWorkflowPreservesArtifactContract(t *testing.T) {
 	wf := loadReleaseWorkflowDoc(t)
 
@@ -544,8 +543,36 @@ func TestReleaseWorkflowPreservesArtifactContract(t *testing.T) {
 	if finalize == nil {
 		t.Fatal("no finalize job found")
 	}
-	finalizeStep := workflowStepByName(t, finalize, "Publish draft release as prerelease")
-	assertShellCommandIncludes(t, finalizeStep.Run, "gh", "release", "edit", "--draft=false", "--prerelease=true")
+	workflowStepByName(t, finalize, "Publish draft release as prerelease")
+}
+
+func TestReleaseWorkflowFinalizePublishesPrerelease(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executes POSIX shell workflow steps")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is required to execute workflow shell steps")
+	}
+	wf := loadReleaseWorkflowDoc(t)
+	finalize := wf.Jobs["finalize"]
+	if finalize == nil {
+		t.Fatal("no finalize job found")
+	}
+	ghLog := filepath.Join(t.TempDir(), "gh.log")
+	fakeBin := makeReleaseWorkflowFakeBin(t, ghLog)
+	runReleaseWorkflowStep(t, workflowStepByName(t, finalize, "Publish draft release as prerelease"), t.TempDir(), fakeBin, map[string]string{
+		"TAG": "v1.2.3",
+	})
+	commands := readReleaseWorkflowLines(t, ghLog)
+	if len(commands) != 1 {
+		t.Fatalf("release finalize commands = %v, want one invocation", commands)
+	}
+	fields := strings.Fields(commands[0])
+	for _, want := range []string{"release", "edit", "v1.2.3", "--draft=false", "--prerelease=true"} {
+		if !slicesContains(fields, want) {
+			t.Fatalf("release finalize args = %q, missing %s", commands[0], want)
+		}
+	}
 }
 
 func TestReleaseWorkflowPublishesLegacyArchiveAliases(t *testing.T) {
@@ -761,16 +788,6 @@ func slicesContains(values []string, want string) bool {
 		}
 	}
 	return false
-}
-
-func assertShellCommandIncludes(t *testing.T, command string, want ...string) {
-	t.Helper()
-	fields := strings.Fields(command)
-	for _, token := range want {
-		if !slicesContains(fields, token) {
-			t.Fatalf("shell command fields = %v, missing %q", fields, token)
-		}
-	}
 }
 
 func workflowJobRunsCommand(job *wfJob, command string) bool {

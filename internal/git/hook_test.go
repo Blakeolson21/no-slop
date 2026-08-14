@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPreReceiveHookScript(t *testing.T) {
@@ -61,6 +62,62 @@ func TestRefreshManagedPreReceiveHookPreservesCustomHook(t *testing.T) {
 	managed, err := os.ReadFile(filepath.Join(hooks, "pre-receive"))
 	if err != nil || !isManagedPreReceiveHook(managed) {
 		t.Fatalf("managed admission hook missing: %v", err)
+	}
+}
+
+func TestRefreshManagedPreReceiveHookRejectsConflictingPreservedAliases(t *testing.T) {
+	bare := t.TempDir()
+	hooks := filepath.Join(bare, "hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hooks, preservedPreReceiveHook), []byte("#!/bin/sh\necho canonical\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hooks, legacyPreservedPreReceiveHook), []byte("#!/bin/sh\necho legacy\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := RefreshManagedPreReceiveHook(bare); err == nil || !strings.Contains(err.Error(), "aliases conflict") {
+		t.Fatalf("refresh error = %v, want aliases conflict", err)
+	}
+}
+
+func TestPreReceiveHookScriptRejectsConflictingPreservedAliases(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executes POSIX shell hook")
+	}
+	bare := t.TempDir()
+	if out, err := exec.Command("git", "init", "--bare", bare).CombinedOutput(); err != nil {
+		t.Fatalf("init bare: %v\n%s", err, out)
+	}
+	hooks := filepath.Join(bare, "hooks")
+	fakeBin := filepath.Join(t.TempDir(), "no-slop")
+	if err := os.WriteFile(fakeBin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hooks, preservedPreReceiveHook), []byte("#!/bin/sh\necho canonical\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hooks, legacyPreservedPreReceiveHook), []byte("#!/bin/sh\necho legacy\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hookPath := filepath.Join(hooks, "pre-receive")
+	if err := os.WriteFile(hookPath, []byte(preReceiveHookScript(fakeBin)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sh", hookPath)
+	cmd.WaitDelay = 2 * time.Second
+	cmd.Dir = bare
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("pre-receive hook timed out\n%s", output)
+	}
+	if err == nil || !strings.Contains(string(output), "aliases conflict") {
+		t.Fatalf("pre-receive output = %q, err = %v, want aliases conflict", output, err)
 	}
 }
 

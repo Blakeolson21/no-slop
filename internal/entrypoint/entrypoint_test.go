@@ -1,4 +1,4 @@
-package main
+package entrypoint
 
 import (
 	"fmt"
@@ -24,6 +24,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	_ = os.Setenv("NS_HOME", root)
+	_ = os.Setenv("NM_HOME", root)
 	_ = os.Setenv("HOME", home)
 	_ = os.Setenv("NS_TELEMETRY", "off")
 	_ = os.Setenv("NS_NO_UPDATE_CHECK", "1")
@@ -38,6 +39,7 @@ func TestMain(m *testing.M) {
 func TestCLILogWriterReturnsDiscardWhenLogsDirMissing(t *testing.T) {
 	nmHome := t.TempDir()
 	t.Setenv("NS_HOME", nmHome)
+	t.Setenv("NM_HOME", nmHome)
 
 	w := cliLogWriter()
 	if _, err := w.Write([]byte("hello\n")); err != nil {
@@ -72,6 +74,7 @@ func TestRunRejectsDaemonControlAliasConflict(t *testing.T) {
 func TestCLILogWriterAppendsToFileWhenLogsDirExists(t *testing.T) {
 	nmHome := t.TempDir()
 	t.Setenv("NS_HOME", nmHome)
+	t.Setenv("NM_HOME", nmHome)
 
 	logsDir := filepath.Join(nmHome, "logs")
 	if err := os.MkdirAll(logsDir, 0o755); err != nil {
@@ -157,6 +160,7 @@ func TestDaemonLogSinkRootFromArgs(t *testing.T) {
 func TestWriteDaemonRunErrorPreservesBootstrapSinkOwnership(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("NS_HOME", root)
+	t.Setenv("NM_HOME", root)
 	logDir := filepath.Join(root, "logs")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		t.Fatal(err)

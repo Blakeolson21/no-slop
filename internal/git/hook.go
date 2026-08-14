@@ -1,6 +1,7 @@
 package git
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -55,9 +56,15 @@ if [ $status -ne 0 ]; then
   printf 'no-slop: gate push refused before ref mutation:\n%s\n' "$out" >&2
   exit $status
 fi
-USER_HOOK="$GATE_DIR/hooks/` + preservedPreReceiveHook + `"
+CANONICAL_USER_HOOK="$GATE_DIR/hooks/` + preservedPreReceiveHook + `"
+LEGACY_USER_HOOK="$GATE_DIR/hooks/` + legacyPreservedPreReceiveHook + `"
+if [ -x "$CANONICAL_USER_HOOK" ] && [ -x "$LEGACY_USER_HOOK" ] && ! cmp -s "$CANONICAL_USER_HOOK" "$LEGACY_USER_HOOK"; then
+  printf 'no-slop: preserved pre-receive hook aliases conflict: %s and %s differ\n' "$CANONICAL_USER_HOOK" "$LEGACY_USER_HOOK" >&2
+  exit 1
+fi
+USER_HOOK="$CANONICAL_USER_HOOK"
 if [ ! -x "$USER_HOOK" ]; then
-  USER_HOOK="$GATE_DIR/hooks/` + legacyPreservedPreReceiveHook + `"
+  USER_HOOK="$LEGACY_USER_HOOK"
 fi
 if [ -x "$USER_HOOK" ]; then
   exec "$USER_HOOK"
@@ -80,6 +87,9 @@ func RefreshManagedPreReceiveHook(bareDir string) (bool, error) {
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		return false, err
 	}
+	if err := validatePreservedPreReceiveHookAliases(hooksDir); err != nil {
+		return false, err
+	}
 	hookPath := filepath.Join(hooksDir, "pre-receive")
 	companion := filepath.Join(hooksDir, preservedPreReceiveHook)
 	desired := []byte(PreReceiveHookScript())
@@ -89,6 +99,9 @@ func RefreshManagedPreReceiveHook(bareDir string) (bool, error) {
 			return false, nil
 		}
 		if !isManagedPreReceiveHook(existing) {
+			if err := validatePreservedPreReceiveHookCandidate(hooksDir, existing); err != nil {
+				return false, err
+			}
 			if _, companionErr := os.Stat(companion); companionErr == nil {
 				return false, fmt.Errorf("preserve pre-receive hook: companion already exists")
 			} else if !os.IsNotExist(companionErr) {
@@ -110,6 +123,59 @@ func RefreshManagedPreReceiveHook(bareDir string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+func validatePreservedPreReceiveHookAliases(hooksDir string) error {
+	canonical := filepath.Join(hooksDir, preservedPreReceiveHook)
+	legacy := filepath.Join(hooksDir, legacyPreservedPreReceiveHook)
+	canonicalInfo, canonicalErr := os.Stat(canonical)
+	legacyInfo, legacyErr := os.Stat(legacy)
+	if os.IsNotExist(canonicalErr) || os.IsNotExist(legacyErr) {
+		return nil
+	}
+	if canonicalErr != nil {
+		return canonicalErr
+	}
+	if legacyErr != nil {
+		return legacyErr
+	}
+	if canonicalInfo.Mode()&0o111 == 0 || legacyInfo.Mode()&0o111 == 0 {
+		return nil
+	}
+	canonicalData, err := os.ReadFile(canonical)
+	if err != nil {
+		return err
+	}
+	legacyData, err := os.ReadFile(legacy)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(canonicalData, legacyData) {
+		return fmt.Errorf("preserved pre-receive hook aliases conflict: %s and %s differ", preservedPreReceiveHook, legacyPreservedPreReceiveHook)
+	}
+	return nil
+}
+
+func validatePreservedPreReceiveHookCandidate(hooksDir string, candidate []byte) error {
+	legacy := filepath.Join(hooksDir, legacyPreservedPreReceiveHook)
+	legacyInfo, err := os.Stat(legacy)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if legacyInfo.Mode()&0o111 == 0 {
+		return nil
+	}
+	legacyData, err := os.ReadFile(legacy)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(candidate, legacyData) {
+		return fmt.Errorf("preserved pre-receive hook aliases conflict: %s and %s differ", preservedPreReceiveHook, legacyPreservedPreReceiveHook)
+	}
+	return nil
 }
 
 // RefreshManagedGateHooks owns the complete receive boundary.
