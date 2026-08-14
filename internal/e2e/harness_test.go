@@ -48,6 +48,31 @@ func TestDaemonStartTimeoutLeavesRoomForLoginShellProbe(t *testing.T) {
 	}
 }
 
+func TestSynchronizedAliasOverridesMirrorsMissingAlias(t *testing.T) {
+	overrides := synchronizedAliasOverrides(map[string]string{
+		"NS_HOME":               "/tmp/ns-home",
+		"NO_MISTAKES_TELEMETRY": "off",
+	})
+
+	if overrides["NM_HOME"] != "/tmp/ns-home" {
+		t.Fatalf("NM_HOME = %q, want mirrored NS_HOME", overrides["NM_HOME"])
+	}
+	if overrides["NS_TELEMETRY"] != "off" {
+		t.Fatalf("NS_TELEMETRY = %q, want mirrored legacy telemetry", overrides["NS_TELEMETRY"])
+	}
+}
+
+func TestSynchronizedAliasOverridesPreservesExplicitConflict(t *testing.T) {
+	overrides := synchronizedAliasOverrides(map[string]string{
+		"NS_HOME": "/tmp/ns-home",
+		"NM_HOME": "/tmp/nm-home",
+	})
+
+	if overrides["NS_HOME"] != "/tmp/ns-home" || overrides["NM_HOME"] != "/tmp/nm-home" {
+		t.Fatalf("overrides = %#v, want explicit conflict preserved", overrides)
+	}
+}
+
 func TestCommitChangeCreatesMissingBranchFromMain(t *testing.T) {
 	workDir := t.TempDir()
 	h := &Harness{t: t, WorkDir: workDir}

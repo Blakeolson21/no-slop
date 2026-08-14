@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Blakeolson21/no-slop/internal/identity"
 )
 
 // labRoot creates a mode-0700 isolation root under /private/tmp (or /tmp).
@@ -116,6 +118,28 @@ func TestReapMainRejectsConflictingVerboseAliases(t *testing.T) {
 	}
 }
 
+func TestTempDaemonCommandEnvSetsCompatibilityAliases(t *testing.T) {
+	env := tempDaemonCommandEnv("/tmp/ns-home")
+	for _, pair := range []struct {
+		canonical string
+		legacy    string
+		want      string
+	}{
+		{"NS_HOME", "NM_HOME", "/tmp/ns-home"},
+		{"NS_TEST_START_DAEMON", "NM_TEST_START_DAEMON", "1"},
+		{"NS_TELEMETRY", "NO_MISTAKES_TELEMETRY", "off"},
+		{"NS_NO_UPDATE_CHECK", "NO_MISTAKES_NO_UPDATE_CHECK", "1"},
+	} {
+		got, err := identity.LookupEnvSlice(env, pair.canonical, pair.legacy)
+		if err != nil {
+			t.Fatalf("LookupEnvSlice(%s, %s): %v", pair.canonical, pair.legacy, err)
+		}
+		if got != pair.want {
+			t.Fatalf("LookupEnvSlice(%s, %s) = %q, want %q", pair.canonical, pair.legacy, got, pair.want)
+		}
+	}
+}
+
 func startDetachedTestDaemon(t *testing.T, bin, nmHome string) int {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Join(nmHome, "logs"), 0o755); err != nil {
@@ -131,12 +155,7 @@ func startDetachedTestDaemon(t *testing.T, bin, nmHome string) int {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(bin, "daemon", "run", "--root", nmHome)
-	cmd.Env = append(os.Environ(),
-		"NS_HOME="+nmHome,
-		"NM_TEST_START_DAEMON=1",
-		"NS_TELEMETRY=off",
-		"NS_NO_UPDATE_CHECK=1",
-	)
+	cmd.Env = tempDaemonCommandEnv(nmHome)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	detachTestProcess(cmd)
@@ -153,12 +172,7 @@ func startDetachedTestDaemon(t *testing.T, bin, nmHome string) int {
 		if MatchesDaemonRoot(pid, nmHome) {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			status := exec.CommandContext(ctx, bin, "daemon", "status")
-			status.Env = append(os.Environ(),
-				"NS_HOME="+nmHome,
-				"NM_TEST_START_DAEMON=1",
-				"NS_TELEMETRY=off",
-				"NS_NO_UPDATE_CHECK=1",
-			)
+			status.Env = tempDaemonCommandEnv(nmHome)
 			out, _ := status.CombinedOutput()
 			cancel()
 			if strings.Contains(string(out), "running") {
@@ -394,12 +408,7 @@ func runSigkillChildHelper() {
 		os.Exit(1)
 	}
 	cmd := exec.Command(bin, "daemon", "run", "--root", nmHome)
-	cmd.Env = append(os.Environ(),
-		"NS_HOME="+nmHome,
-		"NM_TEST_START_DAEMON=1",
-		"NS_TELEMETRY=off",
-		"NS_NO_UPDATE_CHECK=1",
-	)
+	cmd.Env = tempDaemonCommandEnv(nmHome)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	detachTestProcess(cmd)

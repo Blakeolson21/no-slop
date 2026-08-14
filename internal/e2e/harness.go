@@ -130,6 +130,7 @@ func NewHarness(t *testing.T, opts SetupOpts) *Harness {
 	t.Setenv("PATH", h.BinDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("HOME", h.HomeDir)
 	t.Setenv("NS_HOME", h.NMHome)
+	t.Setenv("NM_HOME", h.NMHome)
 	t.Setenv("FAKEAGENT_LOG", h.AgentLog)
 	if h.Scenario != "" {
 		t.Setenv("FAKEAGENT_SCENARIO", h.Scenario)
@@ -155,9 +156,11 @@ func NewHarness(t *testing.T, opts SetupOpts) *Harness {
 	// Disable telemetry attempts (the package would no-op anyway, but
 	// avoid a network DNS lookup on each command).
 	t.Setenv("NS_TELEMETRY", "off")
+	t.Setenv("NO_MISTAKES_TELEMETRY", "off")
 	// Disable background update checks so helper processes do not write
 	// update-check.json while testing.T is removing the temp directory.
 	t.Setenv("NS_NO_UPDATE_CHECK", "1")
+	t.Setenv("NO_MISTAKES_NO_UPDATE_CHECK", "1")
 
 	h.writeGlobalConfig()
 	h.initGitRepos()
@@ -288,7 +291,7 @@ func (h *Harness) RunInDirWithEnv(dir string, env map[string]string, args ...str
 	defer cancel()
 	cmd := exec.CommandContext(ctx, h.NMBin, args...)
 	cmd.Dir = dir
-	cmd.Env = mergedEnv(os.Environ(), env)
+	cmd.Env = mergedEnv(os.Environ(), synchronizedAliasOverrides(env))
 	out, err := cmd.CombinedOutput()
 	h.syncDaemonOwnership()
 	return string(out), err
@@ -329,6 +332,38 @@ func mergedEnv(base []string, overrides map[string]string) []string {
 	for key, value := range overrides {
 		if !seen[key] {
 			out = append(out, key+"="+value)
+		}
+	}
+	return out
+}
+
+var harnessAliasEnvPairs = [][2]string{
+	{"NS_HOME", "NM_HOME"},
+	{"NS_TELEMETRY", "NO_MISTAKES_TELEMETRY"},
+	{"NS_NO_UPDATE_CHECK", "NO_MISTAKES_NO_UPDATE_CHECK"},
+	{"NS_TEST_START_DAEMON", "NM_TEST_START_DAEMON"},
+	{"NS_TEST_DAEMON_START_TIMEOUT", "NM_TEST_DAEMON_START_TIMEOUT"},
+	{"NS_TEST_DAEMON_STOP_TIMEOUT", "NM_TEST_DAEMON_STOP_TIMEOUT"},
+	{"NS_TEST_DAEMON_START_POLL_INTERVAL", "NM_TEST_DAEMON_START_POLL_INTERVAL"},
+}
+
+func synchronizedAliasOverrides(overrides map[string]string) map[string]string {
+	if len(overrides) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(overrides)+len(harnessAliasEnvPairs))
+	for key, value := range overrides {
+		out[key] = value
+	}
+	for _, pair := range harnessAliasEnvPairs {
+		canonical, legacy := pair[0], pair[1]
+		canonicalValue, canonicalSet := out[canonical]
+		legacyValue, legacySet := out[legacy]
+		if canonicalSet && !legacySet {
+			out[legacy] = canonicalValue
+		}
+		if legacySet && !canonicalSet {
+			out[canonical] = legacyValue
 		}
 	}
 	return out

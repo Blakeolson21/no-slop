@@ -149,17 +149,91 @@ func TestGateConfigCurrentRejectsMissingOrTamperedAdmissionHook(t *testing.T) {
 }
 
 func TestGateConfigStampStableAcrossExecutableAliases(t *testing.T) {
-	canonical := gateConfigStampContentForExecutable("/opt/no-slop/bin/no-slop")
-	legacy := gateConfigStampContentForExecutable("/opt/no-slop/bin/no-mistakes")
+	dir := t.TempDir()
+	canonicalBin := filepath.Join(dir, hookTestExecutableName("no-slop"))
+	legacyBin := filepath.Join(dir, hookTestExecutableName("no-mistakes"))
+	if err := os.WriteFile(canonicalBin, []byte{}, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	canonical := gateConfigStampContentForExecutable(canonicalBin)
+	legacy := gateConfigStampContentForExecutable(legacyBin)
 	if canonical != legacy {
 		t.Fatalf("gate stamp differs by executable alias:\ncanonical: %slegacy: %s", canonical, legacy)
 	}
 
-	canonicalHook := preReceiveHookScript(canonicalHookExecutable("/opt/no-slop/bin/no-slop"))
-	legacyHook := preReceiveHookScript(canonicalHookExecutable("/opt/no-slop/bin/no-mistakes"))
+	canonicalHook := preReceiveHookScript(canonicalHookExecutable(canonicalBin))
+	legacyHook := preReceiveHookScript(canonicalHookExecutable(legacyBin))
 	if canonicalHook != legacyHook {
 		t.Fatal("managed pre-receive hook differs by executable alias")
 	}
+}
+
+func TestPreReceiveHookScriptKeepsLegacyExecutableWhenCanonicalSiblingMissing(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executes POSIX shell hook")
+	}
+	bare := t.TempDir()
+	initCtx, initCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer initCancel()
+	initCmd := exec.CommandContext(initCtx, "git", "init", "--bare", bare)
+	initCmd.WaitDelay = 2 * time.Second
+	if out, err := initCmd.CombinedOutput(); err != nil {
+		if initCtx.Err() == context.DeadlineExceeded {
+			t.Fatalf("init bare timed out\n%s", out)
+		}
+		t.Fatalf("init bare: %v\n%s", err, out)
+	}
+
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not found")
+	}
+	pathDir := t.TempDir()
+	gitWrapper := filepath.Join(pathDir, "git")
+	if err := os.WriteFile(gitWrapper, []byte("#!/bin/sh\nexec "+shellSingleQuote(gitPath)+" \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	argsPath := filepath.Join(t.TempDir(), "args.txt")
+	legacyBin := filepath.Join(t.TempDir(), "no-mistakes")
+	fakeScript := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + shellSingleQuote(argsPath) + "\nexit 0\n"
+	if err := os.WriteFile(legacyBin, []byte(fakeScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hookPath := filepath.Join(bare, "hooks", "pre-receive")
+	if err := os.WriteFile(hookPath, []byte(preReceiveHookScript(canonicalHookExecutable(legacyBin))), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/sh", hookPath)
+	cmd.WaitDelay = 2 * time.Second
+	cmd.Dir = bare
+	cmd.Env = []string{"PATH=" + pathDir, "HOME=" + t.TempDir()}
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("pre-receive hook timed out\n%s", output)
+	}
+	if err != nil {
+		t.Fatalf("pre-receive hook failed: %v\n%s", err, output)
+	}
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatalf("legacy executable was not called: %v\nhook output:\n%s", err, output)
+	}
+	gotArgs := strings.Split(strings.TrimSpace(string(args)), "\n")
+	if len(gotArgs) < 3 || gotArgs[0] != "daemon" || gotArgs[1] != "admit-push" || gotArgs[2] != "--gate" {
+		t.Fatalf("legacy executable args = %q", args)
+	}
+}
+
+func hookTestExecutableName(base string) string {
+	if runtime.GOOS == "windows" {
+		return base + ".exe"
+	}
+	return base
 }
 
 func TestPostReceiveHookScript(t *testing.T) {

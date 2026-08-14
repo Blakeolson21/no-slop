@@ -41,12 +41,19 @@ func canonicalHookExecutable(command string) string {
 	base := command[separator+1:]
 	switch {
 	case strings.EqualFold(base, "no-mistakes"):
-		return prefix + "no-slop"
+		return canonicalHookExecutableIfPresent(command, prefix+"no-slop")
 	case strings.EqualFold(base, "no-mistakes.exe"):
-		return prefix + "no-slop.exe"
+		return canonicalHookExecutableIfPresent(command, prefix+"no-slop.exe")
 	default:
 		return command
 	}
+}
+
+func canonicalHookExecutableIfPresent(fallback, canonical string) string {
+	if _, err := os.Stat(canonical); err == nil {
+		return canonical
+	}
+	return fallback
 }
 
 func preReceiveHookScript(command string) string {

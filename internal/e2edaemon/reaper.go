@@ -141,14 +141,7 @@ func tryDaemonStop(e Entry) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, "daemon", "stop")
-	cmd.Env = append(os.Environ(),
-		"NS_HOME="+e.NMHome,
-		"NM_HOME="+e.NMHome,
-		"NS_TEST_START_DAEMON=1",
-		"NM_TEST_START_DAEMON=1",
-		"NS_TELEMETRY=off",
-		"NS_NO_UPDATE_CHECK=1",
-	)
+	cmd.Env = tempDaemonCommandEnv(e.NMHome)
 	cmd.Dir = os.TempDir()
 	_ = cmd.Run()
 	// Consider stop successful when no matching process remains.
@@ -160,6 +153,19 @@ func tryDaemonStop(e Entry) bool {
 	}
 	found, _ := FindDaemonsForRoot(e.NMHome)
 	return len(found) == 0
+}
+
+func tempDaemonCommandEnv(nmHome string) []string {
+	return append(os.Environ(),
+		"NS_HOME="+nmHome,
+		"NM_HOME="+nmHome,
+		"NS_TEST_START_DAEMON=1",
+		"NM_TEST_START_DAEMON=1",
+		"NS_TELEMETRY=off",
+		"NO_MISTAKES_TELEMETRY=off",
+		"NS_NO_UPDATE_CHECK=1",
+		"NO_MISTAKES_NO_UPDATE_CHECK=1",
+	)
 }
 
 func terminateMatched(pid int) error {
