@@ -162,4 +162,4 @@ go build -o ./bin/noslop ./cmd/noslop
 
 ## License and credit
 
-MIT licensed. The gate foundation is derived from [no-slop](https://github.com/Blakeolson21/no-slop) by Kun Chen.
+MIT licensed. The gate foundation is derived from [no-mistakes](https://github.com/kunchenguid/no-mistakes) by Kun Chen.

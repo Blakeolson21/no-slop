@@ -4,13 +4,17 @@ description: All fields for .no-slop.yaml.
 ---
 
 Per-repo configuration lives in `.no-slop.yaml` at the root of your repository.
+`.no-mistakes.yaml` remains a compatibility filename during the rename. If both
+files are present in the same tree, no-slop parses both and refuses that tree
+unless their resolved settings are semantically equal. New changes should keep
+only `.no-slop.yaml`.
 
 :::caution[Security: gate-control fields are read from the default branch]
 `commands.*` execute arbitrary shell on the daemon host via `sh -c` / `cmd.exe /c`, and `agent` selects which process launches there (including ordered fallback lists, ACP aliases such as `cursor`, and `acp:` targets) with the maintainer's credentials.
 To prevent a supply-chain attack where a contributor lands a hostile value on a gated branch, the daemon always reads **`commands` and `agent` from your default branch** (e.g. `origin/main`), never from the pushed SHA, and reads them at the exact commit a fresh fetch resolved (so a stale `origin/<default>` ref cannot serve a value the live default branch removed).
 The daemon also reads `document.instructions`, the `review` section (`review.path_instructions`, `review.convergence`), `disable_project_settings`, `no_ci`, and `ci.rerun_transient` only from that trusted copy.
-If the default branch cannot be fetched and resolved to a readable commit, or its present `.no-slop.yaml` cannot be read and parsed, the run aborts before launching an agent.
-A readable default-branch tree with no `.no-slop.yaml` is valid and uses defaults.
+If the default branch cannot be fetched and resolved to a readable commit, or its present repo config (`.no-slop.yaml` or the `.no-mistakes.yaml` compatibility filename) cannot be read and parsed, the run aborts before launching an agent.
+A readable default-branch tree with neither config file is valid and uses defaults.
 Commit the gate-control settings you want to your default branch.
 Non-executing fields (`ignore_patterns`, `auto_fix`, `commit`, `intent`, `test`) are still read from the pushed branch.
 

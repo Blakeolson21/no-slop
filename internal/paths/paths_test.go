@@ -197,7 +197,7 @@ func TestNewDefault(t *testing.T) {
 	t.Setenv("NS_HOME", "")
 	t.Setenv("NM_HOME", "")
 	t.Setenv("NS_ALLOW_DEFAULT_ROOT_IN_TESTS", "1")
-	t.Setenv("NO_MISTAKES_ALLOW_DEFAULT_ROOT_IN_TESTS", "")
+	t.Setenv("NO_MISTAKES_ALLOW_DEFAULT_ROOT_IN_TESTS", "1")
 
 	p, err := New()
 	if err != nil {

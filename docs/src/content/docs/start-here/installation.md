@@ -83,7 +83,7 @@ The [CLI reference](/no-slop/reference/cli/#no-slop-update) owns what the disabl
 no-slop eject
 ```
 
-Removes the `no-slop` remote, deletes the bare repo, cleans up worktrees, and removes the database record.
+Removes the `no-slop` remote and the `no-mistakes` compatibility remote, deletes the bare repo, cleans up worktrees, and removes the database record.
 It does not remove repo-local agent skill files created by `no-slop init`.
 
 ## Uninstall

@@ -25,7 +25,8 @@ When set, everything else moves under this root:
 - Managed service names get a short stable suffix derived from `$NS_HOME` so multiple installs don't collide.
 
 `NM_HOME` is a compatibility alias. If both names are set, their values must
-match or the command refuses to choose a state root.
+resolve to the same root, including when one value is explicitly empty, or the
+command refuses to choose a state root.
 
 ## `NS_DAEMON_CONNECT_TIMEOUT`
 
@@ -38,8 +39,8 @@ Override how long a CLI client waits for an existing daemon socket to accept a c
 
 Takes precedence over `daemon_connect_timeout` in `config.yaml`. An empty, unparsable, or non-positive value is ignored and the config value (or its default) is used instead.
 
-`NM_DAEMON_CONNECT_TIMEOUT` is a compatibility alias. Conflicting non-empty
-values are returned as alias-conflict errors.
+`NM_DAEMON_CONNECT_TIMEOUT` is a compatibility alias. Conflicting values,
+including empty versus non-empty, are returned as alias-conflict errors.
 
 ## `NS_BITBUCKET_EMAIL`
 
@@ -50,7 +51,9 @@ Bitbucket Cloud account email used for PR creation and CI monitoring.
 | Type    | `string`                                      |
 | Default | (none; Bitbucket PR/CI steps skip when unset) |
 
-Used alongside `NS_BITBUCKET_API_TOKEN`. See [Provider Integration](/no-slop/guides/provider-integration/#bitbucket-cloud).
+Used alongside `NS_BITBUCKET_API_TOKEN`. `NO_MISTAKES_BITBUCKET_EMAIL` is a
+compatibility alias; if both names are set, their values must match, including
+empty values. See [Provider Integration](/no-slop/guides/provider-integration/#bitbucket-cloud).
 
 ## `NS_BITBUCKET_API_TOKEN`
 
@@ -63,6 +66,9 @@ Bitbucket Cloud API token.
 
 Get one from [Bitbucket account settings](https://bitbucket.org/account/settings/app-passwords/).
 
+`NO_MISTAKES_BITBUCKET_API_TOKEN` is a compatibility alias; if both names are
+set, their values must match, including empty values.
+
 ## `NS_BITBUCKET_API_BASE_URL`
 
 Override the Bitbucket Cloud API base URL.
@@ -73,6 +79,9 @@ Override the Bitbucket Cloud API base URL.
 | Default | `https://api.bitbucket.org/2.0` |
 
 Useful for mocking in tests or pointing at a proxy.
+
+`NO_MISTAKES_BITBUCKET_API_BASE_URL` is a compatibility alias; if both names are
+set, their values must match, including empty values.
 
 ## `AZURE_DEVOPS_EXT_PAT`
 
@@ -124,7 +133,41 @@ Update checks run on every CLI invocation except `update` itself and version que
 
 This variable has no effect in this build: self-update is disabled, so background checks never run whether or not it is set. See the [CLI reference](/no-slop/reference/cli/#no-slop-update).
 
-`NO_MISTAKES_NO_UPDATE_CHECK` is a compatibility alias.
+`NO_MISTAKES_NO_UPDATE_CHECK` is a compatibility alias; if both names are set,
+their values must match, including empty values.
+
+## `NS_INSTALL_DIR`
+
+Override the install directory used by the repository install scripts.
+
+|         |                                                                 |
+| ------- | --------------------------------------------------------------- |
+| Type    | `string`                                                        |
+| Default | Unix: `~/.no-mistakes/bin`; Windows: `%LOCALAPPDATA%\no-mistakes` |
+
+This controls where `docs/install.sh` places the real binary and where
+`docs/install.ps1` places `no-slop.exe` and its `no-mistakes.exe` compatibility
+entry point. It does not relocate no-slop state; use [`NS_HOME`](#ns_home) for
+that.
+
+`NO_MISTAKES_INSTALL_DIR` is a compatibility alias; if both names are set, their
+values must match, including empty values.
+
+## `NS_LINK_DIR`
+
+Override the symlink directory used by the Unix install script.
+
+|         |                                                                                            |
+| ------- | ------------------------------------------------------------------------------------------ |
+| Type    | `string`                                                                                   |
+| Default | `~/.local/bin` when it is already on `PATH`; otherwise `/usr/local/bin` |
+
+`docs/install.sh` links both `no-slop` and the `no-mistakes` compatibility
+command into this directory. The PowerShell installer does not use this
+variable because it adds the install directory itself to the user `Path`.
+
+`NO_MISTAKES_LINK_DIR` is a compatibility alias; if both names are set, their
+values must match, including empty values.
 
 ## `XDG_DATA_HOME`
 
@@ -181,7 +224,7 @@ Override the telemetry collection host.
 | Type    | `URL`                       |
 | Default | `https://a.kunchenguid.com` |
 
-When set, telemetry sends events to this host's `/api/send` endpoint. `NO_MISTAKES_UMAMI_HOST` is the compatibility alias and conflicting values are refused. If it is unset in a dev build, `no-slop` also checks a repo-local `.env` file for either spelling. If no runtime value is found, it falls back to any host embedded at build time and then the default self-hosted Umami instance.
+When set, telemetry sends events to this host's `/api/send` endpoint. `NO_MISTAKES_UMAMI_HOST` is the compatibility alias; if both names are set, their values must match, including empty values. If it is unset in a dev build, `no-slop` also checks a repo-local `.env` file for either spelling. If no runtime value is found, it falls back to any host embedded at build time and then the default self-hosted Umami instance.
 
 ## `NS_UMAMI_WEBSITE_ID`
 
@@ -192,7 +235,7 @@ Override or enable the telemetry website ID.
 | Type    | `string`                                                                |
 | Default | embedded in Makefile and release builds; unset in unembedded dev builds |
 
-When set, telemetry uses this website ID at runtime. `NO_MISTAKES_UMAMI_WEBSITE_ID` is the compatibility alias and conflicting values are refused. If it is unset in a dev build, `no-slop` also checks a repo-local `.env` file for either spelling. If no runtime value is found, it falls back to any website ID embedded at build time.
+When set, telemetry uses this website ID at runtime. `NO_MISTAKES_UMAMI_WEBSITE_ID` is the compatibility alias; if both names are set, their values must match, including empty values. If it is unset in a dev build, `no-slop` also checks a repo-local `.env` file for either spelling. If no runtime value is found, it falls back to any website ID embedded at build time.
 
 When telemetry is enabled, `no-slop` sends command, run, approval, fix, and wizard events, completed step events with `awaiting_approval`, `fix_review`, or `failed` status, and pageviews for the human surfaces `/wizard` and `/tui` and the state-changing agent surfaces `/axi/run`, `/axi/respond`, and `/axi/abort` to Umami.
 Mutation pageviews are sent alongside command events, so command status and duration remain available.
@@ -233,7 +276,7 @@ Disable telemetry collection.
 | Type    | `0`, `false`, or `off` to disable; anything else to leave enabled |
 | Default | unset                                                             |
 
-When set to a disabling value, telemetry stays off even if a runtime or embedded website ID is available. `NO_MISTAKES_TELEMETRY` is the compatibility alias and conflicting values are refused.
+When set to a disabling value, telemetry stays off even if a runtime or embedded website ID is available. `NO_MISTAKES_TELEMETRY` is the compatibility alias; if both names are set, their values must match, including empty values.
 
 ## Environment the daemon sees
 

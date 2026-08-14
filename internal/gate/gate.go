@@ -38,16 +38,17 @@ func repoID(absPath string) string {
 // Init sets up a no-slop gate for the git repo at workDir.
 // It creates a bare repo, installs the post-receive hook, best-effort
 // isolates the bare repo's hooks path from shared local config writes when
-// Git supports config --worktree, adds the no-slop remote, and records
-// the repo in the database.
+// Git supports config --worktree, adds the canonical no-slop remote and the
+// no-mistakes compatibility remote, and records the repo in the database.
 //
 // Init is idempotent: re-running it on an already-initialized repo repairs and
 // refreshes the gate (for example installing a newer hook, picking up hook-path
 // isolation, or restoring a missing remote) instead of failing. This includes
 // a working directory that was renamed or moved since the gate was created:
-// the gate identified by the leftover no-slop remote is reattached at the
-// new path, preserving its run history. The returned bool reports whether a
-// new gate was created (true) or an existing one was refreshed (false).
+// the gate identified by a leftover no-slop or no-mistakes remote is
+// reattached at the new path, preserving its run history. The returned bool
+// reports whether a new gate was created (true) or an existing one was
+// refreshed (false).
 func Init(ctx context.Context, d *db.DB, p *paths.Paths, workDir string) (*db.Repo, bool, error) {
 	return InitWithFork(ctx, d, p, workDir, "")
 }
@@ -277,9 +278,9 @@ func ensureNamedWorkingRemote(ctx context.Context, absRoot, bareDir, reposDir st
 }
 
 // reattachRelocatedRepo detects a working directory that was renamed or moved
-// after init: it carries a no-slop remote pointing at a gate in our repos
-// dir, but its repo record references the old path. When the old path no
-// longer exists, the record is migrated to the new path so the existing gate
+// after init: it carries a no-slop or no-mistakes remote pointing at a gate in
+// our repos dir, but its repo record references the old path. When the old path
+// no longer exists, the record is migrated to the new path so the existing gate
 // and its run history are reattached. It returns nil when the repo should be
 // treated as a fresh init instead: no gate remote, an orphan gate with no
 // record, or a copy whose original still exists on disk.
@@ -408,7 +409,7 @@ func canonicalWorkingRemoteExistingPrefix(path string) string {
 }
 
 // Eject removes the no-slop gate from the repo at workDir.
-// It removes the remote, deletes the bare repo and worktrees,
+// It removes both working-tree remotes, deletes the bare repo and worktrees,
 // and deletes the repo record from the database.
 func Eject(ctx context.Context, d *db.DB, p *paths.Paths, workDir string) (*db.Repo, error) {
 	if classified, err := (gatecontext.Inspector{DB: d, Paths: p}).Inspect(ctx, gatecontext.Request{CWD: workDir, MarkerPresent: gatecontext.MarkerPresent()}); err != nil {
