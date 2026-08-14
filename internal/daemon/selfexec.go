@@ -134,6 +134,10 @@ func Start(p *paths.Paths) error {
 			}
 		}
 	} else {
+		var cleanupErr *managedServiceCleanupError
+		if errors.As(err, &cleanupErr) {
+			return fmt.Errorf("install managed service: %w", err)
+		}
 		if alive, _ := daemonHealthCheck(p); alive {
 			return nil
 		}

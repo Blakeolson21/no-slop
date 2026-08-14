@@ -43,7 +43,7 @@ func installLaunchAgent(p *paths.Paths, exe string) error {
 	if err := writeServiceFile(path, launchAgentProxyEnv, render); err != nil {
 		return fmt.Errorf("write launch agent: %w", err)
 	}
-	return cleanupLegacyLaunchAgent(p)
+	return managedServiceCleanupFailure(cleanupLegacyLaunchAgent(p))
 }
 
 // cleanupLegacyLaunchAgent removes any plist installed by a pre-scoping

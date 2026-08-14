@@ -35,7 +35,7 @@ func installSystemdUserService(p *paths.Paths, exe string) error {
 	if _, err := serviceCommandRunner("systemctl", "--user", "enable", systemdServiceName(p)); err != nil {
 		return fmt.Errorf("systemctl enable: %w", err)
 	}
-	return cleanupLegacySystemdUnit(p)
+	return managedServiceCleanupFailure(cleanupLegacySystemdUnit(p))
 }
 
 func cleanupLegacySystemdUnit(p *paths.Paths) error {

@@ -669,6 +669,53 @@ func TestStartFallsBackToDetachedDaemonWhenManagedStartFails(t *testing.T) {
 	_ = os.Remove(p.Socket())
 }
 
+func TestStartTreatsManagedInstallCleanupFailureAsTerminal(t *testing.T) {
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+
+	cleanup := stubServiceRuntime(t)
+	defer cleanup()
+	t.Setenv("NM_DAEMON_HELPER_PROCESS", "1")
+	runtimeGOOS = "linux"
+	serviceUserHomeDir = func() (string, error) { return home, nil }
+	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-slop", nil }
+	daemonHealthCheck = func(*paths.Paths) (bool, error) { return false, nil }
+
+	legacyPath := filepath.Join(home, ".config", "systemd", "user", legacySystemdServiceName)
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, []byte(renderSystemdUnit("/usr/local/bin/no-mistakes", p, home)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var commands []string
+	serviceCommandRunner = func(name string, args ...string) ([]byte, error) {
+		command := name + " " + strings.Join(args, " ")
+		commands = append(commands, command)
+		if command == "systemctl --user stop "+legacySystemdServiceName {
+			return nil, fmt.Errorf("legacy stop failed")
+		}
+		return nil, nil
+	}
+
+	err := Start(p)
+	if err == nil || !strings.Contains(err.Error(), "install managed service") || !strings.Contains(err.Error(), "systemctl stop legacy service") {
+		t.Fatalf("Start error = %v, want terminal managed cleanup failure", err)
+	}
+	if strings.Contains(err.Error(), "detached fallback") {
+		t.Fatalf("Start attempted detached fallback after cleanup failure: %v", err)
+	}
+	for _, command := range commands {
+		if command == "systemctl --user start "+systemdServiceName(p) {
+			t.Fatalf("Start should not start canonical service after cleanup failure, commands = %v", commands)
+		}
+	}
+}
+
 func TestStartDetachedDaemonUsesProvidedRootViaNMHome(t *testing.T) {
 	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
@@ -1491,6 +1538,38 @@ func TestServiceInstanceSuffixResolvesSymlinkedRoot(t *testing.T) {
 	}
 	if got, want := windowsTaskName(aliasPaths), windowsTaskName(realPaths); got != want {
 		t.Fatalf("windowsTaskName(alias) = %q, want %q", got, want)
+	}
+}
+
+func TestServiceDefinitionMatchesRootResolvesSymlinkedRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink setup is environment-dependent on Windows")
+	}
+
+	base := t.TempDir()
+	realRoot := filepath.Join(base, "real", "ns-home")
+	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkRoot := filepath.Join(base, "alias")
+	if err := os.Symlink(filepath.Join(base, "real"), linkRoot); err != nil {
+		t.Skipf("symlink setup unavailable: %v", err)
+	}
+
+	realPaths := paths.WithRoot(realRoot)
+	aliasPaths := paths.WithRoot(filepath.Join(linkRoot, "ns-home"))
+	home := t.TempDir()
+	windowsArgs := "daemon run --root " + quoteWindowsTaskArg(aliasPaths.Root())
+	definitions := map[string][]byte{
+		"launchd":  []byte(renderLaunchAgent("/usr/local/bin/no-mistakes", aliasPaths, home)),
+		"systemd":  []byte(renderSystemdUnit("/usr/local/bin/no-mistakes", aliasPaths, home)),
+		"schtasks": []byte("<Task><Actions><Exec><Arguments>" + xmlEscaped(windowsArgs) + "</Arguments></Exec></Actions></Task>"),
+	}
+
+	for name, data := range definitions {
+		if !serviceDefinitionMatchesRoot(data, realPaths) {
+			t.Fatalf("%s definition with alias root did not match real root", name)
+		}
 	}
 }
 

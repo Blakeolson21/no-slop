@@ -27,21 +27,6 @@ func TestDogfoodConfig_NoBroadLocalTestCommand(t *testing.T) {
 	if got := strings.TrimSpace(cfg.Commands.Test); got != "" {
 		t.Fatalf("dogfood commands.test = %q, want empty so local Test stays agent-targeted; put broad regression in remote CI", got)
 	}
-
-	raw, err := os.ReadFile(filepath.Join(root, ".no-slop.yaml"))
-	if err != nil {
-		t.Fatalf("read .no-slop.yaml: %v", err)
-	}
-	content := string(raw)
-	for _, forbid := range []string{
-		`test: "go test -race ./..."`,
-		`test: 'go test -race ./...'`,
-		`test: go test -race ./...`,
-	} {
-		if strings.Contains(content, forbid) {
-			t.Fatalf(".no-slop.yaml still configures broad local Test %q", forbid)
-		}
-	}
 }
 
 // commands.test contract ownership lives in repo-config.md: targeted local

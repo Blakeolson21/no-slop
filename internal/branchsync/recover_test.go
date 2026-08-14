@@ -274,6 +274,46 @@ func TestRecoverCleanBehindFastForwardsAndReturnsCustody(t *testing.T) {
 	}
 }
 
+func TestRecoverRejectsLegacyRecoverLocalAnchorConflict(t *testing.T) {
+	t.Parallel()
+
+	f := newRecoverFixture(t, types.RunCancelled)
+	mustWrite(t, filepath.Join(f.local, "local.txt"), "local work\n")
+	mustRun(t, f.local, "add", "local.txt")
+	mustRun(t, f.local, "commit", "-m", "local work")
+	localHead := mustRun(t, f.local, "rev-parse", "HEAD")
+
+	pipeline := filepath.Join(t.TempDir(), "pipeline")
+	mustRun(t, filepath.Dir(pipeline), "-c", "core.autocrlf=false", "clone", f.gate, pipeline)
+	configureIdentity(t, pipeline)
+	mustRun(t, pipeline, "checkout", "feature/recover")
+	mustWrite(t, filepath.Join(pipeline, "local.txt"), "local work\n")
+	mustRun(t, pipeline, "add", "local.txt")
+	mustRun(t, pipeline, "commit", "-m", "carry local work")
+	preservedWithLocal := mustRun(t, pipeline, "rev-parse", "HEAD")
+	mustRun(t, pipeline, "push", "origin", "HEAD:refs/heads/feature/recover")
+	if err := f.db.UpdateRunHeadSHA(f.run.ID, preservedWithLocal); err != nil {
+		t.Fatal(err)
+	}
+
+	legacyLocalAnchor := strings.Replace(recoverLocalAnchorRef(f.run.ID), "refs/no-slop/", "refs/no-mistakes/", 1)
+	mustRun(t, f.local, "update-ref", legacyLocalAnchor, f.base)
+
+	state := f.service.Recover(f.ctx, false)
+	if state.Recovered || state.Changed || state.Safety != "blocked_recover_preserve_failed" {
+		t.Fatalf("state = %#v, want recover-local alias conflict refusal", state)
+	}
+	if _, err := gitpkg.Run(f.ctx, f.local, "rev-parse", recoverLocalAnchorRef(f.run.ID)+"^{commit}"); err == nil {
+		t.Fatal("canonical recover-local anchor should not be written after legacy conflict")
+	}
+	if got := mustRun(t, f.local, "rev-parse", legacyLocalAnchor+"^{commit}"); got != f.base {
+		t.Fatalf("legacy recover-local anchor = %s, want %s", got, f.base)
+	}
+	if got := mustRun(t, f.local, "rev-parse", "HEAD"); got != localHead {
+		t.Fatalf("HEAD = %s, want unchanged local head %s", got, localHead)
+	}
+}
+
 func TestRecoverFastForwardRechecksCurrentBranchBeforeMerge(t *testing.T) {
 	t.Parallel()
 

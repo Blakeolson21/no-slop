@@ -31,7 +31,7 @@ func installWindowsTask(p *paths.Paths, exe string) error {
 	if _, err := serviceCommandRunner("schtasks", args...); err != nil {
 		return fmt.Errorf("schtasks create: %w", err)
 	}
-	return cleanupLegacyWindowsTask(p)
+	return managedServiceCleanupFailure(cleanupLegacyWindowsTask(p))
 }
 
 func cleanupLegacyWindowsTask(p *paths.Paths) error {

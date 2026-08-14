@@ -839,9 +839,35 @@ func TestResolvePrivateRefAliasFindsLegacyAnchor(t *testing.T) {
 	legacy := "refs/no-mistakes/recover/run-legacy"
 	mustRun(t, repo, "update-ref", legacy, head)
 
-	ref, sha, ok := resolvePrivateRefAlias(context.Background(), repo, "refs/no-slop/recover/run-legacy")
-	if !ok || ref != legacy || sha != head {
+	ref, sha, ok, err := resolvePrivateRefAlias(context.Background(), repo, "refs/no-slop/recover/run-legacy")
+	if err != nil || !ok || ref != legacy || sha != head {
 		t.Fatalf("resolved = (%q, %q, %v), want (%q, %q, true)", ref, sha, ok, legacy, head)
+	}
+	ref, sha, ok, err = resolvePrivateRefAlias(context.Background(), repo, legacy)
+	if err != nil || !ok || ref != legacy || sha != head {
+		t.Fatalf("legacy-input resolved = (%q, %q, %v), want (%q, %q, true)", ref, sha, ok, legacy, head)
+	}
+}
+
+func TestResolvePrivateRefAliasRejectsConflictingAliases(t *testing.T) {
+	repo := t.TempDir()
+	mustRun(t, repo, "init")
+	configureIdentity(t, repo)
+	mustWrite(t, filepath.Join(repo, "file.txt"), "canonical\n")
+	mustRun(t, repo, "add", "file.txt")
+	mustRun(t, repo, "commit", "-m", "canonical")
+	canonicalHead := mustRun(t, repo, "rev-parse", "HEAD")
+	mustWrite(t, filepath.Join(repo, "file.txt"), "legacy\n")
+	mustRun(t, repo, "commit", "-am", "legacy")
+	legacyHead := mustRun(t, repo, "rev-parse", "HEAD")
+	canonical := "refs/no-slop/recover/run-conflict"
+	legacy := "refs/no-mistakes/recover/run-conflict"
+	mustRun(t, repo, "update-ref", canonical, canonicalHead)
+	mustRun(t, repo, "update-ref", legacy, legacyHead)
+
+	_, _, ok, err := resolvePrivateRefAlias(context.Background(), repo, canonical)
+	if err == nil || ok || !strings.Contains(err.Error(), "different commits") {
+		t.Fatalf("resolve = (_, _, %v, %v), want divergent-alias error", ok, err)
 	}
 }
 

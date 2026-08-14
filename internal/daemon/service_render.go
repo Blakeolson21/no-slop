@@ -19,26 +19,172 @@ func serviceDefinitionMatchesRoot(data []byte, p *paths.Paths) bool {
 	if p == nil {
 		return true
 	}
-	root := p.Root()
-	text := string(data)
-	if strings.Contains(text, "<string>"+xmlEscaped(root)+"</string>") {
-		return true
-	}
-	for _, line := range strings.Split(text, "\n") {
-		if strings.TrimSpace(line) == "WorkingDirectory="+systemdEscapeArg(root) {
-			return true
-		}
-	}
-	windowsRoot := quoteWindowsTaskArg(root)
-	for _, suffix := range []string{
-		"--root " + windowsRoot + "</Arguments>",
-		"--root " + xmlEscaped(windowsRoot) + "</Arguments>",
-	} {
-		if strings.Contains(text, suffix) {
+	want := canonicalRoot(p.Root())
+	for _, root := range serviceDefinitionRoots(data) {
+		if canonicalRoot(root) == want {
 			return true
 		}
 	}
 	return false
+}
+
+func serviceDefinitionRoots(data []byte) []string {
+	var roots []string
+	text := string(data)
+	if root, ok := launchAgentRoot(data); ok {
+		roots = append(roots, root)
+	}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "WorkingDirectory=") {
+			continue
+		}
+		if root, ok := serviceDefinitionArg(strings.TrimSpace(strings.TrimPrefix(line, "WorkingDirectory="))); ok {
+			roots = append(roots, root)
+		}
+	}
+	if root, ok := windowsTaskRoot(data); ok {
+		roots = append(roots, root)
+	}
+	return roots
+}
+
+func launchAgentRoot(data []byte) (string, bool) {
+	decoder := xml.NewDecoder(bytes.NewReader(data))
+	var sawProgramArguments bool
+	var inProgramArguments bool
+	var args []string
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			return rootArg(args)
+		}
+		switch t := token.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "key":
+				var key string
+				if err := decoder.DecodeElement(&key, &t); err != nil {
+					return "", false
+				}
+				sawProgramArguments = strings.TrimSpace(key) == "ProgramArguments"
+			case "array":
+				if sawProgramArguments {
+					inProgramArguments = true
+					sawProgramArguments = false
+				}
+			case "string":
+				if !inProgramArguments {
+					sawProgramArguments = false
+					continue
+				}
+				var value string
+				if err := decoder.DecodeElement(&value, &t); err != nil {
+					return "", false
+				}
+				args = append(args, value)
+			default:
+				if !inProgramArguments {
+					sawProgramArguments = false
+				}
+			}
+		case xml.EndElement:
+			if inProgramArguments && t.Name.Local == "array" {
+				return rootArg(args)
+			}
+		}
+	}
+}
+
+func windowsTaskRoot(data []byte) (string, bool) {
+	decoder := xml.NewDecoder(bytes.NewReader(data))
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			return "", false
+		}
+		start, ok := token.(xml.StartElement)
+		if !ok || start.Name.Local != "Arguments" {
+			continue
+		}
+		var value string
+		if err := decoder.DecodeElement(&value, &start); err != nil {
+			return "", false
+		}
+		if root, ok := rootArg(commandFields(value)); ok {
+			return root, true
+		}
+	}
+}
+
+func rootArg(args []string) (string, bool) {
+	for i, arg := range args {
+		if arg == "--root" && i+1 < len(args) {
+			return args[i+1], strings.TrimSpace(args[i+1]) != ""
+		}
+		if value, ok := strings.CutPrefix(arg, "--root="); ok {
+			return value, strings.TrimSpace(value) != ""
+		}
+	}
+	return "", false
+}
+
+func serviceDefinitionArg(value string) (string, bool) {
+	if value == "" {
+		return "", false
+	}
+	if value[0] == '"' {
+		unquoted, err := strconv.Unquote(value)
+		if err != nil || strings.TrimSpace(unquoted) == "" {
+			return "", false
+		}
+		return unquoted, true
+	}
+	return value, strings.TrimSpace(value) != ""
+}
+
+func commandFields(command string) []string {
+	var fields []string
+	for i := 0; i < len(command); {
+		for i < len(command) && (command[i] == ' ' || command[i] == '\t') {
+			i++
+		}
+		if i >= len(command) {
+			break
+		}
+		if command[i] != '"' {
+			start := i
+			for i < len(command) && command[i] != ' ' && command[i] != '\t' {
+				i++
+			}
+			fields = append(fields, command[start:i])
+			continue
+		}
+		start := i
+		i++
+		escaped := false
+		for i < len(command) {
+			c := command[i]
+			i++
+			if escaped {
+				escaped = false
+				continue
+			}
+			if c == '\\' {
+				escaped = true
+				continue
+			}
+			if c == '"' {
+				break
+			}
+		}
+		value, err := strconv.Unquote(command[start:i])
+		if err != nil {
+			continue
+		}
+		fields = append(fields, value)
+	}
+	return fields
 }
 
 func xmlEscaped(value string) string {

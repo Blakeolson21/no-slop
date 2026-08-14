@@ -612,7 +612,9 @@ func (s *Service) Recover(ctx context.Context, keepLocal bool) State {
 	anchorRef := recoverAnchorRef(run.ID)
 	localAnchor := recoverLocalAnchorRef(run.ID)
 
-	if _, anchoredLocal, ok := resolvePrivateRefAlias(ctx, wd, localAnchor); ok && anchoredLocal != preserved && local == preserved && !state.Local.Clean {
+	if _, anchoredLocal, ok, err := resolvePrivateRefAlias(ctx, wd, localAnchor); err != nil {
+		return blockedPrivateRefConflict(state, err)
+	} else if ok && anchoredLocal != preserved && local == preserved && !state.Local.Clean {
 		blocked := blockedPlan(state, StatePipelineOwned, "blocked_recover_incomplete_adoption", fmt.Sprintf("the branch reached the preserved pipeline head, but its worktree still differs from that head; the pre-recovery head remains anchored at %s; reconcile the worktree and re-run recovery; custody was not recorded", localAnchor))
 		blocked.NextAction = &NextAction{Code: "inspect_worktree", Command: "git status"}
 		return blocked
@@ -634,7 +636,9 @@ func (s *Service) Recover(ctx context.Context, keepLocal bool) State {
 		return blockedPlan(state, StatePipelineOwned, "blocked_recover_gate_unavailable", fmt.Sprintf("the local gate no longer has branch %s, so the preserved pipeline head %s cannot be verified; no files or refs were changed", branch, preserved))
 	}
 	anchored := false
-	if _, existing, ok := resolvePrivateRefAlias(ctx, wd, anchorRef); ok && existing == preserved {
+	if _, existing, ok, err := resolvePrivateRefAlias(ctx, wd, anchorRef); err != nil {
+		return blockedPrivateRefConflict(state, err)
+	} else if ok && existing == preserved {
 		anchored = true
 	}
 	// A gate branch still at the run's SUBMITTED head means the pipeline never
@@ -901,16 +905,21 @@ func (s *Service) recoverAdoptPreserved(ctx context.Context, run *db.Run, state 
 	// Create-only: an empty old value requires the ref not to exist. A resumed
 	// recovery legitimately finds its own anchor already at this head; an anchor
 	// at any other commit is unexplained and refuses.
-	existingAnchor, existingErr := git.Run(ctx, wd, "rev-parse", "--verify", localAnchor+"^{commit}")
-	if existingErr == nil && existingAnchor != head {
+	resolvedAnchor, existingAnchor, hasExistingAnchor, aliasErr := resolvePrivateRefAlias(ctx, wd, localAnchor)
+	if aliasErr != nil {
+		return blockedPrivateRefConflict(state, aliasErr)
+	}
+	if hasExistingAnchor && existingAnchor != head {
 		return blockedPlan(state, StatePipelineOwned, "blocked_recover_preserve_failed", "the pre-recovery local head could not be anchored; no files or refs were changed")
 	}
-	if existingErr != nil {
+	if !hasExistingAnchor || resolvedAnchor != localAnchor {
 		if _, err := git.Run(ctx, wd, "update-ref", localAnchor, head, ""); err != nil {
 			return blockedPlan(state, StatePipelineOwned, "blocked_recover_preserve_failed", "the pre-recovery local head could not be anchored; no files or refs were changed")
 		}
 	}
-	if anchored, err := git.Run(ctx, wd, "rev-parse", localAnchor+"^{commit}"); err != nil || anchored != head {
+	if _, anchored, ok, err := resolvePrivateRefAlias(ctx, wd, localAnchor); err != nil {
+		return blockedPrivateRefConflict(state, err)
+	} else if !ok || anchored != head {
 		return blockedPlan(state, StatePipelineOwned, "blocked_recover_preserve_failed", "the pre-recovery local head could not be verified after anchoring; no files or worktree refs were changed")
 	}
 
@@ -1027,11 +1036,15 @@ func (s *Service) anchorAbandonedGateHead(ctx context.Context, state State, runI
 	if strings.TrimSpace(gateHead) == "" || gateHead == local || isAncestor(ctx, wd, gateHead, local) {
 		return State{}, true
 	}
-	if _, existing, ok := resolvePrivateRefAlias(ctx, wd, recoverAnchorRef(runID)); ok && existing == gateHead {
+	if _, existing, ok, err := resolvePrivateRefAlias(ctx, wd, recoverAnchorRef(runID)); err != nil {
+		return blockedPrivateRefConflict(state, err), false
+	} else if ok && existing == gateHead {
 		return State{}, true
 	}
 	ref := recoverAbandonedAnchorRef(runID)
-	if _, existing, ok := resolvePrivateRefAlias(ctx, wd, ref); ok && existing == gateHead {
+	if _, existing, ok, err := resolvePrivateRefAlias(ctx, wd, ref); err != nil {
+		return blockedPrivateRefConflict(state, err), false
+	} else if ok && existing == gateHead {
 		return State{}, true
 	}
 	if objectExists(ctx, wd, gateHead) {
@@ -1124,7 +1137,10 @@ func (s *Service) unreachablePipelineHead(ctx context.Context, preserved, localH
 // does not already contain, and "" otherwise.
 func (s *Service) unclaimedAnchorRef(ctx context.Context, ref, localHead string) string {
 	wd := s.workDir()
-	resolvedRef, anchored, ok := resolvePrivateRefAlias(ctx, wd, ref)
+	resolvedRef, anchored, ok, err := resolvePrivateRefAlias(ctx, wd, ref)
+	if err != nil {
+		return ref
+	}
 	if !ok {
 		return ""
 	}
@@ -1135,21 +1151,44 @@ func (s *Service) unclaimedAnchorRef(ctx context.Context, ref, localHead string)
 	return resolvedRef
 }
 
+func blockedPrivateRefConflict(state State, err error) State {
+	return blockedPlan(state, StatePipelineOwned, "blocked_recover_private_ref_conflict", fmt.Sprintf("private recovery refs conflict: %v; no files or refs were changed", err))
+}
+
 // resolvePrivateRefAlias reads canonical refs first, then their legacy
 // refs/no-mistakes spelling. New writes always use refs/no-slop, but recovery
 // must not lose the only reference to work anchored by an older binary.
-func resolvePrivateRefAlias(ctx context.Context, workDir, canonicalRef string) (string, string, bool) {
-	refs := []string{canonicalRef}
-	if legacy := strings.Replace(canonicalRef, "refs/no-slop/", "refs/no-mistakes/", 1); legacy != canonicalRef {
-		refs = append(refs, legacy)
+func resolvePrivateRefAlias(ctx context.Context, workDir, canonicalRef string) (string, string, bool, error) {
+	type resolvedPrivateRef struct {
+		ref string
+		sha string
 	}
-	for _, ref := range refs {
+	var found []resolvedPrivateRef
+	for _, ref := range privateRefAliases(canonicalRef) {
 		anchored, err := git.Run(ctx, workDir, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
-		if err == nil {
-			return ref, strings.TrimSpace(anchored), true
+		if err != nil {
+			continue
+		}
+		found = append(found, resolvedPrivateRef{ref: ref, sha: strings.TrimSpace(anchored)})
+	}
+	if len(found) == 0 {
+		return "", "", false, nil
+	}
+	for _, candidate := range found[1:] {
+		if candidate.sha != found[0].sha {
+			return "", "", false, fmt.Errorf("%s and %s name the same private ref with different commits", found[0].ref, candidate.ref)
 		}
 	}
-	return "", "", false
+	return found[0].ref, found[0].sha, true, nil
+}
+
+func privateRefAliases(canonicalRef string) []string {
+	ref := strings.Replace(canonicalRef, "refs/no-mistakes/", "refs/no-slop/", 1)
+	refs := []string{ref}
+	if legacy := strings.Replace(ref, "refs/no-slop/", "refs/no-mistakes/", 1); legacy != ref {
+		refs = append(refs, legacy)
+	}
+	return refs
 }
 
 // refusalRefClause states what a refusal actually left behind. Recovery anchors

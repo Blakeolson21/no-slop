@@ -45,6 +45,25 @@ var serviceManagerBypassed = defaultServiceManagerBypassed
 var prepareManagedDaemonLaunch = managedDaemonLaunch
 var inspectManagedDaemonService = managedDaemonServiceState
 
+type managedServiceCleanupError struct {
+	err error
+}
+
+func (e *managedServiceCleanupError) Error() string {
+	return e.err.Error()
+}
+
+func (e *managedServiceCleanupError) Unwrap() error {
+	return e.err
+}
+
+func managedServiceCleanupFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &managedServiceCleanupError{err: err}
+}
+
 type managedServiceState int
 
 type managedServiceLaunch struct {
