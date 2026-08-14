@@ -144,6 +144,63 @@ func TestInstallScriptFailsWhenDaemonRestartFails(t *testing.T) {
 	}
 }
 
+func TestInstallScriptRejectsEmptyAliasConflicts(t *testing.T) {
+	skipInstallScriptTestsOnWindows(t)
+
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+	}{
+		{
+			name: "install dir",
+			env: map[string]string{
+				"NS_INSTALL_DIR":          "",
+				"NO_MISTAKES_INSTALL_DIR": filepath.Join(t.TempDir(), "legacy-bin"),
+			},
+		},
+		{
+			name: "link dir",
+			env: map[string]string{
+				"NS_LINK_DIR":          "",
+				"NO_MISTAKES_LINK_DIR": filepath.Join(t.TempDir(), "legacy-links"),
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			output, err := runInstallScriptCommand(t, t.TempDir(), makeFakeInstallCommands(t), tc.env)
+			if err == nil || !strings.Contains(string(output), "same setting with different values") {
+				t.Fatalf("install.sh should reject empty alias conflict: %v\n%s", err, output)
+			}
+		})
+	}
+}
+
+func TestPowerShellInstallScriptRejectsEmptyAliasConflict(t *testing.T) {
+	shell, err := exec.LookPath("pwsh")
+	if err != nil {
+		shell, err = exec.LookPath("powershell")
+	}
+	if err != nil {
+		t.Skip("PowerShell not available")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, shell, "-NoProfile", "-NonInteractive", "-File", filepath.Join("docs", "install.ps1"))
+	cmd.Env = append(filteredEnv(os.Environ(), "NS_INSTALL_DIR", "NO_MISTAKES_INSTALL_DIR"), []string{
+		"NS_INSTALL_DIR=",
+		"NO_MISTAKES_INSTALL_DIR=" + filepath.Join(t.TempDir(), "legacy-bin"),
+	}...)
+	shellenv.ConfigureShellCommand(cmd)
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("install.ps1 timed out after %s\n%s", 15*time.Second, output)
+	}
+	if err == nil || !strings.Contains(string(output), "same setting with different values") {
+		t.Fatalf("install.ps1 should reject empty alias conflict: %v\n%s", err, output)
+	}
+}
+
 func TestPowerShellInstallScriptChecksDaemonRestartFailure(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("docs", "install.ps1"))
 	if err != nil {
@@ -350,7 +407,7 @@ func runInstallScriptCommand(t *testing.T, home, fakeBin string, extraEnv map[st
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", "docs/install.sh")
 	pathValue := strings.Join([]string{fakeBin, filepath.Join(home, ".local", "bin"), os.Getenv("PATH")}, string(os.PathListSeparator))
-	cmd.Env = append(filteredEnv(os.Environ(), "HOME", "PATH"), []string{
+	cmd.Env = append(filteredEnv(os.Environ(), "HOME", "PATH", "NS_INSTALL_DIR", "NO_MISTAKES_INSTALL_DIR", "NS_LINK_DIR", "NO_MISTAKES_LINK_DIR"), []string{
 		"HOME=" + home,
 		"PATH=" + pathValue,
 	}...)

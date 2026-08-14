@@ -8,22 +8,26 @@ DOTENV_NS_UMAMI_HOST := $(shell [ -f "$(DOTENV_FILE)" ] && perl -ne 'next if /^\
 DOTENV_LEGACY_UMAMI_HOST := $(shell [ -f "$(DOTENV_FILE)" ] && perl -ne 'next if /^\s*(?:\#|$$)/; s/^\s*export\s+//; next unless /^\s*NO_MISTAKES_UMAMI_HOST\s*=\s*(.*)$$/; $$v=$$1; $$v =~ s/^\s+|\s+$$//g; if ($$v =~ /^( ["\x27] )(.*)\1$$/x) { $$v=$$2; } else { $$v =~ s/\s+\#.*$$//; $$v =~ s/\s+$$//; } $$out=$$v; END { print $$out if defined $$out }' "$(DOTENV_FILE)")
 DOTENV_NS_UMAMI_WEBSITE_ID := $(shell [ -f "$(DOTENV_FILE)" ] && perl -ne 'next if /^\s*(?:\#|$$)/; s/^\s*export\s+//; next unless /^\s*NS_UMAMI_WEBSITE_ID\s*=\s*(.*)$$/; $$v=$$1; $$v =~ s/^\s+|\s+$$//g; if ($$v =~ /^(["\x27])(.*)\1$$/) { $$v=$$2; } else { $$v =~ s/\s+\#.*$$//; $$v =~ s/\s+$$//; } $$out=$$v; END { print $$out if defined $$out }' "$(DOTENV_FILE)")
 DOTENV_LEGACY_UMAMI_WEBSITE_ID := $(shell [ -f "$(DOTENV_FILE)" ] && perl -ne 'next if /^\s*(?:\#|$$)/; s/^\s*export\s+//; next unless /^\s*NO_MISTAKES_UMAMI_WEBSITE_ID\s*=\s*(.*)$$/; $$v=$$1; $$v =~ s/^\s+|\s+$$//g; if ($$v =~ /^(["\x27])(.*)\1$$/) { $$v=$$2; } else { $$v =~ s/\s+\#.*$$//; $$v =~ s/\s+$$//; } $$out=$$v; END { print $$out if defined $$out }' "$(DOTENV_FILE)")
-ifneq ($(strip $(DOTENV_NS_UMAMI_HOST)),)
-ifneq ($(strip $(DOTENV_LEGACY_UMAMI_HOST)),)
+DOTENV_NS_UMAMI_HOST_SET := $(shell [ -f "$(DOTENV_FILE)" ] && perl -ne 'next if /^\s*(?:\#|$$)/; s/^\s*export\s+//; if (/^\s*NS_UMAMI_HOST\s*=/) { print "1"; exit }' "$(DOTENV_FILE)")
+DOTENV_LEGACY_UMAMI_HOST_SET := $(shell [ -f "$(DOTENV_FILE)" ] && perl -ne 'next if /^\s*(?:\#|$$)/; s/^\s*export\s+//; if (/^\s*NO_MISTAKES_UMAMI_HOST\s*=/) { print "1"; exit }' "$(DOTENV_FILE)")
+DOTENV_NS_UMAMI_WEBSITE_ID_SET := $(shell [ -f "$(DOTENV_FILE)" ] && perl -ne 'next if /^\s*(?:\#|$$)/; s/^\s*export\s+//; if (/^\s*NS_UMAMI_WEBSITE_ID\s*=/) { print "1"; exit }' "$(DOTENV_FILE)")
+DOTENV_LEGACY_UMAMI_WEBSITE_ID_SET := $(shell [ -f "$(DOTENV_FILE)" ] && perl -ne 'next if /^\s*(?:\#|$$)/; s/^\s*export\s+//; if (/^\s*NO_MISTAKES_UMAMI_WEBSITE_ID\s*=/) { print "1"; exit }' "$(DOTENV_FILE)")
+ifneq ($(DOTENV_NS_UMAMI_HOST_SET),)
+ifneq ($(DOTENV_LEGACY_UMAMI_HOST_SET),)
 ifneq ($(DOTENV_NS_UMAMI_HOST),$(DOTENV_LEGACY_UMAMI_HOST))
 $(error NS_UMAMI_HOST and NO_MISTAKES_UMAMI_HOST configure the same setting with different values)
 endif
 endif
 endif
-ifneq ($(strip $(DOTENV_NS_UMAMI_WEBSITE_ID)),)
-ifneq ($(strip $(DOTENV_LEGACY_UMAMI_WEBSITE_ID)),)
+ifneq ($(DOTENV_NS_UMAMI_WEBSITE_ID_SET),)
+ifneq ($(DOTENV_LEGACY_UMAMI_WEBSITE_ID_SET),)
 ifneq ($(DOTENV_NS_UMAMI_WEBSITE_ID),$(DOTENV_LEGACY_UMAMI_WEBSITE_ID))
 $(error NS_UMAMI_WEBSITE_ID and NO_MISTAKES_UMAMI_WEBSITE_ID configure the same setting with different values)
 endif
 endif
 endif
-DOTENV_UMAMI_HOST := $(if $(DOTENV_NS_UMAMI_HOST),$(DOTENV_NS_UMAMI_HOST),$(DOTENV_LEGACY_UMAMI_HOST))
-DOTENV_UMAMI_WEBSITE_ID := $(if $(DOTENV_NS_UMAMI_WEBSITE_ID),$(DOTENV_NS_UMAMI_WEBSITE_ID),$(DOTENV_LEGACY_UMAMI_WEBSITE_ID))
+DOTENV_UMAMI_HOST := $(if $(DOTENV_NS_UMAMI_HOST_SET),$(DOTENV_NS_UMAMI_HOST),$(DOTENV_LEGACY_UMAMI_HOST))
+DOTENV_UMAMI_WEBSITE_ID := $(if $(DOTENV_NS_UMAMI_WEBSITE_ID_SET),$(DOTENV_NS_UMAMI_WEBSITE_ID),$(DOTENV_LEGACY_UMAMI_WEBSITE_ID))
 override UMAMI_HOST := $(if $(DOTENV_UMAMI_HOST),$(DOTENV_UMAMI_HOST),$(if $(UMAMI_HOST),$(UMAMI_HOST),$(DEFAULT_UMAMI_HOST)))
 override UMAMI_WEBSITE_ID := $(if $(DOTENV_UMAMI_WEBSITE_ID),$(DOTENV_UMAMI_WEBSITE_ID),$(if $(UMAMI_WEBSITE_ID),$(UMAMI_WEBSITE_ID),$(DEFAULT_UMAMI_WEBSITE_ID)))
 LDFLAGS := -X 'github.com/Blakeolson21/no-slop/internal/buildinfo.Version=$(VERSION)' \

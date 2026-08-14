@@ -380,6 +380,52 @@ func TestValidateDefaultConfigRejectsConflictingDotEnvAliases(t *testing.T) {
 	}
 }
 
+func TestValidateDefaultConfigRejectsEmptyDotEnvAliasConflict(t *testing.T) {
+	prevSink := defaultSink
+	defaultSink = nil
+	defer func() { defaultSink = prevSink }()
+
+	prevHost := buildinfo.TelemetryHost
+	prevWebsiteID := buildinfo.TelemetryWebsiteID
+	defer func() {
+		buildinfo.TelemetryHost = prevHost
+		buildinfo.TelemetryWebsiteID = prevWebsiteID
+	}()
+	buildinfo.TelemetryHost = ""
+	buildinfo.TelemetryWebsiteID = ""
+
+	for _, key := range []string{
+		telemetryEnv, legacyTelemetryEnv,
+		umamiHostEnv, legacyUmamiHostEnv,
+		umamiWebsiteIDEnv, legacyUmamiWebsiteIDEnv,
+	} {
+		t.Setenv(key, "")
+	}
+
+	dir := t.TempDir()
+	content := strings.Join([]string{
+		"NS_UMAMI_HOST=",
+		"NO_MISTAKES_UMAMI_HOST=https://legacy-dotenv.example",
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write .env: %v", err)
+	}
+
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd(): %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir(): %v", err)
+	}
+	defer os.Chdir(prevWD)
+
+	if err := ValidateDefaultConfig(); err == nil {
+		t.Fatal("ValidateDefaultConfig() should reject empty dotenv alias conflicts")
+	}
+}
+
 func TestDefaultIgnoresDotEnvOutsideRepo(t *testing.T) {
 	prevSink := defaultSink
 	defaultSink = nil

@@ -54,7 +54,7 @@ func TestPrepareDaemonEnvironment_RemovesClaudeSessionVarsAndAppliesShellEnv(t *
 
 func TestPrepareDaemonEnvironment_PreservesExistingNSHome(t *testing.T) {
 	t.Setenv("NS_HOME", "/service/root")
-	t.Setenv("NM_HOME", "")
+	unsetEnv(t, "NM_HOME")
 	t.Setenv("PATH", os.Getenv("PATH"))
 
 	oldApply := applyShellEnvToProcess
@@ -161,6 +161,21 @@ func TestValidateControlEnvRejectsConflictingAliases(t *testing.T) {
 	if !strings.Contains(err.Error(), "same setting with different values") {
 		t.Fatalf("ValidateControlEnv error = %v", err)
 	}
+}
+
+func unsetEnv(t *testing.T, key string) {
+	t.Helper()
+	oldValue, hadValue := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if hadValue {
+			_ = os.Setenv(key, oldValue)
+		} else {
+			_ = os.Unsetenv(key)
+		}
+	})
 }
 
 func TestValidateControlEnvRejectsConflictingHelperAliases(t *testing.T) {

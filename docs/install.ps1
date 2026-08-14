@@ -1,10 +1,34 @@
 $ErrorActionPreference = "Stop"
 
 $repo = "Blakeolson21/no-slop"
-if ($env:NS_INSTALL_DIR -and $env:NO_MISTAKES_INSTALL_DIR -and $env:NS_INSTALL_DIR -ne $env:NO_MISTAKES_INSTALL_DIR) {
-    throw "NS_INSTALL_DIR and NO_MISTAKES_INSTALL_DIR configure the same setting with different values"
+
+function Resolve-EnvAlias {
+    param(
+        [string]$Canonical,
+        [string]$Legacy
+    )
+
+    $canonicalSet = Test-Path -LiteralPath "Env:$Canonical"
+    $legacySet = Test-Path -LiteralPath "Env:$Legacy"
+    $canonicalValue = if ($canonicalSet) { (Get-Item -LiteralPath "Env:$Canonical").Value } else { "" }
+    $legacyValue = if ($legacySet) { (Get-Item -LiteralPath "Env:$Legacy").Value } else { "" }
+
+    if ($canonicalSet -and $legacySet -and $canonicalValue -ne $legacyValue) {
+        throw "$Canonical and $Legacy configure the same setting with different values"
+    }
+    if ($canonicalSet) {
+        return $canonicalValue
+    }
+    if ($legacySet) {
+        return $legacyValue
+    }
+    return ""
 }
-$installDir = if ($env:NS_INSTALL_DIR) { $env:NS_INSTALL_DIR } elseif ($env:NO_MISTAKES_INSTALL_DIR) { $env:NO_MISTAKES_INSTALL_DIR } else { "$env:LOCALAPPDATA\no-mistakes" }
+
+$installDir = Resolve-EnvAlias -Canonical "NS_INSTALL_DIR" -Legacy "NO_MISTAKES_INSTALL_DIR"
+if ([string]::IsNullOrEmpty($installDir)) {
+    $installDir = "$env:LOCALAPPDATA\no-mistakes"
+}
 $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
 
 $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest"

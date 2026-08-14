@@ -43,12 +43,12 @@ func New() (*Paths, error) {
 }
 
 func LookupHomeEnv() (string, error) {
-	canonicalValue := os.Getenv(identity.HomeEnv)
-	legacyValue := os.Getenv(identity.LegacyHomeEnv)
-	if canonicalValue != "" && legacyValue != "" && canonicalHomeRoot(canonicalValue) != canonicalHomeRoot(legacyValue) {
+	canonicalValue, canonicalSet := os.LookupEnv(identity.HomeEnv)
+	legacyValue, legacySet := os.LookupEnv(identity.LegacyHomeEnv)
+	if canonicalSet && legacySet && canonicalHomeRoot(canonicalValue) != canonicalHomeRoot(legacyValue) {
 		return "", fmt.Errorf("%s and legacy alias %s configure the same setting with different values", identity.HomeEnv, identity.LegacyHomeEnv)
 	}
-	if canonicalValue != "" {
+	if canonicalSet {
 		return canonicalValue, nil
 	}
 	return legacyValue, nil

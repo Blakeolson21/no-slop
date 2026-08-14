@@ -458,12 +458,14 @@ func telemetryDisabled() (bool, error) {
 }
 
 func lookupDotEnv(values map[string]string, canonical, legacy string) (string, error) {
-	canonicalValue := strings.TrimSpace(values[canonical])
-	legacyValue := strings.TrimSpace(values[legacy])
-	if canonicalValue != "" && legacyValue != "" && canonicalValue != legacyValue {
+	canonicalValue, canonicalSet := values[canonical]
+	legacyValue, legacySet := values[legacy]
+	canonicalValue = strings.TrimSpace(canonicalValue)
+	legacyValue = strings.TrimSpace(legacyValue)
+	if canonicalSet && legacySet && canonicalValue != legacyValue {
 		return "", fmt.Errorf("%s and legacy alias %s configure the same setting with different values", canonical, legacy)
 	}
-	if canonicalValue != "" {
+	if canonicalSet {
 		return canonicalValue, nil
 	}
 	return legacyValue, nil

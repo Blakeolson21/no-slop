@@ -2,16 +2,29 @@
 set -e
 
 REPO="Blakeolson21/no-slop"
-if [ -n "${NS_INSTALL_DIR:-}" ] && [ -n "${NO_MISTAKES_INSTALL_DIR:-}" ] && [ "$NS_INSTALL_DIR" != "$NO_MISTAKES_INSTALL_DIR" ]; then
-  echo "NS_INSTALL_DIR and NO_MISTAKES_INSTALL_DIR configure the same setting with different values" >&2
-  exit 2
-fi
-if [ -n "${NS_LINK_DIR:-}" ] && [ -n "${NO_MISTAKES_LINK_DIR:-}" ] && [ "$NS_LINK_DIR" != "$NO_MISTAKES_LINK_DIR" ]; then
-  echo "NS_LINK_DIR and NO_MISTAKES_LINK_DIR configure the same setting with different values" >&2
-  exit 2
-fi
-INSTALL_DIR="${NS_INSTALL_DIR:-${NO_MISTAKES_INSTALL_DIR:-$HOME/.no-mistakes/bin}}"
-LINK_DIR="${NS_LINK_DIR:-${NO_MISTAKES_LINK_DIR:-}}"
+resolve_env_alias() {
+  canonical="$1"
+  legacy="$2"
+  eval "canonical_set=\${$canonical+x}"
+  eval "legacy_set=\${$legacy+x}"
+  eval "canonical_value=\${$canonical-}"
+  eval "legacy_value=\${$legacy-}"
+  if [ -n "$canonical_set" ] && [ -n "$legacy_set" ] && [ "$canonical_value" != "$legacy_value" ]; then
+    echo "$canonical and $legacy configure the same setting with different values" >&2
+    exit 2
+  fi
+  if [ -n "$canonical_set" ]; then
+    printf '%s' "$canonical_value"
+    return
+  fi
+  if [ -n "$legacy_set" ]; then
+    printf '%s' "$legacy_value"
+  fi
+}
+
+INSTALL_DIR="$(resolve_env_alias NS_INSTALL_DIR NO_MISTAKES_INSTALL_DIR)"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.no-mistakes/bin}"
+LINK_DIR="$(resolve_env_alias NS_LINK_DIR NO_MISTAKES_LINK_DIR)"
 
 if [ -z "$LINK_DIR" ]; then
   case ":$PATH:" in

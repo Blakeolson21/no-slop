@@ -725,7 +725,7 @@ func TestStartDetachedDaemonUsesProvidedRootViaNMHome(t *testing.T) {
 
 	t.Setenv("NM_DAEMON_HELPER_PROCESS", "1")
 	t.Setenv("NM_CAPTURE_NS_HOME_FILE", capturePath)
-	t.Setenv("NS_HOME", "")
+	unsetEnv(t, "NS_HOME")
 
 	cleanup := stubServiceRuntime(t)
 	defer cleanup()
@@ -768,7 +768,7 @@ func TestStartDetachedDaemonMirrorsCanonicalHelperAlias(t *testing.T) {
 
 	t.Setenv(daemonHelperProcessEnv, "1")
 	t.Setenv("NM_CAPTURE_NS_HOME_FILE", capturePath)
-	t.Setenv("NS_HOME", "")
+	unsetEnv(t, "NS_HOME")
 
 	cleanup := stubServiceRuntime(t)
 	defer cleanup()

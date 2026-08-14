@@ -88,7 +88,14 @@ func TestPreReceiveHookScriptRejectsConflictingPreservedAliases(t *testing.T) {
 		t.Skip("executes POSIX shell hook")
 	}
 	bare := t.TempDir()
-	if out, err := exec.Command("git", "init", "--bare", bare).CombinedOutput(); err != nil {
+	initCtx, initCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer initCancel()
+	initCmd := exec.CommandContext(initCtx, "git", "init", "--bare", bare)
+	initCmd.WaitDelay = 2 * time.Second
+	if out, err := initCmd.CombinedOutput(); err != nil {
+		if initCtx.Err() == context.DeadlineExceeded {
+			t.Fatalf("init bare timed out\n%s", out)
+		}
 		t.Fatalf("init bare: %v\n%s", err, out)
 	}
 	hooks := filepath.Join(bare, "hooks")

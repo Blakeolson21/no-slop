@@ -74,8 +74,8 @@ func TestLogPaths(t *testing.T) {
 
 func TestNewWithEnvOverride(t *testing.T) {
 	dir := t.TempDir()
+	unsetEnv(t, "NS_HOME")
 	t.Setenv("NM_HOME", dir)
-	t.Setenv("NS_HOME", "")
 
 	p, err := New()
 	if err != nil {
@@ -89,7 +89,7 @@ func TestNewWithEnvOverride(t *testing.T) {
 func TestNewWithCanonicalEnvOverride(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("NS_HOME", dir)
-	t.Setenv("NM_HOME", "")
+	unsetEnv(t, "NM_HOME")
 
 	p, err := New()
 	if err != nil {
@@ -151,6 +151,21 @@ func TestNewTreatsEquivalentRootEnvAliasesAsOneSetting(t *testing.T) {
 	}
 }
 
+func TestNewRejectsEmptyRootEnvAliasConflict(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("NS_HOME", "")
+	t.Setenv("NM_HOME", dir)
+	if _, err := New(); err == nil {
+		t.Fatal("New() should reject empty canonical root conflicting with legacy root")
+	}
+
+	t.Setenv("NS_HOME", dir)
+	t.Setenv("NM_HOME", "")
+	if _, err := New(); err == nil {
+		t.Fatal("New() should reject canonical root conflicting with empty legacy root")
+	}
+}
+
 func TestNewRejectsDefaultRootInTests(t *testing.T) {
 	t.Setenv("NS_HOME", "")
 	t.Setenv("NM_HOME", "")
@@ -161,6 +176,21 @@ func TestNewRejectsDefaultRootInTests(t *testing.T) {
 	if err == nil {
 		t.Fatal("New() should reject the default root under go test")
 	}
+}
+
+func unsetEnv(t *testing.T, key string) {
+	t.Helper()
+	oldValue, hadValue := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if hadValue {
+			_ = os.Setenv(key, oldValue)
+		} else {
+			_ = os.Unsetenv(key)
+		}
+	})
 }
 
 func TestNewDefault(t *testing.T) {
