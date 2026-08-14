@@ -108,6 +108,24 @@ func TestLoadRepo_AcceptsIdenticalConfigAliases(t *testing.T) {
 	}
 }
 
+func TestLoadRepo_AcceptsSemanticallyEqualConfigAliases(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".no-slop.yaml"), []byte("agent: codex\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte("agent: codex\nignore_patterns: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadRepo(dir)
+	if err != nil {
+		t.Fatalf("LoadRepo: %v", err)
+	}
+	if cfg.Agent != types.AgentCodex {
+		t.Fatalf("agent = %q, want %q", cfg.Agent, types.AgentCodex)
+	}
+}
+
 func TestLoadRepo_RejectsDivergentConfigAliases(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, ".no-slop.yaml"), []byte("agent: codex\n"), 0o644); err != nil {

@@ -16,6 +16,7 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/daemon"
 	"github.com/Blakeolson21/no-slop/internal/db"
 	"github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/identity"
 	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
@@ -45,7 +46,10 @@ func init() {
 		}
 		os.Exit(0)
 	}
-	if os.Getenv("NM_DAEMON_HELPER_PROCESS") == "bootstrap-sink" {
+	if helperMode, err := identity.LookupEnv("NS_DAEMON_HELPER_PROCESS", "NM_DAEMON_HELPER_PROCESS"); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	} else if helperMode == "bootstrap-sink" {
 		root, ok := explicitDaemonLogSinkRootFromArgs(os.Args[1:])
 		if !ok {
 			os.Exit(1)
@@ -57,7 +61,12 @@ func init() {
 		}
 		os.Exit(0)
 	}
-	if os.Getenv("NM_TEST_START_DAEMON") != "1" {
+	testStart, err := identity.EnvEnabled("NS_TEST_START_DAEMON", "NM_TEST_START_DAEMON")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if !testStart {
 		return
 	}
 	if root, ok := explicitDaemonRunRootFromArgs(os.Args[1:]); ok && root != "" {

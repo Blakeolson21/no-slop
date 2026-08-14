@@ -24,6 +24,11 @@ var daemonProcessStartTime = processStartTime
 var daemonKillPID = killPID
 var daemonEndpointUsesRegularFile = func() bool { return runtime.GOOS == "windows" }
 
+const (
+	daemonHelperProcessEnv       = "NS_DAEMON_HELPER_PROCESS"
+	legacyDaemonHelperProcessEnv = "NM_DAEMON_HELPER_PROCESS"
+)
+
 func daemonStartTimeout() (time.Duration, error) {
 	// Login-shell environment resolution alone has a 30s safety budget. A
 	// production readiness deadline must cover that cold work plus exclusive
@@ -71,6 +76,7 @@ func ValidateControlEnv() error {
 		{"NS_TEST_DAEMON_STOP_TIMEOUT", "NM_TEST_DAEMON_STOP_TIMEOUT"},
 		{"NS_TEST_DAEMON_START_POLL_INTERVAL", "NM_TEST_DAEMON_START_POLL_INTERVAL"},
 		{"NS_TEST_START_DAEMON", "NM_TEST_START_DAEMON"},
+		{daemonHelperProcessEnv, legacyDaemonHelperProcessEnv},
 	} {
 		if _, err := identity.LookupEnv(pair[0], pair[1]); err != nil {
 			return err
@@ -355,6 +361,12 @@ func startDetachedDaemon(p *paths.Paths) error {
 	cmd := exec.Command(exe, "daemon", "run", "--root", p.Root())
 	cmd.Env = upsertEnv(os.Environ(), "NS_HOME", p.Root())
 	cmd.Env = upsertEnv(cmd.Env, "NM_HOME", p.Root())
+	if helper, err := identity.LookupEnvSlice(cmd.Env, daemonHelperProcessEnv, legacyDaemonHelperProcessEnv); err != nil {
+		return err
+	} else if helper != "" {
+		cmd.Env = upsertEnv(cmd.Env, daemonHelperProcessEnv, helper)
+		cmd.Env = upsertEnv(cmd.Env, legacyDaemonHelperProcessEnv, helper)
+	}
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	// Detach from parent process group so daemon survives CLI exit.

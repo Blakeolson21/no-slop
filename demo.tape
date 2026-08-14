@@ -12,7 +12,7 @@ Set Theme "Catppuccin Mocha"
 
 Env NS_DEMO "1"
 Env NS_TEST_START_DAEMON "1"
-Env NO_MISTAKES_NO_UPDATE_CHECK "1"
+Env NS_NO_UPDATE_CHECK "1"
 Env SHELL "/bin/bash"
 Env GIT_AUTHOR_NAME "demo"
 Env GIT_AUTHOR_EMAIL "demo@example.com"

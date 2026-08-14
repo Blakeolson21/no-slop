@@ -1393,7 +1393,7 @@ func resolveRepoConfigAliases(canonicalData []byte, canonicalExists bool, legacy
 		if canonicalErr != nil || legacyErr != nil {
 			return nil, true, repoConfigAliasParseError(canonicalErr, legacyErr)
 		}
-		if !reflect.DeepEqual(canonicalCfg, legacyCfg) {
+		if !reflect.DeepEqual(normalizeRepoConfigAlias(canonicalCfg), normalizeRepoConfigAlias(legacyCfg)) {
 			return nil, true, fmt.Errorf("%s and %s name the same repo config with different values", identity.RepoConfigName, identity.LegacyRepoConfigName)
 		}
 		return canonicalCfg, true, nil
@@ -1405,6 +1405,48 @@ func resolveRepoConfigAliases(canonicalData []byte, canonicalExists bool, legacy
 		return cfg, true, err
 	default:
 		return nil, false, nil
+	}
+}
+
+func normalizeRepoConfigAlias(cfg *RepoConfig) RepoConfig {
+	if cfg == nil {
+		return RepoConfig{}
+	}
+	out := *cfg
+	normalizeNilCollections(reflect.ValueOf(&out))
+	return out
+}
+
+func normalizeNilCollections(v reflect.Value) {
+	if !v.IsValid() {
+		return
+	}
+	if v.Kind() == reflect.Pointer {
+		if v.IsNil() {
+			return
+		}
+		normalizeNilCollections(v.Elem())
+		return
+	}
+	switch v.Kind() {
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			field := v.Field(i)
+			if field.CanSet() || field.Kind() == reflect.Struct || field.Kind() == reflect.Pointer {
+				normalizeNilCollections(field)
+			}
+		}
+	case reflect.Slice:
+		if v.IsNil() && v.CanSet() {
+			v.Set(reflect.MakeSlice(v.Type(), 0, 0))
+		}
+		for i := 0; i < v.Len(); i++ {
+			normalizeNilCollections(v.Index(i))
+		}
+	case reflect.Map:
+		if v.IsNil() && v.CanSet() {
+			v.Set(reflect.MakeMap(v.Type()))
+		}
 	}
 }
 

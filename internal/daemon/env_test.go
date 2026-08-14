@@ -123,3 +123,16 @@ func TestValidateControlEnvRejectsConflictingAliases(t *testing.T) {
 		t.Fatalf("ValidateControlEnv error = %v", err)
 	}
 }
+
+func TestValidateControlEnvRejectsConflictingHelperAliases(t *testing.T) {
+	t.Setenv(daemonHelperProcessEnv, "daemon")
+	t.Setenv(legacyDaemonHelperProcessEnv, "block")
+
+	err := ValidateControlEnv()
+	if err == nil {
+		t.Fatal("expected conflicting daemon helper aliases to fail")
+	}
+	if !strings.Contains(err.Error(), "same setting with different values") {
+		t.Fatalf("ValidateControlEnv error = %v", err)
+	}
+}

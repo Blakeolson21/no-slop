@@ -105,6 +105,20 @@ func TestTrustedRepoConfigAcceptsIdenticalAliases(t *testing.T) {
 	}
 }
 
+func TestTrustedRepoConfigAcceptsSemanticallyEqualAliases(t *testing.T) {
+	wt, sha := gateOptOutWorktreeFiles(t, map[string]string{
+		".no-slop.yaml":     "disable_project_settings: true\n",
+		".no-mistakes.yaml": "disable_project_settings: true\nignore_patterns: []\n",
+	})
+	if err := assertGateTrustedConfigReadable(context.Background(), wt, "main", sha); err != nil {
+		t.Fatalf("semantically equal trusted config aliases must not abort: %v", err)
+	}
+	got := loadTrustedRepoConfig(context.Background(), wt, sha, "run")
+	if got == nil || !got.DisableProjectSettings {
+		t.Fatalf("trusted alias config = %+v, want disable_project_settings=true", got)
+	}
+}
+
 func TestTrustedRepoConfigRejectsDivergentAliases(t *testing.T) {
 	wt, sha := gateOptOutWorktreeFiles(t, map[string]string{
 		".no-slop.yaml":     "disable_project_settings: true\n",

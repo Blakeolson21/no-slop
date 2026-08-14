@@ -39,7 +39,7 @@ Override how long a CLI client waits for an existing daemon socket to accept a c
 Takes precedence over `daemon_connect_timeout` in `config.yaml`. An empty, unparsable, or non-positive value is ignored and the config value (or its default) is used instead.
 
 `NM_DAEMON_CONNECT_TIMEOUT` is a compatibility alias. Conflicting non-empty
-values fail safe to the configured default.
+values are returned as alias-conflict errors.
 
 ## `NS_BITBUCKET_EMAIL`
 

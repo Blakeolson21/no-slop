@@ -712,6 +712,43 @@ func TestStartDetachedDaemonUsesProvidedRootViaNMHome(t *testing.T) {
 	}
 }
 
+func TestStartDetachedDaemonMirrorsCanonicalHelperAlias(t *testing.T) {
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	capturePath := filepath.Join(t.TempDir(), "ns-home.txt")
+
+	t.Setenv(daemonHelperProcessEnv, "1")
+	t.Setenv("NM_CAPTURE_NS_HOME_FILE", capturePath)
+	t.Setenv("NS_HOME", "")
+
+	cleanup := stubServiceRuntime(t)
+	defer cleanup()
+	checks := 0
+	daemonHealthCheck = func(*paths.Paths) (bool, error) {
+		checks++
+		return checks >= 2, nil
+	}
+
+	if err := startDetachedDaemon(p); err != nil {
+		t.Fatalf("startDetachedDaemon should succeed: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(capturePath)
+		if err == nil {
+			if got := string(data); got != p.Root() {
+				t.Fatalf("child NS_HOME = %q, want %q", got, p.Root())
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("canonical helper alias was not mirrored to legacy child helper")
+}
+
 func TestStartDetachedDaemonCleansUpChildWhenStartTimeProbeFails(t *testing.T) {
 	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {

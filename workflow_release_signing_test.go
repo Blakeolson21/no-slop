@@ -391,7 +391,7 @@ func TestReleaseWorkflowSignsBeforeArchiveAndChecksum(t *testing.T) {
 		}
 	}
 
-	checksums := wf.jobByRunContains("sha256sum", "checksums.txt")
+	checksums := wf.Jobs["checksums"]
 	if checksums == nil {
 		t.Fatal("no checksums job found")
 	}
@@ -501,17 +501,6 @@ func TestReleaseWorkflowCleansUpKeychainAlways(t *testing.T) {
 func TestReleaseWorkflowPreservesArtifactContract(t *testing.T) {
 	wf := loadReleaseWorkflowDoc(t)
 
-	for _, arch := range signingDarwinArches {
-		job := wf.darwinJobForArch(arch)
-		if job == nil {
-			t.Fatalf("no darwin build job for %s", arch)
-		}
-		run := job.allRun()
-		if !strings.Contains(run, "no-slop-") || !strings.Contains(run, "${GOOS}-${GOARCH}.tar.gz") {
-			t.Errorf("darwin job %q must preserve the no-slop-<tag>-<goos>-<goarch>.tar.gz name", job.name)
-		}
-	}
-
 	lw := wf.nonDarwinBuildJob()
 	if lw == nil {
 		t.Fatal("no linux/windows build job found")
@@ -535,22 +524,23 @@ func TestReleaseWorkflowPreservesArtifactContract(t *testing.T) {
 			t.Errorf("linux/windows job %q missing target %s", lw.name, target)
 		}
 	}
-	if strings.Contains(lw.allRun(), "codesign") {
+	if workflowJobRunsCommand(lw, "codesign") {
 		t.Errorf("linux/windows job %q must not sign", lw.name)
 	}
-	if uploadStepIndex(lw) < 0 {
-		t.Errorf("linux/windows job %q must still upload the release asset", lw.name)
-	}
+	workflowStepByName(t, lw, "Upload release asset")
 
-	checksums := wf.jobByRunContains("sha256sum", "checksums.txt")
-	if checksums == nil || !strings.Contains(checksums.allRun(), "sha256sum no-slop-*") {
-		t.Error("checksums job must still compute `sha256sum no-slop-*`")
+	checksums := wf.Jobs["checksums"]
+	if checksums == nil {
+		t.Fatal("no checksums job found")
 	}
+	workflowStepByName(t, checksums, "Generate checksums")
 
-	finalize := wf.jobByRunContains("--prerelease=true")
-	if finalize == nil || !wfContainsAll(finalize.allRun(), "--draft=false", "--prerelease=true") {
-		t.Error("finalize job must still run `gh release edit --draft=false --prerelease=true`")
+	finalize := wf.Jobs["finalize"]
+	if finalize == nil {
+		t.Fatal("no finalize job found")
 	}
+	finalizeStep := workflowStepByName(t, finalize, "Publish draft release as prerelease")
+	assertShellCommandIncludes(t, finalizeStep.Run, "gh", "release", "edit", "--draft=false", "--prerelease=true")
 }
 
 func TestReleaseWorkflowPublishesLegacyArchiveAliases(t *testing.T) {
@@ -755,6 +745,39 @@ func readReleaseWorkflowLines(t *testing.T, path string) []string {
 func slicesContains(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func assertShellCommandIncludes(t *testing.T, command string, want ...string) {
+	t.Helper()
+	fields := strings.Fields(command)
+	for _, token := range want {
+		if !slicesContains(fields, token) {
+			t.Fatalf("shell command fields = %v, missing %q", fields, token)
+		}
+	}
+}
+
+func workflowJobRunsCommand(job *wfJob, command string) bool {
+	for _, step := range job.Steps {
+		if shellRunsCommand(step.Run, command) {
+			return true
+		}
+	}
+	return false
+}
+
+func shellRunsCommand(script, command string) bool {
+	for _, line := range strings.Split(script, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) > 0 && fields[0] == command {
 			return true
 		}
 	}

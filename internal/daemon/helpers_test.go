@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/identity"
 	"github.com/Blakeolson21/no-slop/internal/ipc"
 	"github.com/Blakeolson21/no-slop/internal/logstore"
 	"github.com/Blakeolson21/no-slop/internal/paths"
@@ -21,7 +22,12 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	switch os.Getenv("NM_DAEMON_HELPER_PROCESS") {
+	helperMode, helperErr := identity.LookupEnv(daemonHelperProcessEnv, legacyDaemonHelperProcessEnv)
+	if helperErr != nil {
+		_, _ = os.Stderr.WriteString(helperErr.Error() + "\n")
+		os.Exit(2)
+	}
+	switch helperMode {
 	case "1":
 		if capturePath := os.Getenv("NM_CAPTURE_NS_HOME_FILE"); capturePath != "" {
 			_ = os.WriteFile(capturePath, []byte(os.Getenv("NS_HOME")), 0o644)
