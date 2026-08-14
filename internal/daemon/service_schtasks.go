@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -30,19 +31,24 @@ func installWindowsTask(p *paths.Paths, exe string) error {
 	if _, err := serviceCommandRunner("schtasks", args...); err != nil {
 		return fmt.Errorf("schtasks create: %w", err)
 	}
-	cleanupLegacyWindowsTask(p)
-	return nil
+	return cleanupLegacyWindowsTask(p)
 }
 
-func cleanupLegacyWindowsTask(p *paths.Paths) {
+func cleanupLegacyWindowsTask(p *paths.Paths) error {
+	var errs []error
 	for _, name := range []string{legacyScopedWindowsTaskName(p), legacyWindowsTaskName} {
 		data, err := serviceCommandRunner("schtasks", "/Query", "/TN", name, "/XML")
 		if err != nil || !serviceDefinitionMatchesRoot(data, p) {
 			continue
 		}
-		_, _ = serviceCommandRunner("schtasks", "/End", "/TN", name)
-		_, _ = serviceCommandRunner("schtasks", "/Delete", "/TN", name, "/F")
+		if _, err := serviceCommandRunner("schtasks", "/End", "/TN", name); err != nil {
+			errs = append(errs, fmt.Errorf("schtasks end legacy task: %w", err))
+		}
+		if _, err := serviceCommandRunner("schtasks", "/Delete", "/TN", name, "/F"); err != nil {
+			errs = append(errs, fmt.Errorf("schtasks delete legacy task: %w", err))
+		}
 	}
+	return errors.Join(errs...)
 }
 
 func startWindowsTask(p *paths.Paths) error {
@@ -62,17 +68,19 @@ func stopWindowsTask(p *paths.Paths) error {
 }
 
 func stopLegacyWindowsTask(p *paths.Paths) (bool, error) {
+	stopped := false
+	var errs []error
 	for _, name := range []string{legacyScopedWindowsTaskName(p), legacyWindowsTaskName} {
 		data, queryErr := serviceCommandRunner("schtasks", "/Query", "/TN", name, "/XML")
 		if queryErr != nil || !serviceDefinitionMatchesRoot(data, p) {
 			continue
 		}
+		stopped = true
 		if _, err := serviceCommandRunner("schtasks", "/End", "/TN", name); err != nil {
-			return true, fmt.Errorf("schtasks end legacy task: %w", err)
+			errs = append(errs, fmt.Errorf("schtasks end legacy task: %w", err))
 		}
-		return true, nil
 	}
-	return false, nil
+	return stopped, errors.Join(errs...)
 }
 
 type windowsManagedDaemonObservation struct {

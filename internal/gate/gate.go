@@ -228,10 +228,28 @@ func provisionGate(ctx context.Context, bareDir, absRoot, upstreamURL, reposDir 
 }
 
 func ensureWorkingRemote(ctx context.Context, absRoot, bareDir, reposDir string, refresh bool) error {
+	if err := validateWorkingRemoteAliases(ctx, absRoot); err != nil {
+		return err
+	}
 	for _, name := range []string{RemoteName, LegacyRemoteName} {
 		if err := ensureNamedWorkingRemote(ctx, absRoot, bareDir, reposDir, refresh, name); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateWorkingRemoteAliases(ctx context.Context, absRoot string) error {
+	remotes := map[string]string{}
+	for _, name := range []string{RemoteName, LegacyRemoteName} {
+		url, err := git.GetRemoteURL(ctx, absRoot, name)
+		if err != nil || strings.TrimSpace(url) == "" {
+			continue
+		}
+		remotes[name] = url
+	}
+	if remotes[RemoteName] != "" && remotes[LegacyRemoteName] != "" && remotes[RemoteName] != remotes[LegacyRemoteName] {
+		return fmt.Errorf("%s and %s name the same gate with different URLs", RemoteName, LegacyRemoteName)
 	}
 	return nil
 }

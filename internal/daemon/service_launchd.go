@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -42,17 +43,16 @@ func installLaunchAgent(p *paths.Paths, exe string) error {
 	if err := writeServiceFile(path, launchAgentProxyEnv, render); err != nil {
 		return fmt.Errorf("write launch agent: %w", err)
 	}
-	cleanupLegacyLaunchAgent(p)
-	return nil
+	return cleanupLegacyLaunchAgent(p)
 }
 
 // cleanupLegacyLaunchAgent removes any plist installed by a pre-scoping
 // binary at the globally-named path so the new scoped install is the only
 // managed daemon for this user going forward. We bootout the legacy label
 // before deleting so an already-loaded legacy daemon is released from
-// launchd (it will exit on SIGTERM). Any error is best-effort: if there's
-// no legacy plist or launchctl refuses, we proceed with the scoped install.
-func cleanupLegacyLaunchAgent(p *paths.Paths) {
+// launchd (it will exit on SIGTERM).
+func cleanupLegacyLaunchAgent(p *paths.Paths) error {
+	var errs []error
 	for _, legacy := range []struct {
 		label string
 		path  string
@@ -64,11 +64,19 @@ func cleanupLegacyLaunchAgent(p *paths.Paths) {
 		if err != nil || !serviceDefinitionMatchesRoot(data, p) {
 			continue
 		}
-		if domain, err := launchdDomainTarget(); err == nil {
-			_, _ = serviceCommandRunner("launchctl", "bootout", domain+"/"+legacy.label)
+		if domain, err := launchdDomainTarget(); err != nil {
+			errs = append(errs, err)
+		} else {
+			output, stopErr := serviceCommandRunner("launchctl", "bootout", domain+"/"+legacy.label)
+			if stopErr != nil && !launchctlBootoutServiceNotLoaded(stopErr, output) {
+				errs = append(errs, fmt.Errorf("launchctl bootout legacy service: %w", stopErr))
+			}
 		}
-		_ = os.Remove(legacy.path)
+		if err := os.Remove(legacy.path); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("remove legacy launch agent: %w", err))
+		}
 	}
+	return errors.Join(errs...)
 }
 
 func startLaunchAgent(p *paths.Paths) error {
@@ -147,6 +155,8 @@ func stopLegacyLaunchAgent(p *paths.Paths) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	stopped := false
+	var errs []error
 	for _, legacy := range []struct {
 		label string
 		path  string
@@ -158,13 +168,13 @@ func stopLegacyLaunchAgent(p *paths.Paths) (bool, error) {
 		if readErr != nil || !serviceDefinitionMatchesRoot(data, p) {
 			continue
 		}
+		stopped = true
 		output, stopErr := serviceCommandRunner("launchctl", "bootout", domain+"/"+legacy.label)
 		if stopErr != nil && !launchctlBootoutServiceNotLoaded(stopErr, output) {
-			return true, fmt.Errorf("launchctl bootout legacy service: %w", stopErr)
+			errs = append(errs, fmt.Errorf("launchctl bootout legacy service: %w", stopErr))
 		}
-		return true, nil
 	}
-	return false, nil
+	return stopped, errors.Join(errs...)
 }
 
 func removeLaunchAgent(p *paths.Paths) error {

@@ -115,6 +115,46 @@ func TestInstallSystemdUserServiceDoesNotRemoveLegacyUnitForDifferentRoot(t *tes
 	}
 }
 
+func TestInstallSystemdUserServiceReportsLegacyCleanupFailure(t *testing.T) {
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+
+	cleanup := stubServiceRuntime(t)
+	defer cleanup()
+	runtimeGOOS = "linux"
+	serviceUserHomeDir = func() (string, error) { return home, nil }
+
+	legacyPath := filepath.Join(home, ".config", "systemd", "user", legacySystemdServiceName)
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacyUnit := renderSystemdUnit("/usr/local/bin/no-mistakes", p, home)
+	if err := os.WriteFile(legacyPath, []byte(legacyUnit), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var commands []string
+	serviceCommandRunner = func(name string, args ...string) ([]byte, error) {
+		command := name + " " + strings.Join(args, " ")
+		commands = append(commands, command)
+		if command == "systemctl --user stop "+legacySystemdServiceName {
+			return nil, fmt.Errorf("stop failed")
+		}
+		return nil, nil
+	}
+
+	err := installSystemdUserService(p, "/usr/local/bin/no-slop")
+	if err == nil || !strings.Contains(err.Error(), "systemctl stop legacy service") {
+		t.Fatalf("install error = %v, want legacy cleanup failure", err)
+	}
+	if !containsCmd(commands, "systemctl --user disable "+legacySystemdServiceName) {
+		t.Fatalf("cleanup should still disable matching legacy unit after stop failure, got %v", commands)
+	}
+}
+
 func TestInstallSystemdUserServiceKeepsLegacyUnitOnEnableFailure(t *testing.T) {
 	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {

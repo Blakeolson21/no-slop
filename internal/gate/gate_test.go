@@ -388,6 +388,42 @@ func TestInitIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestInitRefreshRejectsConflictingRemoteAliasesBeforeRepair(t *testing.T) {
+	workDir := setupTestRepo(t)
+	nmRoot := t.TempDir()
+	p := paths.WithRoot(nmRoot)
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatalf("ensure dirs: %v", err)
+	}
+	d := openTestDB(t, p)
+	ctx := context.Background()
+
+	first, _, err := Init(ctx, d, p, workDir)
+	if err != nil {
+		t.Fatalf("first init: %v", err)
+	}
+	canonicalURL := p.RepoDir(first.ID)
+	legacyURL := p.RepoDir("other-gate")
+	if err := gitpkg.EnsureRemote(ctx, workDir, LegacyRemoteName, legacyURL); err != nil {
+		t.Fatalf("poison legacy remote: %v", err)
+	}
+
+	_, _, err = Init(ctx, d, p, workDir)
+	if err == nil || !strings.Contains(err.Error(), "same gate with different URLs") {
+		t.Fatalf("refresh error = %v, want conflicting-alias refusal", err)
+	}
+	if url, err := gitpkg.GetRemoteURL(ctx, workDir, RemoteName); err != nil {
+		t.Fatalf("get canonical remote: %v", err)
+	} else if url != canonicalURL {
+		t.Fatalf("canonical remote = %q, want %q", url, canonicalURL)
+	}
+	if url, err := gitpkg.GetRemoteURL(ctx, workDir, LegacyRemoteName); err != nil {
+		t.Fatalf("get legacy remote: %v", err)
+	} else if url != legacyURL {
+		t.Fatalf("legacy remote was repaired before conflict rejection: got %q, want %q", url, legacyURL)
+	}
+}
+
 func TestInitWithForkPreservesForkOnPlainReinit(t *testing.T) {
 	workDir := setupTestRepo(t)
 	nmRoot := t.TempDir()

@@ -3,6 +3,7 @@ package daemon
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"os/user"
@@ -424,14 +425,18 @@ func restartManagedService(p *paths.Paths) (bool, error) {
 	if bypassed {
 		return false, nil
 	}
+	legacyStopped, legacyErr := stopLegacyManagedService(p)
+	var restartErr error
 	switch runtimeGOOS {
 	case "darwin":
-		return true, startLaunchAgent(p)
+		restartErr = startLaunchAgent(p)
 	case "linux":
-		return true, restartSystemdUserService(p)
+		restartErr = restartSystemdUserService(p)
 	default:
-		return startManagedService(p)
+		started, startErr := startManagedService(p)
+		return started || legacyStopped, errors.Join(startErr, legacyErr)
 	}
+	return true, errors.Join(restartErr, legacyErr)
 }
 
 func reloadManagedServiceDefinition(p *paths.Paths) error {
@@ -464,25 +469,33 @@ func stopManagedService(p *paths.Paths) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if !installed {
-		switch runtimeGOOS {
-		case "darwin":
-			return stopLegacyLaunchAgent(p)
-		case "linux":
-			return stopLegacySystemdUserService(p)
-		case "windows":
-			return stopLegacyWindowsTask(p)
-		default:
-			return false, nil
-		}
-	}
+	var stopErr error
 	switch runtimeGOOS {
 	case "darwin":
-		return true, stopLaunchAgent(p)
+		if installed {
+			stopErr = stopLaunchAgent(p)
+		}
 	case "linux":
-		return true, stopSystemdUserService(p)
+		if installed {
+			stopErr = stopSystemdUserService(p)
+		}
 	case "windows":
-		return true, stopWindowsTask(p)
+		if installed {
+			stopErr = stopWindowsTask(p)
+		}
+	}
+	legacyStopped, legacyErr := stopLegacyManagedService(p)
+	return installed || legacyStopped, errors.Join(stopErr, legacyErr)
+}
+
+func stopLegacyManagedService(p *paths.Paths) (bool, error) {
+	switch runtimeGOOS {
+	case "darwin":
+		return stopLegacyLaunchAgent(p)
+	case "linux":
+		return stopLegacySystemdUserService(p)
+	case "windows":
+		return stopLegacyWindowsTask(p)
 	default:
 		return false, nil
 	}

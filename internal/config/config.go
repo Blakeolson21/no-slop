@@ -1393,7 +1393,7 @@ func resolveRepoConfigAliases(canonicalData []byte, canonicalExists bool, legacy
 		if canonicalErr != nil || legacyErr != nil {
 			return nil, true, repoConfigAliasParseError(canonicalErr, legacyErr)
 		}
-		if !reflect.DeepEqual(normalizeRepoConfigAlias(canonicalCfg), normalizeRepoConfigAlias(legacyCfg)) {
+		if !reflect.DeepEqual(repoConfigAliasSemantics(canonicalCfg), repoConfigAliasSemantics(legacyCfg)) {
 			return nil, true, fmt.Errorf("%s and %s name the same repo config with different values", identity.RepoConfigName, identity.LegacyRepoConfigName)
 		}
 		return canonicalCfg, true, nil
@@ -1408,13 +1408,22 @@ func resolveRepoConfigAliases(canonicalData []byte, canonicalExists bool, legacy
 	}
 }
 
-func normalizeRepoConfigAlias(cfg *RepoConfig) RepoConfig {
+type repoConfigAliasSemantic struct {
+	Config            Config
+	AllowRepoCommands bool
+}
+
+func repoConfigAliasSemantics(cfg *RepoConfig) repoConfigAliasSemantic {
 	if cfg == nil {
-		return RepoConfig{}
+		cfg = &RepoConfig{}
 	}
-	out := *cfg
-	normalizeNilCollections(reflect.ValueOf(&out))
-	return out
+	effective := EffectiveRepoConfig(cfg, cfg, true)
+	merged := *Merge(&GlobalConfig{}, effective)
+	normalizeNilCollections(reflect.ValueOf(&merged))
+	return repoConfigAliasSemantic{
+		Config:            merged,
+		AllowRepoCommands: effective.AllowRepoCommands,
+	}
 }
 
 func normalizeNilCollections(v reflect.Value) {

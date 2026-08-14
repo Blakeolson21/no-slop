@@ -285,6 +285,15 @@ func stopCurrentDaemonBeforeManagedRestart(p *paths.Paths) error {
 				return fmt.Errorf("wait for managed daemon exit before restart: %w", waitErr)
 			}
 		}
+		if err != nil {
+			if detachedErr != nil {
+				return fmt.Errorf("stop managed daemon before restart: %w; detached shutdown: %v", err, detachedErr)
+			}
+			return fmt.Errorf("stop managed daemon before restart: %w", err)
+		}
+		if detachedErr != nil {
+			return fmt.Errorf("detached shutdown before managed restart: %w", detachedErr)
+		}
 		return nil
 	}
 	if alive, _ := daemonHealthCheck(p); alive {
@@ -634,6 +643,15 @@ func Stop(p *paths.Paths) error {
 			default:
 				return waitErr
 			}
+		}
+		if err != nil {
+			if detachedErr != nil {
+				return fmt.Errorf("%w; detached shutdown: %v", err, detachedErr)
+			}
+			return err
+		}
+		if detachedErr != nil {
+			return fmt.Errorf("detached shutdown: %w", detachedErr)
 		}
 		return nil
 	}

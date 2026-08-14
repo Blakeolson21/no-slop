@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,21 +35,13 @@ func TestCanonicalAndLegacyBinaryInvocationsHaveParity(t *testing.T) {
 		{canonical, "./cmd/no-slop"},
 		{legacy, "./cmd/no-mistakes"},
 	} {
-		cmd := exec.Command("go", "build", "-o", build.output, build.pkg)
-		if data, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("build %s from %s: %v\n%s", filepath.Base(build.output), build.pkg, err, data)
-		}
+		identityCommandOutput(t, 2*time.Minute, "", nil, "go", "build", "-o", build.output, build.pkg)
 	}
 
 	root := t.TempDir()
 	run := func(path string) string {
 		t.Helper()
-		cmd := exec.Command(path, "--help")
-		cmd.Env = append(os.Environ(), "NS_HOME="+root, "NM_HOME="+root, "NS_TELEMETRY=off", "NO_MISTAKES_TELEMETRY=off")
-		data, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("%s --help: %v\n%s", filepath.Base(path), err, data)
-		}
+		data := identityCommandOutput(t, 30*time.Second, "", append(os.Environ(), "NS_HOME="+root, "NM_HOME="+root, "NS_TELEMETRY=off", "NO_MISTAKES_TELEMETRY=off"), path, "--help")
 		return string(data)
 	}
 	if got, want := run(legacy), run(canonical); got != want {
@@ -69,10 +63,7 @@ func TestLiveRunStateSurvivesLegacyDaemonAndCanonicalBinary(t *testing.T) {
 		{canonical, "./cmd/no-slop"},
 		{legacy, "./cmd/no-mistakes"},
 	} {
-		cmd := exec.Command("go", "build", "-o", build.output, build.pkg)
-		if data, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("build %s from %s: %v\n%s", filepath.Base(build.output), build.pkg, err, data)
-		}
+		identityCommandOutput(t, 2*time.Minute, "", nil, "go", "build", "-o", build.output, build.pkg)
 	}
 
 	shortDir, err := os.MkdirTemp("/tmp", "ns-identity-")
@@ -81,28 +72,24 @@ func TestLiveRunStateSurvivesLegacyDaemonAndCanonicalBinary(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(shortDir) })
 	stateRoot := filepath.Join(shortDir, "state")
-	legacyDaemon := exec.Command(legacy, "daemon", "run")
+	daemonCtx, cancelDaemon := context.WithCancel(context.Background())
+	legacyDaemon := exec.CommandContext(daemonCtx, legacy, "daemon", "run")
 	legacyDaemon.Env = identityTestEnv("NM_HOME=" + stateRoot)
+	legacyDaemon.WaitDelay = 5 * time.Second
 	var legacyStderr bytes.Buffer
 	legacyDaemon.Stderr = &legacyStderr
 	if err := legacyDaemon.Start(); err != nil {
 		t.Fatalf("start legacy daemon: %v", err)
 	}
 	defer func() {
-		stop := exec.Command(canonical, "daemon", "stop", "--force", "--abandon-executing-runs")
-		stop.Env = identityTestEnv("NS_HOME=" + stateRoot)
-		_, _ = stop.CombinedOutput()
-		if legacyDaemon.ProcessState == nil {
-			_ = legacyDaemon.Process.Kill()
-		}
-		_ = legacyDaemon.Wait()
+		_, _ = identityCommandOutputAllowError(10*time.Second, "", identityTestEnv("NS_HOME="+stateRoot), canonical, "daemon", "stop", "--force", "--abandon-executing-runs")
+		cancelDaemon()
+		waitIdentityCommand(t, legacyDaemon, 10*time.Second)
 	}()
 
 	deadline := time.Now().Add(15 * time.Second)
 	for {
-		status := exec.Command(canonical, "daemon", "status")
-		status.Env = identityTestEnv("NS_HOME=" + stateRoot)
-		data, err := status.CombinedOutput()
+		data, err := identityCommandOutputAllowError(5*time.Second, "", identityTestEnv("NS_HOME="+stateRoot), canonical, "daemon", "status")
 		if err == nil && strings.Contains(string(data), "daemon running") {
 			break
 		}
@@ -116,11 +103,7 @@ func TestLiveRunStateSurvivesLegacyDaemonAndCanonicalBinary(t *testing.T) {
 	if err := os.MkdirAll(repoDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	gitInit := exec.Command("git", "init", "-b", "main")
-	gitInit.Dir = repoDir
-	if data, err := gitInit.CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v\n%s", err, data)
-	}
+	identityCommandOutput(t, 30*time.Second, repoDir, nil, "git", "init", "-b", "main")
 	resolvedRepoDir, err := filepath.EvalSymlinks(repoDir)
 	if err != nil {
 		t.Fatalf("resolve repo path: %v", err)
@@ -147,10 +130,7 @@ func TestLiveRunStateSurvivesLegacyDaemonAndCanonicalBinary(t *testing.T) {
 
 	runList := func(want string) {
 		t.Helper()
-		cmd := exec.Command(canonical, "runs")
-		cmd.Dir = repoDir
-		cmd.Env = identityTestEnv("NS_HOME=" + stateRoot)
-		data, err := cmd.CombinedOutput()
+		data, err := identityCommandOutputAllowError(30*time.Second, repoDir, identityTestEnv("NS_HOME="+stateRoot), canonical, "runs")
 		if err != nil || !strings.Contains(string(data), want) {
 			t.Fatalf("canonical runs missing %q: %v\n%s", want, err, data)
 		}
@@ -177,4 +157,56 @@ func identityTestEnv(entries ...string) []string {
 	}
 	env = append(env, entries...)
 	return append(env, "NS_TELEMETRY=off", "NO_MISTAKES_TELEMETRY=off")
+}
+
+func identityCommandOutput(t *testing.T, timeout time.Duration, dir string, env []string, name string, args ...string) []byte {
+	t.Helper()
+	data, err := identityCommandOutputAllowError(timeout, dir, env, name, args...)
+	if err != nil {
+		t.Fatalf("%s %s: %v\n%s", filepath.Base(name), strings.Join(args, " "), err, data)
+	}
+	return data
+}
+
+func identityCommandOutputAllowError(timeout time.Duration, dir string, env []string, name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = 5 * time.Second
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	if env != nil {
+		cmd.Env = env
+	}
+	data, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		if err == nil {
+			err = ctx.Err()
+		} else {
+			err = fmt.Errorf("%w: %v", ctx.Err(), err)
+		}
+	}
+	return data, err
+}
+
+func waitIdentityCommand(t *testing.T, cmd *exec.Cmd, timeout time.Duration) {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+	select {
+	case <-done:
+		return
+	case <-time.After(timeout):
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Errorf("%s did not exit after kill", filepath.Base(cmd.Path))
+	}
 }

@@ -1078,6 +1078,50 @@ func TestStopUsesManagedServiceWhenInstalled(t *testing.T) {
 	}
 }
 
+func TestStopManagedServiceStopsCanonicalAndLegacySystemdUnits(t *testing.T) {
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+
+	cleanup := stubServiceRuntime(t)
+	defer cleanup()
+	runtimeGOOS = "linux"
+	serviceUserHomeDir = func() (string, error) { return home, nil }
+
+	canonicalPath := systemdUserServicePath(p)
+	if err := os.MkdirAll(filepath.Dir(canonicalPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(canonicalPath, []byte("WorkingDirectory="+p.Root()+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	legacyPath := legacySystemdUserServicePath()
+	if err := os.WriteFile(legacyPath, []byte(renderSystemdUnit("/usr/local/bin/no-mistakes", p, home)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var commands []string
+	serviceCommandRunner = func(name string, args ...string) ([]byte, error) {
+		commands = append(commands, name+" "+strings.Join(args, " "))
+		return nil, nil
+	}
+
+	stopped, err := stopManagedService(p)
+	if err != nil || !stopped {
+		t.Fatalf("stopManagedService = (%v, %v), want (true, nil); commands %v", stopped, err, commands)
+	}
+	for _, want := range []string{
+		"systemctl --user stop " + systemdServiceName(p),
+		"systemctl --user stop " + legacySystemdServiceName,
+	} {
+		if !containsCmd(commands, want) {
+			t.Fatalf("commands = %v, want %q", commands, want)
+		}
+	}
+}
+
 func TestManagedServiceInstalledRequiresMatchingRoot(t *testing.T) {
 	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	home := t.TempDir()
@@ -1213,8 +1257,9 @@ func TestManagedStopErrorsStillWaitForCapturedDaemonExit(t *testing.T) {
 				daemonProcessRunning = oldProcessRunning
 			})
 
-			if err := tc.stop(p); err != nil {
-				t.Fatalf("stop should succeed after confirming daemon exit: %v", err)
+			err := tc.stop(p)
+			if err == nil || !strings.Contains(err.Error(), "user manager unavailable") {
+				t.Fatalf("stop error = %v, want managed-service failure after confirming daemon exit", err)
 			}
 			if probes == 0 {
 				t.Fatal("stop returned without probing the captured daemon process")
@@ -1284,8 +1329,8 @@ func TestStopManagedServiceFindsLegacyScopedWindowsTask(t *testing.T) {
 		t.Fatalf("stop legacy scoped task = (%v, %v), want (true, nil); commands %v", stopped, err, commands)
 	}
 	wantEnd := "schtasks /End /TN " + legacyScopedWindowsTaskName(p)
-	if commands[len(commands)-1] != wantEnd {
-		t.Fatalf("last command = %q, want %q", commands[len(commands)-1], wantEnd)
+	if !containsCmd(commands, wantEnd) {
+		t.Fatalf("commands = %v, want %q", commands, wantEnd)
 	}
 }
 

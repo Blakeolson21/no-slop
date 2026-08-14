@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,11 +35,11 @@ func installSystemdUserService(p *paths.Paths, exe string) error {
 	if _, err := serviceCommandRunner("systemctl", "--user", "enable", systemdServiceName(p)); err != nil {
 		return fmt.Errorf("systemctl enable: %w", err)
 	}
-	cleanupLegacySystemdUnit(p)
-	return nil
+	return cleanupLegacySystemdUnit(p)
 }
 
-func cleanupLegacySystemdUnit(p *paths.Paths) {
+func cleanupLegacySystemdUnit(p *paths.Paths) error {
+	var errs []error
 	for _, legacy := range []struct {
 		name string
 		path string
@@ -50,10 +51,17 @@ func cleanupLegacySystemdUnit(p *paths.Paths) {
 		if err != nil || !serviceDefinitionMatchesRoot(data, p) {
 			continue
 		}
-		_, _ = serviceCommandRunner("systemctl", "--user", "stop", legacy.name)
-		_, _ = serviceCommandRunner("systemctl", "--user", "disable", legacy.name)
-		_ = os.Remove(legacy.path)
+		if _, err := serviceCommandRunner("systemctl", "--user", "stop", legacy.name); err != nil {
+			errs = append(errs, fmt.Errorf("systemctl stop legacy service: %w", err))
+		}
+		if _, err := serviceCommandRunner("systemctl", "--user", "disable", legacy.name); err != nil {
+			errs = append(errs, fmt.Errorf("systemctl disable legacy service: %w", err))
+		}
+		if err := os.Remove(legacy.path); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("remove legacy systemd unit: %w", err))
+		}
 	}
+	return errors.Join(errs...)
 }
 
 func startSystemdUserService(p *paths.Paths) error {
@@ -81,6 +89,8 @@ func stopSystemdUserService(p *paths.Paths) error {
 }
 
 func stopLegacySystemdUserService(p *paths.Paths) (bool, error) {
+	stopped := false
+	var errs []error
 	for _, legacy := range []struct {
 		name string
 		path string
@@ -92,12 +102,12 @@ func stopLegacySystemdUserService(p *paths.Paths) (bool, error) {
 		if readErr != nil || !serviceDefinitionMatchesRoot(data, p) {
 			continue
 		}
+		stopped = true
 		if _, err := serviceCommandRunner("systemctl", "--user", "stop", legacy.name); err != nil {
-			return true, fmt.Errorf("systemctl stop legacy service: %w", err)
+			errs = append(errs, fmt.Errorf("systemctl stop legacy service: %w", err))
 		}
-		return true, nil
 	}
-	return false, nil
+	return stopped, errors.Join(errs...)
 }
 
 func systemdUserServicePath(p *paths.Paths) string {
