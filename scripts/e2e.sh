@@ -15,22 +15,47 @@
 set -u
 
 resolve_alias() {
-  canonical_name="$1"
-  legacy_name="$2"
-  canonical_value="${!canonical_name:-}"
-  legacy_value="${!legacy_name:-}"
-  if [[ -n "$canonical_value" && -n "$legacy_value" && "$canonical_value" != "$legacy_value" ]]; then
-    printf '%s and legacy alias %s configure the same setting with different values\n' "$canonical_name" "$legacy_name" >&2
-    exit 2
+  local canonical_name="$1"
+  local legacy_name="$2"
+  local canonical_value=""
+  local legacy_value=""
+  local canonical_set=0
+  local legacy_set=0
+  if [[ -v "$canonical_name" ]]; then
+    canonical_set=1
+    canonical_value="${!canonical_name}"
   fi
-  printf '%s' "${canonical_value:-$legacy_value}"
+  if [[ -v "$legacy_name" ]]; then
+    legacy_set=1
+    legacy_value="${!legacy_name}"
+  fi
+  if [[ "$canonical_set" -eq 1 && "$legacy_set" -eq 1 && "$canonical_value" != "$legacy_value" ]]; then
+    printf '%s and legacy alias %s configure the same setting with different values\n' "$canonical_name" "$legacy_name" >&2
+    return 2
+  fi
+  if [[ "$canonical_set" -eq 1 ]]; then
+    printf '%s' "$canonical_value"
+  else
+    printf '%s' "$legacy_value"
+  fi
+}
+
+assign_alias() {
+  local target="$1"
+  local value
+  shift
+  if value="$(resolve_alias "$@")"; then
+    printf -v "$target" '%s' "$value"
+  else
+    exit "$?"
+  fi
 }
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 1
 
-NS_E2E_DAEMON_INVENTORY="$(resolve_alias NS_E2E_DAEMON_INVENTORY NM_E2E_DAEMON_INVENTORY)"
-NS_E2E_DAEMON_INVENTORY_PARENT="$(resolve_alias NS_E2E_DAEMON_INVENTORY_PARENT NM_E2E_DAEMON_INVENTORY_PARENT)"
+assign_alias NS_E2E_DAEMON_INVENTORY NS_E2E_DAEMON_INVENTORY NM_E2E_DAEMON_INVENTORY
+assign_alias NS_E2E_DAEMON_INVENTORY_PARENT NS_E2E_DAEMON_INVENTORY_PARENT NM_E2E_DAEMON_INVENTORY_PARENT
 
 if [[ -z "$NS_E2E_DAEMON_INVENTORY" ]]; then
   base="/tmp"
@@ -54,7 +79,7 @@ else
   OWNED_INVENTORY=0
 fi
 
-NS_E2E_DAEMON_MAX="$(resolve_alias NS_E2E_DAEMON_MAX NM_E2E_DAEMON_MAX)"
+assign_alias NS_E2E_DAEMON_MAX NS_E2E_DAEMON_MAX NM_E2E_DAEMON_MAX
 NS_E2E_DAEMON_MAX="${NS_E2E_DAEMON_MAX:-2}"
 
 # Export both spellings with the same values so old and new test binaries can

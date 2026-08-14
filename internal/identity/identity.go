@@ -34,15 +34,9 @@ const (
 // Equal duplicate values are harmless. Different values are refused so aliases
 // can never become two independent settings with an implicit precedence rule.
 func LookupEnv(canonical, legacy string) (string, error) {
-	canonicalValue := os.Getenv(canonical)
-	legacyValue := os.Getenv(legacy)
-	if canonicalValue != "" && legacyValue != "" && canonicalValue != legacyValue {
-		return "", fmt.Errorf("%s and legacy alias %s configure the same setting with different values", canonical, legacy)
-	}
-	if canonicalValue != "" {
-		return canonicalValue, nil
-	}
-	return legacyValue, nil
+	canonicalValue, canonicalSet := os.LookupEnv(canonical)
+	legacyValue, legacySet := os.LookupEnv(legacy)
+	return resolveAliasValues(canonical, legacy, canonicalValue, canonicalSet, legacyValue, legacySet)
 }
 
 // LookupEnvSlice is LookupEnv for an explicit subprocess environment. A nil
@@ -51,24 +45,37 @@ func LookupEnvSlice(env []string, canonical, legacy string) (string, error) {
 	if env == nil {
 		return LookupEnv(canonical, legacy)
 	}
-	values := make(map[string]string, 2)
+	var canonicalValue, legacyValue string
+	var canonicalSet, legacySet bool
 	for _, entry := range env {
 		key, value, ok := strings.Cut(entry, "=")
-		if ok && (key == canonical || key == legacy) {
-			values[key] = value
+		if !ok {
+			continue
+		}
+		switch key {
+		case canonical:
+			canonicalValue = value
+			canonicalSet = true
+		case legacy:
+			legacyValue = value
+			legacySet = true
 		}
 	}
-	if values[canonical] != "" && values[legacy] != "" && values[canonical] != values[legacy] {
+	return resolveAliasValues(canonical, legacy, canonicalValue, canonicalSet, legacyValue, legacySet)
+}
+
+func resolveAliasValues(canonical, legacy, canonicalValue string, canonicalSet bool, legacyValue string, legacySet bool) (string, error) {
+	if canonicalSet && legacySet && canonicalValue != legacyValue {
 		return "", fmt.Errorf("%s and legacy alias %s configure the same setting with different values", canonical, legacy)
 	}
-	if values[canonical] != "" {
-		return values[canonical], nil
+	if canonicalSet {
+		return canonicalValue, nil
 	}
-	return values[legacy], nil
+	return legacyValue, nil
 }
 
 // EnvEnabled reports whether either spelling of a boolean marker is exactly 1.
-// Conflicting non-empty spellings are rejected by LookupEnv.
+// Conflicting spellings are rejected by LookupEnv.
 func EnvEnabled(canonical, legacy string) (bool, error) {
 	value, err := LookupEnv(canonical, legacy)
 	return value == "1", err
