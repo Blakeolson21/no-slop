@@ -289,6 +289,12 @@ func (s *Service) Refresh(ctx context.Context) State {
 
 	privateRef := "refs/no-slop/sync/" + run.ID
 	branch := strings.TrimPrefix(state.Target.Ref, "refs/heads/")
+	if err := rejectLegacyPrivateRefConflictForWrite(ctx, s.workDir(), privateRef, live); err != nil {
+		state.State = StateAmbiguousContext
+		state.Safety = "blocked_private_ref_conflict"
+		state.Error = fmt.Sprintf("private sync refs conflict: %v; no files or refs were changed", err)
+		return state
+	}
 	if err := git.FetchRemoteBranchToPrivateRef(refreshCtx, s.workDir(), pushURL, branch, privateRef); err != nil {
 		state.State = StateOffline
 		state.Safety = "blocked_offline"
@@ -1197,6 +1203,30 @@ func writePrivateRefAnchor(ctx context.Context, workDir, canonicalRef, sha strin
 		return fmt.Errorf("%s did not anchor %s", canonicalRef, sha)
 	}
 	return nil
+}
+
+func rejectLegacyPrivateRefConflictForWrite(ctx context.Context, workDir, canonicalRef, sha string) error {
+	aliases := privateRefAliases(canonicalRef)
+	if len(aliases) < 2 {
+		return nil
+	}
+	canonicalSHA, canonicalOK := privateRefCommit(ctx, workDir, aliases[0])
+	legacySHA, legacyOK := privateRefCommit(ctx, workDir, aliases[1])
+	if canonicalOK && legacyOK && canonicalSHA != legacySHA {
+		return fmt.Errorf("%s and %s name the same private ref with different commits", aliases[0], aliases[1])
+	}
+	if legacyOK && legacySHA != sha {
+		return fmt.Errorf("%s already anchors %s", aliases[1], legacySHA)
+	}
+	return nil
+}
+
+func privateRefCommit(ctx context.Context, workDir, ref string) (string, bool) {
+	sha, err := git.Run(ctx, workDir, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(sha), true
 }
 
 // resolvePrivateRefAlias reads canonical refs first, then their legacy

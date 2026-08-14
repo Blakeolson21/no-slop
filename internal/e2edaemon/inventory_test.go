@@ -45,6 +45,20 @@ func TestInventoryRegisterUpdateUnregister(t *testing.T) {
 	}
 }
 
+func TestDirFromEnvUsesLegacyDefaultPhysicalPath(t *testing.T) {
+	t.Setenv(EnvInventory, "")
+	t.Setenv(LegacyEnvInventory, "")
+
+	dir, err := DirFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(os.TempDir(), "no-mistakes-e2e-daemon-inventory")
+	if dir != want {
+		t.Fatalf("DirFromEnv() = %q, want %q", dir, want)
+	}
+}
+
 func TestInventoryCorruptFileRecoversEmpty(t *testing.T) {
 	dir := t.TempDir()
 	inv, err := OpenDir(dir)

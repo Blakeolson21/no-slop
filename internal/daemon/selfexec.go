@@ -226,17 +226,19 @@ func reinstallManagedServiceIfChanged(p *paths.Paths) (bool, error) {
 	switch {
 	case readErr == nil && string(existing) == wanted:
 		return false, nil
-	case os.IsNotExist(readErr):
-		return false, nil
 	case readErr != nil && !os.IsNotExist(readErr):
 		return false, fmt.Errorf("read managed service definition: %w", readErr)
 	}
+	hadExisting := readErr == nil
 	restoreMode := os.FileMode(0o644)
 	if info, err := os.Stat(installPath); err == nil {
 		restoreMode = info.Mode().Perm()
 	}
 	stoppedForRefresh := false
 	restoreOnFailure := func(cause error) (bool, error) {
+		if !hadExisting {
+			return false, cause
+		}
 		if err := writeFileAtomic(installPath, existing, restoreMode); err != nil {
 			return false, fmt.Errorf("%w; restore managed service definition: %v", cause, err)
 		}

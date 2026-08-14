@@ -230,6 +230,25 @@ func TestInspectCachedBehindPerformsNoFetchOrMutation(t *testing.T) {
 	}
 }
 
+func TestRefreshRejectsLegacySyncPrivateRefConflictBeforeFetch(t *testing.T) {
+	t.Parallel()
+
+	f := newSyncFixture(t)
+	legacyRef := strings.Replace("refs/no-slop/sync/"+f.run.ID, "refs/no-slop/", "refs/no-mistakes/", 1)
+	mustRun(t, f.local, "update-ref", legacyRef, f.base)
+
+	state := f.service.Refresh(f.ctx)
+	if state.State != StateAmbiguousContext || state.Safety != "blocked_private_ref_conflict" {
+		t.Fatalf("state = %#v, want private ref conflict", state)
+	}
+	if _, err := gitpkg.Run(f.ctx, f.local, "rev-parse", "--verify", "refs/no-slop/sync/"+f.run.ID+"^{commit}"); err == nil {
+		t.Fatal("canonical sync private ref should not be written after legacy conflict")
+	}
+	if got := mustRun(t, f.local, "rev-parse", legacyRef+"^{commit}"); got != f.base {
+		t.Fatalf("legacy sync private ref = %s, want %s", got, f.base)
+	}
+}
+
 func TestApplyCleanStrictBehindFastForwardsExactBoundHead(t *testing.T) {
 	t.Parallel()
 

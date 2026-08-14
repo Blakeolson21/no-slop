@@ -65,7 +65,7 @@ func DirFromEnv() (string, error) {
 	if dir != "" {
 		return dir, nil
 	}
-	return filepath.Join(os.TempDir(), "no-slop-e2e-daemon-inventory"), nil
+	return filepath.Join(os.TempDir(), "no-mistakes-e2e-daemon-inventory"), nil
 }
 
 // Open returns an Inventory rooted at DirFromEnv(), creating the directory

@@ -131,6 +131,69 @@ func TestStart_DoesNotReinstallWhenPlistUnchanged(t *testing.T) {
 	}
 }
 
+func TestStartInstallsCanonicalServiceWhenOnlyLegacyServiceExists(t *testing.T) {
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+
+	cleanup := stubServiceRuntime(t)
+	defer cleanup()
+	runtimeGOOS = "linux"
+	serviceUserHomeDir = func() (string, error) { return home, nil }
+	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-slop", nil }
+
+	legacyPath := legacyScopedSystemdUserServicePath(p)
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, []byte(renderSystemdUnit("/usr/local/bin/no-mistakes", p, home)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	running := true
+	var commands []string
+	serviceCommandRunner = func(name string, args ...string) ([]byte, error) {
+		command := name + " " + strings.Join(args, " ")
+		commands = append(commands, command)
+		switch command {
+		case "systemctl --user stop " + legacyScopedSystemdServiceName(p):
+			running = false
+		case "systemctl --user restart " + systemdServiceName(p):
+			running = true
+		}
+		return nil, nil
+	}
+	daemonHealthCheck = func(*paths.Paths) (bool, error) { return running, nil }
+
+	if err := Start(p); err != nil {
+		t.Fatalf("Start should install canonical service and restart it, got %v", err)
+	}
+	if _, err := os.Stat(systemdUserServicePath(p)); err != nil {
+		t.Fatalf("canonical unit missing after Start: %v", err)
+	}
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy unit should be removed after Start, stat err = %v", err)
+	}
+	sawLegacyStop := false
+	sawLegacyDisable := false
+	sawCanonicalRestart := false
+	for _, command := range commands {
+		switch command {
+		case "systemctl --user stop " + legacyScopedSystemdServiceName(p):
+			sawLegacyStop = true
+		case "systemctl --user disable " + legacyScopedSystemdServiceName(p):
+			sawLegacyDisable = true
+		case "systemctl --user restart " + systemdServiceName(p):
+			sawCanonicalRestart = true
+		}
+	}
+	if !sawLegacyStop || !sawLegacyDisable || !sawCanonicalRestart {
+		t.Fatalf("expected legacy cleanup and canonical restart, got %v", commands)
+	}
+}
+
 func TestStartDoesNotRestartLaunchAgentForExecutableOnlyChange(t *testing.T) {
 	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
