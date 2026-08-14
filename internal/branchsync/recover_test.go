@@ -372,6 +372,22 @@ func TestRecoverIdempotentAfterSuccess(t *testing.T) {
 	}
 }
 
+func TestRecoverIdempotentAfterSuccessRejectsPrivateRefAliasConflict(t *testing.T) {
+	t.Parallel()
+
+	f := newRecoverFixture(t, types.RunCancelled)
+	if first := f.service.Recover(f.ctx, false); !first.Recovered {
+		t.Fatalf("first recover = %#v", first)
+	}
+	legacyRef := strings.Replace(f.anchorRef(), "refs/no-slop/", "refs/no-mistakes/", 1)
+	mustRun(t, f.local, "update-ref", legacyRef, f.base)
+
+	second := f.service.Recover(f.ctx, false)
+	if second.Recovered || second.Safety != "blocked_recover_private_ref_conflict" {
+		t.Fatalf("second recover with private ref conflict = %#v", second)
+	}
+}
+
 // TestRecoverWorktreeAlreadyAtPreservedHeadReturnsCustodyWithoutMutation
 // covers the equal cell: nothing to reconcile, custody return only.
 func TestRecoverWorktreeAlreadyAtPreservedHeadReturnsCustodyWithoutMutation(t *testing.T) {

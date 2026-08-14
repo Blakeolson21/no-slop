@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Blakeolson21/no-slop/internal/shellenv"
 )
 
 func TestInstallScriptInstallsUserOwnedBinaryAndPathSymlink(t *testing.T) {
@@ -355,7 +357,12 @@ func runInstallScriptCommand(t *testing.T, home, fakeBin string, extraEnv map[st
 	for key, value := range extraEnv {
 		cmd.Env = append(cmd.Env, key+"="+value)
 	}
-	return cmd.CombinedOutput()
+	shellenv.ConfigureShellCommand(cmd)
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return output, fmt.Errorf("install.sh timed out after %s", 30*time.Second)
+	}
+	return output, err
 }
 
 func filteredEnv(env []string, excluded ...string) []string {

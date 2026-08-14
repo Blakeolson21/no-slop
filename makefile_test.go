@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Blakeolson21/no-slop/internal/shellenv"
 )
 
 func TestMakeBuildProducesCanonicalAndLegacyGateBinaries(t *testing.T) {
@@ -48,7 +50,11 @@ func TestMakeDistProducesCanonicalAndLegacyArchives(t *testing.T) {
 	cmd := exec.CommandContext(ctx, makePath, "dist", "VERSION=v1.2.3", "DIST_DIR="+distDir)
 	cmd.Dir = workDir
 	cmd.Env = filteredEnv(os.Environ(), "UMAMI_HOST", "UMAMI_WEBSITE_ID", "NS_UMAMI_HOST", "NS_UMAMI_WEBSITE_ID", "NO_MISTAKES_UMAMI_HOST", "NO_MISTAKES_UMAMI_WEBSITE_ID")
+	configureMakeTestCommand(cmd)
 	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("make dist timed out after %s\n%s", 45*time.Second, output)
+	}
 	if err != nil {
 		t.Fatalf("make dist: %v\n%s", err, output)
 	}
@@ -100,7 +106,11 @@ func TestMakeBuildRejectsConflictingDotEnvTelemetryAliases(t *testing.T) {
 	cmd := exec.CommandContext(ctx, makePath, "build", "BIN_DIR="+filepath.Join(workDir, "bin"))
 	cmd.Dir = workDir
 	cmd.Env = filteredEnv(os.Environ(), "UMAMI_HOST", "UMAMI_WEBSITE_ID", "NS_UMAMI_HOST", "NS_UMAMI_WEBSITE_ID", "NO_MISTAKES_UMAMI_HOST", "NO_MISTAKES_UMAMI_WEBSITE_ID")
+	configureMakeTestCommand(cmd)
 	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("make build timed out after %s\n%s", 20*time.Second, output)
+	}
 	if err == nil || !strings.Contains(string(output), "same setting with different values") {
 		t.Fatalf("conflicting aliases should fail: %v\n%s", err, output)
 	}
@@ -335,7 +345,11 @@ func runMakeBuildInfo(t *testing.T, makePath, workDir string, extraEnv map[strin
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, filepath.Join(binDir, "no-slop"))
+	configureMakeTestCommand(cmd)
 	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("built no-slop timed out after %s\n%s", 5*time.Second, out)
+	}
 	if err != nil {
 		t.Fatalf("built no-slop failed: %v\n%s", err, out)
 	}
@@ -354,8 +368,16 @@ func runMakeBuild(t *testing.T, makePath, workDir, binDir string, extraEnv map[s
 	for key, value := range extraEnv {
 		cmd.Env = append(cmd.Env, key+"="+value)
 	}
+	configureMakeTestCommand(cmd)
 	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("make build timed out after %s\n%s", 20*time.Second, out)
+	}
 	if err != nil {
 		t.Fatalf("make build failed: %v\n%s", err, out)
 	}
+}
+
+func configureMakeTestCommand(cmd *exec.Cmd) {
+	shellenv.ConfigureShellCommand(cmd)
 }

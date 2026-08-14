@@ -554,7 +554,9 @@ func (s *Service) Recover(ctx context.Context, keepLocal bool) State {
 	if run != nil && run.CustodyReturnedAt != nil {
 		state.Recovered = true
 		state.Changed = false
-		s.attachUnclaimedAnchors(ctx, run, &state)
+		if err := s.attachUnclaimedAnchors(ctx, run, &state); err != nil {
+			return blockedPrivateRefConflict(state, err)
+		}
 		return state
 	}
 	// A branch released by its terminal outcome is already the operator's:
@@ -1046,6 +1048,8 @@ func (s *Service) anchorAbandonedGateHead(ctx context.Context, state State, runI
 		return blockedPrivateRefConflict(state, err), false
 	} else if ok && existing == gateHead {
 		return State{}, true
+	} else if ok {
+		return blockedPlan(state, StatePipelineOwned, "blocked_recover_preserve_failed", "the gate branch head this recovery would abandon could not be anchored locally; "+s.refusalRefClause(ctx, runID, local)), false
 	}
 	if objectExists(ctx, wd, gateHead) {
 		if _, err := git.Run(ctx, wd, "update-ref", ref, gateHead); err != nil {
@@ -1067,6 +1071,11 @@ func (s *Service) anchorAbandonedGateHead(ctx context.Context, state State, runI
 }
 
 func (s *Service) anchorReachablePreserved(ctx context.Context, state State, runID, anchorRef, preserved string) (State, bool) {
+	if _, existing, ok, err := resolvePrivateRefAlias(ctx, s.workDir(), anchorRef); err != nil {
+		return blockedPrivateRefConflict(state, err), false
+	} else if ok && existing != preserved {
+		return blockedPlan(state, StatePipelineOwned, "blocked_recover_preserve_failed", "the preserved pipeline commits could not be anchored locally; "+s.refusalRefClause(ctx, runID, state.Local.Head)), false
+	}
 	if _, err := git.Run(ctx, s.workDir(), "update-ref", anchorRef, preserved); err != nil {
 		return blockedPlan(state, StatePipelineOwned, "blocked_recover_preserve_failed", "the preserved pipeline commits could not be anchored locally; "+s.refusalRefClause(ctx, runID, state.Local.Head)), false
 	}
@@ -1090,7 +1099,9 @@ func (s *Service) finishRecover(ctx context.Context, run *db.Run, changed bool) 
 	state, _, _ := s.inspect(ctx)
 	state.Recovered = true
 	state.Changed = changed
-	s.attachUnclaimedAnchors(ctx, run, &state)
+	if err := s.attachUnclaimedAnchors(ctx, run, &state); err != nil {
+		return blockedPrivateRefConflict(state, err)
+	}
 	return state
 }
 
@@ -1108,10 +1119,19 @@ func (s *Service) finishRecover(ctx context.Context, run *db.Run, changed bool) 
 // cannot reach its commits: an adoption only happens once
 // preservedContainsLocalWork proves the adopted head carries every local
 // change, so that anchor pins superseded SHAs of content the branch still has.
-func (s *Service) attachUnclaimedAnchors(ctx context.Context, run *db.Run, state *State) {
-	state.PreservedAnchorRef = s.unclaimedAnchorRef(ctx, recoverAnchorRef(run.ID), state.Local.Head)
-	state.AbandonedAnchorRef = s.unclaimedAnchorRef(ctx, recoverAbandonedAnchorRef(run.ID), state.Local.Head)
+func (s *Service) attachUnclaimedAnchors(ctx context.Context, run *db.Run, state *State) error {
+	preservedAnchorRef, err := s.unclaimedAnchorRef(ctx, recoverAnchorRef(run.ID), state.Local.Head)
+	if err != nil {
+		return err
+	}
+	abandonedAnchorRef, err := s.unclaimedAnchorRef(ctx, recoverAbandonedAnchorRef(run.ID), state.Local.Head)
+	if err != nil {
+		return err
+	}
+	state.PreservedAnchorRef = preservedAnchorRef
+	state.AbandonedAnchorRef = abandonedAnchorRef
 	state.LostPipelineHead = s.unreachablePipelineHead(ctx, run.HeadSHA, state.Local.Head)
+	return nil
 }
 
 // unreachablePipelineHead returns the recorded pipeline head when the branch
@@ -1135,24 +1155,26 @@ func (s *Service) unreachablePipelineHead(ctx context.Context, preserved, localH
 
 // unclaimedAnchorRef returns ref when it resolves to a commit the branch head
 // does not already contain, and "" otherwise.
-func (s *Service) unclaimedAnchorRef(ctx context.Context, ref, localHead string) string {
+func (s *Service) unclaimedAnchorRef(ctx context.Context, ref, localHead string) (string, error) {
 	wd := s.workDir()
 	resolvedRef, anchored, ok, err := resolvePrivateRefAlias(ctx, wd, ref)
 	if err != nil {
-		return ref
+		return "", err
 	}
 	if !ok {
-		return ""
+		return "", nil
 	}
 	sha := strings.TrimSpace(anchored)
 	if sha == "" || sha == localHead || isAncestor(ctx, wd, sha, localHead) {
-		return ""
+		return "", nil
 	}
-	return resolvedRef
+	return resolvedRef, nil
 }
 
 func blockedPrivateRefConflict(state State, err error) State {
-	return blockedPlan(state, StatePipelineOwned, "blocked_recover_private_ref_conflict", fmt.Sprintf("private recovery refs conflict: %v; no files or refs were changed", err))
+	state = blockedPlan(state, StatePipelineOwned, "blocked_recover_private_ref_conflict", fmt.Sprintf("private recovery refs conflict: %v; no files or refs were changed", err))
+	state.Recovered = false
+	return state
 }
 
 // resolvePrivateRefAlias reads canonical refs first, then their legacy
@@ -1198,10 +1220,10 @@ func privateRefAliases(canonicalRef string) []string {
 // and falls back to the plain no-change promise when there are none.
 func (s *Service) refusalRefClause(ctx context.Context, runID, localHead string) string {
 	var anchors []string
-	if ref := s.unclaimedAnchorRef(ctx, recoverAnchorRef(runID), localHead); ref != "" {
+	if ref, err := s.unclaimedAnchorRef(ctx, recoverAnchorRef(runID), localHead); err == nil && ref != "" {
 		anchors = append(anchors, "the preserved pipeline commits stay anchored at "+ref)
 	}
-	if ref := s.unclaimedAnchorRef(ctx, recoverAbandonedAnchorRef(runID), localHead); ref != "" {
+	if ref, err := s.unclaimedAnchorRef(ctx, recoverAbandonedAnchorRef(runID), localHead); err == nil && ref != "" {
 		anchors = append(anchors, "the gate head this recovery would abandon stays anchored at "+ref)
 	}
 	if len(anchors) == 0 {

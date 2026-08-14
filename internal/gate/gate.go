@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/Blakeolson21/no-slop/internal/db"
@@ -248,7 +250,7 @@ func validateWorkingRemoteAliases(ctx context.Context, absRoot string) error {
 		}
 		remotes[name] = url
 	}
-	if remotes[RemoteName] != "" && remotes[LegacyRemoteName] != "" && remotes[RemoteName] != remotes[LegacyRemoteName] {
+	if remotes[RemoteName] != "" && remotes[LegacyRemoteName] != "" && !sameWorkingRemoteURL(absRoot, remotes[RemoteName], remotes[LegacyRemoteName]) {
 		return fmt.Errorf("%s and %s name the same gate with different URLs", RemoteName, LegacyRemoteName)
 	}
 	return nil
@@ -262,13 +264,13 @@ func ensureNamedWorkingRemote(ctx context.Context, absRoot, bareDir, reposDir st
 	if err != nil {
 		return git.AddRemote(ctx, absRoot, name, bareDir)
 	}
-	if existingURL == bareDir {
+	if sameWorkingRemoteURL(absRoot, existingURL, bareDir) {
 		return nil
 	}
 	// A leftover remote pointing into our own repos dir is stale gate wiring
 	// (e.g. the working directory was copied, or its gate was half-ejected);
 	// repoint it. Anything else is a user-managed remote we must not touch.
-	if filepath.Dir(existingURL) == reposDir {
+	if workingRemoteURLDirEquals(absRoot, existingURL, reposDir) {
 		return git.EnsureRemote(ctx, absRoot, name, bareDir)
 	}
 	return fmt.Errorf("remote %q already exists with url %q", name, existingURL)
@@ -289,7 +291,7 @@ func reattachRelocatedRepo(ctx context.Context, d *db.DB, p *paths.Paths, absRoo
 		}
 	}
 	if canonical, canonicalOK := remoteURLs[RemoteName]; canonicalOK {
-		if legacy, legacyOK := remoteURLs[LegacyRemoteName]; legacyOK && canonical != legacy {
+		if legacy, legacyOK := remoteURLs[LegacyRemoteName]; legacyOK && !sameWorkingRemoteURL(absRoot, canonical, legacy) {
 			return nil, fmt.Errorf("remotes %q and %q name the same gate with different URLs", RemoteName, LegacyRemoteName)
 		}
 	}
@@ -300,8 +302,12 @@ func reattachRelocatedRepo(ctx context.Context, d *db.DB, p *paths.Paths, absRoo
 	if remoteURL == "" {
 		return nil, nil
 	}
-	id := strings.TrimSuffix(filepath.Base(remoteURL), ".git")
-	if p.RepoDir(id) != remoteURL {
+	remotePath, ok := workingRemoteLocalPath(absRoot, remoteURL)
+	if !ok {
+		return nil, nil
+	}
+	id := strings.TrimSuffix(filepath.Base(remotePath), ".git")
+	if !sameWorkingRemoteURL(absRoot, p.RepoDir(id), remoteURL) {
 		// Not one of our gate paths; fresh init decides what to do with it.
 		return nil, nil
 	}
@@ -323,6 +329,82 @@ func reattachRelocatedRepo(ctx context.Context, d *db.DB, p *paths.Paths, absRoo
 	}
 	slog.Info("gate reattached after working dir move", "repo_id", id, "old_path", repo.WorkingPath, "new_path", absRoot)
 	return migrated, nil
+}
+
+func sameWorkingRemoteURL(baseDir, a, b string) bool {
+	a = strings.TrimSpace(a)
+	b = strings.TrimSpace(b)
+	if a == "" || b == "" {
+		return a == b
+	}
+	aPath, aOK := workingRemoteLocalPath(baseDir, a)
+	bPath, bOK := workingRemoteLocalPath(baseDir, b)
+	if aOK && bOK {
+		return canonicalWorkingRemotePath(aPath) == canonicalWorkingRemotePath(bPath)
+	}
+	return a == b
+}
+
+func workingRemoteURLDirEquals(baseDir, remoteURL, dir string) bool {
+	remotePath, ok := workingRemoteLocalPath(baseDir, remoteURL)
+	if !ok {
+		return false
+	}
+	return canonicalWorkingRemotePath(filepath.Dir(remotePath)) == canonicalWorkingRemotePath(dir)
+}
+
+func workingRemoteLocalPath(baseDir, raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", false
+	}
+	if parsed, err := url.Parse(raw); err == nil && parsed.Scheme == "file" {
+		if parsed.Host != "" && parsed.Host != "localhost" {
+			return "", false
+		}
+		return filepath.Clean(filepath.FromSlash(parsed.Path)), true
+	}
+	if strings.Contains(raw, "://") || (strings.Contains(raw, "@") && strings.Contains(raw, ":") && !filepath.IsAbs(raw)) {
+		return "", false
+	}
+	path := raw
+	if !filepath.IsAbs(path) {
+		if strings.TrimSpace(baseDir) == "" {
+			return "", false
+		}
+		path = filepath.Join(baseDir, path)
+	}
+	return filepath.Clean(path), true
+}
+
+func canonicalWorkingRemotePath(path string) string {
+	path = filepath.Clean(path)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	} else if resolved := canonicalWorkingRemoteExistingPrefix(path); resolved != "" {
+		path = resolved
+	}
+	if runtime.GOOS == "windows" {
+		path = strings.ToLower(path)
+	}
+	return path
+}
+
+func canonicalWorkingRemoteExistingPrefix(path string) string {
+	path = filepath.Clean(path)
+	var suffix []string
+	for {
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			parts := append([]string{resolved}, suffix...)
+			return filepath.Join(parts...)
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return ""
+		}
+		suffix = append([]string{filepath.Base(path)}, suffix...)
+		path = parent
+	}
 }
 
 // Eject removes the no-slop gate from the repo at workDir.

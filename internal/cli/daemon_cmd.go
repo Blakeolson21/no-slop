@@ -167,10 +167,13 @@ const (
 func parseSkipPushOptions(options []string) ([]types.StepName, error) {
 	var canonicalSteps []types.StepName
 	var legacySteps []types.StepName
+	canonicalSeen := false
+	legacySeen := false
 	for _, option := range options {
 		var value string
 		switch {
 		case strings.HasPrefix(option, skipPushOptionPrefix):
+			canonicalSeen = true
 			value = strings.TrimPrefix(option, skipPushOptionPrefix)
 			parsed, err := parseSkipSteps(value)
 			if err != nil {
@@ -178,6 +181,7 @@ func parseSkipPushOptions(options []string) ([]types.StepName, error) {
 			}
 			canonicalSteps = append(canonicalSteps, parsed...)
 		case strings.HasPrefix(option, legacySkipPushOptionPrefix):
+			legacySeen = true
 			value = strings.TrimPrefix(option, legacySkipPushOptionPrefix)
 			parsed, err := parseSkipSteps(value)
 			if err != nil {
@@ -190,7 +194,7 @@ func parseSkipPushOptions(options []string) ([]types.StepName, error) {
 	}
 	canonicalSteps = dedupeSteps(canonicalSteps)
 	legacySteps = dedupeSteps(legacySteps)
-	if len(canonicalSteps) > 0 && len(legacySteps) > 0 && !sameStepSet(canonicalSteps, legacySteps) {
+	if canonicalSeen && legacySeen && !sameStepSet(canonicalSteps, legacySteps) {
 		return nil, fmt.Errorf("conflicting %s and %s push options", strings.TrimSuffix(skipPushOptionPrefix, "="), strings.TrimSuffix(legacySkipPushOptionPrefix, "="))
 	}
 	steps := append(canonicalSteps, legacySteps...)

@@ -280,6 +280,65 @@ func TestReattachRelocatedRepoRejectsConflictingRemoteAliases(t *testing.T) {
 	}
 }
 
+func TestValidateWorkingRemoteAliasesAcceptsEquivalentLocalPaths(t *testing.T) {
+	workDir := setupTestRepo(t)
+	ctx := context.Background()
+	realGate := filepath.Join(t.TempDir(), "gate.git")
+	if err := os.MkdirAll(realGate, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	aliasGate := filepath.Join(t.TempDir(), "gate.git")
+	if err := os.Symlink(realGate, aliasGate); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if err := gitpkg.AddRemote(ctx, workDir, RemoteName, realGate); err != nil {
+		t.Fatal(err)
+	}
+	if err := gitpkg.AddRemote(ctx, workDir, LegacyRemoteName, aliasGate); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := validateWorkingRemoteAliases(ctx, workDir); err != nil {
+		t.Fatalf("validate equivalent remotes: %v", err)
+	}
+}
+
+func TestReattachRelocatedRepoAcceptsEquivalentRemoteAliases(t *testing.T) {
+	workDir := setupTestRepo(t)
+	p := paths.WithRoot(t.TempDir())
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	database := openTestDB(t, p)
+	ctx := context.Background()
+	id := "relocated"
+	realGate := p.RepoDir(id)
+	if err := os.MkdirAll(realGate, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	aliasGate := filepath.Join(t.TempDir(), id+".git")
+	if err := os.Symlink(realGate, aliasGate); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := database.InsertRepoWithID(id, filepath.Join(t.TempDir(), "missing"), "https://example.com/repo.git", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := gitpkg.AddRemote(ctx, workDir, RemoteName, realGate); err != nil {
+		t.Fatal(err)
+	}
+	if err := gitpkg.AddRemote(ctx, workDir, LegacyRemoteName, aliasGate); err != nil {
+		t.Fatal(err)
+	}
+
+	repo, err := reattachRelocatedRepo(ctx, database, p, workDir)
+	if err != nil {
+		t.Fatalf("reattach equivalent remotes: %v", err)
+	}
+	if repo == nil || repo.ID != id || repo.WorkingPath != workDir {
+		t.Fatalf("reattach repo = %#v, want migrated %s at %s", repo, id, workDir)
+	}
+}
+
 // TestInitIsIdempotent verifies that re-running Init on an already-initialized
 // repo succeeds, reports that it was not newly created, and leaves a single
 // repo record and an intact gate. This is what lets existing users re-run init

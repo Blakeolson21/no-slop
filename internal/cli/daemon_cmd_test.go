@@ -42,6 +42,13 @@ func TestParseSkipPushOptionsRejectsConflictingAliases(t *testing.T) {
 	}
 }
 
+func TestParseSkipPushOptionsRejectsEmptyAliasConflict(t *testing.T) {
+	_, err := parseSkipPushOptions([]string{"no-slop.skip=", "no-mistakes.skip=test"})
+	if err == nil {
+		t.Fatal("expected empty skip alias conflict to fail")
+	}
+}
+
 func TestParseSkipPushOptionsRejectsUnknownStep(t *testing.T) {
 	_, err := parseSkipPushOptions([]string{"no-slop.skip=test,deploy"})
 	if err == nil {
