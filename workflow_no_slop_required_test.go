@@ -44,13 +44,20 @@ func TestNoSlopRequiredWorkflowExemptsReleaseAutomation(t *testing.T) {
 // against the generated PR body emitted by the pipeline summary builder.
 func TestNoSlopRequiredWorkflowChecksSignatureMarker(t *testing.T) {
 	workflow := loadRequiredWorkflow(t)
+	pipelineBody := generatedPipelineBody(t)
+	legacyPipelineBody := strings.Replace(pipelineBody, "git push no-slop", "git push no-mistakes", 1)
+	if legacyPipelineBody == pipelineBody {
+		t.Fatal("generated pipeline body fixture did not contain canonical signature")
+	}
 	got := executeRequiredWorkflowFixture(t, workflow, []requiredWorkflowEvent{
-		{Action: "opened", Body: generatedPipelineBody(t), HeadSHA: "head", PRNumber: 1, RunID: 1, RunNumber: 1},
-		{Action: "edited", Body: "body without a generated pipeline section", HeadSHA: "head", PRNumber: 1, RunID: 2, RunNumber: 2},
+		{Action: "opened", Body: pipelineBody, HeadSHA: "head", PRNumber: 1, RunID: 1, RunNumber: 1},
+		{Action: "edited", Body: legacyPipelineBody, HeadSHA: "head", PRNumber: 1, RunID: 2, RunNumber: 2},
+		{Action: "edited", Body: "body without a generated pipeline section", HeadSHA: "head", PRNumber: 1, RunID: 3, RunNumber: 3},
 	})
 	want := []requiredWorkflowResult{
 		{RunID: 1, RunNumber: 1, Action: "opened", Executed: true, Conclusion: "success"},
-		{RunID: 2, RunNumber: 2, Action: "edited", Executed: true, Conclusion: "failure"},
+		{RunID: 2, RunNumber: 2, Action: "edited", Executed: true, Conclusion: "success"},
+		{RunID: 3, RunNumber: 3, Action: "edited", Executed: true, Conclusion: "failure"},
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("workflow check results =\n  %v\nwant\n  %v", got, want)

@@ -44,8 +44,10 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -eu
-          marker='Updates from [git push no-slop](https://github.com/Blakeolson21/no-slop)'
-          if printf '%s' "${PR_BODY:-}" | grep -qF -- "$marker"; then
+          canonical_marker='Updates from [git push no-slop](https://github.com/Blakeolson21/no-slop)'
+          legacy_marker='Updates from [git push no-mistakes](https://github.com/Blakeolson21/no-slop)'
+          if printf '%s' "${PR_BODY:-}" | grep -qF -- "$canonical_marker" ||
+             printf '%s' "${PR_BODY:-}" | grep -qF -- "$legacy_marker"; then
             echo "Found no-slop signature in PR #${PR_NUMBER} body."
             exit 0
           fi
@@ -54,9 +56,10 @@ jobs:
             echo
             echo "Contributions to this repository must be submitted via 'git push no-slop'."
             echo "That pipeline runs the required review/test/lint/CI steps and writes a"
-            echo "deterministic '## Pipeline' section into the PR body containing:"
+            echo "deterministic '## Pipeline' section into the PR body containing one of:"
             echo
-            echo "    $marker"
+            echo "    $canonical_marker"
+            echo "    $legacy_marker"
             echo
             echo "See CONTRIBUTING.md for setup and the full workflow."
             echo

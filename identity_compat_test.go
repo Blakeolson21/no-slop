@@ -50,6 +50,32 @@ func TestCanonicalAndLegacyBinaryInvocationsHaveParity(t *testing.T) {
 }
 
 func TestLiveRunStateSurvivesLegacyDaemonAndCanonicalBinary(t *testing.T) {
+	testLiveRunStateThroughAliasedBinaries(t, identityLiveStateCase{
+		daemonHomeEnv: "NM_HOME",
+		clientHomeEnv: "NS_HOME",
+		daemonName:    "legacy",
+		clientName:    "canonical",
+	})
+}
+
+func TestLiveRunStateSurvivesCanonicalDaemonAndLegacyBinary(t *testing.T) {
+	testLiveRunStateThroughAliasedBinaries(t, identityLiveStateCase{
+		daemonHomeEnv: "NS_HOME",
+		clientHomeEnv: "NM_HOME",
+		daemonName:    "canonical",
+		clientName:    "legacy",
+	})
+}
+
+type identityLiveStateCase struct {
+	daemonHomeEnv string
+	clientHomeEnv string
+	daemonName    string
+	clientName    string
+}
+
+func testLiveRunStateThroughAliasedBinaries(t *testing.T, tc identityLiveStateCase) {
+	t.Helper()
 	if testing.Short() || runtime.GOOS == "windows" {
 		t.Skip("builds command binaries and starts an isolated daemon")
 	}
@@ -65,6 +91,12 @@ func TestLiveRunStateSurvivesLegacyDaemonAndCanonicalBinary(t *testing.T) {
 	} {
 		identityCommandOutput(t, 2*time.Minute, "", nil, "go", "build", "-o", build.output, build.pkg)
 	}
+	daemonBinary := canonical
+	clientBinary := legacy
+	if tc.daemonName == "legacy" {
+		daemonBinary = legacy
+		clientBinary = canonical
+	}
 
 	shortDir, err := os.MkdirTemp("/tmp", "ns-identity-")
 	if err != nil {
@@ -73,28 +105,28 @@ func TestLiveRunStateSurvivesLegacyDaemonAndCanonicalBinary(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(shortDir) })
 	stateRoot := filepath.Join(shortDir, "state")
 	daemonCtx, cancelDaemon := context.WithCancel(context.Background())
-	legacyDaemon := exec.CommandContext(daemonCtx, legacy, "daemon", "run")
-	legacyDaemon.Env = identityTestEnv("NM_HOME=" + stateRoot)
-	legacyDaemon.WaitDelay = 5 * time.Second
-	var legacyStderr bytes.Buffer
-	legacyDaemon.Stderr = &legacyStderr
-	if err := legacyDaemon.Start(); err != nil {
-		t.Fatalf("start legacy daemon: %v", err)
+	daemonCmd := exec.CommandContext(daemonCtx, daemonBinary, "daemon", "run")
+	daemonCmd.Env = identityTestEnv(tc.daemonHomeEnv + "=" + stateRoot)
+	daemonCmd.WaitDelay = 5 * time.Second
+	var daemonStderr bytes.Buffer
+	daemonCmd.Stderr = &daemonStderr
+	if err := daemonCmd.Start(); err != nil {
+		t.Fatalf("start %s daemon: %v", tc.daemonName, err)
 	}
 	defer func() {
-		_, _ = identityCommandOutputAllowError(10*time.Second, "", identityTestEnv("NS_HOME="+stateRoot), canonical, "daemon", "stop", "--force", "--abandon-executing-runs")
+		_, _ = identityCommandOutputAllowError(10*time.Second, "", identityTestEnv(tc.clientHomeEnv+"="+stateRoot), clientBinary, "daemon", "stop", "--force", "--abandon-executing-runs")
 		cancelDaemon()
-		waitIdentityCommand(t, legacyDaemon, 10*time.Second)
+		waitIdentityCommand(t, daemonCmd, 10*time.Second)
 	}()
 
 	deadline := time.Now().Add(15 * time.Second)
 	for {
-		data, err := identityCommandOutputAllowError(5*time.Second, "", identityTestEnv("NS_HOME="+stateRoot), canonical, "daemon", "status")
+		data, err := identityCommandOutputAllowError(5*time.Second, "", identityTestEnv(tc.clientHomeEnv+"="+stateRoot), clientBinary, "daemon", "status")
 		if err == nil && strings.Contains(string(data), "daemon running") {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("canonical binary did not find legacy daemon: %v\n%slegacy daemon stderr:\n%s", err, data, legacyStderr.String())
+			t.Fatalf("%s binary did not find %s daemon: %v\n%s%s daemon stderr:\n%s", tc.clientName, tc.daemonName, err, data, tc.daemonName, daemonStderr.String())
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -130,9 +162,9 @@ func TestLiveRunStateSurvivesLegacyDaemonAndCanonicalBinary(t *testing.T) {
 
 	runList := func(want string) {
 		t.Helper()
-		data, err := identityCommandOutputAllowError(30*time.Second, repoDir, identityTestEnv("NS_HOME="+stateRoot), canonical, "runs")
+		data, err := identityCommandOutputAllowError(30*time.Second, repoDir, identityTestEnv(tc.clientHomeEnv+"="+stateRoot), clientBinary, "runs")
 		if err != nil || !strings.Contains(string(data), want) {
-			t.Fatalf("canonical runs missing %q: %v\n%s", want, err, data)
+			t.Fatalf("%s runs missing %q: %v\n%s", tc.clientName, want, err, data)
 		}
 	}
 	runList("running")

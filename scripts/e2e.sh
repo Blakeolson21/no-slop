@@ -58,11 +58,13 @@ assign_alias NS_E2E_DAEMON_INVENTORY NS_E2E_DAEMON_INVENTORY NM_E2E_DAEMON_INVEN
 assign_alias NS_E2E_DAEMON_INVENTORY_PARENT NS_E2E_DAEMON_INVENTORY_PARENT NM_E2E_DAEMON_INVENTORY_PARENT
 
 if [[ -z "$NS_E2E_DAEMON_INVENTORY" ]]; then
-  base="/tmp"
-  if [[ -d /private/tmp ]]; then
-    base="/private/tmp"
+  if [[ -z "$NS_E2E_DAEMON_INVENTORY_PARENT" ]]; then
+    base="/tmp"
+    if [[ -d /private/tmp ]]; then
+      base="/private/tmp"
+    fi
+    NS_E2E_DAEMON_INVENTORY_PARENT="${base}/no-mistakes-e2e-inventories-$(id -u)"
   fi
-  NS_E2E_DAEMON_INVENTORY_PARENT="${base}/no-mistakes-e2e-inventories-$(id -u)"
   if [[ -L "$NS_E2E_DAEMON_INVENTORY_PARENT" ]]; then
     exit 1
   fi

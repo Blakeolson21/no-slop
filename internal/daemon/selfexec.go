@@ -162,8 +162,8 @@ func Start(p *paths.Paths) error {
 // differs from what the current binary would generate. Returns true when a
 // reload actually happened. Called from Start() so that `daemon start` after
 // a binary upgrade re-applies the new service definition without forcing
-// users to run `daemon restart` explicitly. No-op on Windows and when the
-// service manager is bypassed (i.e., under `go test`).
+// users to run `daemon restart` explicitly. No-op when the service manager is
+// bypassed (i.e., under `go test`).
 func reinstallManagedServiceIfChanged(p *paths.Paths) (bool, error) {
 	bypassed, err := serviceManagerBypassed()
 	if err != nil {
@@ -176,10 +176,6 @@ func reinstallManagedServiceIfChanged(p *paths.Paths) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("resolve executable: %w", err)
 	}
-	home, err := serviceUserHomeDir()
-	if err != nil {
-		return false, fmt.Errorf("resolve user home: %w", err)
-	}
 
 	var installPath, wanted string
 	renderedExecutable := exe
@@ -188,8 +184,14 @@ func reinstallManagedServiceIfChanged(p *paths.Paths) (bool, error) {
 		installPath = launchAgentPath(p)
 	case "linux":
 		installPath = systemdUserServicePath(p)
+	case "windows":
+		return reinstallWindowsManagedServiceIfMissing(p, exe)
 	default:
 		return false, nil
+	}
+	home, err := serviceUserHomeDir()
+	if err != nil {
+		return false, fmt.Errorf("resolve user home: %w", err)
 	}
 
 	existing, readErr := os.ReadFile(installPath)
@@ -265,6 +267,29 @@ func reinstallManagedServiceIfChanged(p *paths.Paths) (bool, error) {
 	}
 	if err := waitForDaemonStart(p, 0, time.Time{}); err != nil {
 		return restoreOnFailure(err)
+	}
+	return true, nil
+}
+
+func reinstallWindowsManagedServiceIfMissing(p *paths.Paths, exe string) (bool, error) {
+	installed, err := managedServiceInstalled(p)
+	if err != nil {
+		return false, err
+	}
+	if installed {
+		return false, nil
+	}
+	if _, err := installManagedServiceWithExecutable(p, exe); err != nil {
+		return false, err
+	}
+	if err := stopCurrentDaemonBeforeManagedRestart(p); err != nil {
+		return false, err
+	}
+	if _, err := restartManagedService(p); err != nil {
+		return false, err
+	}
+	if err := waitForDaemonStart(p, 0, time.Time{}); err != nil {
+		return false, err
 	}
 	return true, nil
 }

@@ -45,7 +45,7 @@ func cleanupLegacyWindowsTask(p *paths.Paths) error {
 		if !ok || !serviceDefinitionMatchesRoot(data, p) {
 			continue
 		}
-		if _, err := serviceCommandRunner("schtasks", "/End", "/TN", name); err != nil {
+		if output, err := serviceCommandRunner("schtasks", "/End", "/TN", name); err != nil && !windowsTaskEndNotRunning(output, err) {
 			errs = append(errs, fmt.Errorf("schtasks end legacy task: %w", err))
 		}
 		if _, err := serviceCommandRunner("schtasks", "/Delete", "/TN", name, "/F"); err != nil {
@@ -64,8 +64,8 @@ func startWindowsTask(p *paths.Paths) error {
 }
 
 func stopWindowsTask(p *paths.Paths) error {
-	_, err := serviceCommandRunner("schtasks", "/End", "/TN", windowsTaskName(p))
-	if err != nil {
+	output, err := serviceCommandRunner("schtasks", "/End", "/TN", windowsTaskName(p))
+	if err != nil && !windowsTaskEndNotRunning(output, err) {
 		return fmt.Errorf("schtasks end: %w", err)
 	}
 	return nil
@@ -84,11 +84,21 @@ func stopLegacyWindowsTask(p *paths.Paths) (bool, error) {
 			continue
 		}
 		stopped = true
-		if _, err := serviceCommandRunner("schtasks", "/End", "/TN", name); err != nil {
+		if output, err := serviceCommandRunner("schtasks", "/End", "/TN", name); err != nil && !windowsTaskEndNotRunning(output, err) {
 			errs = append(errs, fmt.Errorf("schtasks end legacy task: %w", err))
 		}
 	}
 	return stopped, errors.Join(errs...)
+}
+
+func windowsTaskEndNotRunning(output []byte, err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(string(output) + " " + err.Error())
+	return strings.Contains(text, "not currently running") ||
+		strings.Contains(text, "currently not running") ||
+		strings.Contains(text, "is not running")
 }
 
 func queryLegacyWindowsTask(name string) ([]byte, bool, error) {

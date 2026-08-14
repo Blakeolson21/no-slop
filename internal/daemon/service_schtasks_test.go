@@ -149,6 +149,148 @@ func TestInstallWindowsTaskKeepsLegacyTaskOnCreateFailure(t *testing.T) {
 	}
 }
 
+func TestStartInstallsWindowsTaskWhenOnlyLegacyTaskExists(t *testing.T) {
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns home"))
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+
+	cleanup := stubServiceRuntime(t)
+	defer cleanup()
+	runtimeGOOS = "windows"
+	exe := `C:\Program Files\no-slop\no-slop.exe`
+	serviceExecutablePath = func() (string, error) { return exe, nil }
+
+	canonicalInstalled := false
+	legacyExists := true
+	running := true
+	var commands []string
+	serviceCommandRunner = func(name string, args ...string) ([]byte, error) {
+		command := name + " " + strings.Join(args, " ")
+		commands = append(commands, command)
+		if name != "schtasks" {
+			return nil, nil
+		}
+		if len(args) >= 3 && args[0] == "/Query" && args[2] == windowsTaskName(p) {
+			if canonicalInstalled {
+				return nil, nil
+			}
+			return []byte("ERROR: The system cannot find the file specified."), fmt.Errorf("task not found")
+		}
+		if len(args) >= 4 && args[0] == "/Query" && args[2] == legacyScopedWindowsTaskName(p) && args[3] == "/XML" {
+			if legacyExists {
+				return legacyWindowsTaskDefinition(p), nil
+			}
+			return []byte("ERROR: The specified task name does not exist."), fmt.Errorf("task not found")
+		}
+		if len(args) >= 4 && args[0] == "/Query" && args[2] == legacyWindowsTaskName && args[3] == "/XML" {
+			return []byte("ERROR: The specified task name does not exist."), fmt.Errorf("task not found")
+		}
+		if len(args) >= 1 && args[0] == "/Create" {
+			canonicalInstalled = true
+			return nil, nil
+		}
+		if len(args) >= 3 && args[0] == "/End" && args[2] == legacyScopedWindowsTaskName(p) {
+			running = false
+			return nil, nil
+		}
+		if len(args) >= 3 && args[0] == "/Delete" && args[2] == legacyScopedWindowsTaskName(p) {
+			legacyExists = false
+			return nil, nil
+		}
+		if len(args) >= 3 && args[0] == "/End" && args[2] == windowsTaskName(p) {
+			return []byte("ERROR: The scheduled task is not currently running."), fmt.Errorf("not currently running")
+		}
+		if len(args) >= 3 && args[0] == "/Run" && args[2] == windowsTaskName(p) {
+			running = true
+			return nil, nil
+		}
+		return nil, nil
+	}
+	daemonHealthCheck = func(*paths.Paths) (bool, error) { return running, nil }
+
+	if err := Start(p); err != nil {
+		t.Fatal(err)
+	}
+	wantTaskCommand := strconv.Quote(exe) + " daemon run --root " + strconv.Quote(p.Root())
+	for _, want := range []string{
+		"schtasks /Create /TN " + windowsTaskName(p) + " /SC ONLOGON /RL LIMITED /F /TR " + wantTaskCommand,
+		"schtasks /End /TN " + legacyScopedWindowsTaskName(p),
+		"schtasks /Delete /TN " + legacyScopedWindowsTaskName(p) + " /F",
+		"schtasks /Run /TN " + windowsTaskName(p),
+	} {
+		if !containsCmd(commands, want) {
+			t.Fatalf("commands = %v, want %q", commands, want)
+		}
+	}
+}
+
+func TestInstallWindowsTaskDeletesIdleLegacyTask(t *testing.T) {
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+
+	cleanup := stubServiceRuntime(t)
+	defer cleanup()
+	runtimeGOOS = "windows"
+
+	var commands []string
+	serviceCommandRunner = func(name string, args ...string) ([]byte, error) {
+		commands = append(commands, name+" "+strings.Join(args, " "))
+		if name == "schtasks" && len(args) >= 4 && args[0] == "/Query" && args[2] == legacyScopedWindowsTaskName(p) && args[3] == "/XML" {
+			return legacyWindowsTaskDefinition(p), nil
+		}
+		if name == "schtasks" && len(args) >= 3 && args[0] == "/End" && args[2] == legacyScopedWindowsTaskName(p) {
+			return []byte("ERROR: The scheduled task is not currently running."), fmt.Errorf("not currently running")
+		}
+		if name == "schtasks" && len(args) >= 4 && args[0] == "/Query" && args[2] == legacyWindowsTaskName && args[3] == "/XML" {
+			return []byte("ERROR: The specified task name does not exist."), fmt.Errorf("task not found")
+		}
+		return nil, nil
+	}
+
+	if err := installWindowsTask(p, `C:\Program Files\no-slop\no-slop.exe`); err != nil {
+		t.Fatal(err)
+	}
+	if !containsCmd(commands, "schtasks /Delete /TN "+legacyScopedWindowsTaskName(p)+" /F") {
+		t.Fatalf("commands = %v, want legacy delete after idle end", commands)
+	}
+}
+
+func TestStopLegacyWindowsTaskIgnoresIdleTask(t *testing.T) {
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+
+	cleanup := stubServiceRuntime(t)
+	defer cleanup()
+	runtimeGOOS = "windows"
+
+	serviceCommandRunner = func(name string, args ...string) ([]byte, error) {
+		if name == "schtasks" && len(args) >= 4 && args[0] == "/Query" && args[2] == legacyScopedWindowsTaskName(p) && args[3] == "/XML" {
+			return legacyWindowsTaskDefinition(p), nil
+		}
+		if name == "schtasks" && len(args) >= 3 && args[0] == "/End" && args[2] == legacyScopedWindowsTaskName(p) {
+			return []byte("ERROR: The scheduled task is not currently running."), fmt.Errorf("not currently running")
+		}
+		if name == "schtasks" && len(args) >= 4 && args[0] == "/Query" && args[2] == legacyWindowsTaskName && args[3] == "/XML" {
+			return []byte("ERROR: The specified task name does not exist."), fmt.Errorf("task not found")
+		}
+		return nil, nil
+	}
+
+	stopped, err := stopLegacyWindowsTask(p)
+	if err != nil || !stopped {
+		t.Fatalf("stop legacy idle task = (%v, %v), want (true, nil)", stopped, err)
+	}
+}
+
+func legacyWindowsTaskDefinition(p *paths.Paths) []byte {
+	return []byte(`<Task><Exec><Command>C:\Program Files\no-mistakes\no-mistakes.exe</Command><Arguments>daemon run --root ` + strconv.Quote(p.Root()) + `</Arguments></Exec></Task>`)
+}
+
 func TestWindowsManagedDaemonStateUsesRunGeneration(t *testing.T) {
 	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	cleanup := stubServiceRuntime(t)
