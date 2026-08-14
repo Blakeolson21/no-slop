@@ -71,6 +71,14 @@ func TestRunRejectsDaemonControlAliasConflict(t *testing.T) {
 	}
 }
 
+func TestRunRejectsStateRootAliasConflict(t *testing.T) {
+	t.Setenv("NS_HOME", t.TempDir())
+	t.Setenv("NM_HOME", filepath.Join(t.TempDir(), "legacy-root"))
+	if got := run(); got != 1 {
+		t.Fatalf("run() = %d, want 1", got)
+	}
+}
+
 func TestCLILogWriterAppendsToFileWhenLogsDirExists(t *testing.T) {
 	nmHome := t.TempDir()
 	t.Setenv("NS_HOME", nmHome)

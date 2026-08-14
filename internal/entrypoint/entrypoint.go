@@ -82,6 +82,9 @@ func run() int {
 }
 
 func validateIdentityAliasConflicts() error {
+	if _, err := paths.LookupHomeEnv(); err != nil {
+		return err
+	}
 	if err := telemetry.ValidateDefaultConfig(); err != nil {
 		return err
 	}

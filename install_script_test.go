@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"compress/gzip"
 	"context"
 	"fmt"
@@ -202,187 +203,72 @@ func TestPowerShellInstallScriptRejectsEmptyAliasConflict(t *testing.T) {
 }
 
 func TestPowerShellInstallScriptChecksDaemonRestartFailure(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("docs", "install.ps1"))
+	shell, err := exec.LookPath("pwsh")
+	if err != nil {
+		shell, err = exec.LookPath("powershell")
+	}
+	if err != nil {
+		t.Skip("PowerShell not available")
+	}
+
+	installDir := filepath.Join(t.TempDir(), "install")
+	archivePath := filepath.Join(t.TempDir(), "no-slop-v1.2.3-windows-amd64.zip")
+	makePowerShellInstallArchive(t, archivePath, "fake binary")
+
+	scriptPath, err := filepath.Abs(filepath.Join("docs", "install.ps1"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	model, err := parsePowerShellRestartModel(string(data))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if model.Assignment != "restart" {
-		t.Fatalf("restart process assignment = %q, want restart", model.Assignment)
-	}
-	if model.Command != "Start-Process" {
-		t.Fatalf("restart command = %q, want Start-Process", model.Command)
-	}
-	if model.Named["FilePath"] != "$installDir\\no-slop.exe" {
-		t.Fatalf("restart FilePath = %q, want installed no-slop.exe", model.Named["FilePath"])
-	}
-	if got, want := strings.Join(model.ArgumentList, " "), "daemon restart"; got != want {
-		t.Fatalf("restart arguments = %q, want %q", got, want)
-	}
-	for _, flag := range []string{"Wait", "PassThru"} {
-		if !model.Switches[flag] {
-			t.Fatalf("restart command missing -%s", flag)
-		}
-	}
-	if model.ExitCheckVariable != "restart" || model.ExitCheckOperator != "-ne" || model.ExitCheckValue != "0" {
-		t.Fatalf("exit check = %s %s %s, want restart -ne 0", model.ExitCheckVariable, model.ExitCheckOperator, model.ExitCheckValue)
-	}
-	if !strings.Contains(model.ThrowExpression, "$($restart.ExitCode)") {
-		t.Fatalf("failure throw should surface restart exit code, got %q", model.ThrowExpression)
-	}
+	command := fmt.Sprintf(`
+function Invoke-RestMethod {
+    param([string]$Uri)
+    [pscustomobject]@{ tag_name = 'v1.2.3' }
 }
-
-type powerShellRestartModel struct {
-	Assignment        string
-	Command           string
-	Named             map[string]string
-	Switches          map[string]bool
-	ArgumentList      []string
-	ExitCheckVariable string
-	ExitCheckOperator string
-	ExitCheckValue    string
-	ThrowExpression   string
+function Invoke-WebRequest {
+    param([string]$Uri, [string]$OutFile)
+    Copy-Item -LiteralPath $env:NS_FAKE_RELEASE_ARCHIVE -Destination $OutFile -Force
 }
-
-func parsePowerShellRestartModel(script string) (powerShellRestartModel, error) {
-	model := powerShellRestartModel{Named: map[string]string{}, Switches: map[string]bool{}}
-	lines := strings.Split(script, "\n")
-	for i := 0; i < len(lines); i++ {
-		line := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(line, "$") && strings.Contains(line, "= Start-Process ") {
-			left, right, _ := strings.Cut(line, "=")
-			model.Assignment = strings.TrimPrefix(strings.TrimSpace(left), "$")
-			commandLines := []string{strings.TrimSpace(right)}
-			for i+1 < len(lines) {
-				next := strings.TrimSpace(lines[i+1])
-				if strings.HasPrefix(next, "if ") {
-					break
-				}
-				commandLines = append(commandLines, next)
-				i++
-			}
-			if err := parsePowerShellCommand(strings.Join(commandLines, " "), &model); err != nil {
-				return model, err
-			}
-			continue
-		}
-		if strings.HasPrefix(line, "if ") && model.Command != "" {
-			if err := parsePowerShellExitCheck(line, &model); err != nil {
-				return model, err
-			}
-			for i+1 < len(lines) {
-				next := strings.TrimSpace(lines[i+1])
-				i++
-				if next == "}" {
-					break
-				}
-				if throw, ok := strings.CutPrefix(next, "throw "); ok {
-					model.ThrowExpression = strings.Trim(throw, `"`)
-				}
-			}
-		}
-	}
-	if model.Command == "" {
-		return model, fmt.Errorf("restart command not found")
-	}
-	if model.ExitCheckVariable == "" {
-		return model, fmt.Errorf("restart exit check not found")
-	}
-	if model.ThrowExpression == "" {
-		return model, fmt.Errorf("restart failure throw not found")
-	}
-	return model, nil
+function Start-Process {
+    param(
+        [string]$FilePath,
+        [string[]]$ArgumentList,
+        [switch]$Wait,
+        [switch]$PassThru,
+        [switch]$NoNewWindow
+    )
+    if (-not (Test-Path -LiteralPath $FilePath)) {
+        throw "missing installed no-slop: $FilePath"
+    }
+    if ($FilePath -ne "$env:NS_INSTALL_DIR\no-slop.exe") {
+        throw "unexpected restart path: $FilePath"
+    }
+    if (($ArgumentList -join ' ') -ne 'daemon restart') {
+        throw "unexpected restart arguments: $($ArgumentList -join ' ')"
+    }
+    [pscustomobject]@{ ExitCode = 23 }
 }
+. %s
+`, powerShellSingleQuoted(scriptPath))
 
-func parsePowerShellCommand(command string, model *powerShellRestartModel) error {
-	tokens := powerShellTokens(command)
-	if len(tokens) == 0 {
-		return fmt.Errorf("empty command")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, shell, "-NoProfile", "-NonInteractive", "-Command", command)
+	cmd.Env = append(filteredEnv(os.Environ(), "NS_INSTALL_DIR", "NO_MISTAKES_INSTALL_DIR", "NS_FAKE_RELEASE_ARCHIVE", "PROCESSOR_ARCHITECTURE"), []string{
+		"NS_INSTALL_DIR=" + installDir,
+		"NS_FAKE_RELEASE_ARCHIVE=" + archivePath,
+		"PROCESSOR_ARCHITECTURE=AMD64",
+	}...)
+	shellenv.ConfigureShellCommand(cmd)
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("install.ps1 timed out after %s\n%s", 20*time.Second, output)
 	}
-	model.Command = tokens[0]
-	for i := 1; i < len(tokens); i++ {
-		token := tokens[i]
-		if !strings.HasPrefix(token, "-") {
-			continue
-		}
-		name := strings.TrimPrefix(token, "-")
-		if name == "ArgumentList" {
-			if i+1 >= len(tokens) || tokens[i+1] != "@(" {
-				return fmt.Errorf("ArgumentList is not an array literal")
-			}
-			i += 2
-			for ; i < len(tokens) && tokens[i] != ")"; i++ {
-				if tokens[i] != "," {
-					model.ArgumentList = append(model.ArgumentList, tokens[i])
-				}
-			}
-			continue
-		}
-		if i+1 < len(tokens) && !strings.HasPrefix(tokens[i+1], "-") {
-			model.Named[name] = tokens[i+1]
-			i++
-			continue
-		}
-		model.Switches[name] = true
+	if err == nil {
+		t.Fatalf("install.ps1 should fail when daemon restart fails\n%s", output)
 	}
-	return nil
-}
-
-func parsePowerShellExitCheck(line string, model *powerShellRestartModel) error {
-	condition := strings.TrimSpace(strings.TrimPrefix(line, "if "))
-	condition = strings.TrimSuffix(condition, "{")
-	condition = strings.TrimSpace(condition)
-	condition = strings.TrimPrefix(condition, "(")
-	condition = strings.TrimSuffix(condition, ")")
-	fields := strings.Fields(condition)
-	if len(fields) != 3 {
-		return fmt.Errorf("unsupported exit check %q", line)
+	if !strings.Contains(string(output), "Failed to restart daemon (exit code 23)") {
+		t.Fatalf("install.ps1 should surface restart failure, got: %v\n%s", err, output)
 	}
-	variable, ok := strings.CutSuffix(strings.TrimPrefix(fields[0], "$"), ".ExitCode")
-	if !ok {
-		return fmt.Errorf("exit check does not inspect ExitCode: %q", line)
-	}
-	model.ExitCheckVariable = variable
-	model.ExitCheckOperator = fields[1]
-	model.ExitCheckValue = fields[2]
-	return nil
-}
-
-func powerShellTokens(s string) []string {
-	var tokens []string
-	for i := 0; i < len(s); {
-		switch {
-		case s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n':
-			i++
-		case s[i] == '@' && i+1 < len(s) && s[i+1] == '(':
-			tokens = append(tokens, "@(")
-			i += 2
-		case s[i] == ')' || s[i] == ',':
-			tokens = append(tokens, string(s[i]))
-			i++
-		case s[i] == '"' || s[i] == '\'':
-			quote := s[i]
-			i++
-			start := i
-			for i < len(s) && s[i] != quote {
-				i++
-			}
-			tokens = append(tokens, s[start:i])
-			if i < len(s) {
-				i++
-			}
-		default:
-			start := i
-			for i < len(s) && !strings.ContainsRune(" \t\r\n),", rune(s[i])) {
-				i++
-			}
-			tokens = append(tokens, s[start:i])
-		}
-	}
-	return tokens
 }
 
 func skipInstallScriptTestsOnWindows(t *testing.T) {
@@ -466,6 +352,33 @@ func makeInstallArchive(t *testing.T, archivePath, binaryContent string) {
 	if err := gz.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func makePowerShellInstallArchive(t *testing.T, archivePath, binaryContent string) {
+	t.Helper()
+
+	file, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	zw := zip.NewWriter(file)
+	hdr := &zip.FileHeader{Name: "no-slop.exe", Method: zip.Deflate}
+	hdr.SetMode(0o755)
+	w, err := zw.CreateHeader(hdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte(binaryContent)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func powerShellSingleQuoted(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
 func makeFakeInstallCommands(t *testing.T) string {
