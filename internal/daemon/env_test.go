@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -74,6 +75,44 @@ func TestPrepareDaemonEnvironment_PreservesExistingNSHome(t *testing.T) {
 	}
 	if got := os.Getenv("PATH"); got != "/resolved/bin" {
 		t.Fatalf("PATH = %q, want %q", got, "/resolved/bin")
+	}
+}
+
+func TestPrepareDaemonEnvironmentAcceptsEquivalentRootAliases(t *testing.T) {
+	base := t.TempDir()
+	realRoot := filepath.Join(base, "real-root")
+	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	aliasRoot := filepath.Join(base, "alias-root")
+	if err := os.Symlink(realRoot, aliasRoot); err != nil {
+		t.Skipf("symlink setup unavailable: %v", err)
+	}
+
+	t.Setenv("NS_HOME", realRoot)
+	t.Setenv("NM_HOME", aliasRoot)
+	t.Setenv("PATH", os.Getenv("PATH"))
+
+	oldApply := applyShellEnvToProcess
+	defer func() { applyShellEnvToProcess = oldApply }()
+	applyShellEnvToProcess = func() error {
+		if err := os.Setenv("NS_HOME", "/login/shell/root"); err != nil {
+			return err
+		}
+		if err := os.Setenv("NM_HOME", "/login/shell/legacy-root"); err != nil {
+			return err
+		}
+		return os.Setenv("PATH", "/resolved/bin")
+	}
+
+	if err := prepareDaemonEnvironment(); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("NS_HOME"); got != realRoot {
+		t.Fatalf("NS_HOME = %q, want %q", got, realRoot)
+	}
+	if got := os.Getenv("NM_HOME"); got != realRoot {
+		t.Fatalf("NM_HOME = %q, want %q", got, realRoot)
 	}
 }
 

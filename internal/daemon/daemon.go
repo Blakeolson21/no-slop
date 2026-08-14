@@ -20,7 +20,6 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/db"
 	"github.com/Blakeolson21/no-slop/internal/gatecontext"
 	"github.com/Blakeolson21/no-slop/internal/git"
-	"github.com/Blakeolson21/no-slop/internal/identity"
 	"github.com/Blakeolson21/no-slop/internal/ipc"
 	"github.com/Blakeolson21/no-slop/internal/logstore"
 	"github.com/Blakeolson21/no-slop/internal/paths"
@@ -93,7 +92,7 @@ func Run() (retErr error) {
 }
 
 func prepareDaemonEnvironment() error {
-	nmHome, err := identity.LookupEnv(identity.HomeEnv, identity.LegacyHomeEnv)
+	nmHome, err := paths.LookupHomeEnv()
 	if err != nil {
 		return err
 	}

@@ -21,7 +21,7 @@ type Paths struct {
 
 // New returns Paths rooted at NS_HOME, NM_HOME, or ~/.no-mistakes.
 func New() (*Paths, error) {
-	env, err := lookupHomeEnv()
+	env, err := LookupHomeEnv()
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +42,7 @@ func New() (*Paths, error) {
 	return &Paths{root: filepath.Join(home, identity.DefaultStateDir)}, nil
 }
 
-func lookupHomeEnv() (string, error) {
+func LookupHomeEnv() (string, error) {
 	canonicalValue := os.Getenv(identity.HomeEnv)
 	legacyValue := os.Getenv(identity.LegacyHomeEnv)
 	if canonicalValue != "" && legacyValue != "" && canonicalHomeRoot(canonicalValue) != canonicalHomeRoot(legacyValue) {
