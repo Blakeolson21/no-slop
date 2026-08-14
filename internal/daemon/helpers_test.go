@@ -84,6 +84,8 @@ func TestMain(m *testing.M) {
 	// via GIT_CONFIG_COUNT/KEY_n/VALUE_n; tests that need it re-set it with
 	// t.Setenv (issue #362).
 	os.Unsetenv("GIT_CONFIG_COUNT")
+	os.Unsetenv(identity.HomeEnv)
+	os.Unsetenv(identity.LegacyHomeEnv)
 	os.Exit(m.Run())
 }
 

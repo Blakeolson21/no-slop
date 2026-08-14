@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"testing"
+
+	"github.com/Blakeolson21/no-slop/internal/identity"
 )
 
 func TestMain(m *testing.M) {
@@ -23,6 +25,9 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	_ = os.Setenv("NS_HOME", root)
+	_ = os.Unsetenv(identity.LegacyHomeEnv)
+	_ = os.Unsetenv(noUpdateCheckEnv)
+	_ = os.Unsetenv(legacyNoUpdateCheckEnv)
 	_ = os.Setenv("HOME", home)
 	_ = os.Setenv("NS_TELEMETRY", "off")
 

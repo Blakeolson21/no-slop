@@ -531,6 +531,43 @@ func stopLegacyManagedService(p *paths.Paths) (bool, error) {
 	}
 }
 
+func legacyManagedServiceDefinitionExists(p *paths.Paths) (bool, error) {
+	var definitions []struct {
+		path string
+		kind string
+	}
+	switch runtimeGOOS {
+	case "darwin":
+		definitions = []struct {
+			path string
+			kind string
+		}{
+			{legacyScopedLaunchAgentPath(p), "launch agent"},
+			{legacyLaunchAgentPath(), "launch agent"},
+		}
+	case "linux":
+		definitions = []struct {
+			path string
+			kind string
+		}{
+			{legacyScopedSystemdUserServicePath(p), "systemd unit"},
+			{legacySystemdUserServicePath(), "systemd unit"},
+		}
+	default:
+		return false, nil
+	}
+	for _, definition := range definitions {
+		data, ok, err := readLegacyServiceDefinition(definition.path, definition.kind)
+		if err != nil {
+			return false, err
+		}
+		if ok && serviceDefinitionMatchesRoot(data, p) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // resetFailedManagedService clears failed-unit bookkeeping for the daemon's
 // managed service. A crash-looping systemd unit (Restart=always on a dead
 // binary) is held by the manager in a failed/backoff state that keeps emitting

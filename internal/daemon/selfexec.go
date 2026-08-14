@@ -195,6 +195,15 @@ func reinstallManagedServiceIfChanged(p *paths.Paths) (bool, error) {
 	}
 
 	existing, readErr := os.ReadFile(installPath)
+	if os.IsNotExist(readErr) {
+		legacyExists, err := legacyManagedServiceDefinitionExists(p)
+		if err != nil {
+			return false, err
+		}
+		if !legacyExists {
+			return false, nil
+		}
+	}
 	// Inherit any proxy already baked into the existing definition so an
 	// env-less `daemon start` does not render a no-proxy target, falsely detect
 	// drift, and reinstall - which would strip the proxy and re-break the daemon

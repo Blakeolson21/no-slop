@@ -98,6 +98,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	_ = os.Setenv("NS_HOME", root)
+	_ = os.Unsetenv("NM_HOME")
 	_ = os.Setenv("HOME", home)
 	_ = os.Setenv("NS_TELEMETRY", "off")
 	_ = os.Setenv("NS_NO_UPDATE_CHECK", "1")

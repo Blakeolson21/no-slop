@@ -45,11 +45,13 @@ func TestMakeDistProducesCanonicalAndLegacyArchives(t *testing.T) {
 	}
 	workDir := writeTestMakeWorkspace(t)
 	distDir := filepath.Join(workDir, "release-dist")
+	fakeBin := makeMakeDistFakeGoBin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, makePath, "dist", "VERSION=v1.2.3", "DIST_DIR="+distDir)
 	cmd.Dir = workDir
 	cmd.Env = filteredEnv(os.Environ(), "UMAMI_HOST", "UMAMI_WEBSITE_ID", "NS_UMAMI_HOST", "NS_UMAMI_WEBSITE_ID", "NO_MISTAKES_UMAMI_HOST", "NO_MISTAKES_UMAMI_WEBSITE_ID")
+	cmd.Env = append(cmd.Env, "PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	configureMakeTestCommand(cmd)
 	output, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
@@ -72,6 +74,26 @@ func TestMakeDistProducesCanonicalAndLegacyArchives(t *testing.T) {
 			t.Fatalf("archive %s is empty", name)
 		}
 	}
+}
+
+func makeMakeDistFakeGoBin(t *testing.T) string {
+	t.Helper()
+	bin := t.TempDir()
+	writeExecutable(t, filepath.Join(bin, "go"), `#!/bin/sh
+out=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [ -z "$out" ]; then
+  exit 2
+fi
+mkdir -p "$(dirname "$out")"
+printf 'fake built binary\n' > "$out"
+`)
+	return bin
 }
 
 func TestMakeBuildAcceptsLegacyDotEnvTelemetryAlias(t *testing.T) {

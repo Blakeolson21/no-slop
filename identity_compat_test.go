@@ -41,7 +41,7 @@ func TestCanonicalAndLegacyBinaryInvocationsHaveParity(t *testing.T) {
 	root := t.TempDir()
 	run := func(path string) string {
 		t.Helper()
-		data := identityCommandOutput(t, 30*time.Second, "", append(os.Environ(), "NS_HOME="+root, "NM_HOME="+root, "NS_TELEMETRY=off", "NO_MISTAKES_TELEMETRY=off"), path, "--help")
+		data := identityCommandOutput(t, 30*time.Second, "", identityTestEnv("NS_HOME="+root, "NM_HOME="+root), path, "--help")
 		return string(data)
 	}
 	if got, want := run(legacy), run(canonical); got != want {
