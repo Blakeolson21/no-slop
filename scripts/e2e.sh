@@ -62,7 +62,7 @@ if [[ -z "$NS_E2E_DAEMON_INVENTORY" ]]; then
   if [[ -d /private/tmp ]]; then
     base="/private/tmp"
   fi
-  NS_E2E_DAEMON_INVENTORY_PARENT="${base}/no-slop-e2e-inventories-$(id -u)"
+  NS_E2E_DAEMON_INVENTORY_PARENT="${base}/no-mistakes-e2e-inventories-$(id -u)"
   if [[ -L "$NS_E2E_DAEMON_INVENTORY_PARENT" ]]; then
     exit 1
   fi

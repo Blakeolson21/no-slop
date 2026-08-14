@@ -34,6 +34,7 @@ if [ -z "$LINK_DIR" ]; then
 fi
 
 BIN_PATH="$INSTALL_DIR/no-slop"
+LEGACY_BIN_PATH="$INSTALL_DIR/no-mistakes"
 LINK_PATH="$LINK_DIR/no-slop"
 LEGACY_LINK_PATH="$LINK_DIR/no-mistakes"
 
@@ -74,6 +75,8 @@ fi
 
 mv "${TMPDIR}/no-slop" "$BIN_PATH"
 chmod 755 "$BIN_PATH" 2>/dev/null || true
+rm -f "$LEGACY_BIN_PATH"
+ln -s "$BIN_PATH" "$LEGACY_BIN_PATH"
 
 resolve_path() {
   (cd "$1" 2>/dev/null && pwd -P)

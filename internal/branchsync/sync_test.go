@@ -270,6 +270,32 @@ func TestApplyEquivalentButDivergedRebaseWithPipelineCommitsAnchorsAndAdvances(t
 	}
 }
 
+func TestApplyEquivalentAdvanceRejectsLegacySyncAnchorConflict(t *testing.T) {
+	t.Parallel()
+
+	f := newSyncFixture(t)
+	rebuildPipelineHead(t, f, []pipelineCommit{
+		{message: "feature rebased", files: map[string]string{"file.txt": "feature\n"}},
+		{message: "pipeline doc", files: map[string]string{"doc.txt": "pipeline doc\n"}},
+	})
+	legacyAnchor := strings.Replace(syncAnchorRef(f.run.ID), "refs/no-slop/", "refs/no-mistakes/", 1)
+	mustRun(t, f.local, "update-ref", legacyAnchor, f.base)
+
+	state := f.service.Apply(f.ctx)
+	if state.State != StateAmbiguousContext || state.Safety != "blocked_preserve_failed" || state.Changed {
+		t.Fatalf("state = %#v, want preserve failure", state)
+	}
+	if got := mustRun(t, f.local, "rev-parse", "HEAD"); got != f.old {
+		t.Fatalf("HEAD = %s, want unchanged %s", got, f.old)
+	}
+	if _, err := gitpkg.Run(f.ctx, f.local, "rev-parse", "--verify", syncAnchorRef(f.run.ID)+"^{commit}"); err == nil {
+		t.Fatal("canonical sync anchor should not be written after legacy conflict")
+	}
+	if got := mustRun(t, f.local, "rev-parse", legacyAnchor+"^{commit}"); got != f.base {
+		t.Fatalf("legacy sync anchor = %s, want %s", got, f.base)
+	}
+}
+
 func TestEquivalentButDivergedClassification(t *testing.T) {
 	t.Parallel()
 

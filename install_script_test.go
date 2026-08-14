@@ -36,8 +36,41 @@ func TestInstallScriptInstallsUserOwnedBinaryAndPathSymlink(t *testing.T) {
 
 	realBin := filepath.Join(home, ".no-mistakes", "bin", "no-slop")
 	assertFileContent(t, realBin, binaryScript)
+	assertSymlinkTarget(t, filepath.Join(home, ".no-mistakes", "bin", "no-mistakes"), realBin)
 	assertSymlinkTarget(t, filepath.Join(localBin, "no-slop"), realBin)
 	assertSymlinkTarget(t, filepath.Join(localBin, "no-mistakes"), realBin)
+}
+
+func TestInstallScriptReplacesStaleLegacyInstallBinary(t *testing.T) {
+	skipInstallScriptTestsOnWindows(t)
+
+	home := t.TempDir()
+	archivePath := filepath.Join(t.TempDir(), "no-slop-v1.2.3-darwin-arm64.tar.gz")
+	binaryScript := "#!/bin/sh\nexit 0\n"
+	makeInstallArchive(t, archivePath, binaryScript)
+	fakeBin := makeFakeInstallCommands(t)
+	installDir := filepath.Join(home, ".no-mistakes", "bin")
+	linkDir := filepath.Join(t.TempDir(), "link-bin")
+	if err := os.MkdirAll(installDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(linkDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installDir, "no-mistakes"), []byte("stale legacy binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	runInstallScript(t, home, fakeBin, map[string]string{
+		"FAKE_RELEASE_ARCHIVE": archivePath,
+		"NS_INSTALL_DIR":       installDir,
+		"NS_LINK_DIR":          linkDir,
+	})
+
+	realBin := filepath.Join(installDir, "no-slop")
+	assertFileContent(t, realBin, binaryScript)
+	assertSymlinkTarget(t, filepath.Join(installDir, "no-mistakes"), realBin)
+	assertSymlinkTarget(t, filepath.Join(linkDir, "no-mistakes"), realBin)
 }
 
 func TestInstallScriptReplacesExistingPathEntryWithSymlink(t *testing.T) {

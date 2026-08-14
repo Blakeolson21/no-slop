@@ -419,11 +419,8 @@ func (s *Service) Apply(ctx context.Context) State {
 	var applyErr error
 	if equivalentAdvance {
 		anchorRef := syncAnchorRef(plan.Pipeline.RunID)
-		if _, err := git.Run(ctx, s.workDir(), "update-ref", anchorRef, plan.Local.Head); err != nil {
+		if err := writePrivateRefAnchor(ctx, s.workDir(), anchorRef, plan.Local.Head); err != nil {
 			return blockedPlan(plan, StateAmbiguousContext, "blocked_preserve_failed", "the pre-sync local head could not be anchored; no files or refs were changed")
-		}
-		if anchored, err := git.Run(ctx, s.workDir(), "rev-parse", anchorRef+"^{commit}"); err != nil || anchored != plan.Local.Head {
-			return blockedPlan(plan, StateAmbiguousContext, "blocked_preserve_failed", "the pre-sync local head could not be verified after anchoring; no files or worktree refs were changed")
 		}
 		_, applyErr = git.Run(ctx, s.workDir(), "reset", "--hard", plan.Pipeline.PushedHead)
 	} else {
@@ -1175,6 +1172,29 @@ func blockedPrivateRefConflict(state State, err error) State {
 	state = blockedPlan(state, StatePipelineOwned, "blocked_recover_private_ref_conflict", fmt.Sprintf("private recovery refs conflict: %v; no files or refs were changed", err))
 	state.Recovered = false
 	return state
+}
+
+func writePrivateRefAnchor(ctx context.Context, workDir, canonicalRef, sha string) error {
+	resolvedRef, existing, ok, err := resolvePrivateRefAlias(ctx, workDir, canonicalRef)
+	if err != nil {
+		return err
+	}
+	if ok && existing != sha {
+		return fmt.Errorf("%s already anchors %s", resolvedRef, existing)
+	}
+	if !ok || resolvedRef != canonicalRef {
+		if _, err := git.Run(ctx, workDir, "update-ref", canonicalRef, sha); err != nil {
+			return err
+		}
+	}
+	_, anchored, ok, err := resolvePrivateRefAlias(ctx, workDir, canonicalRef)
+	if err != nil {
+		return err
+	}
+	if !ok || anchored != sha {
+		return fmt.Errorf("%s did not anchor %s", canonicalRef, sha)
+	}
+	return nil
 }
 
 // resolvePrivateRefAlias reads canonical refs first, then their legacy
