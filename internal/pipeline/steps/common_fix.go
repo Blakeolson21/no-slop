@@ -7,11 +7,11 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
-	"github.com/kunchenguid/no-mistakes/internal/config"
-	"github.com/kunchenguid/no-mistakes/internal/git"
-	"github.com/kunchenguid/no-mistakes/internal/pipeline"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/pipeline"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 type fixExecutionOptions struct {
@@ -72,7 +72,7 @@ func hasBlockingFindings(items []Finding) bool {
 // Anchor integrity: sctx.Run.HeadSHA is the correct, un-clobberable anchor. It
 // is the *recorded* head the pipeline itself produced at its last commit - held
 // in the single daemon process's in-memory Run struct (one shared pointer per
-// run, never re-read from the DB mid-pipeline) and written only by no-mistakes
+// run, never re-read from the DB mid-pipeline) and written only by no-slop
 // commit code (commit_fix / rebase / ci_fix / push). An out-of-band `git reset`
 // mutates the worktree HEAD on disk but cannot touch this field, so at the check
 // point the anchor still holds the reviewed head even after a clobber. The guard
@@ -223,7 +223,7 @@ func isThreadStatusGlyph(r rune) bool {
 // for a status footer on every turn-ending message gets one appended to the
 // structured summary too: the agent treats finishing its fix as ending a turn.
 // That summary becomes the commit subject, so the footer lands in permanent
-// history as "no-mistakes(review): Harden the parser ✅ done". The footer
+// history as "no-slop(review): Harden the parser ✅ done". The footer
 // addresses a human reading a chat thread and carries no meaning in a subject
 // line, so truncating at the glyph keeps what the agent actually described.
 //

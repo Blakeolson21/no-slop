@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Blakeolson21/no-slop/internal/types"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
 // editorKind identifies which modal editor is currently active.

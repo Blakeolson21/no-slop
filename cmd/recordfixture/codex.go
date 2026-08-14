@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 )
 
-// recordCodex captures codex CLI's JSONL stream. no-mistakes parses the
+// recordCodex captures codex CLI's JSONL stream. no-slop parses the
 // final structured response from agent_message text, so we emulate that
 // contract by asking codex to emit a JSON literal.
 func recordCodex(ctx context.Context, out string, args []string) int {

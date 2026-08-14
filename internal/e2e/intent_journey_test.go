@@ -10,15 +10,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 // TestIntentJourney exercises the full user-intent extraction
 // path end-to-end:
 //
-//   - real `no-mistakes init` + post-receive hook + daemon
+//   - real `no-slop init` + post-receive hook + daemon
 //   - a Claude transcript fixture seeded under the daemon's $HOME
 //   - real Claude reader walking that transcript and matching by cwd
 //   - real summarizer prompt sent to the fake agent

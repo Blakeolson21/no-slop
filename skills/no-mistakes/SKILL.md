@@ -1,50 +1,50 @@
 ---
 name: no-mistakes
-description: Validate your code changes through the no-mistakes pipeline - automated code review, tests, lint, docs, push, PR, and CI - before they reach the configured push target. Use when the user asks to run no-mistakes, gate or ship or validate their changes, push safely, asks you to do a task and then validate it, or invokes /no-mistakes.
+description: Compatibility alias for the no-slop validation pipeline. Use /no-mistakes for existing automation; new workflows should invoke /no-slop.
 user-invocable: true
 ---
 
-# no-mistakes
+# no-slop
 
-`no-mistakes` is a local gate that validates your code changes through a pipeline
+`no-slop` is a local gate that validates your code changes through a pipeline
 (intent, rebase, review, test, document, lint, push, PR, CI) before they reach
-the configured push target. You drive it through the `no-mistakes axi` command family, which prints
+the configured push target. You drive it through the `no-slop axi` command family, which prints
 machine-readable [TOON](https://toonformat.dev) to stdout and progress to stderr.
 
 
 ## Active validation-step boundary
 
-A no-mistakes validation-step agent is already inside an active outer run. It
+A no-slop validation-step agent is already inside an active outer run. It
 must inspect, fix, and return only its assigned phase. It must never initialize,
 start, reattach, rerun, respond to, synchronize, abort, eject, or directly push
-a no-mistakes pipeline. Delivery requirements in user intent remain
+a no-slop pipeline. Delivery requirements in user intent remain
 acceptance context, but the outer executor alone performs the other validation,
 push, PR, and CI phases.
 
-`NO_MISTAKES_GATE` is fast diagnostic evidence, not authorization by
+`NS_GATE` is fast diagnostic evidence, not authorization by
 itself. The runtime combines managed Git identity with authenticated process
 ancestry. If a pipeline-control command returns
 `error.code: nested_gate_context`, stop immediately and
 return control to the outer executor. Safe inspection remains available through
-`no-mistakes axi status`, `no-mistakes axi logs`, help, and
-`no-mistakes doctor`.
+`no-slop axi status`, `no-slop axi logs`, help, and
+`no-slop doctor`.
 
 
-When the user invokes `/no-mistakes`, report the outcome at the end. If the user
+When the user invokes `/no-slop`, report the outcome at the end. If the user
 asks for something specific, translate that request into the matching `axi run`
 flags yourself - for example, "skip the lint step" becomes `--skip=lint`. Run
-`no-mistakes axi run --help` to see the available flags.
+`no-slop axi run --help` to see the available flags.
 
 ## Two ways to invoke
 
-`/no-mistakes` works in two modes, depending on whether the user hands you a
+`/no-slop` works in two modes, depending on whether the user hands you a
 task along with the command:
 
-- **Validate-only** - bare `/no-mistakes` (optionally with flag-style requests
+- **Validate-only** - bare `/no-slop` (optionally with flag-style requests
   like "skip the lint step"). The user's code changes are already committed;
   validate them and report the outcome.
-- **Task-first** - `/no-mistakes <task>`, e.g.
-  `/no-mistakes add a --json flag to the status command`. First carry out the
+- **Task-first** - `/no-slop <task>`, e.g.
+  `/no-slop add a --json flag to the status command`. First carry out the
   task yourself, then validate the result through the pipeline:
   1. **Check scope.** Inspect `git status` before you change or commit anything.
      Preserve unrelated pre-existing uncommitted changes, and when you commit,
@@ -99,24 +99,24 @@ the same way once the work is committed on a feature branch.
 - The work you want validated must be **committed** on a branch. The gate
   validates committed history, not your uncommitted working tree.
 - You must be on a **feature branch**, not the repository's default branch.
-- The repository must already be initialized with `no-mistakes init`.
+- The repository must already be initialized with `no-slop init`.
 - The daemon must have a runnable configured pipeline agent: a supported native
   agent binary, the `agent: cursor` ACP alias, or an explicit `acp:<target>` through
   `acpx`. You are the AXI driver, not
   an implicit pipeline-agent backend. If none is available, the run fails
-  before its first step; `no-mistakes doctor` reports the configuration problem.
+  before its first step; `no-slop doctor` reports the configuration problem.
 
 If any of these is not met, `axi run` returns an `error:` with the exact command
 to fix it - read it and act on it (commit your work, or create a branch). If the
-repository is not initialized, run `no-mistakes init` first; if the `no-mistakes`
-command itself is missing or misbehaving, `no-mistakes doctor` reports what is
+repository is not initialized, run `no-slop init` first; if the `no-slop`
+command itself is missing or misbehaving, `no-slop doctor` reports what is
 wrong.
-Before starting, run `no-mistakes axi` (home view).
-If it shows an active run on your current branch, inspect it with `no-mistakes axi status`.
-If it is parked at a gate, drive it with `no-mistakes axi respond`.
-Reattach an in-flight run by re-running `no-mistakes axi run` when it still matches your current `HEAD` - either as the submitted head or as the current pipeline head.
-Only `no-mistakes axi abort` it when you mean to discard that run before starting over; aborting is a between-runs action, never a way to take over or bypass a gate while a run is still going (see [Validate and decide](#validate-and-decide)).
-If it shows an active run on another branch, leave that run alone and start validation for your current branch with `no-mistakes axi run --intent "..."`.
+Before starting, run `no-slop axi` (home view).
+If it shows an active run on your current branch, inspect it with `no-slop axi status`.
+If it is parked at a gate, drive it with `no-slop axi respond`.
+Reattach an in-flight run by re-running `no-slop axi run` when it still matches your current `HEAD` - either as the submitted head or as the current pipeline head.
+Only `no-slop axi abort` it when you mean to discard that run before starting over; aborting is a between-runs action, never a way to take over or bypass a gate while a run is still going (see [Validate and decide](#validate-and-decide)).
+If it shows an active run on another branch, leave that run alone and start validation for your current branch with `no-slop axi run --intent "..."`.
 
 ## Intent is required
 
@@ -124,7 +124,7 @@ When you start a run you must pass `--intent`: **what the user set out to
 accomplish** - the goal or request behind this work, in their terms. This is not
 a description of the diff or the files you changed; it is the objective the
 change is meant to achieve. You know it from the conversation, so pass it
-directly - no-mistakes uses it verbatim instead of inferring it from local agent
+directly - no-slop uses it verbatim instead of inferring it from local agent
 transcripts (slower and flakier).
 
 Err on the side of completeness, not brevity. The review step uses `--intent`
@@ -142,13 +142,13 @@ Run the pipeline and decide on its findings as they come up:
 
 1. Start the run. It blocks until the first decision point or the end:
    ```sh
-   no-mistakes axi run --intent "<what the user set out to accomplish>"
+   no-slop axi run --intent "<what the user set out to accomplish>"
    ```
    `axi run` and every `axi respond` block synchronously - the review, test,
    and CI steps can each take **several minutes**, so a single call may not
    return for a while. That is normal; allow a long timeout and do not cancel
    or re-issue the command because it seems slow. To check progress without
-   disturbing the run, use `no-mistakes axi status` from a separate call.
+   disturbing the run, use `no-slop axi status` from a separate call.
    A long-running call is working, not stalled - background it if your harness
    needs to, but the run **never advances past a gate on its own**. Read every
    return; on a `gate:`, respond; loop until an `outcome:`. Never idle-wait
@@ -184,13 +184,13 @@ Run the pipeline and decide on its findings as they come up:
    Choose one response:
    ```sh
    # accept the step as-is and continue
-   no-mistakes axi respond --action approve
+   no-slop axi respond --action approve
 
    # have the pipeline fix specific findings, then continue
-   no-mistakes axi respond --action fix --findings <id1,id2> --instructions "<optional guidance>"
+   no-slop axi respond --action fix --findings <id1,id2> --instructions "<optional guidance>"
 
    # skip this step
-   no-mistakes axi respond --action skip
+   no-slop axi respond --action skip
    ```
    While a run is active, never fix findings by editing the code yourself -
    the pipeline owns both the findings and the fixes. Your job at a gate is to
@@ -219,34 +219,34 @@ Run the pipeline and decide on its findings as they come up:
      the PR is not merged yet. **You are done driving the pipeline.** Do not
      wait for the merge: tell the user the PR is ready and ask them to review
      and merge it (the PR link is in the `help` line). A generic empty forge
-     check list without that declaration is not ready. no-mistakes keeps
+     check list without that declaration is not ready. no-slop keeps
      monitoring the PR in the background until it is merged, closed, or its
      configured idle timeout elapses, so a human can watch it in the TUI.
    - `passed` - the changes cleared the gate and the PR was merged or closed.
    - `failed` or `cancelled` - they did not; read the output and address it.
      Fix whatever the output points at (a failing test, a lint error, a finding
      you skipped), commit the fix on the same feature branch, then drive the
-     pipeline again - `no-mistakes axi run --intent "..."` starts a fresh run,
-     or `no-mistakes rerun` re-runs the pipeline for the current branch. This
+     pipeline again - `no-slop axi run --intent "..."` starts a fresh run,
+     or `no-slop rerun` re-runs the pipeline for the current branch. This
      is the right place to start over: a fresh run or `rerun` is a
      *between-runs* action, correct only after a terminal outcome like this -
      never mid-run to circumvent a gate. Do not leave the user at a `failed`
      outcome without either retrying or explaining what blocks it.
 
 Before any post-pipeline local commit or fresh run, read the structured `branch_sync` object returned by AXI home, status, or a drive result.
-Only when its `next_action.code` is `sync`, run `no-mistakes axi sync` first.
+Only when its `next_action.code` is `sync`, run `no-slop axi sync` first.
 That guarded sync may be a strict fast-forward or a content-equivalent diverged advance that anchors the pre-sync head before moving the branch with reset semantics; genuine divergence stays blocked.
 If it reports `next_action.code` is `continue_active_run`, the pipeline still owns the branch: run the reported command, keep driving the active run, and do not make local follow-up commits.
-When `next_action.code` is `recover_custody`, a terminal run left the branch in pipeline custody: run `no-mistakes axi sync --recover` to return custody, or `no-mistakes rerun` to start a fresh run from the gate branch head instead.
-Recovery takes that head by fast-forward, or by adopting a diverged preserved head proven to carry every local change - the ordinary result of the pipeline rebasing your commits onto a newer base - after anchoring your pre-recovery head under `refs/no-mistakes/recover-local/<run>`.
+When `next_action.code` is `recover_custody`, a terminal run left the branch in pipeline custody: run `no-slop axi sync --recover` to return custody, or `no-slop rerun` to start a fresh run from the gate branch head instead.
+Recovery takes that head by fast-forward, or by adopting a diverged preserved head proven to carry every local change - the ordinary result of the pipeline rebasing your commits onto a newer base - after anchoring your pre-recovery head under `refs/no-slop/recover-local/<run>`.
 That proof is deliberately narrow, so a rebase whose fix rounds also rewrote your own lines refuses instead of being adopted: when nothing can tell a deliberate pipeline fix from a dropped change, the decision is yours.
 When the gate branch never moved past the submitted head, the recorded pipeline head reached no ref: recovery anchors whatever still survives of it and returns custody in place instead of refusing.
 A `branch_sync.state` of `user_owned` means the run went terminal before changing the submitted head and cancellation released the branch: the exact branch and head are yours and immediately usable for whichever delivery path is authorized - no sync action is needed, and a repeated `--recover` there is a harmless no-op.
-A dirty worktree, or divergence that cannot be proven contained, makes the recovery refuse with explicit choices; `--keep-local` keeps your current head while the preserved commits stay anchored under `refs/no-mistakes/recover/<run>`.
-Whenever the returned branch does not contain a commit the recovery anchored, the result names the ref that holds it: `preserved_anchor` for the pipeline commits, and `abandoned_anchor` (`refs/no-mistakes/recover-abandoned/<run>`) for the gate head a `--keep-local` compare-and-swap moved the branch off, which in the frozen-gate case is a different commit and may be its last remaining reference.
+A dirty worktree, or divergence that cannot be proven contained, makes the recovery refuse with explicit choices; `--keep-local` keeps your current head while the preserved commits stay anchored under `refs/no-slop/recover/<run>`.
+Whenever the returned branch does not contain a commit the recovery anchored, the result names the ref that holds it: `preserved_anchor` for the pipeline commits, and `abandoned_anchor` (`refs/no-slop/recover-abandoned/<run>`) for the gate head a `--keep-local` compare-and-swap moved the branch off, which in the frozen-gate case is a different commit and may be its last remaining reference.
 A recorded pipeline head that survives in no object store is reported as `lost_pipeline_head` instead of being passed over, so custody returning with no anchor never hides destroyed pipeline work.
 If synchronization is blocked, process that structured state instead of improvising reset, stash, merge, rebase, force, or branch replacement.
-After synchronization, commit the follow-up on top and re-run `no-mistakes axi run --intent "..."` with the original user intent.
+After synchronization, commit the follow-up on top and re-run `no-slop axi run --intent "..."` with the original user intent.
 This preserves every prior gate-fix commit regardless of its configured subject.
 
 The CI step deliberately keeps watching the PR after checks pass, so
@@ -263,9 +263,9 @@ the branch itself**; a PR that is merely behind but still clean needs nothing
 either, since the platform merges it. The one exception is when that monitor is
 no longer running - the PR was closed, the run was aborted or superseded, it
 idle-timed-out, or its auto-fix attempts were exhausted - in which case recover
-with `no-mistakes rerun`, which cancels the stale monitor and re-runs the full
+with `no-slop rerun`, which cancels the stale monitor and re-runs the full
 pipeline including a deterministic rebase step. Do **not** reach for
-`no-mistakes axi run` to refresh a still-active PR: after `checks-passed` it
+`no-slop axi run` to refresh a still-active PR: after `checks-passed` it
 reattaches to the running monitor (HEAD unchanged) and returns its output
 without rebasing.
 
@@ -317,14 +317,14 @@ escalate to the user.
 ## Inspecting state
 
 ```sh
-no-mistakes axi               # home view: current branch, active runs, next steps
-no-mistakes axi status        # full detail plus cached branch_sync when relevant
-no-mistakes axi sync --check  # freshly verify an offered synchronization plan
-no-mistakes axi sync          # apply only an offered guarded synchronization
-no-mistakes axi sync --recover  # return custody after a terminal run left unpublished pipeline commits
-no-mistakes axi logs --step <name> --full   # full log output of one step
-no-mistakes axi abort         # cancel the current-branch active run
-no-mistakes axi abort --run <id>   # cancel a specific run by id (works outside its worktree)
+no-slop axi               # home view: current branch, active runs, next steps
+no-slop axi status        # full detail plus cached branch_sync when relevant
+no-slop axi sync --check  # freshly verify an offered synchronization plan
+no-slop axi sync          # apply only an offered guarded synchronization
+no-slop axi sync --recover  # return custody after a terminal run left unpublished pipeline commits
+no-slop axi logs --step <name> --full   # full log output of one step
+no-slop axi abort         # cancel the current-branch active run
+no-slop axi abort --run <id>   # cancel a specific run by id (works outside its worktree)
 ```
 
 ## Reading the output
@@ -343,12 +343,12 @@ gate: review
 note: Review auto-fix is disabled by default (auto_fix.review: 0; a repo or global auto_fix.review > 0 override re-enables it), so blocking and ask-user review findings park for your decision rather than being silently self-fixed.
 findings[2]{id,severity,file,line,action,description}:
   r1,warning,internal/pipeline/executor.go,,auto-fix,Error from os.Remove is ignored
-  r2,error,cmd/no-mistakes/main.go,,ask-user,New --force flag bypasses the confirm prompt
+  r2,error,cmd/no-slop/main.go,,ask-user,New --force flag bypasses the confirm prompt
 help[6]:
-  Run `no-mistakes axi respond --action approve` to accept this step and continue
-  Run `no-mistakes axi respond --action fix --findings <ids>` to have the pipeline fix the selected findings (do not edit files yourself)
-  Run `no-mistakes axi respond --action skip` to skip this step
-  Run `no-mistakes axi logs --step review --full` to read the full step log
+  Run `no-slop axi respond --action approve` to accept this step and continue
+  Run `no-slop axi respond --action fix --findings <ids>` to have the pipeline fix the selected findings (do not edit files yourself)
+  Run `no-slop axi respond --action skip` to skip this step
+  Run `no-slop axi logs --step review --full` to read the full step log
   A long-running call is working, not stalled - background it if your harness needs to, but the run never advances past a gate on its own. Read every return; on a `gate:`, respond; loop until an `outcome:`.
   Commit post-pipeline follow-up work on top of the existing branch so every pipeline fix commit remains present. Never abort-and-restart, reset, or replace the branch in a way that drops prior gate-fix commits.
 ```

@@ -8,19 +8,26 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/gate"
-	"github.com/kunchenguid/no-mistakes/internal/git"
-	"github.com/kunchenguid/no-mistakes/internal/ipc"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/types"
-	"github.com/kunchenguid/no-mistakes/internal/wizard"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/gate"
+	"github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/wizard"
 )
+
+func TestRootUsesCanonicalNoSlopIdentity(t *testing.T) {
+	cmd := newRootCmd()
+	if cmd.Use != "no-slop" {
+		t.Fatalf("root Use = %q, want %q", cmd.Use, "no-slop")
+	}
+}
 
 func TestRootYesRunsWizardNonInteractively(t *testing.T) {
 	setupTestRepo(t)
 	nmHome := makeSocketSafeTempDir(t)
-	t.Setenv("NM_HOME", nmHome)
+	t.Setenv("NS_HOME", nmHome)
 	p := paths.WithRoot(nmHome)
 
 	d, err := db.Open(p.DB())
@@ -75,7 +82,7 @@ func TestRootYesRunsWizardNonInteractively(t *testing.T) {
 func TestRootSkipPassesStepsToWizard(t *testing.T) {
 	setupTestRepo(t)
 	nmHome := makeSocketSafeTempDir(t)
-	t.Setenv("NM_HOME", nmHome)
+	t.Setenv("NS_HOME", nmHome)
 	p := paths.WithRoot(nmHome)
 
 	d, err := db.Open(p.DB())
@@ -126,7 +133,7 @@ func TestRootSkipPassesStepsToWizard(t *testing.T) {
 func TestRootYesUsesVisibleWizardWhenInteractive(t *testing.T) {
 	setupTestRepo(t)
 	nmHome := makeSocketSafeTempDir(t)
-	t.Setenv("NM_HOME", nmHome)
+	t.Setenv("NS_HOME", nmHome)
 	p := paths.WithRoot(nmHome)
 
 	d, err := db.Open(p.DB())
@@ -197,7 +204,7 @@ func TestRootYesUsesVisibleWizardWhenInteractive(t *testing.T) {
 func TestRootYesFailsWhenWizardPushProducesNoRun(t *testing.T) {
 	setupTestRepo(t)
 	nmHome := makeSocketSafeTempDir(t)
-	t.Setenv("NM_HOME", nmHome)
+	t.Setenv("NS_HOME", nmHome)
 	p := paths.WithRoot(nmHome)
 
 	d, err := db.Open(p.DB())
@@ -230,7 +237,7 @@ func TestRootYesFailsWhenWizardPushProducesNoRun(t *testing.T) {
 func TestRootYesPassesCommandContextToWizard(t *testing.T) {
 	setupTestRepo(t)
 	nmHome := makeSocketSafeTempDir(t)
-	t.Setenv("NM_HOME", nmHome)
+	t.Setenv("NS_HOME", nmHome)
 	p := paths.WithRoot(nmHome)
 
 	d, err := db.Open(p.DB())
@@ -269,7 +276,7 @@ func TestRootYesPassesCommandContextToWizard(t *testing.T) {
 func TestRootYesStopsWaitingForRunWhenContextCanceled(t *testing.T) {
 	setupTestRepo(t)
 	nmHome := makeSocketSafeTempDir(t)
-	t.Setenv("NM_HOME", nmHome)
+	t.Setenv("NS_HOME", nmHome)
 	p := paths.WithRoot(nmHome)
 
 	d, err := db.Open(p.DB())

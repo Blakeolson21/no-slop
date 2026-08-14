@@ -17,7 +17,7 @@ func TestReplaceExecutableDarwinRequiresAtomicReplace(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	execPath := filepath.Join(dir, "no-mistakes")
+	execPath := filepath.Join(dir, "no-slop")
 	if err := os.WriteFile(execPath, []byte("old-binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -4,14 +4,14 @@ import starlight from "@astrojs/starlight";
 
 export default defineConfig({
   site: "https://kunchenguid.github.io",
-  base: "/no-mistakes",
+  base: "/no-slop",
   integrations: [
     mermaid({ enableLog: false }),
     starlight({
-      title: "git push no-mistakes",
+      title: "git push no-slop",
       customCss: ["./src/styles/custom.css"],
       social: {
-        github: "https://github.com/kunchenguid/no-mistakes",
+        github: "https://github.com/Blakeolson21/no-slop",
         discord: "https://discord.gg/Wsy2NpnZDu",
         "x.com": "https://x.com/kunchenguid",
       },

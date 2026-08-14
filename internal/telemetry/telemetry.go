@@ -17,18 +17,22 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/buildinfo"
+	"github.com/Blakeolson21/no-slop/internal/buildinfo"
+	"github.com/Blakeolson21/no-slop/internal/identity"
 )
 
 const (
 	defaultHostname = "cli"
-	defaultTitle    = "no-mistakes CLI"
+	defaultTitle    = "no-slop CLI"
 	defaultPath     = "/api/send"
 	defaultHost     = "https://a.kunchenguid.com"
 
-	umamiHostEnv      = "NO_MISTAKES_UMAMI_HOST"
-	umamiWebsiteIDEnv = "NO_MISTAKES_UMAMI_WEBSITE_ID"
-	telemetryEnv      = "NO_MISTAKES_TELEMETRY"
+	umamiHostEnv            = "NS_UMAMI_HOST"
+	legacyUmamiHostEnv      = "NO_MISTAKES_UMAMI_HOST"
+	umamiWebsiteIDEnv       = "NS_UMAMI_WEBSITE_ID"
+	legacyUmamiWebsiteIDEnv = "NO_MISTAKES_UMAMI_WEBSITE_ID"
+	telemetryEnv            = "NS_TELEMETRY"
+	legacyTelemetryEnv      = "NO_MISTAKES_TELEMETRY"
 )
 
 type Fields map[string]any
@@ -94,7 +98,7 @@ func NewClient(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("website ID is required")
 	}
 	if cfg.App == "" {
-		cfg.App = "no-mistakes"
+		cfg.App = "no-slop"
 	}
 	if cfg.Version == "" {
 		cfg.Version = buildinfo.CurrentVersion()
@@ -120,40 +124,63 @@ func NewClient(cfg Config) (*Client, error) {
 	}, nil
 }
 
-func Default() Sink {
+func Default() (Sink, error) {
 	defaultMu.Lock()
 	defer defaultMu.Unlock()
 
 	if defaultSink != nil {
-		return defaultSink
+		return defaultSink, nil
 	}
-	if telemetryDisabled() {
+	disabled, err := telemetryDisabled()
+	if err != nil {
+		return nil, err
+	}
+	if disabled {
 		defaultSink = noopSink{}
-		return defaultSink
+		return defaultSink, nil
 	}
 
-	websiteID := defaultWebsiteID()
+	websiteID, err := defaultWebsiteID()
+	if err != nil {
+		return nil, err
+	}
 	if websiteID == "" {
 		defaultSink = noopSink{}
-		return defaultSink
+		return defaultSink, nil
 	}
 
-	host := defaultHostValue()
+	host, err := defaultHostValue()
+	if err != nil {
+		return nil, err
+	}
 	client, err := NewClient(Config{
 		Host:      host,
 		WebsiteID: websiteID,
-		App:       "no-mistakes",
+		App:       "no-slop",
 		Version:   buildinfo.CurrentVersion(),
 		GOOS:      runtime.GOOS,
 		GOARCH:    runtime.GOARCH,
 	})
 	if err != nil {
 		defaultSink = noopSink{}
-		return defaultSink
+		return defaultSink, nil
 	}
 
 	defaultSink = client
-	return defaultSink
+	return defaultSink, nil
+}
+
+func ValidateDefaultConfig() error {
+	if _, err := telemetryDisabled(); err != nil {
+		return err
+	}
+	if _, err := defaultWebsiteID(); err != nil {
+		return err
+	}
+	if _, err := defaultHostValue(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func SetDefaultForTesting(sink Sink) func() {
@@ -173,20 +200,36 @@ func SetDefaultForTesting(sink Sink) func() {
 }
 
 func Track(name string, fields Fields) {
-	Default().Track(name, fields)
+	sink, err := Default()
+	if err != nil {
+		return
+	}
+	sink.Track(name, fields)
 }
 
 func Pageview(path string, fields Fields) {
-	Default().Pageview(path, fields)
+	sink, err := Default()
+	if err != nil {
+		return
+	}
+	sink.Pageview(path, fields)
 }
 
 func Enabled() bool {
-	_, disabled := Default().(noopSink)
+	sink, err := Default()
+	if err != nil {
+		return false
+	}
+	_, disabled := sink.(noopSink)
 	return !disabled
 }
 
 func Close(ctx context.Context) error {
-	return Default().Close(ctx)
+	sink, err := Default()
+	if err != nil {
+		return err
+	}
+	return sink.Close(ctx)
 }
 
 func (c *Client) Track(name string, fields Fields) {
@@ -296,7 +339,7 @@ func (c *Client) send(ctx context.Context, payload []byte) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", fmt.Sprintf("no-mistakes/%s telemetry", c.version))
+	req.Header.Set("User-Agent", fmt.Sprintf("no-slop/%s telemetry", c.version))
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -328,7 +371,7 @@ func normalizeEndpoint(host string) (string, error) {
 
 func eventURL(app, name string) string {
 	if app == "" {
-		app = "no-mistakes"
+		app = "no-slop"
 	}
 	if name == "" {
 		return "app://" + app
@@ -354,27 +397,41 @@ func normalizePagePath(path string) string {
 	return "/" + path
 }
 
-func defaultWebsiteID() string {
-	websiteID := strings.TrimSpace(os.Getenv(umamiWebsiteIDEnv))
+func defaultWebsiteID() (string, error) {
+	websiteID, err := identity.LookupEnv(umamiWebsiteIDEnv, legacyUmamiWebsiteIDEnv)
+	if err != nil {
+		return "", err
+	}
+	websiteID = strings.TrimSpace(websiteID)
 
 	if buildChannel(buildinfo.CurrentVersion()) == "dev" && websiteID == "" {
 		values := loadDotEnvValues()
-		websiteID = strings.TrimSpace(values[umamiWebsiteIDEnv])
+		websiteID, err = lookupDotEnv(values, umamiWebsiteIDEnv, legacyUmamiWebsiteIDEnv)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	if websiteID == "" {
 		websiteID = strings.TrimSpace(buildinfo.TelemetryWebsiteID)
 	}
 
-	return websiteID
+	return websiteID, nil
 }
 
-func defaultHostValue() string {
-	host := strings.TrimSpace(os.Getenv(umamiHostEnv))
+func defaultHostValue() (string, error) {
+	host, err := identity.LookupEnv(umamiHostEnv, legacyUmamiHostEnv)
+	if err != nil {
+		return "", err
+	}
+	host = strings.TrimSpace(host)
 
 	if buildChannel(buildinfo.CurrentVersion()) == "dev" && host == "" {
 		values := loadDotEnvValues()
-		host = strings.TrimSpace(values[umamiHostEnv])
+		host, err = lookupDotEnv(values, umamiHostEnv, legacyUmamiHostEnv)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	if host == "" {
@@ -384,16 +441,34 @@ func defaultHostValue() string {
 		host = defaultHost
 	}
 
-	return host
+	return host, nil
 }
 
-func telemetryDisabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(telemetryEnv))) {
-	case "0", "false", "off":
-		return true
-	default:
-		return false
+func telemetryDisabled() (bool, error) {
+	value, err := identity.LookupEnv(telemetryEnv, legacyTelemetryEnv)
+	if err != nil {
+		return false, err
 	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "0", "false", "off":
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+func lookupDotEnv(values map[string]string, canonical, legacy string) (string, error) {
+	canonicalValue, canonicalSet := values[canonical]
+	legacyValue, legacySet := values[legacy]
+	canonicalValue = strings.TrimSpace(canonicalValue)
+	legacyValue = strings.TrimSpace(legacyValue)
+	if canonicalSet && legacySet && canonicalValue != legacyValue {
+		return "", fmt.Errorf("%s and legacy alias %s configure the same setting with different values", canonical, legacy)
+	}
+	if canonicalSet {
+		return canonicalValue, nil
+	}
+	return legacyValue, nil
 }
 
 func loadDotEnvValues() map[string]string {

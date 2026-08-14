@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/filelock"
+	"github.com/Blakeolson21/no-slop/internal/filelock"
 )
 
 const (

@@ -1,6 +1,7 @@
 package git
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -8,33 +9,60 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
 var runGit = RunBare
 
-const gateConfigStampFile = "no-mistakes-gate-config"
-const preservedPreReceiveHook = "pre-receive.no-mistakes-user"
+const gateConfigStampFile = "no-slop-gate-config"
+const preservedPreReceiveHook = "pre-receive.no-slop-user"
+const legacyPreservedPreReceiveHook = "pre-receive.no-mistakes-user"
 
 // PreReceiveHookScript returns the fail-closed admission hook that runs before
 // Git mutates any managed gate ref. The daemon authenticates the hook process's
 // ancestry, so a validation-step descendant cannot bypass CLI guards with a
 // direct push.
 func PreReceiveHookScript() string {
+	return preReceiveHookScript(managedHookExecutable())
+}
+
+func managedHookExecutable() string {
 	exe, err := os.Executable()
 	if err != nil {
-		exe = "no-mistakes"
+		return "no-slop"
 	}
-	return preReceiveHookScript(exe)
+	return canonicalHookExecutable(exe)
+}
+
+func canonicalHookExecutable(command string) string {
+	separator := strings.LastIndexAny(command, `/\`)
+	prefix := command[:separator+1]
+	base := command[separator+1:]
+	switch {
+	case strings.EqualFold(base, "no-mistakes"):
+		return canonicalHookExecutableIfPresent(command, prefix+"no-slop")
+	case strings.EqualFold(base, "no-mistakes.exe"):
+		return canonicalHookExecutableIfPresent(command, prefix+"no-slop.exe")
+	default:
+		return command
+	}
+}
+
+func canonicalHookExecutableIfPresent(fallback, canonical string) string {
+	if _, err := os.Stat(canonical); err == nil {
+		return canonical
+	}
+	return fallback
 }
 
 func preReceiveHookScript(command string) string {
 	return `#!/bin/sh
-# no-mistakes pre-receive hook
+# no-slop pre-receive hook
 # Authorize the pushing process before any managed gate ref changes.
-NM_BIN=` + shellSingleQuote(command) + `
-if [ ! -f "$NM_BIN" ]; then
-  NM_BIN="$(command -v no-mistakes 2>/dev/null || echo no-mistakes)"
+NS_BIN=` + shellSingleQuote(command) + `
+if [ ! -f "$NS_BIN" ]; then
+  NS_BIN="$(command -v no-slop 2>/dev/null || command -v no-mistakes 2>/dev/null || echo no-slop)"
 fi
 GATE_DIR=$(git rev-parse --absolute-git-dir 2>/dev/null || :)
 case "$GATE_DIR" in
@@ -48,13 +76,22 @@ case "$GATE_DIR" in
     GATE_DIR=$(cd "$HOOK_DIR/.." 2>/dev/null && (/bin/pwd -P 2>/dev/null || pwd -P) || :)
     ;;
 esac
-out=$(NM_HOOK_HELPER=1 "$NM_BIN" daemon admit-push --gate "$GATE_DIR" 2>&1)
+out=$(NS_HOOK_HELPER=1 NM_HOOK_HELPER=1 "$NS_BIN" daemon admit-push --gate "$GATE_DIR" 2>&1)
 status=$?
 if [ $status -ne 0 ]; then
-  printf 'no-mistakes: gate push refused before ref mutation:\n%s\n' "$out" >&2
+  printf 'no-slop: gate push refused before ref mutation:\n%s\n' "$out" >&2
   exit $status
 fi
-USER_HOOK="$GATE_DIR/hooks/` + preservedPreReceiveHook + `"
+CANONICAL_USER_HOOK="$GATE_DIR/hooks/` + preservedPreReceiveHook + `"
+LEGACY_USER_HOOK="$GATE_DIR/hooks/` + legacyPreservedPreReceiveHook + `"
+if [ -x "$CANONICAL_USER_HOOK" ] && [ -x "$LEGACY_USER_HOOK" ] && ! cmp -s "$CANONICAL_USER_HOOK" "$LEGACY_USER_HOOK"; then
+  printf 'no-slop: preserved pre-receive hook aliases conflict: %s and %s differ\n' "$CANONICAL_USER_HOOK" "$LEGACY_USER_HOOK" >&2
+  exit 1
+fi
+USER_HOOK="$CANONICAL_USER_HOOK"
+if [ ! -x "$USER_HOOK" ]; then
+  USER_HOOK="$LEGACY_USER_HOOK"
+fi
 if [ -x "$USER_HOOK" ]; then
   exec "$USER_HOOK"
 fi
@@ -64,7 +101,9 @@ exit 0
 
 func isManagedPreReceiveHook(content []byte) bool {
 	text := string(content)
-	return strings.Contains(text, "# no-mistakes pre-receive hook") && strings.Contains(text, "daemon admit-push")
+	return (strings.Contains(text, "# no-slop pre-receive hook") ||
+		strings.Contains(text, "# no-mistakes pre-receive hook")) &&
+		strings.Contains(text, "daemon admit-push")
 }
 
 // RefreshManagedPreReceiveHook installs or refreshes admission while preserving
@@ -72,6 +111,9 @@ func isManagedPreReceiveHook(content []byte) bool {
 func RefreshManagedPreReceiveHook(bareDir string) (bool, error) {
 	hooksDir := filepath.Join(bareDir, "hooks")
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		return false, err
+	}
+	if err := validatePreservedPreReceiveHookAliases(hooksDir); err != nil {
 		return false, err
 	}
 	hookPath := filepath.Join(hooksDir, "pre-receive")
@@ -83,6 +125,9 @@ func RefreshManagedPreReceiveHook(bareDir string) (bool, error) {
 			return false, nil
 		}
 		if !isManagedPreReceiveHook(existing) {
+			if err := validatePreservedPreReceiveHookCandidate(hooksDir, existing); err != nil {
+				return false, err
+			}
 			if _, companionErr := os.Stat(companion); companionErr == nil {
 				return false, fmt.Errorf("preserve pre-receive hook: companion already exists")
 			} else if !os.IsNotExist(companionErr) {
@@ -106,6 +151,63 @@ func RefreshManagedPreReceiveHook(bareDir string) (bool, error) {
 	return true, nil
 }
 
+func validatePreservedPreReceiveHookAliases(hooksDir string) error {
+	canonical := filepath.Join(hooksDir, preservedPreReceiveHook)
+	legacy := filepath.Join(hooksDir, legacyPreservedPreReceiveHook)
+	canonicalInfo, canonicalErr := os.Stat(canonical)
+	legacyInfo, legacyErr := os.Stat(legacy)
+	if os.IsNotExist(canonicalErr) || os.IsNotExist(legacyErr) {
+		return nil
+	}
+	if canonicalErr != nil {
+		return canonicalErr
+	}
+	if legacyErr != nil {
+		return legacyErr
+	}
+	if !preservedHookRunnable(canonicalInfo) || !preservedHookRunnable(legacyInfo) {
+		return nil
+	}
+	canonicalData, err := os.ReadFile(canonical)
+	if err != nil {
+		return err
+	}
+	legacyData, err := os.ReadFile(legacy)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(canonicalData, legacyData) {
+		return fmt.Errorf("preserved pre-receive hook aliases conflict: %s and %s differ", preservedPreReceiveHook, legacyPreservedPreReceiveHook)
+	}
+	return nil
+}
+
+func validatePreservedPreReceiveHookCandidate(hooksDir string, candidate []byte) error {
+	legacy := filepath.Join(hooksDir, legacyPreservedPreReceiveHook)
+	legacyInfo, err := os.Stat(legacy)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !preservedHookRunnable(legacyInfo) {
+		return nil
+	}
+	legacyData, err := os.ReadFile(legacy)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(candidate, legacyData) {
+		return fmt.Errorf("preserved pre-receive hook aliases conflict: %s and %s differ", preservedPreReceiveHook, legacyPreservedPreReceiveHook)
+	}
+	return nil
+}
+
+func preservedHookRunnable(info os.FileInfo) bool {
+	return runtime.GOOS == "windows" || info.Mode()&0o111 != 0
+}
+
 // RefreshManagedGateHooks owns the complete receive boundary.
 func RefreshManagedGateHooks(bareDir string) error {
 	if _, err := RefreshManagedPreReceiveHook(bareDir); err != nil {
@@ -123,23 +225,19 @@ func RefreshManagedGateHooks(bareDir string) error {
 // It never blocks the push - notification failures are surfaced to stderr and
 // appended to notify-push.log inside the bare repo.
 func PostReceiveHookScript() string {
-	exe, err := os.Executable()
-	if err != nil {
-		exe = "no-mistakes"
-	}
-	return postReceiveHookScript(exe)
+	return postReceiveHookScript(managedHookExecutable())
 }
 
 func postReceiveHookScript(command string) string {
 	return `#!/bin/sh
-# no-mistakes post-receive hook
+# no-slop post-receive hook
 # Notifies the daemon of the push. Non-blocking: post-receive exit code is
 # ignored by git, so we never reject the push here. Instead, failures are
 # surfaced on stderr (so the pushing client sees them) and appended to
 # notify-push.log inside the bare repo for later inspection.
-NM_BIN=` + shellSingleQuote(command) + `
-if [ ! -f "$NM_BIN" ]; then
-  NM_BIN="$(command -v no-mistakes 2>/dev/null || echo no-mistakes)"
+NS_BIN=` + shellSingleQuote(command) + `
+if [ ! -f "$NS_BIN" ]; then
+  NS_BIN="$(command -v no-slop 2>/dev/null || command -v no-mistakes 2>/dev/null || echo no-slop)"
 fi
 # Resolve the bare repo dir explicitly. Git can invoke this hook from a cwd
 # whose pwd collapses to "." (issue #269), which would pass "--gate ." and be
@@ -176,7 +274,7 @@ while read oldrev newrev refname; do
 	    set -- "$@" --push-option "$opt"
 	    i=$((i + 1))
 	  done
-	  out=$(NM_HOOK_HELPER=1 "$NM_BIN" daemon notify-push "$@" 2>&1)
+	  out=$(NS_HOOK_HELPER=1 NM_HOOK_HELPER=1 "$NS_BIN" daemon notify-push "$@" 2>&1)
   status=$?
   if [ $status -ne 0 ]; then
     notify_failed=1
@@ -185,7 +283,7 @@ while read oldrev newrev refname; do
       printf '%s\n\n' "$out"
     } >> "$LOG"
     {
-      printf 'no-mistakes: notify-push failed for %s (exit %d):\n' "$refname" "$status"
+      printf 'no-slop: notify-push failed for %s (exit %d):\n' "$refname" "$status"
       printf '%s\n' "$out"
       printf 'See %s for full history.\n' "$LOG"
     } >&2
@@ -194,13 +292,13 @@ done
 
 if [ "$notify_failed" -eq 0 ]; then
   cat >&2 <<'BANNER'
-_  _ ____    _  _ _ ____ ___ ____ _  _ ____ ____
-|\ | |  |    |\/| | [__   |  |__| |_/  |___ [__
-| \| |__|    |  | | ___]  |  |  | | \_ |___ ___]
+_  _ ____    ____ _    ____ ___
+|\ | |  |    [__  |    |  | |__]
+| \| |__|    ___] |___ |__| |
 
   * Pipeline started
 
-  Run no-mistakes to review.
+  Run no-slop to review.
 
 BANNER
 fi
@@ -214,7 +312,9 @@ func shellSingleQuote(value string) string {
 
 func isManagedPostReceiveHook(content []byte) bool {
 	text := string(content)
-	return strings.Contains(text, "# no-mistakes post-receive hook") && strings.Contains(text, "daemon notify-push")
+	return (strings.Contains(text, "# no-slop post-receive hook") ||
+		strings.Contains(text, "# no-mistakes post-receive hook")) &&
+		strings.Contains(text, "daemon notify-push")
 }
 
 // InstallPostReceiveHook writes the post-receive hook script into
@@ -228,7 +328,7 @@ func InstallPostReceiveHook(bareDir string) error {
 	return writeHookFileAtomic(hookPath, []byte(PostReceiveHookScript()))
 }
 
-// RefreshManagedPostReceiveHook updates an existing no-mistakes-owned hook.
+// RefreshManagedPostReceiveHook updates an existing no-slop-owned hook.
 // Custom hooks are left untouched; missing hooks are installed for gate repos.
 func RefreshManagedPostReceiveHook(bareDir string) (bool, error) {
 	hooksDir := filepath.Join(bareDir, "hooks")
@@ -303,12 +403,17 @@ func MarkGateConfigCurrent(bareDir string) error {
 		filepath.Join(bareDir, gateConfigStampFile),
 		[]byte(gateConfigStampContent()),
 		0o644,
-		".no-mistakes-gate-config-*",
+		".no-slop-gate-config-*",
 	)
 }
 
 func gateConfigStampContent() string {
-	sum := sha256.Sum256([]byte("gate-config-v2\x00" + PreReceiveHookScript() + "\x00" + PostReceiveHookScript()))
+	return gateConfigStampContentForExecutable(managedHookExecutable())
+}
+
+func gateConfigStampContentForExecutable(command string) string {
+	command = canonicalHookExecutable(command)
+	sum := sha256.Sum256([]byte("gate-config-v2\x00" + preReceiveHookScript(command) + "\x00" + postReceiveHookScript(command)))
 	return fmt.Sprintf("v2:%x\n", sum)
 }
 

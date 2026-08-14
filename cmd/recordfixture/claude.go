@@ -9,7 +9,7 @@ import (
 )
 
 // recordClaude invokes the real claude CLI with the same flags
-// no-mistakes' agent uses, and saves the JSONL stdout to a fixture file.
+// no-slop' agent uses, and saves the JSONL stdout to a fixture file.
 // We capture two flavours per session: with a JSON schema (review-style)
 // and without (commit-summary-style). Both are kept tiny by asking for
 // the smallest possible response.
@@ -36,7 +36,7 @@ func recordClaude(ctx context.Context, out string, args []string) int {
 	}
 
 	// 2) Plain-text flavour. No schema; tests this codepath even though
-	// no-mistakes' claude steps always pass a schema today.
+	// no-slop' claude steps always pass a schema today.
 	if err := captureClaude(ctx, bin, forward, "Reply with the literal word OK and nothing else.", "", filepath.Join(out, "plain.jsonl")); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1

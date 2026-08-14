@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/db"
 )
 
 // TestMain unsets ambient GIT_CONFIG_* injection from agent harnesses so the

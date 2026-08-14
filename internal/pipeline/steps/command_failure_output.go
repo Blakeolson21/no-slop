@@ -5,8 +5,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/kunchenguid/no-mistakes/internal/pipeline"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/pipeline"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 // configuredCommandFailureSummaryMaxBytes is the fixed upper bound for the
@@ -48,7 +48,7 @@ func configuredCommandFailureSummary(output string, step types.StepName) string 
 	omitted := tailStart - headEnd
 	stepLabel := configuredCommandStepLabel(step)
 	marker := fmt.Sprintf(
-		"\n\n[configured %s output truncated: original byte count: %d; omitted byte count: %d; complete output: %s step log (`no-mistakes axi logs --step %s --full`)]\n\n",
+		"\n\n[configured %s output truncated: original byte count: %d; omitted byte count: %d; complete output: %s step log (`no-slop axi logs --step %s --full`)]\n\n",
 		stepLabel,
 		len(output),
 		omitted,

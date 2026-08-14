@@ -12,11 +12,11 @@ import (
 
 	toon "github.com/toon-format/toon-go"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/git"
-	"github.com/kunchenguid/no-mistakes/internal/ipc"
-	"github.com/kunchenguid/no-mistakes/internal/telemetry"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/telemetry"
+	"github.com/Blakeolson21/no-slop/internal/types"
 	"github.com/spf13/cobra"
 )
 
@@ -152,7 +152,7 @@ func configQuietWarning(env *axiEnv) time.Duration {
 }
 
 func startRunHelp() string {
-	return `Run no-mistakes axi run --intent "the user's goal" --yes to validate the current branch`
+	return `Run no-slop axi run --intent "the user's goal" --yes to validate the current branch`
 }
 
 func noRunLogsHelp() string {
@@ -241,7 +241,7 @@ func runAxiLogs(cmd *cobra.Command, step, runID string, full bool) (string, erro
 		fields = append(fields,
 			toon.Field{Key: "lines", Value: fmt.Sprintf("%d of %d total (tail)", len(shown), len(lines))},
 			toon.Field{Key: "log", Value: logRows(shown)},
-			toon.Field{Key: "help", Value: []string{fmt.Sprintf("Run `no-mistakes axi logs --step %s --full` to see the entire log", step)}},
+			toon.Field{Key: "help", Value: []string{fmt.Sprintf("Run `no-slop axi logs --step %s --full` to see the entire log", step)}},
 		)
 		emitDoc(cmd, fields...)
 		return fingerprint, nil

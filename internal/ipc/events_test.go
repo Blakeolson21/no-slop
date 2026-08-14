@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/ipc"
 )
 
 // The taxonomy is the single owner of "may this event be dropped?". Every

@@ -3,7 +3,7 @@ package pathmatch_test
 import (
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/slop/pathmatch"
+	"github.com/Blakeolson21/no-slop/internal/slop/pathmatch"
 )
 
 func TestMatchSupportsRepositoryGlobsAndRecursiveDirectories(t *testing.T) {

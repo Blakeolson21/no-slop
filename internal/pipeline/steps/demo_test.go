@@ -3,12 +3,13 @@ package steps
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/pipeline"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/pipeline"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func withoutDemoSleep(t *testing.T) {
@@ -24,9 +25,18 @@ func TestIsDemoMode(t *testing.T) {
 	if IsDemoMode() {
 		t.Fatal("expected demo mode to be off by default")
 	}
-	t.Setenv("NM_DEMO", "1")
+	t.Setenv("NS_DEMO", "1")
+	unsetTestEnv(t, "NM_DEMO")
 	if !IsDemoMode() {
-		t.Fatal("expected demo mode to be on when NM_DEMO=1")
+		t.Fatal("expected demo mode to be on when NS_DEMO=1")
+	}
+}
+
+func TestValidateDemoModeConfigRejectsConflictingAliases(t *testing.T) {
+	t.Setenv("NS_DEMO", "1")
+	t.Setenv("NM_DEMO", "0")
+	if err := ValidateDemoModeConfig(); err == nil {
+		t.Fatal("ValidateDemoModeConfig() should reject conflicting aliases")
 	}
 }
 
@@ -57,7 +67,8 @@ func TestDemoSteps(t *testing.T) {
 func TestAllStepsDemoMode(t *testing.T) {
 	withoutDemoSleep(t)
 
-	t.Setenv("NM_DEMO", "1")
+	t.Setenv("NS_DEMO", "1")
+	unsetTestEnv(t, "NM_DEMO")
 	steps := AllSteps()
 	// Verify we get demo steps, not real ones, by checking the type.
 	for _, s := range steps {
@@ -68,6 +79,21 @@ func TestAllStepsDemoMode(t *testing.T) {
 			t.Fatalf("expected demo step type in demo mode, got %T", s)
 		}
 	}
+}
+
+func unsetTestEnv(t *testing.T, name string) {
+	t.Helper()
+	value, existed := os.LookupEnv(name)
+	if err := os.Unsetenv(name); err != nil {
+		t.Fatalf("unset %s: %v", name, err)
+	}
+	t.Cleanup(func() {
+		if existed {
+			_ = os.Setenv(name, value)
+			return
+		}
+		_ = os.Unsetenv(name)
+	})
 }
 
 func TestDemoStepExecute(t *testing.T) {

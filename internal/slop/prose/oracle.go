@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/slop/pathmatch"
+	"github.com/Blakeolson21/no-slop/internal/slop/pathmatch"
 )
 
 // Kind identifies a prose-oracle finding class.

@@ -6,12 +6,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/branchsync"
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/git"
-	"github.com/kunchenguid/no-mistakes/internal/pipeline"
-	"github.com/kunchenguid/no-mistakes/internal/safeurl"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/branchsync"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/pipeline"
+	"github.com/Blakeolson21/no-slop/internal/safeurl"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 // PushStep force-pushes the worktree state to the configured push remote.
@@ -50,7 +50,7 @@ func (s *PushStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, e
 		if _, err := git.Run(ctx, sctx.WorkDir, "add", "-A"); err != nil {
 			return nil, fmt.Errorf("stage agent changes: %w", err)
 		}
-		_, err := git.Run(ctx, sctx.WorkDir, "commit", "-m", "no-mistakes: apply agent fixes")
+		_, err := git.Run(ctx, sctx.WorkDir, "commit", "-m", "no-slop: apply agent fixes")
 		if err != nil {
 			return nil, fmt.Errorf("commit agent changes: %w", err)
 		}

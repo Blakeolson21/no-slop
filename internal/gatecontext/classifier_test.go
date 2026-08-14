@@ -8,11 +8,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/gate"
-	"github.com/kunchenguid/no-mistakes/internal/gatecontext"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/gate"
+	"github.com/Blakeolson21/no-slop/internal/gatecontext"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 type topologyFixture struct {
@@ -85,7 +85,7 @@ func TestInspectorCanonicalManagedGitIdentityMatrix(t *testing.T) {
 
 func TestInspectorRejectsRelocatedAndSymlinkedManagedRoots(t *testing.T) {
 	f := newTopologyFixture(t)
-	link := filepath.Join(t.TempDir(), "nm-home-link")
+	link := filepath.Join(t.TempDir(), "ns-home-link")
 	if err := os.Symlink(f.root, link); err != nil {
 		t.Fatalf("symlink root: %v", err)
 	}
@@ -202,7 +202,7 @@ func assertAllowed(t *testing.T, inspector gatecontext.Inspector, cwd, label str
 
 func newTopologyFixture(t *testing.T) *topologyFixture {
 	t.Helper()
-	root := filepath.Join(t.TempDir(), "relocated-nm-home")
+	root := filepath.Join(t.TempDir(), "relocated-ns-home")
 	p := paths.WithRoot(root)
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatalf("ensure paths: %v", err)

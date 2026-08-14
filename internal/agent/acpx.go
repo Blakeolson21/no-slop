@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/kunchenguid/no-mistakes/internal/shellenv"
+	"github.com/Blakeolson21/no-slop/internal/shellenv"
 )
 
 const acpxScannerMaxTokenSize = 256 * 1024 * 1024
@@ -125,7 +125,7 @@ func acpxProcessErrorOutput(stderr []byte, stdoutErr string) string {
 }
 
 func buildACPStructuredPrompt(prompt string, schema json.RawMessage) string {
-	return prompt + "\n\n## no-mistakes final output contract\n\n" +
+	return prompt + "\n\n## no-slop final output contract\n\n" +
 		"When the task is complete, your final assistant message must be a single JSON object that matches this JSON Schema. " +
 		"Return only the JSON object. Do not wrap it in Markdown fences. Do not include prose before or after the JSON.\n\n" +
 		string(schema)

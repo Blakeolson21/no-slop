@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
 // spawnSleepProcess launches `sleep 30` in its own process group so that a

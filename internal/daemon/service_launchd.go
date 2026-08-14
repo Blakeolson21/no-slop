@@ -1,14 +1,15 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/shellenv"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/shellenv"
 )
 
 // Retry parameters for `launchctl bootstrap` after a preceding bootout.
@@ -42,26 +43,44 @@ func installLaunchAgent(p *paths.Paths, exe string) error {
 	if err := writeServiceFile(path, launchAgentProxyEnv, render); err != nil {
 		return fmt.Errorf("write launch agent: %w", err)
 	}
-	cleanupLegacyLaunchAgent(p)
-	return nil
+	return managedServiceCleanupFailure(cleanupLegacyLaunchAgent(p))
 }
 
 // cleanupLegacyLaunchAgent removes any plist installed by a pre-scoping
 // binary at the globally-named path so the new scoped install is the only
 // managed daemon for this user going forward. We bootout the legacy label
 // before deleting so an already-loaded legacy daemon is released from
-// launchd (it will exit on SIGTERM). Any error is best-effort: if there's
-// no legacy plist or launchctl refuses, we proceed with the scoped install.
-func cleanupLegacyLaunchAgent(p *paths.Paths) {
-	path := legacyLaunchAgentPath()
-	data, err := os.ReadFile(path)
-	if err != nil || !serviceDefinitionMatchesRoot(data, p) {
-		return
+// launchd (it will exit on SIGTERM).
+func cleanupLegacyLaunchAgent(p *paths.Paths) error {
+	var errs []error
+	for _, legacy := range []struct {
+		label string
+		path  string
+	}{
+		{legacyScopedLaunchdServiceLabel(p), legacyScopedLaunchAgentPath(p)},
+		{legacyLaunchdServiceLabel, legacyLaunchAgentPath()},
+	} {
+		data, ok, err := readLegacyServiceDefinition(legacy.path, "launch agent")
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if !ok || !serviceDefinitionMatchesRoot(data, p) {
+			continue
+		}
+		if domain, err := launchdDomainTarget(); err != nil {
+			errs = append(errs, err)
+		} else {
+			output, stopErr := serviceCommandRunner("launchctl", "bootout", domain+"/"+legacy.label)
+			if stopErr != nil && !launchctlBootoutServiceNotLoaded(stopErr, output) {
+				errs = append(errs, fmt.Errorf("launchctl bootout legacy service: %w", stopErr))
+			}
+		}
+		if err := os.Remove(legacy.path); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("remove legacy launch agent: %w", err))
+		}
 	}
-	if domain, err := launchdDomainTarget(); err == nil {
-		_, _ = serviceCommandRunner("launchctl", "bootout", domain+"/"+legacyLaunchdServiceLabel)
-	}
-	_ = os.Remove(path)
+	return errors.Join(errs...)
 }
 
 func startLaunchAgent(p *paths.Paths) error {
@@ -135,6 +154,37 @@ func stopLaunchAgent(p *paths.Paths) error {
 	return nil
 }
 
+func stopLegacyLaunchAgent(p *paths.Paths) (bool, error) {
+	domain, err := launchdDomainTarget()
+	if err != nil {
+		return false, err
+	}
+	stopped := false
+	var errs []error
+	for _, legacy := range []struct {
+		label string
+		path  string
+	}{
+		{legacyScopedLaunchdServiceLabel(p), legacyScopedLaunchAgentPath(p)},
+		{legacyLaunchdServiceLabel, legacyLaunchAgentPath()},
+	} {
+		data, ok, err := readLegacyServiceDefinition(legacy.path, "launch agent")
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if !ok || !serviceDefinitionMatchesRoot(data, p) {
+			continue
+		}
+		stopped = true
+		output, stopErr := serviceCommandRunner("launchctl", "bootout", domain+"/"+legacy.label)
+		if stopErr != nil && !launchctlBootoutServiceNotLoaded(stopErr, output) {
+			errs = append(errs, fmt.Errorf("launchctl bootout legacy service: %w", stopErr))
+		}
+	}
+	return stopped, errors.Join(errs...)
+}
+
 func removeLaunchAgent(p *paths.Paths) error {
 	err := os.Remove(launchAgentPath(p))
 	if err != nil && !os.IsNotExist(err) {
@@ -166,6 +216,11 @@ func launchAgentPath(p *paths.Paths) string {
 func legacyLaunchAgentPath() string {
 	home, _ := serviceUserHomeDir()
 	return filepath.Join(home, "Library", "LaunchAgents", legacyLaunchdServiceLabel+".plist")
+}
+
+func legacyScopedLaunchAgentPath(p *paths.Paths) string {
+	home, _ := serviceUserHomeDir()
+	return filepath.Join(home, "Library", "LaunchAgents", legacyScopedLaunchdServiceLabel(p)+".plist")
 }
 
 func launchdDomainTarget() (string, error) {

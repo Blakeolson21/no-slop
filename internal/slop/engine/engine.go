@@ -5,12 +5,12 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/kunchenguid/no-mistakes/internal/slop/leakscan"
-	"github.com/kunchenguid/no-mistakes/internal/slop/lenses"
-	"github.com/kunchenguid/no-mistakes/internal/slop/precheck"
-	"github.com/kunchenguid/no-mistakes/internal/slop/prose"
-	"github.com/kunchenguid/no-mistakes/internal/slop/risk"
-	"github.com/kunchenguid/no-mistakes/internal/slop/testfloor"
+	"github.com/Blakeolson21/no-slop/internal/slop/leakscan"
+	"github.com/Blakeolson21/no-slop/internal/slop/lenses"
+	"github.com/Blakeolson21/no-slop/internal/slop/precheck"
+	"github.com/Blakeolson21/no-slop/internal/slop/prose"
+	"github.com/Blakeolson21/no-slop/internal/slop/risk"
+	"github.com/Blakeolson21/no-slop/internal/slop/testfloor"
 )
 
 // Change contains the revision content each mechanical check needs.

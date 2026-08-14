@@ -1,13 +1,14 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
 func installSystemdUserService(p *paths.Paths, exe string) error {
@@ -34,19 +35,37 @@ func installSystemdUserService(p *paths.Paths, exe string) error {
 	if _, err := serviceCommandRunner("systemctl", "--user", "enable", systemdServiceName(p)); err != nil {
 		return fmt.Errorf("systemctl enable: %w", err)
 	}
-	cleanupLegacySystemdUnit(p)
-	return nil
+	return managedServiceCleanupFailure(cleanupLegacySystemdUnit(p))
 }
 
-func cleanupLegacySystemdUnit(p *paths.Paths) {
-	path := legacySystemdUserServicePath()
-	data, err := os.ReadFile(path)
-	if err != nil || !serviceDefinitionMatchesRoot(data, p) {
-		return
+func cleanupLegacySystemdUnit(p *paths.Paths) error {
+	var errs []error
+	for _, legacy := range []struct {
+		name string
+		path string
+	}{
+		{legacyScopedSystemdServiceName(p), legacyScopedSystemdUserServicePath(p)},
+		{legacySystemdServiceName, legacySystemdUserServicePath()},
+	} {
+		data, ok, err := readLegacyServiceDefinition(legacy.path, "systemd unit")
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if !ok || !serviceDefinitionMatchesRoot(data, p) {
+			continue
+		}
+		if _, err := serviceCommandRunner("systemctl", "--user", "stop", legacy.name); err != nil {
+			errs = append(errs, fmt.Errorf("systemctl stop legacy service: %w", err))
+		}
+		if _, err := serviceCommandRunner("systemctl", "--user", "disable", legacy.name); err != nil {
+			errs = append(errs, fmt.Errorf("systemctl disable legacy service: %w", err))
+		}
+		if err := os.Remove(legacy.path); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("remove legacy systemd unit: %w", err))
+		}
 	}
-	_, _ = serviceCommandRunner("systemctl", "--user", "stop", legacySystemdServiceName)
-	_, _ = serviceCommandRunner("systemctl", "--user", "disable", legacySystemdServiceName)
-	_ = os.Remove(path)
+	return errors.Join(errs...)
 }
 
 func startSystemdUserService(p *paths.Paths) error {
@@ -73,6 +92,32 @@ func stopSystemdUserService(p *paths.Paths) error {
 	return nil
 }
 
+func stopLegacySystemdUserService(p *paths.Paths) (bool, error) {
+	stopped := false
+	var errs []error
+	for _, legacy := range []struct {
+		name string
+		path string
+	}{
+		{legacyScopedSystemdServiceName(p), legacyScopedSystemdUserServicePath(p)},
+		{legacySystemdServiceName, legacySystemdUserServicePath()},
+	} {
+		data, ok, err := readLegacyServiceDefinition(legacy.path, "systemd unit")
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if !ok || !serviceDefinitionMatchesRoot(data, p) {
+			continue
+		}
+		stopped = true
+		if _, err := serviceCommandRunner("systemctl", "--user", "stop", legacy.name); err != nil {
+			errs = append(errs, fmt.Errorf("systemctl stop legacy service: %w", err))
+		}
+	}
+	return stopped, errors.Join(errs...)
+}
+
 func systemdUserServicePath(p *paths.Paths) string {
 	home, err := serviceUserHomeDir()
 	if err != nil {
@@ -84,6 +129,11 @@ func systemdUserServicePath(p *paths.Paths) string {
 func legacySystemdUserServicePath() string {
 	home, _ := serviceUserHomeDir()
 	return filepath.Join(home, ".config", "systemd", "user", legacySystemdServiceName)
+}
+
+func legacyScopedSystemdUserServicePath(p *paths.Paths) string {
+	home, _ := serviceUserHomeDir()
+	return filepath.Join(home, ".config", "systemd", "user", legacyScopedSystemdServiceName(p))
 }
 
 // renderSystemdUnit renders the systemd unit, resolving the proxy environment
@@ -116,7 +166,7 @@ func renderSystemdUnitWithProxyEnv(exe string, p *paths.Paths, home string, prox
 		envLines = append(envLines, systemdEnvironmentLine(kv[0], kv[1]))
 	}
 	return fmt.Sprintf(`[Unit]
-Description=no-mistakes background daemon
+Description=no-slop background daemon
 
 [Service]
 Type=simple

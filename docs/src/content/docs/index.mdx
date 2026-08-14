@@ -1,16 +1,16 @@
 ---
-title: git push no-mistakes
+title: git push no-slop
 description: Kill all the slop. Raise clean PR.
 template: splash
 hero:
   tagline: Kill all the slop. Raise clean PR.
   actions:
     - text: Get Started
-      link: /no-mistakes/start-here/quick-start/
+      link: /no-slop/start-here/quick-start/
       icon: right-arrow
       variant: primary
     - text: View on GitHub
-      link: https://github.com/kunchenguid/no-mistakes
+      link: https://github.com/Blakeolson21/no-slop
       icon: external
 ---
 
@@ -21,7 +21,7 @@ slop. You can't tell which is which at 5,000 lines per diff. The bottleneck
 isn't writing code anymore. It's reviewing and validating it.
 
 Most of that quality infrastructure still lives in the outer loop, after the
-branch is already public. `no-mistakes` moves more of that loop closer to where
+branch is already public. `no-slop` moves more of that loop closer to where
 you are working.
 
 ```mermaid
@@ -34,9 +34,9 @@ flowchart LR
     D --> A
   end
 
-  subgraph after[" With no-mistakes "]
+  subgraph after[" With no-slop "]
     direction TB
-    E["Local branch"] -->|"git push no-mistakes"| F["Local gate"]
+    E["Local branch"] -->|"git push no-slop"| F["Local gate"]
     F --> G["Rebase, review, test, docs, lint"]
     G --> H["Push branch + open PR"]
     H --> I["Watch CI + auto-fix"]
@@ -60,6 +60,6 @@ A gated push turns a rough branch into a clean PR:
 
 ## Start here
 
-- [Quick Start](/no-mistakes/start-here/quick-start/) - first gated push in a few minutes
-- [Introduction](/no-mistakes/start-here/introduction/) - why the tool exists and how to think about it
-- [The Gate Model](/no-mistakes/concepts/gate-model/) - architecture, push flow, and design choices
+- [Quick Start](/no-slop/start-here/quick-start/) - first gated push in a few minutes
+- [Introduction](/no-slop/start-here/introduction/) - why the tool exists and how to think about it
+- [The Gate Model](/no-slop/concepts/gate-model/) - architecture, push flow, and design choices

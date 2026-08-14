@@ -12,14 +12,14 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 const (
 	maxEmbeddedArtifactBytes       = 16 * 1024
 	maxEmbeddedArtifactsTotalBytes = 32 * 1024
-	noMistakesPRSignature          = "Updates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)"
+	noMistakesPRSignature          = "Updates from [git push no-slop](https://github.com/Blakeolson21/no-slop)"
 )
 
 type testingArtifactRenderState struct {

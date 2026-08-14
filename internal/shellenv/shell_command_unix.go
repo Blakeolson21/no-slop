@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/proctree"
+	"github.com/Blakeolson21/no-slop/internal/proctree"
 )
 
 // defaultWaitDelay is the pipe backstop installed on cmd.WaitDelay, mirroring
@@ -43,7 +43,7 @@ const defaultWaitDelay = 5 * time.Second
 // the group when the leader exits so inherited pipe holders cannot wedge the
 // parser.
 //
-// Apply this to every long-lived subprocess no-mistakes spawns on behalf of a
+// Apply this to every long-lived subprocess no-slop spawns on behalf of a
 // cancellable step/agent invocation.
 func ConfigureShellCommand(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

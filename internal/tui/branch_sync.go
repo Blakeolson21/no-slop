@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/branchsync"
-	"github.com/kunchenguid/no-mistakes/internal/telemetry"
+	"github.com/Blakeolson21/no-slop/internal/branchsync"
+	"github.com/Blakeolson21/no-slop/internal/telemetry"
 )
 
 func renderLocalBranchStatus(state *branchsync.State, refreshing bool, width int) string {
@@ -139,7 +139,7 @@ func renderRecoverConfirmation(state branchsync.State, width int) string {
 	fmt.Fprintf(&b, "Local branch:   %s\n", state.Local.Branch)
 	fmt.Fprintf(&b, "Local HEAD:     %s\n", state.Local.Head)
 	fmt.Fprintf(&b, "Preserved HEAD: %s\n\n", state.Pipeline.CurrentHead)
-	b.WriteString("Dirty worktrees and divergence that cannot be proven contained refuse, leaving your branch, worktree, and gate branch exactly as they are and naming any private ref that holds rescued commits; `no-mistakes sync --recover --keep-local` keeps the current head instead. `no-mistakes rerun` starts fresh validation from the gate head.")
+	b.WriteString("Dirty worktrees and divergence that cannot be proven contained refuse, leaving your branch, worktree, and gate branch exactly as they are and naming any private ref that holds rescued commits; `no-slop sync --recover --keep-local` keeps the current head instead. `no-slop rerun` starts fresh validation from the gate head.")
 	return renderBoxWithFooter("Confirm custody recovery", b.String(), width, "u/enter recover  ·  esc cancel")
 }
 

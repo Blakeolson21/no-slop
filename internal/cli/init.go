@@ -4,25 +4,25 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/daemon"
-	"github.com/kunchenguid/no-mistakes/internal/gate"
-	"github.com/kunchenguid/no-mistakes/internal/safeurl"
-	"github.com/kunchenguid/no-mistakes/internal/skill"
+	"github.com/Blakeolson21/no-slop/internal/daemon"
+	"github.com/Blakeolson21/no-slop/internal/gate"
+	"github.com/Blakeolson21/no-slop/internal/safeurl"
+	"github.com/Blakeolson21/no-slop/internal/skill"
 	"github.com/spf13/cobra"
 )
 
-const banner = `_  _ ____    _  _ _ ____ ___ ____ _  _ ____ ____
-|\ | |  |    |\/| | [__   |  |__| |_/  |___ [__
-| \| |__|    |  | | ___]  |  |  | | \_ |___ ___]`
+const banner = `_  _ ____    ____ _    ____ ___
+|\ | |  |    [__  |    |  | |__]
+| \| |__|    ___] |___ |__| |`
 
 func newInitCmd() *cobra.Command {
 	var forkURL string
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Initialize no-mistakes gate for the current repository",
+		Short: "Initialize no-slop gate for the current repository",
 		Long: "Sets up or refreshes a local bare repo as a gate, installs a post-receive hook,\n" +
 			"best-effort isolates the gate hook path from shared local git config writes when Git supports `config --worktree`,\n" +
-			"adds or repairs the \"no-mistakes\" git remote, and records the repo in the database.\n\n" +
+			"adds or repairs the \"no-slop\" git remote, and records the repo in the database.\n\n" +
 			"Run this from inside a git repository that has an \"origin\" remote.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -52,7 +52,7 @@ func newInitCmd() *cobra.Command {
 				}
 
 				// Install the agent skill at user level so agents can drive
-				// no-mistakes via `/no-mistakes` in any repo. Best-effort: a
+				// no-slop via `/no-slop` in any repo. Best-effort: a
 				// skill write failure must not undo a successful gate setup.
 				_, skillErr := skill.InstallUser()
 
@@ -66,7 +66,7 @@ func newInitCmd() *cobra.Command {
 				fmt.Fprintf(w, "  %s %s\n", sGreen.Render("✓"), headline)
 				fmt.Fprintln(w)
 				fmt.Fprintf(w, "  %s  %s\n", sDim.Render("  repo"), repo.WorkingPath)
-				fmt.Fprintf(w, "  %s  no-mistakes → %s\n", sDim.Render("  gate"), p.RepoDir(repo.ID))
+				fmt.Fprintf(w, "  %s  no-slop → %s\n", sDim.Render("  gate"), p.RepoDir(repo.ID))
 				remoteURL := repo.UpstreamURL
 				if repo.ForkURL != "" {
 					remoteURL = safeurl.Redact(remoteURL)
@@ -78,14 +78,14 @@ func newInitCmd() *cobra.Command {
 				if skillErr != nil {
 					fmt.Fprintf(w, "  %s  %s\n", sDim.Render(" skill"), sYellow.Render("skipped: "+skillErr.Error()))
 				} else {
-					fmt.Fprintf(w, "  %s  %s %s\n", sDim.Render(" skill"), sGreen.Render("/no-mistakes"), sDim.Render("installed for agents at user level"))
+					fmt.Fprintf(w, "  %s  %s %s\n", sDim.Render(" skill"), sGreen.Render("/no-slop"), sDim.Render("installed for agents at user level"))
 				}
 				if legacy := skill.Vendored(repo.WorkingPath); len(legacy) > 0 {
 					fmt.Fprintf(w, "  %s  %s\n", sDim.Render("  note"), sDim.Render("vendored skill copy ("+strings.Join(legacy, ", ")+") is no longer needed and can be removed"))
 				}
 				fmt.Fprintln(w)
 				fmt.Fprintf(w, "  %s\n", sDim.Render("Push through the gate with:"))
-				fmt.Fprintf(w, "  %s\n", sBold.Render("git push no-mistakes <branch>"))
+				fmt.Fprintf(w, "  %s\n", sBold.Render("git push no-slop <branch>"))
 				return nil
 			})
 		},

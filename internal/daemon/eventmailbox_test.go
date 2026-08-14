@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/ipc"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 // The acceptance matrix for the bounded subscription overflow contract. Every

@@ -12,19 +12,20 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
-	"github.com/kunchenguid/no-mistakes/internal/config"
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/gate"
-	"github.com/kunchenguid/no-mistakes/internal/git"
-	"github.com/kunchenguid/no-mistakes/internal/ipc"
-	"github.com/kunchenguid/no-mistakes/internal/lanehealth"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/pipeline"
-	"github.com/kunchenguid/no-mistakes/internal/pipeline/steps"
-	"github.com/kunchenguid/no-mistakes/internal/safeurl"
-	"github.com/kunchenguid/no-mistakes/internal/telemetry"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/gate"
+	"github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/identity"
+	"github.com/Blakeolson21/no-slop/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/lanehealth"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/pipeline"
+	"github.com/Blakeolson21/no-slop/internal/pipeline/steps"
+	"github.com/Blakeolson21/no-slop/internal/safeurl"
+	"github.com/Blakeolson21/no-slop/internal/telemetry"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 // StepFactory creates pipeline steps for a run. Defaults to steps.AllSteps.
@@ -281,7 +282,11 @@ func laneHealthStore(health *lanehealth.Store) agent.LaneHealthStore {
 }
 
 func newPipelineAgent(ctx context.Context, cfg *config.Config, lookPath func(string) (string, error), health *lanehealth.Store) (agent.Agent, error) {
-	if steps.IsDemoMode() {
+	demoMode, err := steps.DemoMode()
+	if err != nil {
+		return nil, err
+	}
+	if demoMode {
 		return agent.NewNoop(), nil
 	}
 	if err := cfg.ResolveAgent(ctx, lookPath); err != nil {
@@ -535,7 +540,7 @@ func branchFromRef(ref string) string {
 	return strings.TrimPrefix(ref, "refs/heads/")
 }
 
-// loadTrustedRepoConfig reads .no-mistakes.yaml from the trusted
+// loadTrustedRepoConfig reads the repo config alias pair from the trusted
 // default-branch commit (trustedSHA - the exact SHA startRun just fetched and
 // resolved) in the worktree and parses it. Reading at a pinned SHA, rather
 // than the origin/<defaultBranch> remote-tracking ref, closes the stale-ref
@@ -554,7 +559,7 @@ func loadTrustedRepoConfig(ctx context.Context, wtDir, trustedSHA, runID string)
 		// potentially stale origin/<defaultBranch> ref.
 		return nil
 	}
-	content, err := git.ShowFile(ctx, wtDir, trustedSHA, ".no-mistakes.yaml")
+	contents, err := readTrustedRepoConfig(ctx, wtDir, trustedSHA)
 	if err != nil {
 		// Path absent on the default branch is the common "repo has no
 		// trusted commands" case; log at debug so it isn't noisy. Other
@@ -563,30 +568,90 @@ func loadTrustedRepoConfig(ctx context.Context, wtDir, trustedSHA, runID string)
 		slog.Debug("trusted repo config: not present on default branch", "run_id", runID, "sha", trustedSHA, "error", err)
 		return nil
 	}
-	trusted, err := config.LoadRepoFromBytes([]byte(content))
+	if !contents.present() {
+		return nil
+	}
+	trusted, _, err := contents.parse()
 	if err != nil {
-		slog.Warn("trusted repo config: parse failed; commands/agent from pushed branch will be disabled", "run_id", runID, "sha", trustedSHA, "error", err)
+		slog.Warn("trusted repo config: parse failed; commands/agent from pushed branch will be disabled", "run_id", runID, "sha", trustedSHA, "config", contents.configName(), "error", err)
 		return nil
 	}
 	return trusted
 }
 
+type trustedRepoConfigContents struct {
+	canonical        string
+	legacy           string
+	canonicalPresent bool
+	legacyPresent    bool
+	readName         string
+}
+
+func (c trustedRepoConfigContents) present() bool {
+	return c.canonicalPresent || c.legacyPresent
+}
+
+func (c trustedRepoConfigContents) configName() string {
+	if c.canonicalPresent && c.legacyPresent {
+		return identity.RepoConfigName + " and " + identity.LegacyRepoConfigName
+	}
+	if c.canonicalPresent {
+		return identity.RepoConfigName
+	}
+	if c.legacyPresent {
+		return identity.LegacyRepoConfigName
+	}
+	return ""
+}
+
+func (c trustedRepoConfigContents) parse() (*config.RepoConfig, bool, error) {
+	return config.LoadRepoFromAliasBytes([]byte(c.canonical), c.canonicalPresent, []byte(c.legacy), c.legacyPresent)
+}
+
+func readTrustedRepoConfig(ctx context.Context, wtDir, trustedSHA string) (trustedRepoConfigContents, error) {
+	var contents trustedRepoConfigContents
+	for _, candidate := range []struct {
+		name string
+		set  func(string)
+		mark func()
+	}{
+		{name: identity.RepoConfigName, set: func(s string) { contents.canonical = s }, mark: func() { contents.canonicalPresent = true }},
+		{name: identity.LegacyRepoConfigName, set: func(s string) { contents.legacy = s }, mark: func() { contents.legacyPresent = true }},
+	} {
+		entry, listErr := git.Run(ctx, wtDir, "ls-tree", trustedSHA, "--", candidate.name)
+		if listErr != nil {
+			return contents, listErr
+		}
+		if entry == "" {
+			continue
+		}
+		candidate.mark()
+		contents.readName = candidate.name
+		content, showErr := git.ShowFile(ctx, wtDir, trustedSHA, candidate.name)
+		if showErr != nil {
+			return contents, showErr
+		}
+		candidate.set(content)
+	}
+	return contents, nil
+}
+
 // assertGateTrustedConfigReadable fails a run LOUD when the trusted
-// default-branch copy of .no-mistakes.yaml could not be READ at all. This is the
+// default-branch copy of .no-slop.yaml could not be READ at all. This is the
 // security correction for disable_project_settings: that field is a boundary
 // honored only from the trusted copy, so an unreadable trusted config must NOT
-// be silently treated as "not opted out" - no-mistakes cannot know whether the
+// be silently treated as "not opted out" - no-slop cannot know whether the
 // repo relies on the boundary, so it refuses to run rather than risk launching a
 // gate agent with the project instructions loaded.
 //
 // It distinguishes "could not read the trusted config at all" (abort) from
-// "read the trusted tree fine, there is simply no .no-mistakes.yaml on the
+// "read the trusted tree fine, there is simply no .no-slop.yaml on the
 // default branch" (the common ordinary-repo case, which is NOT opted out and
 // must proceed). Abort cases:
 //   - no known default branch to read a trusted copy from,
 //   - the default branch could not be fetched/resolved to a pinned SHA,
 //   - the pinned commit or tree is not readable (missing object / partial fetch),
-//   - the trusted .no-mistakes.yaml is present but unreadable or unparseable.
+//   - the trusted .no-slop.yaml is present but unreadable or unparseable.
 func assertGateTrustedConfigReadable(ctx context.Context, wtDir, defaultBranch, trustedSHA string) error {
 	if defaultBranch == "" {
 		return fmt.Errorf("cannot evaluate disable_project_settings: repository has no known default branch to read trusted config from")
@@ -597,19 +662,22 @@ func assertGateTrustedConfigReadable(ctx context.Context, wtDir, defaultBranch, 
 	if _, err := git.Run(ctx, wtDir, "rev-parse", "-q", "--verify", trustedSHA+"^{commit}"); err != nil {
 		return fmt.Errorf("cannot evaluate disable_project_settings: trusted default-branch commit %s is not readable: %w", trustedSHA, err)
 	}
-	entry, err := git.Run(ctx, wtDir, "ls-tree", trustedSHA, "--", ".no-mistakes.yaml")
+	contents, err := readTrustedRepoConfig(ctx, wtDir, trustedSHA)
 	if err != nil {
+		if contents.present() {
+			configName := contents.readName
+			if configName == "" {
+				configName = contents.configName()
+			}
+			return fmt.Errorf("cannot evaluate disable_project_settings: trusted %s at %s is present but not readable: %w", configName, trustedSHA, err)
+		}
 		return fmt.Errorf("cannot evaluate disable_project_settings: trusted default-branch tree at %s is not readable: %w", trustedSHA, err)
 	}
-	if entry == "" {
+	if !contents.present() {
 		return nil
 	}
-	content, err := git.ShowFile(ctx, wtDir, trustedSHA, ".no-mistakes.yaml")
-	if err != nil {
-		return fmt.Errorf("cannot evaluate disable_project_settings: trusted .no-mistakes.yaml at %s is present but not readable: %w", trustedSHA, err)
-	}
-	if _, err := config.LoadRepoFromBytes([]byte(content)); err != nil {
-		return fmt.Errorf("cannot evaluate disable_project_settings: trusted .no-mistakes.yaml at %s is present but unparseable: %w", trustedSHA, err)
+	if _, _, err := contents.parse(); err != nil {
+		return fmt.Errorf("cannot evaluate disable_project_settings: trusted %s at %s is present but unparseable: %w", contents.configName(), trustedSHA, err)
 	}
 	return nil
 }
@@ -850,7 +918,7 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 		return "", fmt.Errorf("load repo config: %w", err)
 	}
 	// SECURITY: load the code-executing selection fields (commands.* and
-	// agent) from the trusted default-branch copy of .no-mistakes.yaml rather
+	// agent) from the trusted default-branch copy of .no-slop.yaml rather
 	// than the pushed SHA. The worktree is checked out at headSHA (the
 	// contributor's branch), so reading repoCfg above would honor a
 	// contributor's commands/agent and let any pushed SHA run arbitrary shell
@@ -885,7 +953,13 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 
 	// Create agent. In demo mode, skip resolution and use a no-op agent.
 	var ag agent.Agent
-	if steps.IsDemoMode() {
+	demoMode, err := steps.DemoMode()
+	if err != nil {
+		m.db.UpdateRunError(run.ID, err.Error())
+		trackStartFailure("demo_mode")
+		return "", err
+	}
+	if demoMode {
 		ag = agent.NewNoop()
 	} else {
 		if err := cfg.ResolveAgent(ctx, exec.LookPath); err != nil {
@@ -921,7 +995,7 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 		"agent":       string(cfg.Agent),
 		"branch_role": branchRole,
 		"step_count":  len(execSteps),
-		"demo_mode":   steps.IsDemoMode(),
+		"demo_mode":   demoMode,
 	})
 
 	// Create executor with event broadcast.

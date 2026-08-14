@@ -1,5 +1,5 @@
 // Package gatecontext owns the authoritative classification of callers that
-// are executing inside an active no-mistakes validation step.
+// are executing inside an active no-slop validation step.
 package gatecontext
 
 import (
@@ -9,11 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/git"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 const ErrorCode = "nested_gate_context"
@@ -21,11 +21,11 @@ const ErrorCode = "nested_gate_context"
 // RefusalMessage is the stable, privacy-safe error contract used at daemon
 // ingress and non-AXI command boundaries.
 func RefusalMessage(result Result) string {
-	target := "an active no-mistakes validation step"
+	target := "an active no-slop validation step"
 	if result.RunID != "" && result.Phase != "" {
-		target = fmt.Sprintf("no-mistakes run %s, phase %s", result.RunID, result.Phase)
+		target = fmt.Sprintf("no-slop run %s, phase %s", result.RunID, result.Phase)
 	} else if result.RunID != "" {
-		target = "no-mistakes run " + result.RunID
+		target = "no-slop run " + result.RunID
 	}
 	return fmt.Sprintf("%s: refusing pipeline control from %s; return control to the outer executor", ErrorCode, target)
 }
@@ -261,6 +261,9 @@ func sameCanonicalPath(a, b string) bool {
 // MarkerPresent reports the coarse diagnostic marker emitted by adapters.
 // Classification never rejects on this signal alone.
 func MarkerPresent() bool {
-	_, ok := os.LookupEnv(agent.GateRoleEnvVar)
+	if _, ok := os.LookupEnv(agent.GateRoleEnvVar); ok {
+		return true
+	}
+	_, ok := os.LookupEnv(agent.LegacyGateRoleEnvVar)
 	return ok
 }

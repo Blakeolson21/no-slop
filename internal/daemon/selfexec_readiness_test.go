@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
 func TestStartDetachedDaemonDetectsChildExitPromptly(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestStartDetachedDaemonDetectsChildExitPromptly(t *testing.T) {
 }
 
 func TestWaitForManagedDaemonStartDetectsPublishedChildExit(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestWaitForManagedDaemonStartDetectsPublishedChildExit(t *testing.T) {
 }
 
 func TestWaitForManagedDaemonStartDetectsExitAfterPIDFileRemoval(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestWaitForManagedDaemonStartDetectsExitAfterPIDFileRemoval(t *testing.T) {
 }
 
 func TestStartDetachedDaemonTimeoutKillsAndReapsChild(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestStartDetachedDaemonTimeoutKillsAndReapsChild(t *testing.T) {
 }
 
 func TestStartPreservesManagedAndDetachedFallbackErrors(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestStartPreservesManagedAndDetachedFallbackErrors(t *testing.T) {
 	runtimeGOOS = "linux"
 	serviceUserHomeDir = func() (string, error) { return home, nil }
 	serviceCurrentUser = func() (*user.User, error) { return &user.User{Uid: "501"}, nil }
-	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-mistakes", nil }
+	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-slop", nil }
 	serviceCommandRunner = func(name string, args ...string) ([]byte, error) {
 		command := name + " " + strings.Join(args, " ")
 		if command == "systemctl --user start "+systemdServiceName(p) {

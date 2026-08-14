@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"time"
+
+	"github.com/Blakeolson21/no-slop/internal/identity"
 )
 
 // Slot is a held concurrency permit for one temporary E2E daemon owner.
@@ -16,16 +18,19 @@ type Slot struct {
 }
 
 // MaxConcurrent returns the configured concurrency cap.
-func MaxConcurrent() int {
-	raw := os.Getenv(EnvMaxConcurrent)
+func MaxConcurrent() (int, error) {
+	raw, err := identity.LookupEnv(EnvMaxConcurrent, LegacyEnvMaxConcurrent)
+	if err != nil {
+		return 0, err
+	}
 	if raw == "" {
-		return DefaultMaxConcurrent
+		return DefaultMaxConcurrent, nil
 	}
 	n, err := strconv.Atoi(raw)
 	if err != nil || n < 1 {
-		return DefaultMaxConcurrent
+		return DefaultMaxConcurrent, nil
 	}
-	return n
+	return n, nil
 }
 
 // AcquireSlot blocks until a concurrency slot is free or timeout elapses.
@@ -34,7 +39,10 @@ func (inv *Inventory) AcquireSlot(timeout time.Duration) (*Slot, error) {
 	if inv == nil {
 		return nil, fmt.Errorf("e2edaemon: nil inventory")
 	}
-	max := MaxConcurrent()
+	max, err := MaxConcurrent()
+	if err != nil {
+		return nil, err
+	}
 	deadline := time.Now().Add(timeout)
 	if timeout <= 0 {
 		deadline = time.Now().Add(2 * time.Minute)

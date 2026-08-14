@@ -18,7 +18,7 @@ func defaultSpawnBackground(currentVersion string) error {
 	defer devNull.Close()
 
 	cmd := exec.Command(execPath, backgroundFlag, currentVersion)
-	cmd.Env = append(os.Environ(), noUpdateCheckEnv+"=1")
+	cmd.Env = append(os.Environ(), noUpdateCheckEnv+"=1", legacyNoUpdateCheckEnv+"=1")
 	cmd.Stdout = devNull
 	cmd.Stderr = devNull
 	cmd.Stdin = nil

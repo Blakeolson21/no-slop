@@ -4,14 +4,14 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
 // TestRunWithResources_SecondDaemonForSameRootFailsWithoutStealingSocket is
 // the regression test for the duplicate-daemon wedge: v1.32.2's listen()
 // unconditionally unlinked a live socket, so a second daemon starting
-// against the same NM_HOME would steal the path and leave the first daemon
+// against the same NS_HOME would steal the path and leave the first daemon
 // alive but unreachable. With the singleton lock in place, a second
 // RunWithResources call for the same root must fail fast (never reaching
 // srv.Serve) and the first daemon must remain reachable throughout.

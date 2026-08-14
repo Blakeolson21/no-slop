@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestAgentPath_Override(t *testing.T) {

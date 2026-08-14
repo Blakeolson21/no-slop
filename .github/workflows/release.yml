@@ -68,8 +68,8 @@ jobs:
           DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           COMMIT="$(git rev-parse --short=7 HEAD)"
           CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
-            go build -ldflags "-X github.com/kunchenguid/no-mistakes/internal/buildinfo.Version=${TAG} -X github.com/kunchenguid/no-mistakes/internal/buildinfo.Commit=${COMMIT} -X github.com/kunchenguid/no-mistakes/internal/buildinfo.Date=${DATE} -X github.com/kunchenguid/no-mistakes/internal/buildinfo.TelemetryHost=${UMAMI_HOST} -X github.com/kunchenguid/no-mistakes/internal/buildinfo.TelemetryWebsiteID=${UMAMI_WEBSITE_ID}" \
-            -o "dist/no-mistakes" ./cmd/no-mistakes
+            go build -ldflags "-X github.com/Blakeolson21/no-slop/internal/buildinfo.Version=${TAG} -X github.com/Blakeolson21/no-slop/internal/buildinfo.Commit=${COMMIT} -X github.com/Blakeolson21/no-slop/internal/buildinfo.Date=${DATE} -X github.com/Blakeolson21/no-slop/internal/buildinfo.TelemetryHost=${UMAMI_HOST} -X github.com/Blakeolson21/no-slop/internal/buildinfo.TelemetryWebsiteID=${UMAMI_WEBSITE_ID}" \
+            -o "dist/no-slop" ./cmd/no-slop
 
       # Import the Developer ID Application cert into an ephemeral keychain locked
       # with a runtime-generated password, discover exactly one signing identity
@@ -87,9 +87,9 @@ jobs:
             echo "::error::CSC_LINK/CSC_KEY_PASSWORD signing secrets are missing; refusing to publish an unsigned macOS artifact" >&2
             exit 1
           fi
-          KEYCHAIN_PATH="$RUNNER_TEMP/nm-signing.keychain-db"
+          KEYCHAIN_PATH="$RUNNER_TEMP/ns-signing.keychain-db"
           KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
-          CERT_PATH="$RUNNER_TEMP/nm-developer-id.p12"
+          CERT_PATH="$RUNNER_TEMP/ns-developer-id.p12"
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
 
           # Reconstruct the cert from the base64 secret into RUNNER_TEMP only.
@@ -127,10 +127,10 @@ jobs:
           IDENTITY_HASH="$(printf '%s\n' "$IDENTITIES" | awk 'NR==1 {print $2}')"
 
           codesign --force --timestamp --options runtime \
-            --identifier com.kunchenguid.no-mistakes \
+            --identifier com.kunchenguid.no-slop \
             --keychain "$KEYCHAIN_PATH" \
             --sign "$IDENTITY_HASH" \
-            "dist/no-mistakes"
+            "dist/no-slop"
 
       # Strict verification gate: any missing or ambiguous property fails the
       # release before the artifact is archived or uploaded.
@@ -140,7 +140,7 @@ jobs:
         run: |
           set -euo pipefail
           TEAM_ID="9T2J7MNUP9"
-          BIN="dist/no-mistakes"
+          BIN="dist/no-slop"
 
           case "$GOARCH" in
             amd64) EXPECTED_ARCH="x86_64" ;;
@@ -156,7 +156,7 @@ jobs:
           printf '%s\n' "$SIG"
           grep -q 'Authority=Developer ID Application' <<<"$SIG"
           grep -q "TeamIdentifier=$TEAM_ID" <<<"$SIG"
-          grep -q 'Identifier=com.kunchenguid.no-mistakes' <<<"$SIG"
+          grep -q 'Identifier=com.kunchenguid.no-slop' <<<"$SIG"
           if grep -qi 'adhoc' <<<"$SIG"; then
             echo "::error::signature is ad-hoc" >&2; exit 1
           fi
@@ -179,7 +179,7 @@ jobs:
           # The Team ID starts with a digit so codesign quotes it, but accept the
           # unquoted form too so a codesign quirk cannot fail a valid release.
           grep -Eq "leaf\[subject.OU][[:space:]]*=[[:space:]]*\"?$TEAM_ID\"?" <<<"$DR"
-          grep -q 'identifier "com.kunchenguid.no-mistakes"' <<<"$DR"
+          grep -q 'identifier "com.kunchenguid.no-slop"' <<<"$DR"
           if grep -q 'cdhash H' <<<"$DR"; then
             echo "::error::designated requirement is content-based (cdhash), not identity-based" >&2; exit 1
           fi
@@ -197,20 +197,26 @@ jobs:
           TAG: ${{ needs.release-please.outputs.tag_name }}
         run: |
           set -euo pipefail
-          ARCHIVE="dist/no-mistakes-${TAG}-${GOOS}-${GOARCH}.tar.gz"
-          tar -C dist -czf "$ARCHIVE" no-mistakes
+          ARCHIVE="dist/no-slop-${TAG}-${GOOS}-${GOARCH}.tar.gz"
+          LEGACY_ARCHIVE="dist/no-mistakes-${TAG}-${GOOS}-${GOARCH}.tar.gz"
+          tar -C dist -czf "$ARCHIVE" no-slop
+          cp dist/no-slop dist/no-mistakes
+          tar -C dist -czf "$LEGACY_ARCHIVE" no-mistakes
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+          echo "LEGACY_ARCHIVE=$LEGACY_ARCHIVE" >> "$GITHUB_ENV"
 
       - name: Upload release asset
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.release-please.outputs.tag_name }}
-        run: gh release upload "$TAG" "$ARCHIVE" --clobber
+        run: gh release upload "$TAG" "$ARCHIVE" "$LEGACY_ARCHIVE" --clobber
 
       - uses: actions/upload-artifact@v7
         with:
           name: archive-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: ${{ env.ARCHIVE }}
+          path: |
+            ${{ env.ARCHIVE }}
+            ${{ env.LEGACY_ARCHIVE }}
 
       # Tear down the ephemeral keychain on success and failure alike.
       - name: Clean up signing keychain
@@ -220,7 +226,7 @@ jobs:
           if [ -n "${KEYCHAIN_PATH:-}" ]; then
             security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
           fi
-          rm -f "$RUNNER_TEMP/nm-developer-id.p12" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/ns-developer-id.p12" 2>/dev/null || true
 
   build-and-upload:
     runs-on: ubuntu-latest
@@ -259,37 +265,47 @@ jobs:
           mkdir -p dist
           DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           COMMIT="$(git rev-parse --short=7 HEAD)"
-          BIN="no-mistakes"
+          BIN="no-slop"
+          LEGACY_BIN="no-mistakes"
           OUT="dist/${BIN}"
           if [ "$GOOS" = "windows" ]; then
             BIN="${BIN}.exe"
+            LEGACY_BIN="${LEGACY_BIN}.exe"
             OUT="dist/${BIN}"
           fi
           CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
-            go build -ldflags "-X github.com/kunchenguid/no-mistakes/internal/buildinfo.Version=${TAG} -X github.com/kunchenguid/no-mistakes/internal/buildinfo.Commit=${COMMIT} -X github.com/kunchenguid/no-mistakes/internal/buildinfo.Date=${DATE} -X github.com/kunchenguid/no-mistakes/internal/buildinfo.TelemetryHost=${UMAMI_HOST} -X github.com/kunchenguid/no-mistakes/internal/buildinfo.TelemetryWebsiteID=${UMAMI_WEBSITE_ID}" \
-            -o "$OUT" ./cmd/no-mistakes
+            go build -ldflags "-X github.com/Blakeolson21/no-slop/internal/buildinfo.Version=${TAG} -X github.com/Blakeolson21/no-slop/internal/buildinfo.Commit=${COMMIT} -X github.com/Blakeolson21/no-slop/internal/buildinfo.Date=${DATE} -X github.com/Blakeolson21/no-slop/internal/buildinfo.TelemetryHost=${UMAMI_HOST} -X github.com/Blakeolson21/no-slop/internal/buildinfo.TelemetryWebsiteID=${UMAMI_WEBSITE_ID}" \
+            -o "$OUT" ./cmd/no-slop
+          cp "$OUT" "dist/${LEGACY_BIN}"
           if [ "$GOOS" = "windows" ]; then
-            ARCHIVE="dist/no-mistakes-${TAG}-${GOOS}-${GOARCH}.zip"
+            ARCHIVE="dist/no-slop-${TAG}-${GOOS}-${GOARCH}.zip"
+            LEGACY_ARCHIVE="dist/no-mistakes-${TAG}-${GOOS}-${GOARCH}.zip"
             (
               cd dist
               zip -q "$(basename "$ARCHIVE")" "$BIN"
+              zip -q "$(basename "$LEGACY_ARCHIVE")" "$LEGACY_BIN"
             )
           else
-            ARCHIVE="dist/no-mistakes-${TAG}-${GOOS}-${GOARCH}.tar.gz"
+            ARCHIVE="dist/no-slop-${TAG}-${GOOS}-${GOARCH}.tar.gz"
+            LEGACY_ARCHIVE="dist/no-mistakes-${TAG}-${GOOS}-${GOARCH}.tar.gz"
             tar -C dist -czf "$ARCHIVE" "$BIN"
+            tar -C dist -czf "$LEGACY_ARCHIVE" "$LEGACY_BIN"
           fi
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+          echo "LEGACY_ARCHIVE=$LEGACY_ARCHIVE" >> "$GITHUB_ENV"
 
       - name: Upload release asset
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.release-please.outputs.tag_name }}
-        run: gh release upload "$TAG" "$ARCHIVE" --clobber
+        run: gh release upload "$TAG" "$ARCHIVE" "$LEGACY_ARCHIVE" --clobber
 
       - uses: actions/upload-artifact@v7
         with:
           name: archive-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: ${{ env.ARCHIVE }}
+          path: |
+            ${{ env.ARCHIVE }}
+            ${{ env.LEGACY_ARCHIVE }}
 
   checksums:
     runs-on: ubuntu-latest
@@ -314,7 +330,7 @@ jobs:
           set -euo pipefail
           (
             cd dist
-            sha256sum no-mistakes-* > ../checksums.txt
+            sha256sum no-slop-* no-mistakes-* > ../checksums.txt
           )
 
       - name: Upload checksums

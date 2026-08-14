@@ -3,7 +3,7 @@ package precheck_test
 import (
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/slop/precheck"
+	"github.com/Blakeolson21/no-slop/internal/slop/precheck"
 )
 
 func TestScanAcquitsSimilarButSafePatterns(t *testing.T) {

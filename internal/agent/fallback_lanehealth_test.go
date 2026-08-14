@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/lanehealth"
+	"github.com/Blakeolson21/no-slop/internal/lanehealth"
 )
 
 // Reproduces the 2026-08-04 03:44-03:58 UTC incident: roughly a dozen gate runs

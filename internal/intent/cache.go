@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"strconv"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/db"
 )
 
 // Cache abstracts the summarization cache behind a small interface so the

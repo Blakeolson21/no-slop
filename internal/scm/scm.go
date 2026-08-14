@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/shellenv"
-	"github.com/kunchenguid/no-mistakes/internal/winproc"
+	"github.com/Blakeolson21/no-slop/internal/shellenv"
+	"github.com/Blakeolson21/no-slop/internal/winproc"
 	"gopkg.in/yaml.v3"
 )
 

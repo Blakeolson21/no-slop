@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	nmgit "github.com/kunchenguid/no-mistakes/internal/git"
-	"github.com/kunchenguid/no-mistakes/internal/winproc"
+	nmgit "github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/winproc"
 )
 
 // resolveHome returns the home directory to use, preferring an explicit

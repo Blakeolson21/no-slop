@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
-	"github.com/kunchenguid/no-mistakes/internal/config"
-	"github.com/kunchenguid/no-mistakes/internal/slop/lenses"
+	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/slop/lenses"
 )
 
 func TestReviewStepFeedsEverySlopLensToReviewer(t *testing.T) {

@@ -8,13 +8,16 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPreReceiveHookScript(t *testing.T) {
-	script := preReceiveHookScript("/opt/No Mistakes/no-mistakes")
+	script := preReceiveHookScript("/opt/No Mistakes/no-slop")
 	for _, want := range []string{
 		"#!/bin/sh",
-		"NM_BIN='/opt/No Mistakes/no-mistakes'",
+		"NS_BIN='/opt/No Mistakes/no-slop'",
+		"command -v no-mistakes",
+		"NS_HOOK_HELPER=1 NM_HOOK_HELPER=1",
 		"git rev-parse --absolute-git-dir",
 		"daemon admit-push --gate \"$GATE_DIR\"",
 		"gate push refused before ref mutation",
@@ -62,6 +65,69 @@ func TestRefreshManagedPreReceiveHookPreservesCustomHook(t *testing.T) {
 	}
 }
 
+func TestRefreshManagedPreReceiveHookRejectsConflictingPreservedAliases(t *testing.T) {
+	bare := t.TempDir()
+	hooks := filepath.Join(bare, "hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hooks, preservedPreReceiveHook), []byte("#!/bin/sh\necho canonical\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hooks, legacyPreservedPreReceiveHook), []byte("#!/bin/sh\necho legacy\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := RefreshManagedPreReceiveHook(bare); err == nil || !strings.Contains(err.Error(), "aliases conflict") {
+		t.Fatalf("refresh error = %v, want aliases conflict", err)
+	}
+}
+
+func TestPreReceiveHookScriptRejectsConflictingPreservedAliases(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executes POSIX shell hook")
+	}
+	bare := t.TempDir()
+	initCtx, initCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer initCancel()
+	initCmd := exec.CommandContext(initCtx, "git", "init", "--bare", bare)
+	initCmd.WaitDelay = 2 * time.Second
+	if out, err := initCmd.CombinedOutput(); err != nil {
+		if initCtx.Err() == context.DeadlineExceeded {
+			t.Fatalf("init bare timed out\n%s", out)
+		}
+		t.Fatalf("init bare: %v\n%s", err, out)
+	}
+	hooks := filepath.Join(bare, "hooks")
+	fakeBin := filepath.Join(t.TempDir(), "no-slop")
+	if err := os.WriteFile(fakeBin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hooks, preservedPreReceiveHook), []byte("#!/bin/sh\necho canonical\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hooks, legacyPreservedPreReceiveHook), []byte("#!/bin/sh\necho legacy\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hookPath := filepath.Join(hooks, "pre-receive")
+	if err := os.WriteFile(hookPath, []byte(preReceiveHookScript(fakeBin)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sh", hookPath)
+	cmd.WaitDelay = 2 * time.Second
+	cmd.Dir = bare
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("pre-receive hook timed out\n%s", output)
+	}
+	if err == nil || !strings.Contains(string(output), "aliases conflict") {
+		t.Fatalf("pre-receive output = %q, err = %v, want aliases conflict", output, err)
+	}
+}
+
 func TestGateConfigCurrentRejectsMissingOrTamperedAdmissionHook(t *testing.T) {
 	bare := t.TempDir()
 	if err := RefreshManagedGateHooks(bare); err != nil {
@@ -82,16 +148,104 @@ func TestGateConfigCurrentRejectsMissingOrTamperedAdmissionHook(t *testing.T) {
 	}
 }
 
+func TestGateConfigStampStableAcrossExecutableAliases(t *testing.T) {
+	dir := t.TempDir()
+	canonicalBin := filepath.Join(dir, hookTestExecutableName("no-slop"))
+	legacyBin := filepath.Join(dir, hookTestExecutableName("no-mistakes"))
+	if err := os.WriteFile(canonicalBin, []byte{}, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	canonical := gateConfigStampContentForExecutable(canonicalBin)
+	legacy := gateConfigStampContentForExecutable(legacyBin)
+	if canonical != legacy {
+		t.Fatalf("gate stamp differs by executable alias:\ncanonical: %slegacy: %s", canonical, legacy)
+	}
+
+	canonicalHook := preReceiveHookScript(canonicalHookExecutable(canonicalBin))
+	legacyHook := preReceiveHookScript(canonicalHookExecutable(legacyBin))
+	if canonicalHook != legacyHook {
+		t.Fatal("managed pre-receive hook differs by executable alias")
+	}
+}
+
+func TestPreReceiveHookScriptKeepsLegacyExecutableWhenCanonicalSiblingMissing(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executes POSIX shell hook")
+	}
+	bare := t.TempDir()
+	initCtx, initCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer initCancel()
+	initCmd := exec.CommandContext(initCtx, "git", "init", "--bare", bare)
+	initCmd.WaitDelay = 2 * time.Second
+	if out, err := initCmd.CombinedOutput(); err != nil {
+		if initCtx.Err() == context.DeadlineExceeded {
+			t.Fatalf("init bare timed out\n%s", out)
+		}
+		t.Fatalf("init bare: %v\n%s", err, out)
+	}
+
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not found")
+	}
+	pathDir := t.TempDir()
+	gitWrapper := filepath.Join(pathDir, "git")
+	if err := os.WriteFile(gitWrapper, []byte("#!/bin/sh\nexec "+shellSingleQuote(gitPath)+" \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	argsPath := filepath.Join(t.TempDir(), "args.txt")
+	legacyBin := filepath.Join(t.TempDir(), "no-mistakes")
+	fakeScript := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + shellSingleQuote(argsPath) + "\nexit 0\n"
+	if err := os.WriteFile(legacyBin, []byte(fakeScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hookPath := filepath.Join(bare, "hooks", "pre-receive")
+	if err := os.WriteFile(hookPath, []byte(preReceiveHookScript(canonicalHookExecutable(legacyBin))), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/sh", hookPath)
+	cmd.WaitDelay = 2 * time.Second
+	cmd.Dir = bare
+	cmd.Env = []string{"PATH=" + pathDir, "HOME=" + t.TempDir()}
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("pre-receive hook timed out\n%s", output)
+	}
+	if err != nil {
+		t.Fatalf("pre-receive hook failed: %v\n%s", err, output)
+	}
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatalf("legacy executable was not called: %v\nhook output:\n%s", err, output)
+	}
+	gotArgs := strings.Split(strings.TrimSpace(string(args)), "\n")
+	if len(gotArgs) < 3 || gotArgs[0] != "daemon" || gotArgs[1] != "admit-push" || gotArgs[2] != "--gate" {
+		t.Fatalf("legacy executable args = %q", args)
+	}
+}
+
+func hookTestExecutableName(base string) string {
+	if runtime.GOOS == "windows" {
+		return base + ".exe"
+	}
+	return base
+}
+
 func TestPostReceiveHookScript(t *testing.T) {
-	script := postReceiveHookScript("/opt/No Mistakes/no-mistakes")
+	script := postReceiveHookScript("/opt/No Mistakes/no-slop")
 
 	// should be a shell script
 	if !strings.HasPrefix(script, "#!/bin/sh\n") {
 		t.Fatal("hook should start with #!/bin/sh")
 	}
 
-	if !strings.Contains(script, "NM_BIN='/opt/No Mistakes/no-mistakes'") {
-		t.Fatal("hook should embed the no-mistakes executable path")
+	if !strings.Contains(script, "NS_BIN='/opt/No Mistakes/no-slop'") {
+		t.Fatal("hook should embed the no-slop executable path")
 	}
 
 	// should read oldrev newrev refname
@@ -123,11 +277,14 @@ func TestPostReceiveHookScript(t *testing.T) {
 	if strings.Contains(script, "eval") {
 		t.Fatal("hook should not use eval to read push options")
 	}
-	if !strings.Contains(script, "\"$NM_BIN\" daemon notify-push") {
+	if !strings.Contains(script, "\"$NS_BIN\" daemon notify-push") {
 		t.Fatal("hook should execute the embedded binary path")
 	}
-	if !strings.Contains(script, "command -v no-mistakes") {
+	if !strings.Contains(script, "command -v no-slop") {
 		t.Fatal("hook should fall back to PATH when baked-in path doesn't exist")
+	}
+	if !strings.Contains(script, "command -v no-mistakes") {
+		t.Fatal("hook should fall back to the legacy binary during the compatibility window")
 	}
 	if strings.Contains(script, ">/dev/null 2>&1 || true") {
 		t.Fatal("hook should not silently swallow notify-push errors (issue #122)")
@@ -143,11 +300,14 @@ func TestPostReceiveHookScript(t *testing.T) {
 	if !strings.Contains(script, "Pipeline started") {
 		t.Fatal("hook should print pipeline started message")
 	}
-	if !strings.Contains(script, "no-mistakes") {
+	if !strings.Contains(script, "no-slop") {
 		t.Fatal("hook should mention the command name")
 	}
-	if !strings.Contains(script, "|__| |_/") {
-		t.Fatal("hook should contain ASCII art banner")
+	const banner = `_  _ ____    ____ _    ____ ___
+|\ | |  |    [__  |    |  | |__]
+| \| |__|    ___] |___ |__| |`
+	if !strings.Contains(script, banner) {
+		t.Fatal("hook should contain the canonical no-slop ASCII art banner")
 	}
 	if strings.Contains(script, "\033[") {
 		t.Fatal("hook banner should not include ANSI escapes")
@@ -168,7 +328,7 @@ func TestShellSingleQuote(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"plain", "/usr/bin/no-mistakes", "'/usr/bin/no-mistakes'"},
+		{"plain", "/usr/bin/no-slop", "'/usr/bin/no-slop'"},
 		{"spaces", "/opt/No Mistakes/bin", "'/opt/No Mistakes/bin'"},
 		{"single_quote", "/opt/it's/bin", "'/opt/it'\"'\"'s/bin'"},
 		{"multiple_quotes", "a'b'c", "'a'\"'\"'b'\"'\"'c'"},
@@ -185,9 +345,18 @@ func TestShellSingleQuote(t *testing.T) {
 }
 
 func TestPostReceiveHookScriptWithQuotedPath(t *testing.T) {
-	script := postReceiveHookScript("/opt/it's here/no-mistakes")
-	if !strings.Contains(script, "NM_BIN='/opt/it'\"'\"'s here/no-mistakes'") {
+	script := postReceiveHookScript("/opt/it's here/no-slop")
+	if !strings.Contains(script, "NS_BIN='/opt/it'\"'\"'s here/no-slop'") {
 		t.Fatal("hook should correctly escape single quotes in the executable path")
+	}
+}
+
+func TestManagedHookRecognitionAcceptsLegacyMarkers(t *testing.T) {
+	if !isManagedPreReceiveHook([]byte("# no-mistakes pre-receive hook\nno-mistakes daemon admit-push\n")) {
+		t.Fatal("legacy pre-receive hook must be recognized for in-place upgrade")
+	}
+	if !isManagedPostReceiveHook([]byte("# no-mistakes post-receive hook\nno-mistakes daemon notify-push\n")) {
+		t.Fatal("legacy post-receive hook must be recognized for in-place upgrade")
 	}
 }
 
@@ -203,7 +372,7 @@ func TestPostReceiveHookScriptDoesNotEvaluatePushOptions(t *testing.T) {
 	}
 
 	argsPath := filepath.Join(base, "args.txt")
-	fakeBin := filepath.Join(base, "fake-no-mistakes")
+	fakeBin := filepath.Join(base, "fake-no-slop")
 	fakeScript := "#!/bin/sh\nprintf '%s\n' \"$@\" > " + shellSingleQuote(argsPath) + "\nexit 0\n"
 	if err := os.WriteFile(fakeBin, []byte(fakeScript), 0o755); err != nil {
 		t.Fatal(err)
@@ -351,10 +520,10 @@ func TestPostReceiveHook_ResolvesAbsoluteGateDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Fake no-mistakes binary: record the notify-push argv so we can inspect
+	// Fake no-slop binary: record the notify-push argv so we can inspect
 	// the --gate value the hook actually computed.
 	argsPath := filepath.Join(base, "args.txt")
-	fakeBin := filepath.Join(base, "fake-no-mistakes")
+	fakeBin := filepath.Join(base, "fake-no-slop")
 	fakeScript := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + shellSingleQuote(argsPath) + "\nexit 0\n"
 	if err := os.WriteFile(fakeBin, []byte(fakeScript), 0o755); err != nil {
 		t.Fatal(err)
@@ -418,7 +587,7 @@ func TestPostReceiveHook_FallsBackToHookLocationForGateDir(t *testing.T) {
 	}
 
 	argsPath := filepath.Join(base, "args.txt")
-	fakeBin := filepath.Join(base, "fake-no-mistakes")
+	fakeBin := filepath.Join(base, "fake-no-slop")
 	fakeScript := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + shellSingleQuote(argsPath) + "\nexit 0\n"
 	if err := os.WriteFile(fakeBin, []byte(fakeScript), 0o755); err != nil {
 		t.Fatal(err)
@@ -525,9 +694,9 @@ func TestPostReceiveHook_SurfacesNotifyFailures(t *testing.T) {
 		t.Fatalf("commit: %v: %s", err, out)
 	}
 
-	// Fake no-mistakes binary that always fails notify-push with a
+	// Fake no-slop binary that always fails notify-push with a
 	// distinctive marker on stderr.
-	fakeBin := filepath.Join(base, "fake-no-mistakes")
+	fakeBin := filepath.Join(base, "fake-no-slop")
 	fakeScript := "#!/bin/sh\necho 'TESTMARKER notify failed' >&2\nexit 7\n"
 	if err := os.WriteFile(fakeBin, []byte(fakeScript), 0o755); err != nil {
 		t.Fatal(err)

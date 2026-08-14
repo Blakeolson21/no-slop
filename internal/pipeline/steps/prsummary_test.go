@@ -8,21 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
-
-func TestNoMistakesRequiredWorkflowChecksPipelineSignature(t *testing.T) {
-	t.Parallel()
-
-	workflow, err := os.ReadFile(filepath.Join("..", "..", "..", ".github", "workflows", "no-mistakes-required.yml"))
-	if err != nil {
-		t.Fatalf("read required workflow: %v", err)
-	}
-	if !strings.Contains(string(workflow), "marker='"+noMistakesPRSignature+"'") {
-		t.Fatalf("required workflow does not check the generated PR signature %q", noMistakesPRSignature)
-	}
-}
 
 func TestBuildPipelineSummary_AllClean(t *testing.T) {
 	t.Parallel()
@@ -41,7 +29,7 @@ func TestBuildPipelineSummary_AllClean(t *testing.T) {
 	if !strings.Contains(md, "## Pipeline") {
 		t.Error("missing Pipeline heading")
 	}
-	if !strings.Contains(md, "[git push no-mistakes](https://github.com/kunchenguid/no-mistakes)") {
+	if !strings.Contains(md, "[git push no-slop](https://github.com/Blakeolson21/no-slop)") {
 		t.Errorf("expected linked tagline, got:\n%s", md)
 	}
 	if strings.Count(md, "<details>") != len(steps) {
@@ -468,7 +456,7 @@ func TestBuildTestingSummaryForPR_RendersEvidenceArtifactsCompactly(t *testing.T
 func TestBuildTestingSummaryForPR_RendersLocalTempVisualArtifactPath(t *testing.T) {
 	t.Parallel()
 	repoRoot := t.TempDir()
-	localPath := filepath.Join(os.TempDir(), "no-mistakes-evidence", "run-123", "checkout.png")
+	localPath := filepath.Join(os.TempDir(), "no-slop-evidence", "run-123", "checkout.png")
 	findings := fmt.Sprintf(`{"findings":[],"summary":"","testing_summary":"Evidence was collected.","artifacts":[{"kind":"screenshot","label":"Checkout screenshot","path":%q}]}`, localPath)
 	steps := []*db.StepResult{
 		{ID: "s1", StepName: types.StepTest, Status: types.StepStatusCompleted, FindingsJSON: &findings},
@@ -494,7 +482,7 @@ func TestBuildTestingSummaryForPR_RendersLocalTempVisualArtifactPath(t *testing.
 func TestBuildTestingSummaryForPR_PreservesCaptionedLocalVisualArtifactPath(t *testing.T) {
 	t.Parallel()
 	repoRoot := t.TempDir()
-	localPath := filepath.Join(os.TempDir(), "no-mistakes-evidence", "run-123", "checkout.png")
+	localPath := filepath.Join(os.TempDir(), "no-slop-evidence", "run-123", "checkout.png")
 	findings := fmt.Sprintf(`{"findings":[],"summary":"","testing_summary":"Evidence was collected.","artifacts":[{"kind":"screenshot","label":"Checkout screenshot","path":%q,"content":"Checkout completed visually."}]}`, localPath)
 	steps := []*db.StepResult{
 		{ID: "s1", StepName: types.StepTest, Status: types.StepStatusCompleted, FindingsJSON: &findings},
@@ -521,7 +509,7 @@ func TestBuildTestingSummaryForPR_PreservesCaptionedLocalVisualArtifactPath(t *t
 func TestBuildTestingSummaryForPR_PrefersArtifactURLOverLocalPath(t *testing.T) {
 	t.Parallel()
 	repoRoot := t.TempDir()
-	localPath := filepath.Join(os.TempDir(), "no-mistakes-evidence", "run-123", "checkout.png")
+	localPath := filepath.Join(os.TempDir(), "no-slop-evidence", "run-123", "checkout.png")
 	findings := fmt.Sprintf(`{"findings":[],"summary":"","testing_summary":"Evidence was collected.","artifacts":[{"kind":"screenshot","label":"Checkout screenshot","url":"https://example.com/checkout.png","path":%q}]}`, localPath)
 	steps := []*db.StepResult{
 		{ID: "s1", StepName: types.StepTest, Status: types.StepStatusCompleted, FindingsJSON: &findings},

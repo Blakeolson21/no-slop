@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/pipeline"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/pipeline"
 )
 
 // minimalStepContext builds a StepContext with just enough fields for the
@@ -155,7 +155,7 @@ func TestResolvePushURL_ForkWinsOverCredential(t *testing.T) {
 	if out, err := exec.Command("git", "init", "-q", dir).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, out)
 	}
-	forkURL := "https://github.com/e-jung/no-mistakes.git"
+	forkURL := "https://github.com/e-jung/no-slop.git"
 	sctx := minimalStepContext(t, dir, "https://redacted@github.com/o/r.git")
 	sctx.Repo.ForkURL = forkURL
 	if got := resolvePushURL(sctx); got != forkURL {

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/proctree"
+	"github.com/Blakeolson21/no-slop/internal/proctree"
 )
 
 // trackerTick is how often the poller samples the process table. It is a
@@ -91,8 +91,8 @@ var (
 // persists one record per live leader, and returns a func restoring the previous
 // value.
 //
-// The daemon calls this once at startup with a directory under NM_HOME. It is
-// unset everywhere else - the CLI and the test suite have no NM_HOME worth
+// The daemon calls this once at startup with a directory under NS_HOME. It is
+// unset everywhere else - the CLI and the test suite have no NS_HOME worth
 // writing into, and an empty dir means records are kept in memory only.
 func SetProcessRecordDir(dir string) func() {
 	trackerMu.Lock()

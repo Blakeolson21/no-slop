@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/gatecontext"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/gatecontext"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestGateControlPolicyCoversEveryMutationEntrypoint(t *testing.T) {
@@ -73,7 +73,7 @@ func TestGateContextRefusalIsStructuredActionableAndPrivacySafe(t *testing.T) {
 		"run: run-safe",
 		"phase: document",
 		"enclosing executor owns validation, push, PR, and CI",
-		"no-mistakes axi status",
+		"no-slop axi status",
 		"Return control to the outer executor",
 	} {
 		if !strings.Contains(text, want) {

@@ -2,8 +2,10 @@ package main
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"compress/gzip"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,13 +13,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Blakeolson21/no-slop/internal/shellenv"
 )
 
 func TestInstallScriptInstallsUserOwnedBinaryAndPathSymlink(t *testing.T) {
 	skipInstallScriptTestsOnWindows(t)
 
 	home := t.TempDir()
-	archivePath := filepath.Join(t.TempDir(), "no-mistakes-v1.2.3-darwin-arm64.tar.gz")
+	archivePath := filepath.Join(t.TempDir(), "no-slop-v1.2.3-darwin-arm64.tar.gz")
 	binaryScript := "#!/bin/sh\nexit 0\n"
 	makeInstallArchive(t, archivePath, binaryScript)
 	fakeBin := makeFakeInstallCommands(t)
@@ -30,16 +34,50 @@ func TestInstallScriptInstallsUserOwnedBinaryAndPathSymlink(t *testing.T) {
 		"FAKE_RELEASE_ARCHIVE": archivePath,
 	})
 
-	realBin := filepath.Join(home, ".no-mistakes", "bin", "no-mistakes")
+	realBin := filepath.Join(home, ".no-mistakes", "bin", "no-slop")
 	assertFileContent(t, realBin, binaryScript)
+	assertSymlinkTarget(t, filepath.Join(home, ".no-mistakes", "bin", "no-mistakes"), realBin)
+	assertSymlinkTarget(t, filepath.Join(localBin, "no-slop"), realBin)
 	assertSymlinkTarget(t, filepath.Join(localBin, "no-mistakes"), realBin)
+}
+
+func TestInstallScriptReplacesStaleLegacyInstallBinary(t *testing.T) {
+	skipInstallScriptTestsOnWindows(t)
+
+	home := t.TempDir()
+	archivePath := filepath.Join(t.TempDir(), "no-slop-v1.2.3-darwin-arm64.tar.gz")
+	binaryScript := "#!/bin/sh\nexit 0\n"
+	makeInstallArchive(t, archivePath, binaryScript)
+	fakeBin := makeFakeInstallCommands(t)
+	installDir := filepath.Join(home, ".no-mistakes", "bin")
+	linkDir := filepath.Join(t.TempDir(), "link-bin")
+	if err := os.MkdirAll(installDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(linkDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installDir, "no-mistakes"), []byte("stale legacy binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	runInstallScript(t, home, fakeBin, map[string]string{
+		"FAKE_RELEASE_ARCHIVE": archivePath,
+		"NS_INSTALL_DIR":       installDir,
+		"NS_LINK_DIR":          linkDir,
+	})
+
+	realBin := filepath.Join(installDir, "no-slop")
+	assertFileContent(t, realBin, binaryScript)
+	assertSymlinkTarget(t, filepath.Join(installDir, "no-mistakes"), realBin)
+	assertSymlinkTarget(t, filepath.Join(linkDir, "no-mistakes"), realBin)
 }
 
 func TestInstallScriptReplacesExistingPathEntryWithSymlink(t *testing.T) {
 	skipInstallScriptTestsOnWindows(t)
 
 	home := t.TempDir()
-	archivePath := filepath.Join(t.TempDir(), "no-mistakes-v1.2.3-darwin-arm64.tar.gz")
+	archivePath := filepath.Join(t.TempDir(), "no-slop-v1.2.3-darwin-arm64.tar.gz")
 	binaryScript := "#!/bin/sh\nexit 0\n"
 	makeInstallArchive(t, archivePath, binaryScript)
 	fakeBin := makeFakeInstallCommands(t)
@@ -47,28 +85,49 @@ func TestInstallScriptReplacesExistingPathEntryWithSymlink(t *testing.T) {
 	if err := os.MkdirAll(linkDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	oldPath := filepath.Join(linkDir, "no-mistakes")
+	oldPath := filepath.Join(linkDir, "no-slop")
 	if err := os.WriteFile(oldPath, []byte("old-binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	runInstallScript(t, home, fakeBin, map[string]string{
 		"FAKE_RELEASE_ARCHIVE": archivePath,
-		"NO_MISTAKES_LINK_DIR": linkDir,
+		"NS_LINK_DIR":          linkDir,
 	})
 
-	realBin := filepath.Join(home, ".no-mistakes", "bin", "no-mistakes")
+	realBin := filepath.Join(home, ".no-mistakes", "bin", "no-slop")
 	assertFileContent(t, realBin, binaryScript)
 	assertSymlinkTarget(t, oldPath, realBin)
+}
+
+func TestInstallScriptCreatesLegacyAliasWhenLinkDirIsInstallDir(t *testing.T) {
+	skipInstallScriptTestsOnWindows(t)
+
+	home := t.TempDir()
+	archivePath := filepath.Join(t.TempDir(), "no-slop-v1.2.3-darwin-arm64.tar.gz")
+	binaryScript := "#!/bin/sh\nexit 0\n"
+	makeInstallArchive(t, archivePath, binaryScript)
+	fakeBin := makeFakeInstallCommands(t)
+	installDir := filepath.Join(home, ".no-mistakes", "bin")
+
+	runInstallScript(t, home, fakeBin, map[string]string{
+		"FAKE_RELEASE_ARCHIVE": archivePath,
+		"NS_INSTALL_DIR":       installDir,
+		"NS_LINK_DIR":          installDir,
+	})
+
+	realBin := filepath.Join(installDir, "no-slop")
+	assertFileContent(t, realBin, binaryScript)
+	assertSymlinkTarget(t, filepath.Join(installDir, "no-mistakes"), realBin)
 }
 
 func TestInstallScriptRestartsDaemonAfterInstall(t *testing.T) {
 	skipInstallScriptTestsOnWindows(t)
 
 	home := t.TempDir()
-	archivePath := filepath.Join(t.TempDir(), "no-mistakes-v1.2.3-darwin-arm64.tar.gz")
+	archivePath := filepath.Join(t.TempDir(), "no-slop-v1.2.3-darwin-arm64.tar.gz")
 	callLog := filepath.Join(t.TempDir(), "calls.log")
-	makeInstallArchive(t, archivePath, "#!/bin/sh\nprintf '%s\n' \"$*\" >> \"$NO_MISTAKES_CALL_LOG\"\n")
+	makeInstallArchive(t, archivePath, "#!/bin/sh\nprintf '%s\n' \"$*\" >> \"$NS_CALL_LOG\"\n")
 	fakeBin := makeFakeInstallCommands(t)
 	localBin := filepath.Join(home, ".local", "bin")
 	if err := os.MkdirAll(localBin, 0o755); err != nil {
@@ -77,7 +136,7 @@ func TestInstallScriptRestartsDaemonAfterInstall(t *testing.T) {
 
 	runInstallScript(t, home, fakeBin, map[string]string{
 		"FAKE_RELEASE_ARCHIVE": archivePath,
-		"NO_MISTAKES_CALL_LOG": callLog,
+		"NS_CALL_LOG":          callLog,
 	})
 
 	data, err := os.ReadFile(callLog)
@@ -93,9 +152,9 @@ func TestInstallScriptFailsWhenDaemonRestartFails(t *testing.T) {
 	skipInstallScriptTestsOnWindows(t)
 
 	home := t.TempDir()
-	archivePath := filepath.Join(t.TempDir(), "no-mistakes-v1.2.3-darwin-arm64.tar.gz")
+	archivePath := filepath.Join(t.TempDir(), "no-slop-v1.2.3-darwin-arm64.tar.gz")
 	callLog := filepath.Join(t.TempDir(), "calls.log")
-	makeInstallArchive(t, archivePath, "#!/bin/sh\nprintf '%s\n' \"$*\" >> \"$NO_MISTAKES_CALL_LOG\"\nif [ \"$1\" = \"daemon\" ] && [ \"$2\" = \"restart\" ]; then\n  exit 23\nfi\n")
+	makeInstallArchive(t, archivePath, "#!/bin/sh\nprintf '%s\n' \"$*\" >> \"$NS_CALL_LOG\"\nif [ \"$1\" = \"daemon\" ] && [ \"$2\" = \"restart\" ]; then\n  exit 23\nfi\n")
 	fakeBin := makeFakeInstallCommands(t)
 	localBin := filepath.Join(home, ".local", "bin")
 	if err := os.MkdirAll(localBin, 0o755); err != nil {
@@ -104,7 +163,7 @@ func TestInstallScriptFailsWhenDaemonRestartFails(t *testing.T) {
 
 	output, err := runInstallScriptCommand(t, home, fakeBin, map[string]string{
 		"FAKE_RELEASE_ARCHIVE": archivePath,
-		"NO_MISTAKES_CALL_LOG": callLog,
+		"NS_CALL_LOG":          callLog,
 	})
 	if err == nil {
 		t.Fatalf("install.sh should fail when daemon restart fails\n%s", output)
@@ -119,23 +178,131 @@ func TestInstallScriptFailsWhenDaemonRestartFails(t *testing.T) {
 	}
 }
 
+func TestInstallScriptRejectsEmptyAliasConflicts(t *testing.T) {
+	skipInstallScriptTestsOnWindows(t)
+
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+	}{
+		{
+			name: "install dir",
+			env: map[string]string{
+				"NS_INSTALL_DIR":          "",
+				"NO_MISTAKES_INSTALL_DIR": filepath.Join(t.TempDir(), "legacy-bin"),
+			},
+		},
+		{
+			name: "link dir",
+			env: map[string]string{
+				"NS_LINK_DIR":          "",
+				"NO_MISTAKES_LINK_DIR": filepath.Join(t.TempDir(), "legacy-links"),
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			output, err := runInstallScriptCommand(t, t.TempDir(), makeFakeInstallCommands(t), tc.env)
+			if err == nil || !strings.Contains(string(output), "same setting with different values") {
+				t.Fatalf("install.sh should reject empty alias conflict: %v\n%s", err, output)
+			}
+		})
+	}
+}
+
+func TestPowerShellInstallScriptRejectsEmptyAliasConflict(t *testing.T) {
+	shell, err := exec.LookPath("pwsh")
+	if err != nil {
+		shell, err = exec.LookPath("powershell")
+	}
+	if err != nil {
+		t.Skip("PowerShell not available")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, shell, "-NoProfile", "-NonInteractive", "-File", filepath.Join("docs", "install.ps1"))
+	cmd.WaitDelay = 2 * time.Second
+	cmd.Env = append(filteredEnv(os.Environ(), "NS_INSTALL_DIR", "NO_MISTAKES_INSTALL_DIR"), []string{
+		"NS_INSTALL_DIR=",
+		"NO_MISTAKES_INSTALL_DIR=" + filepath.Join(t.TempDir(), "legacy-bin"),
+	}...)
+	shellenv.ConfigureShellCommand(cmd)
+	output, err := shellenv.CombinedOutputShellCommand(cmd)
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("install.ps1 timed out after %s\n%s", 15*time.Second, output)
+	}
+	if err == nil || !strings.Contains(string(output), "same setting") || !strings.Contains(string(output), "different values") {
+		t.Fatalf("install.ps1 should reject empty alias conflict: %v\n%s", err, output)
+	}
+}
+
 func TestPowerShellInstallScriptChecksDaemonRestartFailure(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("docs", "install.ps1"))
+	shell, err := exec.LookPath("pwsh")
+	if err != nil {
+		shell, err = exec.LookPath("powershell")
+	}
+	if err != nil {
+		t.Skip("PowerShell not available")
+	}
+
+	installDir := filepath.Join(t.TempDir(), "install")
+	archivePath := filepath.Join(t.TempDir(), "no-slop-v1.2.3-windows-amd64.zip")
+	makePowerShellInstallArchive(t, archivePath, "fake binary")
+
+	scriptPath, err := filepath.Abs(filepath.Join("docs", "install.ps1"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(data)
-	if !strings.Contains(text, "$restart = Start-Process -FilePath \"$installDir\\no-mistakes.exe\" -ArgumentList @(") {
-		t.Fatal("install.ps1 should run daemon restart in a way that exposes the exit code")
+	command := fmt.Sprintf(`
+function Invoke-RestMethod {
+    param([string]$Uri)
+    [pscustomobject]@{ tag_name = 'v1.2.3' }
+}
+function Invoke-WebRequest {
+    param([string]$Uri, [string]$OutFile)
+    Copy-Item -LiteralPath $env:NS_FAKE_RELEASE_ARCHIVE -Destination $OutFile -Force
+}
+function Start-Process {
+    param(
+        [string]$FilePath,
+        [string[]]$ArgumentList,
+        [switch]$Wait,
+        [switch]$PassThru,
+        [switch]$NoNewWindow
+    )
+    if (-not (Test-Path -LiteralPath $FilePath)) {
+        throw "missing installed no-slop: $FilePath"
+    }
+    if ($FilePath -ne "$env:NS_INSTALL_DIR\no-slop.exe") {
+        throw "unexpected restart path: $FilePath"
+    }
+    if (($ArgumentList -join ' ') -ne 'daemon restart') {
+        throw "unexpected restart arguments: $($ArgumentList -join ' ')"
+    }
+    [pscustomobject]@{ ExitCode = 23 }
+}
+. %s
+`, powerShellSingleQuoted(scriptPath))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, shell, "-NoProfile", "-NonInteractive", "-Command", command)
+	cmd.WaitDelay = 2 * time.Second
+	cmd.Env = append(filteredEnv(os.Environ(), "NS_INSTALL_DIR", "NO_MISTAKES_INSTALL_DIR", "NS_FAKE_RELEASE_ARCHIVE", "PROCESSOR_ARCHITECTURE"), []string{
+		"NS_INSTALL_DIR=" + installDir,
+		"NS_FAKE_RELEASE_ARCHIVE=" + archivePath,
+		"PROCESSOR_ARCHITECTURE=AMD64",
+	}...)
+	shellenv.ConfigureShellCommand(cmd)
+	output, err := shellenv.CombinedOutputShellCommand(cmd)
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("install.ps1 timed out after %s\n%s", 20*time.Second, output)
 	}
-	if !strings.Contains(text, "-Wait -PassThru") {
-		t.Fatal("install.ps1 should wait for daemon restart to finish and inspect the process result")
+	if err == nil {
+		t.Fatalf("install.ps1 should fail when daemon restart fails\n%s", output)
 	}
-	if !strings.Contains(text, "if ($restart.ExitCode -ne 0)") {
-		t.Fatal("install.ps1 should fail the install when daemon restart returns a non-zero exit code")
-	}
-	if !strings.Contains(text, "throw \"Failed to restart daemon (exit code $($restart.ExitCode))\"") {
-		t.Fatal("install.ps1 should surface the daemon restart exit code")
+	if !strings.Contains(string(output), "Failed to restart daemon (exit code 23)") {
+		t.Fatalf("install.ps1 should surface restart failure, got: %v\n%s", err, output)
 	}
 }
 
@@ -161,14 +328,19 @@ func runInstallScriptCommand(t *testing.T, home, fakeBin string, extraEnv map[st
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", "docs/install.sh")
 	pathValue := strings.Join([]string{fakeBin, filepath.Join(home, ".local", "bin"), os.Getenv("PATH")}, string(os.PathListSeparator))
-	cmd.Env = append(filteredEnv(os.Environ(), "HOME", "PATH"), []string{
+	cmd.Env = append(filteredEnv(os.Environ(), "HOME", "PATH", "NS_INSTALL_DIR", "NO_MISTAKES_INSTALL_DIR", "NS_LINK_DIR", "NO_MISTAKES_LINK_DIR"), []string{
 		"HOME=" + home,
 		"PATH=" + pathValue,
 	}...)
 	for key, value := range extraEnv {
 		cmd.Env = append(cmd.Env, key+"="+value)
 	}
-	return cmd.CombinedOutput()
+	shellenv.ConfigureShellCommand(cmd)
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return output, fmt.Errorf("install.sh timed out after %s", 30*time.Second)
+	}
+	return output, err
 }
 
 func filteredEnv(env []string, excluded ...string) []string {
@@ -202,7 +374,7 @@ func makeInstallArchive(t *testing.T, archivePath, binaryContent string) {
 	gz := gzip.NewWriter(file)
 	tw := tar.NewWriter(gz)
 	data := []byte(binaryContent)
-	hdr := &tar.Header{Name: "no-mistakes", Mode: 0o755, Size: int64(len(data))}
+	hdr := &tar.Header{Name: "no-slop", Mode: 0o755, Size: int64(len(data))}
 	if err := tw.WriteHeader(hdr); err != nil {
 		t.Fatal(err)
 	}
@@ -215,6 +387,33 @@ func makeInstallArchive(t *testing.T, archivePath, binaryContent string) {
 	if err := gz.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func makePowerShellInstallArchive(t *testing.T, archivePath, binaryContent string) {
+	t.Helper()
+
+	file, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	zw := zip.NewWriter(file)
+	hdr := &zip.FileHeader{Name: "no-slop.exe", Method: zip.Deflate}
+	hdr.SetMode(0o755)
+	w, err := zw.CreateHeader(hdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte(binaryContent)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func powerShellSingleQuoted(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
 func makeFakeInstallCommands(t *testing.T) string {

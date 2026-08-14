@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestLoadRepoFromBytes(t *testing.T) {
@@ -139,7 +139,7 @@ func TestEffectiveRepoConfig_NoTrustedDisablesCommands(t *testing.T) {
 		t.Errorf("test = %q, want empty (no trusted config)", got.Commands.Test)
 	}
 	// No trusted copy → agent forced empty (inherits global) so a contributor
-	// who ships .no-mistakes.yaml only on a feature branch cannot pick the
+	// who ships .no-slop.yaml only on a feature branch cannot pick the
 	// agent that launches with the maintainer's credentials.
 	if got.Agent != "" {
 		t.Errorf("agent = %q, want empty (no trusted config)", got.Agent)
@@ -180,7 +180,7 @@ func TestEffectiveRepoConfig_NilPushedSafeDefaults(t *testing.T) {
 // global flag. It defaults false.
 func TestLoadRepo_AllowRepoCommands(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, ".no-mistakes.yaml")
+	path := filepath.Join(dir, ".no-slop.yaml")
 	data := `agent: claude
 allow_repo_commands: true
 `
@@ -198,7 +198,7 @@ allow_repo_commands: true
 
 func TestLoadRepo_AllowRepoCommandsDefaultsFalse(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, ".no-mistakes.yaml")
+	path := filepath.Join(dir, ".no-slop.yaml")
 	if err := os.WriteFile(path, []byte("agent: claude\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +265,7 @@ func TestEffectiveRepoConfig_DocumentPolicyTrustedOnly(t *testing.T) {
 }
 
 // TestLoadRepo_DocumentInstructions proves the document.instructions key
-// parses from .no-mistakes.yaml.
+// parses from .no-slop.yaml.
 func TestLoadRepo_DocumentInstructions(t *testing.T) {
 	cfg, err := LoadRepoFromBytes([]byte("document:\n  instructions: |\n    README.md owns quickstart.\n    docs/reference.md owns flags.\n"))
 	if err != nil {
@@ -357,7 +357,7 @@ func TestEffectiveRepoConfig_ReviewPathInstructionsTrustedOnly(t *testing.T) {
 	}
 
 	// No trusted copy at all: still discarded, so a repo that ships
-	// .no-mistakes.yaml only on feature branches cannot steer its own reviewer.
+	// .no-slop.yaml only on feature branches cannot steer its own reviewer.
 	got = EffectiveRepoConfig(pushed, nil, false)
 	if len(got.Review.PathInstructions) != 0 {
 		t.Fatalf("path_instructions = %v, want none without a trusted copy", got.Review.PathInstructions)

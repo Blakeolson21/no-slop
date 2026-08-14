@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -15,7 +16,7 @@ func TestInventoryRegisterUpdateUnregister(t *testing.T) {
 		t.Fatalf("OpenDir: %v", err)
 	}
 
-	home := filepath.Join(dir, "nm-e2e-case", "nmhome")
+	home := filepath.Join(dir, "ns-e2e-case", "nmhome")
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -41,6 +42,20 @@ func TestInventoryRegisterUpdateUnregister(t *testing.T) {
 	}
 	if len(list) != 0 {
 		t.Fatalf("want empty list, got %+v", list)
+	}
+}
+
+func TestDirFromEnvUsesLegacyDefaultPhysicalPath(t *testing.T) {
+	t.Setenv(EnvInventory, "")
+	t.Setenv(LegacyEnvInventory, "")
+
+	dir, err := DirFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(os.TempDir(), "no-mistakes-e2e-daemon-inventory")
+	if dir != want {
+		t.Fatalf("DirFromEnv() = %q, want %q", dir, want)
 	}
 }
 
@@ -72,7 +87,7 @@ func TestReapAbandonedInventories(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := inv.Register(filepath.Base(dir), filepath.Join(dir, "nm-e2e-case", "nmhome"), "", 0, os.Getpid()); err != nil {
+		if err := inv.Register(filepath.Base(dir), filepath.Join(dir, "ns-e2e-case", "nmhome"), "", 0, os.Getpid()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -105,18 +120,18 @@ func TestReapAbandonedInventories(t *testing.T) {
 }
 
 func TestCommandMatchesDaemonRoot(t *testing.T) {
-	home := "/private/tmp/nm-e2e-x/nmhome"
-	cmd := "/tmp/nm-e2e-bin/no-mistakes daemon run --root " + home
+	home := "/private/tmp/ns-e2e-x/nmhome"
+	cmd := "/tmp/ns-e2e-bin/no-slop daemon run --root " + home
 	if !commandMatchesDaemonRoot(cmd, home) {
 		t.Fatal("expected match for exact root")
 	}
-	if commandMatchesDaemonRoot(cmd, "/Users/me/.no-mistakes") {
+	if commandMatchesDaemonRoot(cmd, "/Users/me/.no-slop") {
 		t.Fatal("must not match shared root")
 	}
 	if commandMatchesDaemonRoot("sleep 3600", home) {
 		t.Fatal("must not match non-daemon")
 	}
-	if commandMatchesDaemonRoot("/bin/no-mistakes daemon run --root=/private/tmp/nm-e2e-x/nmhome", home) {
+	if commandMatchesDaemonRoot("/bin/no-slop daemon run --root=/private/tmp/ns-e2e-x/nmhome", home) {
 		// equals form
 	} else {
 		t.Fatal("expected --root= form to match")
@@ -124,9 +139,9 @@ func TestCommandMatchesDaemonRoot(t *testing.T) {
 }
 
 func TestSplitWindowsTokensPreservesRootPath(t *testing.T) {
-	command := `"C:\Program Files\no-mistakes.exe" daemon run --root "C:\Users\tester\AppData\Local\Temp\nm-e2e-1\nmhome"`
+	command := `"C:\Program Files\no-slop.exe" daemon run --root "C:\Users\tester\AppData\Local\Temp\ns-e2e-1\nmhome"`
 	tokens := splitWindowsTokens(command)
-	want := `C:\Users\tester\AppData\Local\Temp\nm-e2e-1\nmhome`
+	want := `C:\Users\tester\AppData\Local\Temp\ns-e2e-1\nmhome`
 	root, ok := extractRootTokens(tokens)
 	if !ok || root != want {
 		t.Fatalf("root = %q, %v; want %q, true; tokens=%q", root, ok, want, tokens)
@@ -139,7 +154,7 @@ func TestReapAllRetainsEntryWhenProcessCheckIsInconclusive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	nmHome := filepath.Join(dir, "nm-e2e-retry", "nmhome")
+	nmHome := filepath.Join(dir, "ns-e2e-retry", "nmhome")
 	if err := inv.Register("retry", nmHome, "", 0, os.Getpid()); err != nil {
 		t.Fatal(err)
 	}
@@ -165,9 +180,9 @@ func TestIsAllowedTempRoot(t *testing.T) {
 		path string
 		want bool
 	}{
-		{"/private/tmp/nm-e2e-abc/nmhome", true},
-		{"/tmp/nmh-xyz/nm-home", true},
-		{"/var/folders/xx/nm-e2e-1/nmhome", true},
+		{"/private/tmp/ns-e2e-abc/nmhome", true},
+		{"/tmp/nmh-xyz/ns-home", true},
+		{"/var/folders/xx/ns-e2e-1/nmhome", true},
 		{"/Users/someone/.no-mistakes", false},
 		{"/", false},
 		{"", false},
@@ -223,6 +238,33 @@ func TestConcurrencySlotCap(t *testing.T) {
 		t.Fatalf("slot after release: %v", err)
 	}
 	s3.Release()
+}
+
+func TestOpenRejectsConflictingInventoryAliases(t *testing.T) {
+	t.Setenv(EnvInventory, filepath.Join(t.TempDir(), "canonical"))
+	t.Setenv(LegacyEnvInventory, filepath.Join(t.TempDir(), "legacy"))
+
+	if _, err := Open(); err == nil {
+		t.Fatal("expected conflicting inventory aliases to fail")
+	} else if !strings.Contains(err.Error(), "same setting with different values") {
+		t.Fatalf("Open error = %v", err)
+	}
+}
+
+func TestAcquireSlotRejectsConflictingMaxAliases(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(EnvMaxConcurrent, "1")
+	t.Setenv(LegacyEnvMaxConcurrent, "2")
+	inv, err := OpenDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := inv.AcquireSlot(10 * time.Millisecond); err == nil {
+		t.Fatal("expected conflicting max aliases to fail")
+	} else if !strings.Contains(err.Error(), "same setting with different values") {
+		t.Fatalf("AcquireSlot error = %v", err)
+	}
 }
 
 func TestReapAllRefusesSharedRoot(t *testing.T) {

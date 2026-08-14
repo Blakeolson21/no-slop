@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
 func TestAcquireSingletonLock_SecondAcquireFails(t *testing.T) {

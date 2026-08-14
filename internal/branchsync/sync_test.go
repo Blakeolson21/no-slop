@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	gitpkg "github.com/kunchenguid/no-mistakes/internal/git"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	gitpkg "github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 type syncFixture struct {
@@ -180,7 +180,7 @@ func TestInspectCachedPrePushAndPushInProgressAreNonSyncable(t *testing.T) {
 	if state.State != StatePipelineOwned || !strings.Contains(state.Error, "do not make local follow-up commits") {
 		t.Fatalf("pre-push state = %#v", state)
 	}
-	if state.NextAction == nil || state.NextAction.Code != "continue_active_run" || state.NextAction.Command != "no-mistakes axi status" {
+	if state.NextAction == nil || state.NextAction.Code != "continue_active_run" || state.NextAction.Command != "no-slop axi status" {
 		t.Fatalf("pre-push next action = %#v", state.NextAction)
 	}
 	if err := f.db.SetRunPushActive(active.ID, true); err != nil {
@@ -190,7 +190,7 @@ func TestInspectCachedPrePushAndPushInProgressAreNonSyncable(t *testing.T) {
 	if state.State != StatePushInProgress {
 		t.Fatalf("push-in-progress state = %#v", state)
 	}
-	if state.NextAction == nil || state.NextAction.Code != "continue_active_run" || state.NextAction.Command != "no-mistakes axi status" {
+	if state.NextAction == nil || state.NextAction.Code != "continue_active_run" || state.NextAction.Command != "no-slop axi status" {
 		t.Fatalf("push-in-progress next action = %#v", state.NextAction)
 	}
 	if err := f.db.SetRunPushActive(active.ID, false); err != nil {
@@ -225,8 +225,27 @@ func TestInspectCachedBehindPerformsNoFetchOrMutation(t *testing.T) {
 	if got := readOptional(t, filepath.Join(f.local, ".git", "FETCH_HEAD")); got != beforeFetchHead {
 		t.Fatal("cached inspection mutated FETCH_HEAD")
 	}
-	if _, err := gitpkg.Run(f.ctx, f.local, "show-ref", "--verify", "refs/no-mistakes/sync/"+f.run.ID); err == nil {
+	if _, err := gitpkg.Run(f.ctx, f.local, "show-ref", "--verify", "refs/no-slop/sync/"+f.run.ID); err == nil {
 		t.Fatal("cached inspection created a private fetch ref")
+	}
+}
+
+func TestRefreshRejectsLegacySyncPrivateRefConflictBeforeFetch(t *testing.T) {
+	t.Parallel()
+
+	f := newSyncFixture(t)
+	legacyRef := strings.Replace("refs/no-slop/sync/"+f.run.ID, "refs/no-slop/", "refs/no-mistakes/", 1)
+	mustRun(t, f.local, "update-ref", legacyRef, f.base)
+
+	state := f.service.Refresh(f.ctx)
+	if state.State != StateAmbiguousContext || state.Safety != "blocked_private_ref_conflict" {
+		t.Fatalf("state = %#v, want private ref conflict", state)
+	}
+	if _, err := gitpkg.Run(f.ctx, f.local, "rev-parse", "--verify", "refs/no-slop/sync/"+f.run.ID+"^{commit}"); err == nil {
+		t.Fatal("canonical sync private ref should not be written after legacy conflict")
+	}
+	if got := mustRun(t, f.local, "rev-parse", legacyRef+"^{commit}"); got != f.base {
+		t.Fatalf("legacy sync private ref = %s, want %s", got, f.base)
 	}
 }
 
@@ -267,6 +286,32 @@ func TestApplyEquivalentButDivergedRebaseWithPipelineCommitsAnchorsAndAdvances(t
 	}
 	if got := readOptional(t, filepath.Join(f.local, "doc.txt")); got != "pipeline doc\n" {
 		t.Fatalf("pipeline commit not applied: %q", got)
+	}
+}
+
+func TestApplyEquivalentAdvanceRejectsLegacySyncAnchorConflict(t *testing.T) {
+	t.Parallel()
+
+	f := newSyncFixture(t)
+	rebuildPipelineHead(t, f, []pipelineCommit{
+		{message: "feature rebased", files: map[string]string{"file.txt": "feature\n"}},
+		{message: "pipeline doc", files: map[string]string{"doc.txt": "pipeline doc\n"}},
+	})
+	legacyAnchor := strings.Replace(syncAnchorRef(f.run.ID), "refs/no-slop/", "refs/no-mistakes/", 1)
+	mustRun(t, f.local, "update-ref", legacyAnchor, f.base)
+
+	state := f.service.Apply(f.ctx)
+	if state.State != StateAmbiguousContext || state.Safety != "blocked_preserve_failed" || state.Changed {
+		t.Fatalf("state = %#v, want preserve failure", state)
+	}
+	if got := mustRun(t, f.local, "rev-parse", "HEAD"); got != f.old {
+		t.Fatalf("HEAD = %s, want unchanged %s", got, f.old)
+	}
+	if _, err := gitpkg.Run(f.ctx, f.local, "rev-parse", "--verify", syncAnchorRef(f.run.ID)+"^{commit}"); err == nil {
+		t.Fatal("canonical sync anchor should not be written after legacy conflict")
+	}
+	if got := mustRun(t, f.local, "rev-parse", legacyAnchor+"^{commit}"); got != f.base {
+		t.Fatalf("legacy sync anchor = %s, want %s", got, f.base)
 	}
 }
 
@@ -825,6 +870,49 @@ func TestForkTargetNeverReadsParentOrigin(t *testing.T) {
 	state := f.service.Refresh(f.ctx)
 	if state.State != StateBehind || state.Target.Kind != "fork" || state.Remote.ObservedHead != f.pushed {
 		t.Fatalf("state = %#v", state)
+	}
+}
+
+func TestResolvePrivateRefAliasFindsLegacyAnchor(t *testing.T) {
+	repo := t.TempDir()
+	mustRun(t, repo, "init")
+	configureIdentity(t, repo)
+	mustWrite(t, filepath.Join(repo, "file.txt"), "anchored\n")
+	mustRun(t, repo, "add", "file.txt")
+	mustRun(t, repo, "commit", "-m", "anchor")
+	head := mustRun(t, repo, "rev-parse", "HEAD")
+	legacy := "refs/no-mistakes/recover/run-legacy"
+	mustRun(t, repo, "update-ref", legacy, head)
+
+	ref, sha, ok, err := resolvePrivateRefAlias(context.Background(), repo, "refs/no-slop/recover/run-legacy")
+	if err != nil || !ok || ref != legacy || sha != head {
+		t.Fatalf("resolved = (%q, %q, %v), want (%q, %q, true)", ref, sha, ok, legacy, head)
+	}
+	ref, sha, ok, err = resolvePrivateRefAlias(context.Background(), repo, legacy)
+	if err != nil || !ok || ref != legacy || sha != head {
+		t.Fatalf("legacy-input resolved = (%q, %q, %v), want (%q, %q, true)", ref, sha, ok, legacy, head)
+	}
+}
+
+func TestResolvePrivateRefAliasRejectsConflictingAliases(t *testing.T) {
+	repo := t.TempDir()
+	mustRun(t, repo, "init")
+	configureIdentity(t, repo)
+	mustWrite(t, filepath.Join(repo, "file.txt"), "canonical\n")
+	mustRun(t, repo, "add", "file.txt")
+	mustRun(t, repo, "commit", "-m", "canonical")
+	canonicalHead := mustRun(t, repo, "rev-parse", "HEAD")
+	mustWrite(t, filepath.Join(repo, "file.txt"), "legacy\n")
+	mustRun(t, repo, "commit", "-am", "legacy")
+	legacyHead := mustRun(t, repo, "rev-parse", "HEAD")
+	canonical := "refs/no-slop/recover/run-conflict"
+	legacy := "refs/no-mistakes/recover/run-conflict"
+	mustRun(t, repo, "update-ref", canonical, canonicalHead)
+	mustRun(t, repo, "update-ref", legacy, legacyHead)
+
+	_, _, ok, err := resolvePrivateRefAlias(context.Background(), repo, canonical)
+	if err == nil || ok || !strings.Contains(err.Error(), "different commits") {
+		t.Fatalf("resolve = (_, _, %v, %v), want divergent-alias error", ok, err)
 	}
 }
 

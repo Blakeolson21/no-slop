@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	nmtypes "github.com/Blakeolson21/no-slop/internal/types"
 	"github.com/charmbracelet/lipgloss"
-	nmtypes "github.com/kunchenguid/no-mistakes/internal/types"
 )
 
 // finding mirrors pipeline/steps.Finding for TUI rendering.

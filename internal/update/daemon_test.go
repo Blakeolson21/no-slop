@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
 func TestEnsureDaemonUsesCurrentExecutableAllowsWindowsCaseDifferences(t *testing.T) {
@@ -28,11 +28,11 @@ func TestEnsureDaemonUsesCurrentExecutableAllowsWindowsCaseDifferences(t *testin
 		return true, nil
 	}
 	daemonExecutablePath = func(*paths.Paths) (string, error) {
-		return `c:\program files\no-mistakes\NO-MISTAKES.exe`, nil
+		return `c:\program files\no-slop\NO-SLOP.exe`, nil
 	}
 
 	u := &updater{
-		executablePath: `C:\Program Files\No-Mistakes\no-mistakes.exe`,
+		executablePath: `C:\Program Files\No-Slop\no-slop.exe`,
 		paths:          paths.WithRoot(t.TempDir()),
 	}
 
@@ -101,7 +101,7 @@ func TestRunningDaemonExecutablePathUsesPIDFile(t *testing.T) {
 }
 
 func TestRunningDaemonExecutablePathHandlesExecutablePathsWithSpaces(t *testing.T) {
-	if os.Getenv("NO_MISTAKES_TEST_CHILD") == "1" {
+	if os.Getenv("NS_TEST_CHILD") == "1" {
 		time.Sleep(10 * time.Second)
 		return
 	}
@@ -129,7 +129,7 @@ func TestRunningDaemonExecutablePathHandlesExecutablePathsWithSpaces(t *testing.
 	}
 
 	cmd := exec.Command(copyPath, "-test.run=^TestRunningDaemonExecutablePathHandlesExecutablePathsWithSpaces$")
-	cmd.Env = append(os.Environ(), "NO_MISTAKES_TEST_CHILD=1")
+	cmd.Env = append(os.Environ(), "NS_TEST_CHILD=1")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestExecutablePathForPIDUsesWindowsResolver(t *testing.T) {
 		if pid != 4321 {
 			t.Fatalf("pid = %d, want %d", pid, 4321)
 		}
-		return `C:\Program Files\no-mistakes\no-mistakes.exe`, nil
+		return `C:\Program Files\no-slop\no-slop.exe`, nil
 	}
 
 	got, err := executablePathForPID(4321)
@@ -177,7 +177,7 @@ func TestExecutablePathForPIDUsesWindowsResolver(t *testing.T) {
 	if !called {
 		t.Fatal("expected windows resolver to be used")
 	}
-	if got != `C:\Program Files\no-mistakes\no-mistakes.exe` {
+	if got != `C:\Program Files\no-slop\no-slop.exe` {
 		t.Fatalf("executablePathForPID = %q", got)
 	}
 }

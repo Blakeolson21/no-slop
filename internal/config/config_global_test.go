@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/types"
 	"gopkg.in/yaml.v3"
 )
 
@@ -56,7 +56,7 @@ func TestEnsureDefaultGlobalConfig_CreatesFile(t *testing.T) {
 		"log_level: info",
 		"# agent_path_override:",
 		"# commit:",
-		`#   fix_message: "no-mistakes({{.Step}}): {{.Summary}}"`,
+		`#   fix_message: "no-slop({{.Step}}): {{.Summary}}"`,
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("default config missing %q", want)

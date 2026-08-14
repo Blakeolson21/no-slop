@@ -14,7 +14,7 @@ import (
 // claude SessionStart hook outputs (which expose locally-installed
 // axi tools by name).
 //
-// The substitutions don't affect anything the no-mistakes parser
+// The substitutions don't affect anything the no-slop parser
 // actually reads, but they keep personal paths and tool names out of
 // fixtures committed to a public repo.
 func scrubFile(path string) error {
@@ -83,7 +83,7 @@ func replacePathForms(data []byte, path, placeholder string) []byte {
 
 // scrubClaudeHookEvents drops claude's SessionStart system events, which
 // dump the user's locally-installed axi tools (terminal-axi, etc.) into
-// `output`/`stdout` fields. The no-mistakes parser ignores type=system
+// `output`/`stdout` fields. The no-slop parser ignores type=system
 // entirely, so removing these lines doesn't affect e2e wire-format
 // coverage. The init event (subtype=init) carries information about
 // available tools/skills that's also user-specific, so we drop it too.

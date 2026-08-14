@@ -14,15 +14,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestForkRouting(t *testing.T) {
 	h := NewHarness(t, SetupOpts{Agent: "claude"})
 	ctx := context.Background()
 
-	parentURL := "https://github.com/parent-owner/no-mistakes.git"
-	forkURL := "https://github.com/fork-owner/no-mistakes.git"
+	parentURL := "https://github.com/parent-owner/no-slop.git"
+	forkURL := "https://github.com/fork-owner/no-slop.git"
 	branch := "feature/fork-routing-e2e"
 
 	forkDir := filepath.Join(filepath.Dir(h.UpstreamDir), "fork.git")
@@ -45,7 +45,7 @@ func TestForkRouting(t *testing.T) {
 	ghLog := filepath.Join(filepath.Dir(h.AgentLog), "gh-fork-routing.log")
 	t.Setenv("FAKEAGENT_GH_MODE", "fork-pr")
 	t.Setenv("FAKEAGENT_GH_LOG", ghLog)
-	t.Setenv("FAKEAGENT_GH_PARENT", "parent-owner/no-mistakes")
+	t.Setenv("FAKEAGENT_GH_PARENT", "parent-owner/no-slop")
 
 	out, err := h.Run("init", "--fork-url", forkURL)
 	if err != nil {
@@ -59,7 +59,7 @@ func TestForkRouting(t *testing.T) {
 	if run.Status != types.RunCompleted {
 		t.Fatalf("run did not complete: status=%s error=%v", run.Status, deref(run.Error))
 	}
-	if run.PRURL == nil || !strings.HasPrefix(*run.PRURL, "https://github.com/parent-owner/no-mistakes/pull/") {
+	if run.PRURL == nil || !strings.HasPrefix(*run.PRURL, "https://github.com/parent-owner/no-slop/pull/") {
 		t.Fatalf("PR URL = %v, want parent repository PR URL", run.PRURL)
 	}
 
@@ -81,10 +81,10 @@ func TestForkRouting(t *testing.T) {
 			t.Fatalf("gh pr list used unsupported owner-qualified head: %+v", inv)
 		}
 		if len(inv.Args) >= 2 && inv.Args[0] == "pr" && inv.Args[1] == "create" {
-			if inv.Repo == "fork-owner/no-mistakes" {
+			if inv.Repo == "fork-owner/no-slop" {
 				t.Fatalf("created silent self-PR against fork: %+v", inv)
 			}
-			if inv.Repo == "parent-owner/no-mistakes" && inv.Head == "fork-owner:"+branch && inv.Base == "main" {
+			if inv.Repo == "parent-owner/no-slop" && inv.Head == "fork-owner:"+branch && inv.Base == "main" {
 				sawParentCreate = true
 			}
 		}

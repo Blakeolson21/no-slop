@@ -5,8 +5,8 @@ package e2e
 import (
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/ipc"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestValidateSkippedSteps(t *testing.T) {

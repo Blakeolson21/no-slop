@@ -4,13 +4,13 @@ description: Terminal UI layout, keybindings, and approval workflow.
 ---
 
 The TUI is how you interact with running pipelines. Launch it with
-`no-mistakes` or `no-mistakes attach`.
+`no-slop` or `no-slop attach`.
 
 Think of it as the control surface for the gate. It is optimized for one job:
 show you where the run is, why it paused, what changed, and what your choices
 are without making you bounce between logs, diffs, and provider tabs.
 
-Bare `no-mistakes` can also open the [Setup Wizard](/no-mistakes/guides/setup-wizard/) first when there is no active run on the current branch and you need to create one.
+Bare `no-slop` can also open the [Setup Wizard](/no-slop/guides/setup-wizard/) first when there is no active run on the current branch and you need to create one.
 
 ## What the TUI is for
 
@@ -130,7 +130,7 @@ On narrow terminals, the log panel expands to fill the remaining vertical space 
 While the CI step is active, the TUI shows a dedicated CI panel instead of the generic findings view.
 It shows the PR label, the latest CI activity, and a log tail.
 When a real CI auto-fix attempt starts, the panel increments `CI auto-fixes: N`.
-Once the CI monitor reports readiness and known mergeability is clear, the panel shows `✓ Checks passed` with `still monitoring until merged or closed`, and the terminal title switches to `Checks passed`. Readiness includes the trusted [`no_ci: true` declaration](/no-mistakes/reference/repo-config/#no_ci) when no checks are registered; an empty forge response alone is not ready.
+Once the CI monitor reports readiness and known mergeability is clear, the panel shows `✓ Checks passed` with `still monitoring until merged or closed`, and the terminal title switches to `Checks passed`. Readiness includes the trusted [`no_ci: true` declaration](/no-slop/reference/repo-config/#no_ci) when no checks are registered; an empty forge response alone is not ready.
 That text means the CI monitor is still active; it can still pause later if the configured idle timeout elapses with no base-branch movement.
 That ready signal clears if checks start running again, new failures appear, provider state becomes uncertain, or the PR is merged or closed.
 The ready signal is persisted, so a fresh attach shows `Checks passed` without depending on delivery of an earlier log line.
@@ -142,13 +142,13 @@ Passive TUI rendering uses cached pipeline push provenance and never fetches or 
 When a clean strict-behind relation is eligible, or a diverged relation may be equivalent after refresh, the box alone offers `u sync branch`.
 Pressing `u` explicitly refreshes the configured upstream or fork target, then opens a confirmation with both full SHAs, the exact target ref, and the clean-worktree proof.
 Confirm with `u` or Enter, or cancel with Escape.
-The apply path rechecks every mutable assumption and can only perform the same exact strict fast-forward or anchored equivalent-diverged advance as `no-mistakes sync`; blocked states never trigger destructive Git recovery.
-When the owning run ended with the branch still in pipeline custody, the same box offers `u recover custody` instead: `u` opens a confirmation naming the terminal status, the local head, the preserved head, and every outcome the recovery can reach - a fast-forward, a proven-contained adoption, or an in-place return that moves nothing when the gate never advanced past the submitted head - and applying routes through the guarded recovery documented in [`no-mistakes axi sync`](/no-mistakes/reference/cli/#no-mistakes-axi-sync).
+The apply path rechecks every mutable assumption and can only perform the same exact strict fast-forward or anchored equivalent-diverged advance as `no-slop sync`; blocked states never trigger destructive Git recovery.
+When the owning run ended with the branch still in pipeline custody, the same box offers `u recover custody` instead: `u` opens a confirmation naming the terminal status, the local head, the preserved head, and every outcome the recovery can reach - a fast-forward, a proven-contained adoption, or an in-place return that moves nothing when the gate never advanced past the submitted head - and applying routes through the guarded recovery documented in [`no-slop axi sync`](/no-slop/reference/cli/#no-slop-axi-sync).
 Refusals leave the branch, worktree, and gate branch exactly as they are and name any private ref holding rescued commits, and a custody return that leaves those commits off your branch names the ref that still holds them.
 
 ### Footer
 
-The footer shows detach/help/yolo actions and, when `no-mistakes attach` has a cached newer release available, a right-aligned `<version> available` indicator. That update indicator stays visible after reruns in the same TUI session.
+The footer shows detach/help/yolo actions and, when `no-slop attach` has a cached newer release available, a right-aligned `<version> available` indicator. That update indicator stays visible after reruns in the same TUI session.
 When yolo mode is on, the footer changes from `y yolo` to `y end yolo`.
 
 ## Keybindings
@@ -229,6 +229,6 @@ After a failed or cancelled run, press `r` to start a rerun. The TUI switches to
 
 ## Detaching
 
-Press `q` to detach from the TUI. The pipeline continues running in the background. Run `no-mistakes` again to reattach to the active run on your current branch, or `no-mistakes attach` to reattach to the repo's active run without branch scoping.
+Press `q` to detach from the TUI. The pipeline continues running in the background. Run `no-slop` again to reattach to the active run on your current branch, or `no-slop attach` to reattach to the repo's active run without branch scoping.
 
 If the run is already finished, `q` exits the TUI.

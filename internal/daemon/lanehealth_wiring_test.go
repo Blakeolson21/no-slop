@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
-	"github.com/kunchenguid/no-mistakes/internal/config"
-	"github.com/kunchenguid/no-mistakes/internal/lanehealth"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/lanehealth"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 // The pipeline agent must consume persisted lane health, otherwise every run

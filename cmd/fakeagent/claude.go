@@ -23,7 +23,7 @@ func runClaude(args []string, promptReader io.Reader, scenario *Scenario) int {
 
 	// Fixture mode: replay the real claude wire envelope captured by
 	// recordfixture, but splice in scenario-driven content for the
-	// fields no-mistakes parses (assistant text, result structured
+	// fields no-slop parses (assistant text, result structured
 	// output). The envelope (event ordering, field shapes, system
 	// events, rate-limit events, etc.) stays exactly what real claude
 	// emits, so wire-format drift surfaces here. The content stays
@@ -50,7 +50,7 @@ func runClaude(args []string, promptReader io.Reader, scenario *Scenario) int {
 	enc := json.NewEncoder(os.Stdout)
 
 	// Match the real claude CLI's JSONL stream-json format. Real claude
-	// emits init + assistant + result events; no-mistakes' parser ignores
+	// emits init + assistant + result events; no-slop' parser ignores
 	// any type it doesn't know, so init is optional. We emit one assistant
 	// event with the text content + a result event with the structured
 	// output and final usage.

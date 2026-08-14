@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
 // TestStart_ReinstallsManagedServiceWhenPlistChanged covers the post-upgrade
@@ -22,7 +22,7 @@ import (
 // launchd under the new one so the fix actually takes effect. Prior behavior
 // was "daemon already running" with no refresh, stranding the user.
 func TestStart_ReinstallsManagedServiceWhenPlistChanged(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestStart_ReinstallsManagedServiceWhenPlistChanged(t *testing.T) {
 	runtimeGOOS = "darwin"
 	serviceUserHomeDir = func() (string, error) { return home, nil }
 	serviceCurrentUser = func() (*user.User, error) { return &user.User{Uid: "501"}, nil }
-	serviceExecutablePath = func() (string, error) { return "/opt/no-mistakes/bin/no-mistakes", nil }
+	serviceExecutablePath = func() (string, error) { return "/opt/no-slop/bin/no-slop", nil }
 
 	plistPath := filepath.Join(home, "Library", "LaunchAgents", launchdServiceLabel(p)+".plist")
 	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
@@ -93,7 +93,7 @@ func TestStart_ReinstallsManagedServiceWhenPlistChanged(t *testing.T) {
 // `daemon start` invocations from shells/hooks don't silently restart the
 // daemon and churn the current run.
 func TestStart_DoesNotReinstallWhenPlistUnchanged(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -104,13 +104,13 @@ func TestStart_DoesNotReinstallWhenPlistUnchanged(t *testing.T) {
 	runtimeGOOS = "darwin"
 	serviceUserHomeDir = func() (string, error) { return home, nil }
 	serviceCurrentUser = func() (*user.User, error) { return &user.User{Uid: "501"}, nil }
-	serviceExecutablePath = func() (string, error) { return "/opt/no-mistakes/bin/no-mistakes", nil }
+	serviceExecutablePath = func() (string, error) { return "/opt/no-slop/bin/no-slop", nil }
 
 	plistPath := filepath.Join(home, "Library", "LaunchAgents", launchdServiceLabel(p)+".plist")
 	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	current := renderLaunchAgent("/opt/no-mistakes/bin/no-mistakes", p, home)
+	current := renderLaunchAgent("/opt/no-slop/bin/no-slop", p, home)
 	if err := os.WriteFile(plistPath, []byte(current), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -131,8 +131,71 @@ func TestStart_DoesNotReinstallWhenPlistUnchanged(t *testing.T) {
 	}
 }
 
+func TestStartInstallsCanonicalServiceWhenOnlyLegacyServiceExists(t *testing.T) {
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+
+	cleanup := stubServiceRuntime(t)
+	defer cleanup()
+	runtimeGOOS = "linux"
+	serviceUserHomeDir = func() (string, error) { return home, nil }
+	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-slop", nil }
+
+	legacyPath := legacyScopedSystemdUserServicePath(p)
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, []byte(renderSystemdUnit("/usr/local/bin/no-mistakes", p, home)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	running := true
+	var commands []string
+	serviceCommandRunner = func(name string, args ...string) ([]byte, error) {
+		command := name + " " + strings.Join(args, " ")
+		commands = append(commands, command)
+		switch command {
+		case "systemctl --user stop " + legacyScopedSystemdServiceName(p):
+			running = false
+		case "systemctl --user restart " + systemdServiceName(p):
+			running = true
+		}
+		return nil, nil
+	}
+	daemonHealthCheck = func(*paths.Paths) (bool, error) { return running, nil }
+
+	if err := Start(p); err != nil {
+		t.Fatalf("Start should install canonical service and restart it, got %v", err)
+	}
+	if _, err := os.Stat(systemdUserServicePath(p)); err != nil {
+		t.Fatalf("canonical unit missing after Start: %v", err)
+	}
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy unit should be removed after Start, stat err = %v", err)
+	}
+	sawLegacyStop := false
+	sawLegacyDisable := false
+	sawCanonicalRestart := false
+	for _, command := range commands {
+		switch command {
+		case "systemctl --user stop " + legacyScopedSystemdServiceName(p):
+			sawLegacyStop = true
+		case "systemctl --user disable " + legacyScopedSystemdServiceName(p):
+			sawLegacyDisable = true
+		case "systemctl --user restart " + systemdServiceName(p):
+			sawCanonicalRestart = true
+		}
+	}
+	if !sawLegacyStop || !sawLegacyDisable || !sawCanonicalRestart {
+		t.Fatalf("expected legacy cleanup and canonical restart, got %v", commands)
+	}
+}
+
 func TestStartDoesNotRestartLaunchAgentForExecutableOnlyChange(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -143,13 +206,13 @@ func TestStartDoesNotRestartLaunchAgentForExecutableOnlyChange(t *testing.T) {
 	runtimeGOOS = "darwin"
 	serviceUserHomeDir = func() (string, error) { return home, nil }
 	serviceCurrentUser = func() (*user.User, error) { return &user.User{Uid: "501"}, nil }
-	serviceExecutablePath = func() (string, error) { return "/private/var/folders/go-build/no-mistakes", nil }
+	serviceExecutablePath = func() (string, error) { return "/private/var/folders/go-build/no-slop", nil }
 
 	plistPath := filepath.Join(home, "Library", "LaunchAgents", launchdServiceLabel(p)+".plist")
 	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	installed := renderLaunchAgent("/opt/no-mistakes/bin/no-mistakes", p, home)
+	installed := renderLaunchAgent("/opt/no-slop/bin/no-slop", p, home)
 	if err := os.WriteFile(plistPath, []byte(installed), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +241,7 @@ func TestStartDoesNotRestartLaunchAgentForExecutableOnlyChange(t *testing.T) {
 }
 
 func TestStartPreservesInstalledExecutableWhenRefreshingLaunchAgent(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -189,13 +252,13 @@ func TestStartPreservesInstalledExecutableWhenRefreshingLaunchAgent(t *testing.T
 	runtimeGOOS = "darwin"
 	serviceUserHomeDir = func() (string, error) { return home, nil }
 	serviceCurrentUser = func() (*user.User, error) { return &user.User{Uid: "501"}, nil }
-	serviceExecutablePath = func() (string, error) { return "/private/var/folders/go-build/no-mistakes", nil }
+	serviceExecutablePath = func() (string, error) { return "/private/var/folders/go-build/no-slop", nil }
 
 	plistPath := filepath.Join(home, "Library", "LaunchAgents", launchdServiceLabel(p)+".plist")
 	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	stale := renderLaunchAgentWithoutEnvironment("/opt/no-mistakes/bin/no-mistakes", p)
+	stale := renderLaunchAgentWithoutEnvironment("/opt/no-slop/bin/no-slop", p)
 	if err := os.WriteFile(plistPath, []byte(stale), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -222,10 +285,10 @@ func TestStartPreservesInstalledExecutableWhenRefreshingLaunchAgent(t *testing.T
 		t.Fatal(err)
 	}
 	plist := string(data)
-	if !strings.Contains(plist, "<string>/opt/no-mistakes/bin/no-mistakes</string>") {
+	if !strings.Contains(plist, "<string>/opt/no-slop/bin/no-slop</string>") {
 		t.Fatalf("expected refreshed plist to preserve installed executable, got:\n%s", plist)
 	}
-	if strings.Contains(plist, "/private/var/folders/go-build/no-mistakes") {
+	if strings.Contains(plist, "/private/var/folders/go-build/no-slop") {
 		t.Fatalf("refreshed plist should not use transient executable:\n%s", plist)
 	}
 	if !strings.Contains(plist, "<key>PATH</key>") {
@@ -234,7 +297,7 @@ func TestStartPreservesInstalledExecutableWhenRefreshingLaunchAgent(t *testing.T
 }
 
 func TestStartRestartsSystemdUnitWhenDefinitionChanged(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -244,13 +307,13 @@ func TestStartRestartsSystemdUnitWhenDefinitionChanged(t *testing.T) {
 	defer cleanup()
 	runtimeGOOS = "linux"
 	serviceUserHomeDir = func() (string, error) { return home, nil }
-	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-mistakes", nil }
+	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-slop", nil }
 
 	unitPath := filepath.Join(home, ".config", "systemd", "user", systemdServiceName(p))
 	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(unitPath, []byte("[Service]\nExecStart=/old/no-mistakes daemon run\n"), 0o644); err != nil {
+	if err := os.WriteFile(unitPath, []byte("[Service]\nExecStart=/old/no-slop daemon run\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -292,13 +355,13 @@ func TestStartStopsDetachedDaemonBeforeRestartingStaleManagedService(t *testing.
 	defer cleanup()
 	runtimeGOOS = "linux"
 	serviceUserHomeDir = func() (string, error) { return home, nil }
-	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-mistakes", nil }
+	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-slop", nil }
 
 	unitPath := filepath.Join(home, ".config", "systemd", "user", systemdServiceName(p))
 	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(unitPath, []byte("[Service]\nExecStart=/old/no-mistakes daemon run\n"), 0o644); err != nil {
+	if err := os.WriteFile(unitPath, []byte("[Service]\nExecStart=/old/no-slop daemon run\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -345,7 +408,7 @@ func TestStartStopsDetachedDaemonBeforeRestartingStaleManagedService(t *testing.
 }
 
 func TestStartDoesNotStopRunningDaemonWhenStaleManagedInstallFails(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -355,13 +418,13 @@ func TestStartDoesNotStopRunningDaemonWhenStaleManagedInstallFails(t *testing.T)
 	defer cleanup()
 	runtimeGOOS = "linux"
 	serviceUserHomeDir = func() (string, error) { return home, nil }
-	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-mistakes", nil }
+	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-slop", nil }
 
 	unitPath := filepath.Join(home, ".config", "systemd", "user", systemdServiceName(p))
 	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(unitPath, []byte("[Service]\nExecStart=/old/no-mistakes daemon run\n"), 0o644); err != nil {
+	if err := os.WriteFile(unitPath, []byte("[Service]\nExecStart=/old/no-slop daemon run\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -391,7 +454,7 @@ func TestStartDoesNotStopRunningDaemonWhenStaleManagedInstallFails(t *testing.T)
 }
 
 func TestStartRestoresStaleSystemdUnitWhenRefreshInstallFails(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -401,13 +464,13 @@ func TestStartRestoresStaleSystemdUnitWhenRefreshInstallFails(t *testing.T) {
 	defer cleanup()
 	runtimeGOOS = "linux"
 	serviceUserHomeDir = func() (string, error) { return home, nil }
-	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-mistakes", nil }
+	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-slop", nil }
 
 	unitPath := filepath.Join(home, ".config", "systemd", "user", systemdServiceName(p))
 	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	stale := "[Service]\nExecStart=/old/no-mistakes daemon run\n"
+	stale := "[Service]\nExecStart=/old/no-slop daemon run\n"
 	if err := os.WriteFile(unitPath, []byte(stale), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -450,7 +513,7 @@ func TestStartRestoresStaleSystemdUnitAtOriginalModeWhenRefreshInstallFails(t *t
 	for _, key := range proxyEnvKeys {
 		t.Setenv(key, "")
 	}
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -460,13 +523,13 @@ func TestStartRestoresStaleSystemdUnitAtOriginalModeWhenRefreshInstallFails(t *t
 	defer cleanup()
 	runtimeGOOS = "linux"
 	serviceUserHomeDir = func() (string, error) { return home, nil }
-	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-mistakes", nil }
+	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-slop", nil }
 
 	unitPath := filepath.Join(home, ".config", "systemd", "user", systemdServiceName(p))
 	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	stale := "[Service]\nEnvironment=\"HTTPS_PROXY=http://user:pass@127.0.0.1:7897\"\nExecStart=/old/no-mistakes daemon run\n"
+	stale := "[Service]\nEnvironment=\"HTTPS_PROXY=http://user:pass@127.0.0.1:7897\"\nExecStart=/old/no-slop daemon run\n"
 	if err := os.WriteFile(unitPath, []byte(stale), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -500,7 +563,7 @@ func TestStartRestoresStaleSystemdUnitAtOriginalModeWhenRefreshInstallFails(t *t
 }
 
 func TestStartRestartsRestoredSystemdUnitWhenRefreshRestartFails(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -510,13 +573,13 @@ func TestStartRestartsRestoredSystemdUnitWhenRefreshRestartFails(t *testing.T) {
 	defer cleanup()
 	runtimeGOOS = "linux"
 	serviceUserHomeDir = func() (string, error) { return home, nil }
-	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-mistakes", nil }
+	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-slop", nil }
 
 	unitPath := filepath.Join(home, ".config", "systemd", "user", systemdServiceName(p))
 	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	stale := "[Service]\nExecStart=/old/no-mistakes daemon run\n"
+	stale := "[Service]\nExecStart=/old/no-slop daemon run\n"
 	if err := os.WriteFile(unitPath, []byte(stale), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -565,7 +628,7 @@ func TestStartRestartsRestoredSystemdUnitWhenRefreshRestartFails(t *testing.T) {
 }
 
 func TestStartDoesNotInstallManagedServiceWhenDaemonAliveAndDefinitionMissing(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -575,7 +638,7 @@ func TestStartDoesNotInstallManagedServiceWhenDaemonAliveAndDefinitionMissing(t 
 	defer cleanup()
 	runtimeGOOS = "linux"
 	serviceUserHomeDir = func() (string, error) { return home, nil }
-	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-mistakes", nil }
+	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-slop", nil }
 
 	var commands []string
 	serviceCommandRunner = func(name string, args ...string) ([]byte, error) {
@@ -597,7 +660,7 @@ func TestStartDoesNotInstallManagedServiceWhenDaemonAliveAndDefinitionMissing(t 
 }
 
 func TestStartFallsBackToDetachedDaemonWhenManagedStartFails(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -608,7 +671,7 @@ func TestStartFallsBackToDetachedDaemonWhenManagedStartFails(t *testing.T) {
 	t.Setenv("NM_DAEMON_HELPER_PROCESS", "1")
 	runtimeGOOS = "linux"
 	serviceUserHomeDir = func() (string, error) { return home, nil }
-	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-mistakes", nil }
+	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-slop", nil }
 
 	var commands []string
 	var managedStopped bool
@@ -669,16 +732,63 @@ func TestStartFallsBackToDetachedDaemonWhenManagedStartFails(t *testing.T) {
 	_ = os.Remove(p.Socket())
 }
 
-func TestStartDetachedDaemonUsesProvidedRootViaNMHome(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+func TestStartTreatsManagedInstallCleanupFailureAsTerminal(t *testing.T) {
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	capturePath := filepath.Join(t.TempDir(), "nm-home.txt")
+	home := t.TempDir()
+
+	cleanup := stubServiceRuntime(t)
+	defer cleanup()
+	t.Setenv("NM_DAEMON_HELPER_PROCESS", "1")
+	runtimeGOOS = "linux"
+	serviceUserHomeDir = func() (string, error) { return home, nil }
+	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-slop", nil }
+	daemonHealthCheck = func(*paths.Paths) (bool, error) { return false, nil }
+
+	legacyPath := filepath.Join(home, ".config", "systemd", "user", legacySystemdServiceName)
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, []byte(renderSystemdUnit("/usr/local/bin/no-mistakes", p, home)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var commands []string
+	serviceCommandRunner = func(name string, args ...string) ([]byte, error) {
+		command := name + " " + strings.Join(args, " ")
+		commands = append(commands, command)
+		if command == "systemctl --user stop "+legacySystemdServiceName {
+			return nil, fmt.Errorf("legacy stop failed")
+		}
+		return nil, nil
+	}
+
+	err := Start(p)
+	if err == nil || !strings.Contains(err.Error(), "install managed service") || !strings.Contains(err.Error(), "systemctl stop legacy service") {
+		t.Fatalf("Start error = %v, want terminal managed cleanup failure", err)
+	}
+	if strings.Contains(err.Error(), "detached fallback") {
+		t.Fatalf("Start attempted detached fallback after cleanup failure: %v", err)
+	}
+	for _, command := range commands {
+		if command == "systemctl --user start "+systemdServiceName(p) {
+			t.Fatalf("Start should not start canonical service after cleanup failure, commands = %v", commands)
+		}
+	}
+}
+
+func TestStartDetachedDaemonUsesProvidedRootViaNMHome(t *testing.T) {
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	capturePath := filepath.Join(t.TempDir(), "ns-home.txt")
 
 	t.Setenv("NM_DAEMON_HELPER_PROCESS", "1")
-	t.Setenv("NM_CAPTURE_NM_HOME_FILE", capturePath)
-	t.Setenv("NM_HOME", "")
+	t.Setenv("NM_CAPTURE_NS_HOME_FILE", capturePath)
+	unsetEnv(t, "NS_HOME")
 
 	cleanup := stubServiceRuntime(t)
 	defer cleanup()
@@ -705,15 +815,52 @@ func TestStartDetachedDaemonUsesProvidedRootViaNMHome(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if err != nil {
-		t.Fatalf("read captured NM_HOME: %v", err)
+		t.Fatalf("read captured NS_HOME: %v", err)
 	}
 	if got := string(data); got != p.Root() {
-		t.Fatalf("child NM_HOME = %q, want %q", got, p.Root())
+		t.Fatalf("child NS_HOME = %q, want %q", got, p.Root())
 	}
 }
 
+func TestStartDetachedDaemonMirrorsCanonicalHelperAlias(t *testing.T) {
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	capturePath := filepath.Join(t.TempDir(), "ns-home.txt")
+
+	t.Setenv(daemonHelperProcessEnv, "1")
+	t.Setenv("NM_CAPTURE_NS_HOME_FILE", capturePath)
+	unsetEnv(t, "NS_HOME")
+
+	cleanup := stubServiceRuntime(t)
+	defer cleanup()
+	checks := 0
+	daemonHealthCheck = func(*paths.Paths) (bool, error) {
+		checks++
+		return checks >= 2, nil
+	}
+
+	if err := startDetachedDaemon(p); err != nil {
+		t.Fatalf("startDetachedDaemon should succeed: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(capturePath)
+		if err == nil {
+			if got := string(data); got != p.Root() {
+				t.Fatalf("child NS_HOME = %q, want %q", got, p.Root())
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("canonical helper alias was not mirrored to legacy child helper")
+}
+
 func TestStartDetachedDaemonCleansUpChildWhenStartTimeProbeFails(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -775,7 +922,7 @@ func TestStartDetachedDaemonCleansUpChildWhenStartTimeProbeFails(t *testing.T) {
 }
 
 func TestStartStopsManagedServiceBeforeDetachedFallbackAfterTimeout(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -788,7 +935,7 @@ func TestStartStopsManagedServiceBeforeDetachedFallbackAfterTimeout(t *testing.T
 	t.Setenv("NM_TEST_DAEMON_START_POLL_INTERVAL", "1ms")
 	runtimeGOOS = "linux"
 	serviceUserHomeDir = func() (string, error) { return home, nil }
-	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-mistakes", nil }
+	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-slop", nil }
 
 	var commands []string
 	var managedStopped bool
@@ -865,7 +1012,7 @@ func TestStartStopsManagedServiceBeforeDetachedFallbackAfterTimeout(t *testing.T
 }
 
 func TestStartReturnsManagedStopErrorWhenSystemdStopSaysNotLoaded(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -876,7 +1023,7 @@ func TestStartReturnsManagedStopErrorWhenSystemdStopSaysNotLoaded(t *testing.T) 
 	t.Setenv("NM_DAEMON_HELPER_PROCESS", "1")
 	runtimeGOOS = "linux"
 	serviceUserHomeDir = func() (string, error) { return home, nil }
-	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-mistakes", nil }
+	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-slop", nil }
 
 	var commands []string
 	serviceCommandRunner = func(name string, args ...string) ([]byte, error) {
@@ -912,7 +1059,7 @@ func TestStartReturnsManagedStopErrorWhenSystemdStopSaysNotLoaded(t *testing.T) 
 }
 
 func TestStartReturnsManagedStopErrorWhenFallbackCleanupFails(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -923,7 +1070,7 @@ func TestStartReturnsManagedStopErrorWhenFallbackCleanupFails(t *testing.T) {
 	t.Setenv("NM_DAEMON_HELPER_PROCESS", "1")
 	runtimeGOOS = "linux"
 	serviceUserHomeDir = func() (string, error) { return home, nil }
-	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-mistakes", nil }
+	serviceExecutablePath = func() (string, error) { return "/usr/local/bin/no-slop", nil }
 
 	serviceCommandRunner = func(name string, args ...string) ([]byte, error) {
 		command := name + " " + strings.Join(args, " ")
@@ -957,7 +1104,7 @@ func TestStartReturnsManagedStopErrorWhenFallbackCleanupFails(t *testing.T) {
 }
 
 func TestStartRemovesLaunchAgentBeforeDetachedFallbackAfterBootoutESRCH(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -969,7 +1116,7 @@ func TestStartRemovesLaunchAgentBeforeDetachedFallbackAfterBootoutESRCH(t *testi
 	runtimeGOOS = "darwin"
 	serviceUserHomeDir = func() (string, error) { return home, nil }
 	serviceCurrentUser = func() (*user.User, error) { return &user.User{Uid: "501"}, nil }
-	serviceExecutablePath = func() (string, error) { return "/opt/no-mistakes/bin/no-mistakes", nil }
+	serviceExecutablePath = func() (string, error) { return "/opt/no-slop/bin/no-slop", nil }
 
 	serviceCommandRunner = func(name string, args ...string) ([]byte, error) {
 		command := name + " " + strings.Join(args, " ")
@@ -1003,7 +1150,7 @@ func TestStartRemovesLaunchAgentBeforeDetachedFallbackAfterBootoutESRCH(t *testi
 }
 
 func TestStopUsesManagedServiceWhenInstalled(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -1041,8 +1188,52 @@ func TestStopUsesManagedServiceWhenInstalled(t *testing.T) {
 	}
 }
 
+func TestStopManagedServiceStopsCanonicalAndLegacySystemdUnits(t *testing.T) {
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+
+	cleanup := stubServiceRuntime(t)
+	defer cleanup()
+	runtimeGOOS = "linux"
+	serviceUserHomeDir = func() (string, error) { return home, nil }
+
+	canonicalPath := systemdUserServicePath(p)
+	if err := os.MkdirAll(filepath.Dir(canonicalPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(canonicalPath, []byte("WorkingDirectory="+p.Root()+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	legacyPath := legacySystemdUserServicePath()
+	if err := os.WriteFile(legacyPath, []byte(renderSystemdUnit("/usr/local/bin/no-mistakes", p, home)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var commands []string
+	serviceCommandRunner = func(name string, args ...string) ([]byte, error) {
+		commands = append(commands, name+" "+strings.Join(args, " "))
+		return nil, nil
+	}
+
+	stopped, err := stopManagedService(p)
+	if err != nil || !stopped {
+		t.Fatalf("stopManagedService = (%v, %v), want (true, nil); commands %v", stopped, err, commands)
+	}
+	for _, want := range []string{
+		"systemctl --user stop " + systemdServiceName(p),
+		"systemctl --user stop " + legacySystemdServiceName,
+	} {
+		if !containsCmd(commands, want) {
+			t.Fatalf("commands = %v, want %q", commands, want)
+		}
+	}
+}
+
 func TestManagedServiceInstalledRequiresMatchingRoot(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	home := t.TempDir()
 
 	cleanup := stubServiceRuntime(t)
@@ -1055,14 +1246,18 @@ func TestManagedServiceInstalledRequiresMatchingRoot(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(plistPath, []byte(renderLaunchAgent("/opt/no-mistakes/bin/no-mistakes", paths.WithRoot(otherRoot), home)), 0o644); err != nil {
+	if err := os.WriteFile(plistPath, []byte(renderLaunchAgent("/opt/no-slop/bin/no-slop", paths.WithRoot(otherRoot), home)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	if managedServiceInstalled(p) {
+	if installed, err := managedServiceInstalled(p); err != nil {
+		t.Fatal(err)
+	} else if installed {
 		t.Fatal("expected mismatched launch agent root to be ignored")
 	}
-	if !managedServiceInstalled(paths.WithRoot(otherRoot)) {
+	if installed, err := managedServiceInstalled(paths.WithRoot(otherRoot)); err != nil {
+		t.Fatal(err)
+	} else if !installed {
 		t.Fatal("expected matching launch agent root to be detected")
 	}
 }
@@ -1126,7 +1321,7 @@ func TestManagedStopErrorsStillWaitForCapturedDaemonExit(t *testing.T) {
 		{name: "managed restart handoff", stop: stopCurrentDaemonBeforeManagedRestart},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+			p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 			if err := p.EnsureDirs(); err != nil {
 				t.Fatal(err)
 			}
@@ -1172,8 +1367,9 @@ func TestManagedStopErrorsStillWaitForCapturedDaemonExit(t *testing.T) {
 				daemonProcessRunning = oldProcessRunning
 			})
 
-			if err := tc.stop(p); err != nil {
-				t.Fatalf("stop should succeed after confirming daemon exit: %v", err)
+			err := tc.stop(p)
+			if err == nil || !strings.Contains(err.Error(), "user manager unavailable") {
+				t.Fatalf("stop error = %v, want managed-service failure after confirming daemon exit", err)
 			}
 			if probes == 0 {
 				t.Fatal("stop returned without probing the captured daemon process")
@@ -1197,11 +1393,17 @@ func TestStopFallsBackToDetachedDaemonOnWindowsWithoutManagedService(t *testing.
 	if err := Stop(p); err != nil {
 		t.Fatalf("Stop should fall back to detached daemon shutdown: %v", err)
 	}
-	if len(commands) != 1 {
-		t.Fatalf("expected one scheduled-task query, got %v", commands)
+	if len(commands) != 3 {
+		t.Fatalf("expected canonical and compatibility scheduled-task queries, got %v", commands)
 	}
 	if want := "schtasks /Query /TN " + windowsTaskName(p); commands[0] != want {
 		t.Fatalf("query command = %q, want %q", commands[0], want)
+	}
+	if want := "schtasks /Query /TN " + legacyScopedWindowsTaskName(p) + " /XML"; commands[1] != want {
+		t.Fatalf("scoped legacy query = %q, want %q", commands[1], want)
+	}
+	if want := "schtasks /Query /TN " + legacyWindowsTaskName + " /XML"; commands[2] != want {
+		t.Fatalf("unscoped legacy query = %q, want %q", commands[2], want)
 	}
 
 	alive, err := IsRunning(p)
@@ -1213,6 +1415,35 @@ func TestStopFallsBackToDetachedDaemonOnWindowsWithoutManagedService(t *testing.
 	}
 }
 
+func TestStopManagedServiceFindsLegacyScopedWindowsTask(t *testing.T) {
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
+	cleanup := stubServiceRuntime(t)
+	defer cleanup()
+	runtimeGOOS = "windows"
+
+	var commands []string
+	serviceCommandRunner = func(name string, args ...string) ([]byte, error) {
+		command := name + " " + strings.Join(args, " ")
+		commands = append(commands, command)
+		if strings.Contains(command, "/Query /TN "+windowsTaskName(p)) {
+			return nil, fmt.Errorf("task not found")
+		}
+		if strings.Contains(command, "/Query /TN "+legacyScopedWindowsTaskName(p)+" /XML") {
+			return []byte(`<Task><Arguments>daemon run --root ` + p.Root() + `</Arguments></Task>`), nil
+		}
+		return nil, nil
+	}
+
+	stopped, err := stopManagedService(p)
+	if err != nil || !stopped {
+		t.Fatalf("stop legacy scoped task = (%v, %v), want (true, nil); commands %v", stopped, err, commands)
+	}
+	wantEnd := "schtasks /End /TN " + legacyScopedWindowsTaskName(p)
+	if !containsCmd(commands, wantEnd) {
+		t.Fatalf("commands = %v, want %q", commands, wantEnd)
+	}
+}
+
 // TestDefaultServiceManagerBypassedIsTrueUnderGoTest locks in the contract
 // that protects developer machines: under `go test`, the default bypass
 // function must short-circuit managed-service plumbing so unstubbed daemon
@@ -1220,7 +1451,11 @@ func TestStopFallsBackToDetachedDaemonOnWindowsWithoutManagedService(t *testing.
 // previously caused TestStopNotRunningIsNoop to tear down the live
 // LaunchAgent-managed daemon on macOS.
 func TestDefaultServiceManagerBypassedIsTrueUnderGoTest(t *testing.T) {
-	if !defaultServiceManagerBypassed() {
+	bypassed, err := defaultServiceManagerBypassed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bypassed {
 		t.Fatal("defaultServiceManagerBypassed() must return true under `go test` so daemon tests cannot reach real launchctl/systemctl/schtasks state")
 	}
 }
@@ -1246,7 +1481,7 @@ func TestStopWithUnstubbedPathsDoesNotInvokeRealServiceCommands(t *testing.T) {
 	serviceCurrentUser = func() (*user.User, error) { return &user.User{Uid: "99999"}, nil }
 	runtimeGOOS = runtime.GOOS
 
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -1321,7 +1556,7 @@ func TestStartWithUnstubbedPathsDoesNotInvokeRealServiceCommands(t *testing.T) {
 	// full managed-install-then-fallback decision tree.
 	daemonHealthCheck = func(*paths.Paths) (bool, error) { return false, nil }
 
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -1343,7 +1578,7 @@ func TestServiceInstanceSuffixResolvesSymlinkedRoot(t *testing.T) {
 	}
 
 	base := t.TempDir()
-	realRoot := filepath.Join(base, "real", "nm-home")
+	realRoot := filepath.Join(base, "real", "ns-home")
 	if err := os.MkdirAll(realRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1353,7 +1588,7 @@ func TestServiceInstanceSuffixResolvesSymlinkedRoot(t *testing.T) {
 	}
 
 	realPaths := paths.WithRoot(realRoot)
-	aliasPaths := paths.WithRoot(filepath.Join(linkRoot, "nm-home"))
+	aliasPaths := paths.WithRoot(filepath.Join(linkRoot, "ns-home"))
 
 	if got, want := serviceInstanceSuffix(aliasPaths), serviceInstanceSuffix(realPaths); got != want {
 		t.Fatalf("serviceInstanceSuffix(alias) = %q, want %q", got, want)
@@ -1366,6 +1601,38 @@ func TestServiceInstanceSuffixResolvesSymlinkedRoot(t *testing.T) {
 	}
 	if got, want := windowsTaskName(aliasPaths), windowsTaskName(realPaths); got != want {
 		t.Fatalf("windowsTaskName(alias) = %q, want %q", got, want)
+	}
+}
+
+func TestServiceDefinitionMatchesRootResolvesSymlinkedRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink setup is environment-dependent on Windows")
+	}
+
+	base := t.TempDir()
+	realRoot := filepath.Join(base, "real", "ns-home")
+	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkRoot := filepath.Join(base, "alias")
+	if err := os.Symlink(filepath.Join(base, "real"), linkRoot); err != nil {
+		t.Skipf("symlink setup unavailable: %v", err)
+	}
+
+	realPaths := paths.WithRoot(realRoot)
+	aliasPaths := paths.WithRoot(filepath.Join(linkRoot, "ns-home"))
+	home := t.TempDir()
+	windowsArgs := "daemon run --root " + quoteWindowsTaskArg(aliasPaths.Root())
+	definitions := map[string][]byte{
+		"launchd":  []byte(renderLaunchAgent("/usr/local/bin/no-mistakes", aliasPaths, home)),
+		"systemd":  []byte(renderSystemdUnit("/usr/local/bin/no-mistakes", aliasPaths, home)),
+		"schtasks": []byte("<Task><Actions><Exec><Arguments>" + xmlEscaped(windowsArgs) + "</Arguments></Exec></Actions></Task>"),
+	}
+
+	for name, data := range definitions {
+		if !serviceDefinitionMatchesRoot(data, realPaths) {
+			t.Fatalf("%s definition with alias root did not match real root", name)
+		}
 	}
 }
 
@@ -1392,7 +1659,7 @@ func TestServiceInstanceSuffixDistinguishesRelativeRootsAcrossWorkingDirs(t *tes
 		}
 	}()
 
-	relativePaths := paths.WithRoot(filepath.Join(".", "nm-home"))
+	relativePaths := paths.WithRoot(filepath.Join(".", "ns-home"))
 
 	if err := os.Chdir(firstWD); err != nil {
 		t.Fatal(err)
@@ -1424,7 +1691,7 @@ func TestServiceInstanceSuffixNormalizesCaseOnWindows(t *testing.T) {
 }
 
 // TestStopDoesNotTouchManagedDaemonOwnedByDifferentNMHome is the structural
-// regression test for the per-NM_HOME scoping. Before scoping, the launchd
+// regression test for the per-NS_HOME scoping. Before scoping, the launchd
 // label / systemd unit / Windows task name were globally unique per user.
 // Any `go test ./internal/daemon` in any checkout - including worktrees
 // without the testing.Testing() bypass - called TestStopNotRunningIsNoop
@@ -1433,7 +1700,7 @@ func TestServiceInstanceSuffixNormalizesCaseOnWindows(t *testing.T) {
 // with serviceManagerBypassed explicitly disabled (simulating worktrees
 // without the testing.Testing() guard), Stop(p) for a tmpdir paths.Paths
 // must still not invoke any destructive service-manager command against
-// artifacts owned by a different NM_HOME.
+// artifacts owned by a different NS_HOME.
 func TestStopDoesNotTouchManagedDaemonOwnedByDifferentNMHome(t *testing.T) {
 	cleanup := stubServiceRuntime(t)
 	defer cleanup()
@@ -1442,19 +1709,19 @@ func TestStopDoesNotTouchManagedDaemonOwnedByDifferentNMHome(t *testing.T) {
 	// test binary compiled from a codebase that predates or lacks the
 	// bypass, which is exactly the failure mode observed in pipeline
 	// worktrees rebased onto older main branches.
-	serviceManagerBypassed = func() bool { return false }
+	serviceManagerBypassed = func() (bool, error) { return false, nil }
 
 	home := t.TempDir()
 	serviceUserHomeDir = func() (string, error) { return home, nil }
 	serviceCurrentUser = func() (*user.User, error) { return &user.User{Uid: "99999"}, nil }
 	runtimeGOOS = runtime.GOOS
 
-	// Simulate a live managed daemon owned by a DIFFERENT NM_HOME - i.e.
+	// Simulate a live managed daemon owned by a DIFFERENT NS_HOME - i.e.
 	// the user's real ~/.no-mistakes - by seeding the artifact that an
 	// older unscoped binary would have installed (the legacy global name),
 	// plus the scoped artifact a modern binary would install for that
-	// other NM_HOME. Stop(p) for a test p.Root() must touch neither.
-	otherP := paths.WithRoot(filepath.Join(home, "real-nm-home"))
+	// other NS_HOME. Stop(p) for a test p.Root() must touch neither.
+	otherP := paths.WithRoot(filepath.Join(home, "real-ns-home"))
 	switch runtime.GOOS {
 	case "darwin":
 		plistDir := filepath.Join(home, "Library", "LaunchAgents")
@@ -1491,26 +1758,26 @@ func TestStopDoesNotTouchManagedDaemonOwnedByDifferentNMHome(t *testing.T) {
 		return nil, fmt.Errorf("not found")
 	}
 
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "test-nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "test-ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
 
 	if err := Stop(p); err != nil {
-		t.Fatalf("Stop(p) should be a no-op when no managed daemon is owned by this NM_HOME: %v", err)
+		t.Fatalf("Stop(p) should be a no-op when no managed daemon is owned by this NS_HOME: %v", err)
 	}
 	for _, cmd := range called {
-		// Destructive subcommands that would tear down another NM_HOME's daemon.
+		// Destructive subcommands that would tear down another NS_HOME's daemon.
 		for _, forbidden := range []string{"bootout", "/End", "/Delete", "--user stop", "--user disable"} {
 			if strings.Contains(cmd, forbidden) {
-				t.Fatalf("Stop(p) must not touch managed daemon owned by a different NM_HOME, got destructive command: %q", cmd)
+				t.Fatalf("Stop(p) must not touch managed daemon owned by a different NS_HOME, got destructive command: %q", cmd)
 			}
 		}
 	}
 }
 
 func TestWaitForDaemonStartKillsChildOnTimeout(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -1551,7 +1818,7 @@ func TestWaitForDaemonStartKillsChildOnTimeout(t *testing.T) {
 }
 
 func TestWaitForDaemonStartReturnsCleanupErrorOnTimeout(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -1593,7 +1860,7 @@ func TestWaitForDaemonStartReturnsCleanupErrorOnTimeout(t *testing.T) {
 }
 
 func TestWaitForDaemonStartSkipsKillForReusedPID(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -1634,7 +1901,7 @@ func TestWaitForDaemonStartSkipsKillForReusedPID(t *testing.T) {
 }
 
 func TestWaitForDaemonStartDoesNotKillWhenPIDZero(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -1705,7 +1972,7 @@ func stubServiceRuntime(t *testing.T) func() {
 	oldInspectManagedDaemonService := inspectManagedDaemonService
 	oldHealthCheck := daemonHealthCheck
 	oldServiceBypass := serviceManagerBypassed
-	serviceManagerBypassed = func() bool { return false }
+	serviceManagerBypassed = func() (bool, error) { return false, nil }
 	prepareManagedDaemonLaunch = func(*paths.Paths) (managedServiceLaunch, error) {
 		return managedServiceLaunch{}, nil
 	}

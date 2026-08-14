@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
-	"github.com/kunchenguid/no-mistakes/internal/config"
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/pipeline"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/pipeline"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 type mockAgent struct {
@@ -303,9 +303,9 @@ func newFakeBitbucketPRAPI(t *testing.T, existingPRID int, existingPRURL string)
 
 func fakeBitbucketEnv(apiBaseURL string) []string {
 	return []string{
-		"NO_MISTAKES_BITBUCKET_EMAIL=test@example.com",
-		"NO_MISTAKES_BITBUCKET_API_TOKEN=test-token",
-		"NO_MISTAKES_BITBUCKET_API_BASE_URL=" + apiBaseURL,
+		"NS_BITBUCKET_EMAIL=test@example.com",
+		"NS_BITBUCKET_API_TOKEN=test-token",
+		"NS_BITBUCKET_API_BASE_URL=" + apiBaseURL,
 	}
 }
 

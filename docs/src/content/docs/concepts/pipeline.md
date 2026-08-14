@@ -19,7 +19,7 @@ flowchart LR
   ci -. failures .-> action
 ```
 
-This page is the overview. For each step's exact behavior, defaults, skip rules, and fix-commit format, see [Pipeline Steps](/no-mistakes/reference/pipeline-steps/).
+This page is the overview. For each step's exact behavior, defaults, skip rules, and fix-commit format, see [Pipeline Steps](/no-slop/reference/pipeline-steps/).
 
 ## What a passed gate means
 
@@ -69,7 +69,7 @@ Every step can:
 - **Skip** when there's nothing to do (e.g., no diff, unsupported host).
 - **Fail** on fatal errors and stop the pipeline.
 
-See [Auto-Fix Loop](/no-mistakes/concepts/auto-fix/) for how the fix cycle works, and [Using the TUI](/no-mistakes/guides/tui/) for what the approval UI looks like.
+See [Auto-Fix Loop](/no-slop/concepts/auto-fix/) for how the fix cycle works, and [Using the TUI](/no-slop/guides/tui/) for what the approval UI looks like.
 
 ## What you can configure
 
@@ -81,9 +81,9 @@ You can't reorder steps. You *can*:
 - Control auto-fix limits per step.
 - Ignore paths during review and documentation checks.
 - Disable or tune transcript-based intent extraction when intent is not supplied directly.
-- Skip steps for one run with `no-mistakes --skip <steps>`, `git push -o no-mistakes.skip=<steps>`, `no-mistakes axi run --skip <steps>`, or from the TUI.
+- Skip steps for one run with `no-slop --skip <steps>`, `git push -o no-slop.skip=<steps>`, `no-slop axi run --skip <steps>`, or from the TUI.
 
-See [Configuration](/no-mistakes/guides/configuration/).
+See [Configuration](/no-slop/guides/configuration/).
 
 ## What you can't configure
 

@@ -3,7 +3,7 @@ title: Pipeline Steps
 description: Reference for each step in the validation pipeline.
 ---
 
-This is the per-step reference. For the overview and rationale, see [Pipeline](/no-mistakes/concepts/pipeline/). For the fix loop, see [Auto-Fix Loop](/no-mistakes/concepts/auto-fix/).
+This is the per-step reference. For the overview and rationale, see [Pipeline](/no-slop/concepts/pipeline/). For the fix loop, see [Auto-Fix Loop](/no-slop/concepts/auto-fix/).
 
 ```
 intent → rebase → review → test → document → lint → push → pr → ci
@@ -13,10 +13,10 @@ Each step can produce findings, request approval, trigger auto-fix, or apply saf
 In the TUI, yolo mode is an explicit override that auto-resolves paused steps: `auto-fix` and `ask-user` findings are fixed once with every finding selected, fix-review gates are approved, and gates with only `no-op` findings are approved as-is.
 Every pipeline agent invocation is prompt-steered to keep intentional writes inside the run worktree and avoid mutating system state outside it.
 This is a soft boundary, not OS-level sandbox enforcement.
-The steering still allows requested test evidence under the managed temporary `no-mistakes-evidence` directory or the configured in-repo evidence directory, plus incidental temp or cache writes from normal development tools.
-Configured shell commands and one-shot agent subprocesses are scoped to their step: when the invocation exits, fails, or is cancelled, no-mistakes terminates remaining child processes it spawned so background workers do not outlive the run.
-When configured Test or Lint command output exceeds 64 KiB, the complete output remains in the authoritative step log while findings, IPC responses, and repair prompts receive a valid-UTF-8 head-and-tail projection capped at 64 KiB. The truncation marker reports the exact original and omitted byte counts and points to `no-mistakes axi logs --step <step> --full` for the complete output.
-Commits created by the shared Review, Test, Document, and Lint fix path use the configurable [`commit.fix_message`](/no-mistakes/reference/global-config/#commitfix_message) template.
+The steering still allows requested test evidence under the managed temporary `no-slop-evidence` directory or the configured in-repo evidence directory, plus incidental temp or cache writes from normal development tools.
+Configured shell commands and one-shot agent subprocesses are scoped to their step: when the invocation exits, fails, or is cancelled, no-slop terminates remaining child processes it spawned so background workers do not outlive the run.
+When configured Test or Lint command output exceeds 64 KiB, the complete output remains in the authoritative step log while findings, IPC responses, and repair prompts receive a valid-UTF-8 head-and-tail projection capped at 64 KiB. The truncation marker reports the exact original and omitted byte counts and points to `no-slop axi logs --step <step> --full` for the complete output.
+Commits created by the shared Review, Test, Document, and Lint fix path use the configurable [`commit.fix_message`](/no-slop/reference/global-config/#commitfix_message) template.
 Agent roles that can write, repair, or review tests reject tests whose only evidence is matching implementation source text, tokens, syntax, or incidental snapshots.
 They instead require an executable interface or a typed or normalized semantic model that proves observable behavior.
 Reading a file remains valid when that file is itself an owned output or data contract, and deterministic tests may inspect the final emitted agent prompt as a generated interface; model interpretation is reserved for development-only evaluation.
@@ -46,7 +46,7 @@ Fetches the latest authoritative remote state, fetches the configured pushed-bra
 **Behavior:**
 - Fetches `origin/<default_branch>` from the remote into the worktree, and also fetches the pushed branch for non-default branches unless the push rewrote branch history
 - Without fork routing, the pushed-branch target is `origin/<branch>`
-- With GitHub fork routing, the pushed-branch target is the fork branch fetched into `refs/remotes/no-mistakes-push/<branch>`
+- With GitHub fork routing, the pushed-branch target is the fork branch fetched into `refs/remotes/no-slop-push/<branch>`
 - If the branch is not the default branch, tries rebasing onto the pushed-branch target first, then `origin/<default_branch>`
 - If the push rewrote branch history, skips the pushed-branch rebase target so prior remote autofix commits do not get reintroduced
 - If the push rewrote the default branch and `origin/<default_branch>` advanced after that rewrite, pauses for manual approval before updating the branch
@@ -69,10 +69,10 @@ AI code review of your diff.
 - Diffs the base commit against head
 - Filters out files matching `ignore_patterns` from the repo config
 - Sends the filtered diff to the agent with structured review instructions and a structured output schema
-- Appends the [`review.path_instructions`](/no-mistakes/reference/repo-config/#reviewpath_instructions) blocks whose glob matches at least one changed file, in configured order, each labelled with its own `path` and the files it matched so a scoped rule cannot read as a repository-wide instruction; a change that matches nothing, or a repo with none configured, gets the prompt unchanged
+- Appends the [`review.path_instructions`](/no-slop/reference/repo-config/#reviewpath_instructions) blocks whose glob matches at least one changed file, in configured order, each labelled with its own `path` and the files it matched so a scoped rule cannot read as a repository-wide instruction; a change that matches nothing, or a repo with none configured, gets the prompt unchanged
 - Selects those blocks against the complete changed-file list rather than the `ignore_patterns`-filtered one, so a pushed-branch ignore entry cannot suppress a trusted rule, and reads them from the trusted default-branch config copy regardless of `allow_repo_commands`
 - Logs which of those rules it applied and which matched no changed path
-- Includes user intent when the run has supplied intent or transcript matching found a relevant local agent session; the detailed provenance semantics are documented in [Intent extraction](/no-mistakes/guides/agents/#intent-extraction)
+- Includes user intent when the run has supplied intent or transcript matching found a relevant local agent session; the detailed provenance semantics are documented in [Intent extraction](/no-slop/guides/agents/#intent-extraction)
 - Treats authoritative intent as enforceable for source-verifiable acceptance criteria, but does not report the absence of a remote branch, push, pull request, or CI state that this run's later Push, PR, or CI step owns
 - Removes any returned finding whose sole claim is that one of those same-run delivery outcomes is not present yet, while keeping findings about pre-existing or external pull requests, third-party artifacts, and lifecycle state that the current run does not own
 - Keeps the later Push, PR, and CI steps responsible for strictly validating their own outcomes after review completes
@@ -84,7 +84,7 @@ AI code review of your diff.
 - With the default `session_reuse: true`, Claude and Codex reuse one durable fixer session across review-fix turns; a resume failure retries the same fix turn in a fresh fixer session, and unsupported agents run cold
 - Atomically records the exact commit examined when a full review completes successfully; a parked review retains its candidate only for recovery, while failed, skipped, superseded, and legacy reviews grant no inferred approval authority
 
-**Approval:** required if any finding has severity `error` or `warning`. Findings with `action: ask-user` pause for approval instead of entering the normal auto-fix loop. This is for findings that challenge the author's intent, not routine correctness, reliability, or security fixes that may need to re-add a small amount of deleted logic. With the default `auto_fix.review: 0`, blocking review findings park for approval even when their action is `auto-fix`; setting repo or global `auto_fix.review` above `0` re-enables the automatic review fix loop for eligible `auto-fix` findings. Findings with `action: no-op` are informational only. The shared [finding-action model](/no-mistakes/concepts/auto-fix/#finding-actions) owns the behavior for a missing `action`.
+**Approval:** required if any finding has severity `error` or `warning`. Findings with `action: ask-user` pause for approval instead of entering the normal auto-fix loop. This is for findings that challenge the author's intent, not routine correctness, reliability, or security fixes that may need to re-add a small amount of deleted logic. With the default `auto_fix.review: 0`, blocking review findings park for approval even when their action is `auto-fix`; setting repo or global `auto_fix.review` above `0` re-enables the automatic review fix loop for eligible `auto-fix` findings. Findings with `action: no-op` are informational only. The shared [finding-action model](/no-slop/concepts/auto-fix/#finding-actions) owns the behavior for a missing `action`.
 
 **Auto-fix:** the agent receives the selected previous findings plus any per-finding user notes, any selected user-authored findings from the TUI or AXI interface, and a sanitized history of prior rounds for that step, including earlier fix summaries and which findings the user left unselected.
 The fixer applies all selected fixes before running one focused verification limited to the changed area, and it is instructed not to run the complete repository test or lint suite during the fix round.
@@ -95,20 +95,20 @@ Follow-up review passes use the history to avoid re-reporting user-ignored findi
 
 ### Post-review HEAD continuity
 
-At entry to every remaining step in the fixed pipeline order - Test, Document, Lint, Push, PR, and CI - no-mistakes compares the live worktree `HEAD` with the pipeline-recorded head. An equal head or a pipeline-descendant commit continues. A backward reset, divergent sibling, or unverifiable relationship fails the run before that step performs work, including for steps that would not create a commit.
+At entry to every remaining step in the fixed pipeline order - Test, Document, Lint, Push, PR, and CI - no-slop compares the live worktree `HEAD` with the pipeline-recorded head. An equal head or a pipeline-descendant commit continues. A backward reset, divergent sibling, or unverifiable relationship fails the run before that step performs work, including for steps that would not create a commit.
 
 ## Test
 
 Runs **targeted** local validation of the change and requested intent, then gathers evidence for that intent.
 Local Test is never a repository-wide regression-suite substitute; broad regression is owned by remote CI and remains mandatory before a PR is ready.
-[`commands.test`](/no-mistakes/reference/repo-config/#commandstest) owns the configuration contract for any explicit baseline command.
+[`commands.test`](/no-slop/reference/repo-config/#commandstest) owns the configuration contract for any explicit baseline command.
 
 **Behavior:**
 - If `commands.test` is set in repo config: runs it first as a baseline via the platform shell (`sh -c` on POSIX, `cmd.exe /c` on Windows) and captures output. Non-zero exit produces `error` findings. Configure a **targeted** command here (see repo-config); do not treat this field as CI-parity complete-suite configuration.
 - If `commands.test` is empty, or user intent is available after the baseline command passes: the agent validates the change with the **smallest relevant** evidence-oriented tests or manual checks, returning structured findings with severity, description, and `action` (`no-op`, `auto-fix`, `ask-user`). Both the normal evidence agent and the Test-repair agent are instructed not to run the complete repository test suite; a generic driver instruction asking for broad or full-suite confirmation does not override that product boundary. For UI, HTML, CSS, browser, visual layout, or copy-placement changes, the agent attempts reviewer-visible visual evidence and explains in `testing_summary` when screenshots, images, videos, GIFs, or rendered HTML artifacts are not captured.
 - "Do not run everything" is not "run nothing": when no targeted check can establish the intent, the agent must write or improve a focused test, perform manual verification with evidence, or report a warning finding that sufficient targeted evidence is not possible.
-- The step records the exact tests and checks it exercised in a `tested` array, may include a short natural-language `testing_summary`, and includes an `artifacts` array for reviewer-visible evidence; `path` artifacts may be repository-relative paths or absolute paths under the temporary `no-mistakes-evidence/<runID>` directory, `url` artifacts must be externally visible, and `content` artifacts should be short logs or command output shown directly in the PR.
-- By default, evidence is stored under the temporary `no-mistakes-evidence/<runID>` directory. With `test.evidence.store_in_repo: true`, evidence is stored under `<test.evidence.dir>/<branch-slug>` inside the worktree, staged during push, and published with the branch. Unsafe, symlinked, or Git-ignored evidence directories fall back to temporary storage for that run.
+- The step records the exact tests and checks it exercised in a `tested` array, may include a short natural-language `testing_summary`, and includes an `artifacts` array for reviewer-visible evidence; `path` artifacts may be repository-relative paths or absolute paths under the temporary `no-slop-evidence/<runID>` directory, `url` artifacts must be externally visible, and `content` artifacts should be short logs or command output shown directly in the PR.
+- By default, evidence is stored under the temporary `no-slop-evidence/<runID>` directory. With `test.evidence.store_in_repo: true`, evidence is stored under `<test.evidence.dir>/<branch-slug>` inside the worktree, staged during push, and published with the branch. Unsafe, symlinked, or Git-ignored evidence directories fall back to temporary storage for that run.
 - Before finishing, test agents are instructed to remove transient working-tree artifacts they created, such as downloaded models, caches, build outputs, large binaries, or generated data directories, while preserving intentional source or test-file changes and evidence files under the dedicated evidence directory.
 - Missing evidence for user intent can be reported as a warning with `action: ask-user`.
 - If the agent creates new test files (detected via `git status --porcelain`), they are recorded as informational `no-op` findings and do not require approval when tests pass.
@@ -164,7 +164,7 @@ Pushes the validated branch to the configured push target.
 **Behavior:**
 - If `commands.format` is set, runs it first
 - Stages in-repo test evidence artifacts when `test.evidence.store_in_repo` is enabled and the evidence directory is not ignored by Git
-- Commits any uncommitted agent changes with message `no-mistakes: apply agent fixes`
+- Commits any uncommitted agent changes with message `no-slop: apply agent fixes`
 - Without fork routing, successful run-start validation selects the upstream URL from the working clone; when it matches the gate worktree's `origin`, the worktree URL is used so embedded credentials retained outside the database can authenticate. If validation fails, the run continues with its prior routing.
 - With GitHub fork routing, the push target is `repos.fork_url`
 - Immediately before remote mutation, reloads the durable review-approved commit and refuses to push when that binding is missing, malformed, or unreachable
@@ -193,7 +193,7 @@ Creates or updates a pull request.
 - The upstream host is not GitHub, GitLab, Bitbucket Cloud (`bitbucket.org`), or Azure DevOps (`dev.azure.com` / `*.visualstudio.com`)
 - The provider CLI (`gh` or `glab`) is not installed for GitHub or GitLab
 - The provider CLI is not authenticated for GitHub or GitLab
-- Bitbucket Cloud credentials are missing (`NO_MISTAKES_BITBUCKET_EMAIL` or `NO_MISTAKES_BITBUCKET_API_TOKEN`)
+- Bitbucket Cloud credentials are missing (`NS_BITBUCKET_EMAIL` or `NS_BITBUCKET_API_TOKEN`)
 - The `az` CLI with the `azure-devops` extension is not installed or not authenticated for Azure DevOps
 - A legacy or manually edited GitLab, Bitbucket, or Azure DevOps repo record has `fork_url` set, because fork MR/PR routing is currently GitHub-only
 
@@ -220,20 +220,20 @@ Monitors PR health after creation and auto-fixes CI failures. Mergeability polli
 
 - GitHub requires `gh` CLI, installed and authenticated.
 - GitLab requires `glab` CLI, installed and authenticated.
-- Bitbucket Cloud requires `NO_MISTAKES_BITBUCKET_EMAIL` and `NO_MISTAKES_BITBUCKET_API_TOKEN`.
+- Bitbucket Cloud requires `NS_BITBUCKET_EMAIL` and `NS_BITBUCKET_API_TOKEN`.
 - Azure DevOps requires the `az` CLI with the `azure-devops` extension, authenticated with a PAT.
 
 **Behavior:**
 - Polls provider CI status at increasing intervals: every 30s for the first 5 minutes, every 60s for 5-15 minutes, every 120s after that
 - Continues its normal monitoring loop until the PR is merged, closed, declined, or the configured `ci_timeout` idle window elapses, then parks at an approval gate instead of ending the run
-- The [`ci_timeout` reference](/no-mistakes/reference/global-config/#ci_timeout) owns idle re-arming, unlimited monitoring, and fail-closed reconciliation while that gate is parked
+- The [`ci_timeout` reference](/no-slop/reference/global-config/#ci_timeout) owns idle re-arming, unlimited monitoring, and fail-closed reconciliation while that gate is parked
 - On GitHub, GitLab, and Azure DevOps, polls provider mergeability alongside CI checks while the PR remains open
-- While the PR stays open, the TUI and terminal title show `Checks passed` once CI readiness is established and known mergeability is clear, and `no-mistakes axi` returns `outcome: checks-passed` with successful-output reporting instructions so agents can summarize the run, ask the user to review and merge, and list any pipeline fixes instead of waiting
-- An empty forge check list is never treated as green unless the trusted default-branch config declares [`no_ci: true`](/no-mistakes/reference/repo-config/#no_ci). That declaration is positive durable evidence the repository intentionally has no CI; absence means CI is expected and delayed registration stays not-ready. If checks still appear on a declared no-CI repo, their actual states are honored
+- While the PR stays open, the TUI and terminal title show `Checks passed` once CI readiness is established and known mergeability is clear, and `no-slop axi` returns `outcome: checks-passed` with successful-output reporting instructions so agents can summarize the run, ask the user to review and merge, and list any pipeline fixes instead of waiting
+- An empty forge check list is never treated as green unless the trusted default-branch config declares [`no_ci: true`](/no-slop/reference/repo-config/#no_ci). That declaration is positive durable evidence the repository intentionally has no CI; absence means CI is expected and delayed registration stays not-ready. If checks still appear on a declared no-CI repo, their actual states are honored
 - If the default branch moves after `checks-passed`, keeps watching the same PR; a clean behind PR needs no action, while an actual GitHub, GitLab, or Azure DevOps merge conflict is auto-fixed by rebasing onto the base and re-pushing through the force-push safety guard
 - The ready signal clears if checks start running again, new failures appear, provider state becomes uncertain, or the PR is merged, closed, or declined
 - If CI failures or, on GitHub, GitLab, or Azure DevOps, a merge conflict are already known while other checks are still pending: waits for all checks to finish before attempting an auto-fix
-- Once every check has finished, classifies each terminally failed check by the provider's own reported outcome before anything escalates; [`ci.rerun_transient`](/no-mistakes/reference/repo-config/#cirerun_transient) owns which outcomes count as the provider reporting itself
+- Once every check has finished, classifies each terminally failed check by the provider's own reported outcome before anything escalates; [`ci.rerun_transient`](/no-slop/reference/repo-config/#cirerun_transient) owns which outcomes count as the provider reporting itself
 - On GitHub, when the configured budget authorizes a rerun, re-runs such a check for the same commit instead of escalating it, targeting the job its details link identifies and naming each rerun in the step log so a run waiting on one is visible in the TUI and `axi`
 - Escalates every other failure, and any merge conflict, on its first observation with no added latency, and waits out the poll or two a provider can take to publish an accepted rerun rather than escalating the outcome that rerun was meant to replace
 - When cancellation is the only remaining issue, pauses for user approval without spending an auto-fix attempt if no rerun is going to replace it: a check cancelled again after its rerun, and - on the default budget of `0`, once the budget is spent, or on a provider with no rerun API - the cancellation itself. A cancellation is terminal: the provider has published its conclusion and will not replace it on its own, so continuing to poll never resolves it, there is nothing for the fix agent to repair, and the PR must not look green either

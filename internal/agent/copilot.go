@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/kunchenguid/no-mistakes/internal/shellenv"
+	"github.com/Blakeolson21/no-slop/internal/shellenv"
 )
 
 // copilotAgent spawns the GitHub Copilot CLI for each invocation. Copilot
@@ -139,7 +139,7 @@ func copilotErrorDetail(copilotErr, stderr string) string {
 
 // buildArgs constructs the copilot CLI arguments. User-supplied extraArgs
 // (from agent_args_override) are inserted ahead of the managed flags so user
-// choices (e.g. --model, --effort) win over no-mistakes' defaults. If the user
+// choices (e.g. --model, --effort) win over no-slop' defaults. If the user
 // supplied their own permission flag, the default --allow-all-tools is not
 // added; --no-ask-user is always added so the agent never blocks waiting for
 // interactive input.
@@ -205,7 +205,7 @@ func buildCopilotPrompt(prompt string, schema json.RawMessage) string {
 	if err != nil {
 		pretty = []byte(schema)
 	}
-	return prompt + "\n\n## no-mistakes final output contract\n\n" +
+	return prompt + "\n\n## no-slop final output contract\n\n" +
 		"When the task is complete, your final assistant response must be only valid JSON matching this JSON Schema. " +
 		"Do not wrap it in Markdown fences. Do not include prose before or after the JSON object.\n\n" +
 		string(pretty)

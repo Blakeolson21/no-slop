@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestCommitRenderFixMessage_Default(t *testing.T) {
@@ -16,7 +16,7 @@ func TestCommitRenderFixMessage_Default(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "no-mistakes(review): address review findings"
+	want := "no-slop(review): address review findings"
 	if got != want {
 		t.Fatalf("RenderFixMessage() = %q, want %q", got, want)
 	}
@@ -25,12 +25,12 @@ func TestCommitRenderFixMessage_Default(t *testing.T) {
 func TestCommitRenderFixMessage_CustomTemplate(t *testing.T) {
 	t.Parallel()
 
-	commit := Commit{FixMessage: "chore(no-mistakes-{{.Step}}): {{.Summary}}"}
+	commit := Commit{FixMessage: "chore(no-slop-{{.Step}}): {{.Summary}}"}
 	got, err := commit.RenderFixMessage(types.StepDocument, "update configuration docs")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "chore(no-mistakes-document): update configuration docs"
+	want := "chore(no-slop-document): update configuration docs"
 	if got != want {
 		t.Fatalf("RenderFixMessage() = %q, want %q", got, want)
 	}
@@ -105,7 +105,7 @@ func TestCommitRenderFixMessage_NormalizesMultilineSummary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "no-mistakes(document): update configuration docs"
+	want := "no-slop(document): update configuration docs"
 	if got != want {
 		t.Fatalf("RenderFixMessage() = %q, want %q", got, want)
 	}
@@ -182,7 +182,7 @@ func TestLoadGlobal_CommitFixMessage(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	const source = "chore(no-mistakes-{{.Step}}): {{.Summary}}"
+	const source = "chore(no-slop-{{.Step}}): {{.Summary}}"
 	data := []byte("commit:\n  fix_message: '" + source + "'\n")
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
@@ -234,7 +234,7 @@ func TestLoadRepo_CommitFixMessage(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	path := filepath.Join(dir, ".no-mistakes.yaml")
+	path := filepath.Join(dir, ".no-slop.yaml")
 	const source = "{{.Summary}}"
 	data := []byte("commit:\n  fix_message: '" + source + "'\n")
 	if err := os.WriteFile(path, data, 0o644); err != nil {

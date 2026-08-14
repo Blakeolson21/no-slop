@@ -74,7 +74,7 @@ func FindDaemonsForRoot(nmHome string) ([]int, error) {
 	var pids []int
 	for {
 		exe := windows.UTF16ToString(entry.ExeFile[:])
-		if strings.EqualFold(exe, "no-mistakes.exe") || strings.EqualFold(exe, "no-mistakes") {
+		if strings.EqualFold(exe, "no-slop.exe") || strings.EqualFold(exe, "no-slop") {
 			pid := int(entry.ProcessID)
 			command, err := processCommandLine(pid)
 			if err != nil {

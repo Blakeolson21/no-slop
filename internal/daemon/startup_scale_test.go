@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/git"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
 // TestColdDetachedStartupProductionGateCardinality reproduces the production
@@ -41,7 +41,7 @@ func TestColdDetachedStartupProductionGateCardinality(t *testing.T) {
 func startColdDetachedFixture(t *testing.T, gateCount int, delayedGit bool) time.Duration {
 	t.Helper()
 
-	root, err := os.MkdirTemp("", fmt.Sprintf("nm-startup-%d-", gateCount))
+	root, err := os.MkdirTemp("", fmt.Sprintf("ns-startup-%d-", gateCount))
 	if err != nil {
 		t.Fatal(err)
 	}

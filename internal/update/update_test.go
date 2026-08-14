@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestUpdaterCheckLatestAndRefreshCache(t *testing.T) {
@@ -32,19 +32,19 @@ func TestUpdaterCheckLatestAndRefreshCache(t *testing.T) {
 		{
 			name:        "darwin tarball",
 			platform:    platformSpec{GOOS: "darwin", GOARCH: "arm64"},
-			archiveName: "no-mistakes-v1.2.3-darwin-arm64.tar.gz",
+			archiveName: "no-slop-v1.2.3-darwin-arm64.tar.gz",
 		},
 		{
 			name:        "windows zip",
 			platform:    platformSpec{GOOS: "windows", GOARCH: "amd64"},
-			archiveName: "no-mistakes-v1.2.3-windows-amd64.zip",
+			archiveName: "no-slop-v1.2.3-windows-amd64.zip",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != "/repos/kunchenguid/no-mistakes/releases/latest" {
+				if r.URL.Path != "/repos/kunchenguid/no-slop/releases/latest" {
 					t.Fatalf("unexpected path %q", r.URL.Path)
 				}
 				fmt.Fprintf(w, `{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":"http://example.com/archive"},{"name":"checksums.txt","browser_download_url":"http://example.com/checksums"}]}`,
@@ -55,8 +55,8 @@ func TestUpdaterCheckLatestAndRefreshCache(t *testing.T) {
 
 			cachePath := filepath.Join(t.TempDir(), "update-check.json")
 			u := &updater{
-				appName:        "no-mistakes",
-				repo:           "kunchenguid/no-mistakes",
+				appName:        "no-slop",
+				repo:           "kunchenguid/no-slop",
 				currentVersion: "v1.2.2",
 				platform:       tt.platform,
 				apiBaseURL:     server.URL,
@@ -97,9 +97,9 @@ func TestUpdaterRunReplacesExecutable(t *testing.T) {
 	allowInsecureDownloads = true
 	t.Cleanup(func() { allowInsecureDownloads = false })
 
-	archiveName := "no-mistakes-v1.2.3-darwin-arm64.tar.gz"
+	archiveName := "no-slop-v1.2.3-darwin-arm64.tar.gz"
 	archive := makeTarGz(t, map[string][]byte{
-		"bin/no-mistakes": []byte("new-binary"),
+		"bin/no-slop": []byte("new-binary"),
 	})
 	sum := sha256.Sum256(archive)
 	checksums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), archiveName)
@@ -107,7 +107,7 @@ func TestUpdaterRunReplacesExecutable(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/repos/kunchenguid/no-mistakes/releases/latest":
+		case "/repos/kunchenguid/no-slop/releases/latest":
 			fmt.Fprintf(w, `{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}`,
 				archiveName,
 				server.URL+"/archive",
@@ -123,15 +123,15 @@ func TestUpdaterRunReplacesExecutable(t *testing.T) {
 	}))
 	defer server.Close()
 
-	execPath := filepath.Join(t.TempDir(), "no-mistakes")
+	execPath := filepath.Join(t.TempDir(), "no-slop")
 	if err := os.WriteFile(execPath, []byte("old-binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	stdout := new(bytes.Buffer)
 	u := &updater{
-		appName:        "no-mistakes",
-		repo:           "kunchenguid/no-mistakes",
+		appName:        "no-slop",
+		repo:           "kunchenguid/no-slop",
 		currentVersion: "v1.2.2",
 		platform:       platformSpec{GOOS: "darwin", GOARCH: "arm64"},
 		apiBaseURL:     server.URL,
@@ -151,7 +151,7 @@ func TestUpdaterRunReplacesExecutable(t *testing.T) {
 	if string(content) != "new-binary" {
 		t.Fatalf("executable content = %q", string(content))
 	}
-	if !strings.Contains(stdout.String(), "updated no-mistakes") {
+	if !strings.Contains(stdout.String(), "updated no-slop") {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 }
@@ -160,9 +160,9 @@ func TestUpdaterRunResetsDaemonAfterUpdate(t *testing.T) {
 	allowInsecureDownloads = true
 	t.Cleanup(func() { allowInsecureDownloads = false })
 
-	archiveName := "no-mistakes-v1.2.3-darwin-arm64.tar.gz"
+	archiveName := "no-slop-v1.2.3-darwin-arm64.tar.gz"
 	archive := makeTarGz(t, map[string][]byte{
-		"bin/no-mistakes": []byte("new-binary"),
+		"bin/no-slop": []byte("new-binary"),
 	})
 	sum := sha256.Sum256(archive)
 	checksums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), archiveName)
@@ -170,7 +170,7 @@ func TestUpdaterRunResetsDaemonAfterUpdate(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/repos/kunchenguid/no-mistakes/releases/latest":
+		case "/repos/kunchenguid/no-slop/releases/latest":
 			fmt.Fprintf(w, `{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}`,
 				archiveName,
 				server.URL+"/archive",
@@ -186,15 +186,15 @@ func TestUpdaterRunResetsDaemonAfterUpdate(t *testing.T) {
 	}))
 	defer server.Close()
 
-	execPath := filepath.Join(t.TempDir(), "no-mistakes")
+	execPath := filepath.Join(t.TempDir(), "no-slop")
 	if err := os.WriteFile(execPath, []byte("old-binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	resetCalled := false
 	u := &updater{
-		appName:        "no-mistakes",
-		repo:           "kunchenguid/no-mistakes",
+		appName:        "no-slop",
+		repo:           "kunchenguid/no-slop",
 		currentVersion: "v1.2.2",
 		platform:       platformSpec{GOOS: "darwin", GOARCH: "arm64"},
 		apiBaseURL:     server.URL,
@@ -219,9 +219,9 @@ func TestUpdaterRunRefusesWithActiveRunsAndListsThem(t *testing.T) {
 	allowInsecureDownloads = true
 	t.Cleanup(func() { allowInsecureDownloads = false })
 
-	archiveName := "no-mistakes-v1.2.3-darwin-arm64.tar.gz"
+	archiveName := "no-slop-v1.2.3-darwin-arm64.tar.gz"
 	archive := makeTarGz(t, map[string][]byte{
-		"bin/no-mistakes": []byte("new-binary"),
+		"bin/no-slop": []byte("new-binary"),
 	})
 	sum := sha256.Sum256(archive)
 	checksums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), archiveName)
@@ -229,7 +229,7 @@ func TestUpdaterRunRefusesWithActiveRunsAndListsThem(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/repos/kunchenguid/no-mistakes/releases/latest":
+		case "/repos/kunchenguid/no-slop/releases/latest":
 			fmt.Fprintf(w, `{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}`,
 				archiveName,
 				server.URL+"/archive",
@@ -272,7 +272,7 @@ func TestUpdaterRunRefusesWithActiveRunsAndListsThem(t *testing.T) {
 		t.Fatalf("close db: %v", err)
 	}
 
-	execPath := filepath.Join(t.TempDir(), "no-mistakes")
+	execPath := filepath.Join(t.TempDir(), "no-slop")
 	if err := os.WriteFile(execPath, []byte("old-binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -281,8 +281,8 @@ func TestUpdaterRunRefusesWithActiveRunsAndListsThem(t *testing.T) {
 	stderr := new(bytes.Buffer)
 	resetCalled := false
 	u := &updater{
-		appName:        "no-mistakes",
-		repo:           "kunchenguid/no-mistakes",
+		appName:        "no-slop",
+		repo:           "kunchenguid/no-slop",
 		currentVersion: "v1.2.2",
 		platform:       platformSpec{GOOS: "darwin", GOARCH: "arm64"},
 		apiBaseURL:     server.URL,
@@ -375,9 +375,9 @@ func TestUpdaterRunFailsWhenDaemonResetFails(t *testing.T) {
 	allowInsecureDownloads = true
 	t.Cleanup(func() { allowInsecureDownloads = false })
 
-	archiveName := "no-mistakes-v1.2.3-darwin-arm64.tar.gz"
+	archiveName := "no-slop-v1.2.3-darwin-arm64.tar.gz"
 	archive := makeTarGz(t, map[string][]byte{
-		"bin/no-mistakes": []byte("new-binary"),
+		"bin/no-slop": []byte("new-binary"),
 	})
 	sum := sha256.Sum256(archive)
 	checksums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), archiveName)
@@ -385,7 +385,7 @@ func TestUpdaterRunFailsWhenDaemonResetFails(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/repos/kunchenguid/no-mistakes/releases/latest":
+		case "/repos/kunchenguid/no-slop/releases/latest":
 			fmt.Fprintf(w, `{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}`,
 				archiveName,
 				server.URL+"/archive",
@@ -401,7 +401,7 @@ func TestUpdaterRunFailsWhenDaemonResetFails(t *testing.T) {
 	}))
 	defer server.Close()
 
-	execPath := filepath.Join(t.TempDir(), "no-mistakes")
+	execPath := filepath.Join(t.TempDir(), "no-slop")
 	if err := os.WriteFile(execPath, []byte("old-binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -409,8 +409,8 @@ func TestUpdaterRunFailsWhenDaemonResetFails(t *testing.T) {
 	stdout := new(bytes.Buffer)
 	stderr := new(bytes.Buffer)
 	u := &updater{
-		appName:        "no-mistakes",
-		repo:           "kunchenguid/no-mistakes",
+		appName:        "no-slop",
+		repo:           "kunchenguid/no-slop",
 		currentVersion: "v1.2.2",
 		platform:       platformSpec{GOOS: "darwin", GOARCH: "arm64"},
 		apiBaseURL:     server.URL,
@@ -450,9 +450,9 @@ func TestUpdaterRunFailsWhenDaemonResetLeavesDaemonOffline(t *testing.T) {
 	allowInsecureDownloads = true
 	t.Cleanup(func() { allowInsecureDownloads = false })
 
-	archiveName := "no-mistakes-v1.2.3-darwin-arm64.tar.gz"
+	archiveName := "no-slop-v1.2.3-darwin-arm64.tar.gz"
 	archive := makeTarGz(t, map[string][]byte{
-		"bin/no-mistakes": []byte("new-binary"),
+		"bin/no-slop": []byte("new-binary"),
 	})
 	sum := sha256.Sum256(archive)
 	checksums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), archiveName)
@@ -460,7 +460,7 @@ func TestUpdaterRunFailsWhenDaemonResetLeavesDaemonOffline(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/repos/kunchenguid/no-mistakes/releases/latest":
+		case "/repos/kunchenguid/no-slop/releases/latest":
 			fmt.Fprintf(w, `{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}`,
 				archiveName,
 				server.URL+"/archive",
@@ -476,15 +476,15 @@ func TestUpdaterRunFailsWhenDaemonResetLeavesDaemonOffline(t *testing.T) {
 	}))
 	defer server.Close()
 
-	execPath := filepath.Join(t.TempDir(), "no-mistakes")
+	execPath := filepath.Join(t.TempDir(), "no-slop")
 	if err := os.WriteFile(execPath, []byte("old-binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	stdout := new(bytes.Buffer)
 	u := &updater{
-		appName:        "no-mistakes",
-		repo:           "kunchenguid/no-mistakes",
+		appName:        "no-slop",
+		repo:           "kunchenguid/no-slop",
 		currentVersion: "v1.2.2",
 		platform:       platformSpec{GOOS: "darwin", GOARCH: "arm64"},
 		apiBaseURL:     server.URL,
@@ -520,9 +520,9 @@ func TestUpdaterRunFailsWhenDaemonUsesDifferentExecutable(t *testing.T) {
 	allowInsecureDownloads = true
 	t.Cleanup(func() { allowInsecureDownloads = false })
 
-	archiveName := "no-mistakes-v1.2.3-darwin-arm64.tar.gz"
+	archiveName := "no-slop-v1.2.3-darwin-arm64.tar.gz"
 	archive := makeTarGz(t, map[string][]byte{
-		"bin/no-mistakes": []byte("new-binary"),
+		"bin/no-slop": []byte("new-binary"),
 	})
 	sum := sha256.Sum256(archive)
 	checksums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), archiveName)
@@ -530,7 +530,7 @@ func TestUpdaterRunFailsWhenDaemonUsesDifferentExecutable(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/repos/kunchenguid/no-mistakes/releases/latest":
+		case "/repos/kunchenguid/no-slop/releases/latest":
 			fmt.Fprintf(w, `{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}`,
 				archiveName,
 				server.URL+"/archive",
@@ -547,11 +547,11 @@ func TestUpdaterRunFailsWhenDaemonUsesDifferentExecutable(t *testing.T) {
 	defer server.Close()
 
 	execDir := t.TempDir()
-	execPath := filepath.Join(execDir, "no-mistakes")
+	execPath := filepath.Join(execDir, "no-slop")
 	if err := os.WriteFile(execPath, []byte("old-binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	otherExecPath := filepath.Join(execDir, "other-no-mistakes")
+	otherExecPath := filepath.Join(execDir, "other-no-slop")
 	if err := os.WriteFile(otherExecPath, []byte("other-binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -574,8 +574,8 @@ func TestUpdaterRunFailsWhenDaemonUsesDifferentExecutable(t *testing.T) {
 
 	resetCalled := false
 	u := &updater{
-		appName:        "no-mistakes",
-		repo:           "kunchenguid/no-mistakes",
+		appName:        "no-slop",
+		repo:           "kunchenguid/no-slop",
 		currentVersion: "v1.2.2",
 		platform:       platformSpec{GOOS: "darwin", GOARCH: "arm64"},
 		apiBaseURL:     server.URL,
@@ -615,9 +615,9 @@ func TestUpdaterRunReplacesDaemonWhenDifferentExecutableConfirmed(t *testing.T) 
 	allowInsecureDownloads = true
 	t.Cleanup(func() { allowInsecureDownloads = false })
 
-	archiveName := "no-mistakes-v1.2.3-darwin-arm64.tar.gz"
+	archiveName := "no-slop-v1.2.3-darwin-arm64.tar.gz"
 	archive := makeTarGz(t, map[string][]byte{
-		"bin/no-mistakes": []byte("new-binary"),
+		"bin/no-slop": []byte("new-binary"),
 	})
 	sum := sha256.Sum256(archive)
 	checksums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), archiveName)
@@ -625,7 +625,7 @@ func TestUpdaterRunReplacesDaemonWhenDifferentExecutableConfirmed(t *testing.T) 
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/repos/kunchenguid/no-mistakes/releases/latest":
+		case "/repos/kunchenguid/no-slop/releases/latest":
 			fmt.Fprintf(w, `{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}`,
 				archiveName,
 				server.URL+"/archive",
@@ -661,11 +661,11 @@ func TestUpdaterRunReplacesDaemonWhenDifferentExecutableConfirmed(t *testing.T) 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			execDir := t.TempDir()
-			execPath := filepath.Join(execDir, "no-mistakes")
+			execPath := filepath.Join(execDir, "no-slop")
 			if err := os.WriteFile(execPath, []byte("old-binary"), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			otherExecPath := filepath.Join(execDir, "other-no-mistakes")
+			otherExecPath := filepath.Join(execDir, "other-no-slop")
 			if err := os.WriteFile(otherExecPath, []byte("other-binary"), 0o755); err != nil {
 				t.Fatal(err)
 			}
@@ -681,8 +681,8 @@ func TestUpdaterRunReplacesDaemonWhenDifferentExecutableConfirmed(t *testing.T) 
 			stdout := new(bytes.Buffer)
 			stderr := new(bytes.Buffer)
 			u := &updater{
-				appName:        "no-mistakes",
-				repo:           "kunchenguid/no-mistakes",
+				appName:        "no-slop",
+				repo:           "kunchenguid/no-slop",
 				currentVersion: "v1.2.2",
 				platform:       platformSpec{GOOS: "darwin", GOARCH: "arm64"},
 				apiBaseURL:     server.URL,
@@ -713,7 +713,7 @@ func TestUpdaterRunReplacesDaemonWhenDifferentExecutableConfirmed(t *testing.T) 
 			if string(content) != "new-binary" {
 				t.Fatalf("executable content = %q", string(content))
 			}
-			if !strings.Contains(stdout.String(), "updated no-mistakes from v1.2.2 to v1.2.3") {
+			if !strings.Contains(stdout.String(), "updated no-slop from v1.2.2 to v1.2.3") {
 				t.Fatalf("stdout should report successful update, got %q", stdout.String())
 			}
 			for _, want := range []string{resolveExecutablePath(otherExecPath), resolveExecutablePath(execPath), tt.want} {
@@ -731,9 +731,9 @@ func TestUpdaterRunFailsWhenDaemonExecutableCannotBeResolved(t *testing.T) {
 	allowInsecureDownloads = true
 	t.Cleanup(func() { allowInsecureDownloads = false })
 
-	archiveName := "no-mistakes-v1.2.3-darwin-arm64.tar.gz"
+	archiveName := "no-slop-v1.2.3-darwin-arm64.tar.gz"
 	archive := makeTarGz(t, map[string][]byte{
-		"bin/no-mistakes": []byte("new-binary"),
+		"bin/no-slop": []byte("new-binary"),
 	})
 	sum := sha256.Sum256(archive)
 	checksums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), archiveName)
@@ -741,7 +741,7 @@ func TestUpdaterRunFailsWhenDaemonExecutableCannotBeResolved(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/repos/kunchenguid/no-mistakes/releases/latest":
+		case "/repos/kunchenguid/no-slop/releases/latest":
 			fmt.Fprintf(w, `{"tag_name":"v1.2.3","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}`,
 				archiveName,
 				server.URL+"/archive",
@@ -758,7 +758,7 @@ func TestUpdaterRunFailsWhenDaemonExecutableCannotBeResolved(t *testing.T) {
 	defer server.Close()
 
 	execDir := t.TempDir()
-	execPath := filepath.Join(execDir, "no-mistakes")
+	execPath := filepath.Join(execDir, "no-slop")
 	if err := os.WriteFile(execPath, []byte("old-binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -781,8 +781,8 @@ func TestUpdaterRunFailsWhenDaemonExecutableCannotBeResolved(t *testing.T) {
 
 	resetCalled := false
 	u := &updater{
-		appName:        "no-mistakes",
-		repo:           "kunchenguid/no-mistakes",
+		appName:        "no-slop",
+		repo:           "kunchenguid/no-slop",
 		currentVersion: "v1.2.2",
 		platform:       platformSpec{GOOS: "darwin", GOARCH: "arm64"},
 		apiBaseURL:     server.URL,
@@ -818,7 +818,7 @@ func TestUpdaterRunSkipsDaemonExecutableCheckWhenAlreadyUpToDate(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/repos/kunchenguid/no-mistakes/releases/latest":
+		case "/repos/kunchenguid/no-slop/releases/latest":
 			fmt.Fprint(w, `{"tag_name":"v1.2.2","assets":[]}`)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
@@ -826,7 +826,7 @@ func TestUpdaterRunSkipsDaemonExecutableCheckWhenAlreadyUpToDate(t *testing.T) {
 	}))
 	defer server.Close()
 
-	execPath := filepath.Join(t.TempDir(), "no-mistakes")
+	execPath := filepath.Join(t.TempDir(), "no-slop")
 	if err := os.WriteFile(execPath, []byte("current-binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -849,8 +849,8 @@ func TestUpdaterRunSkipsDaemonExecutableCheckWhenAlreadyUpToDate(t *testing.T) {
 
 	stdout := new(bytes.Buffer)
 	u := &updater{
-		appName:        "no-mistakes",
-		repo:           "kunchenguid/no-mistakes",
+		appName:        "no-slop",
+		repo:           "kunchenguid/no-slop",
 		currentVersion: "v1.2.2",
 		platform:       platformSpec{GOOS: "darwin", GOARCH: "arm64"},
 		apiBaseURL:     server.URL,
@@ -884,7 +884,7 @@ func TestUpdaterMaybeNotifyAndCheck(t *testing.T) {
 	stderr := new(bytes.Buffer)
 	spawned := false
 	u := &updater{
-		appName:        "no-mistakes",
+		appName:        "no-slop",
 		currentVersion: "v1.2.2",
 		cachePath:      cachePath,
 		stderr:         stderr,
@@ -898,9 +898,11 @@ func TestUpdaterMaybeNotifyAndCheck(t *testing.T) {
 		},
 	}
 
-	u.maybeNotifyAndCheck([]string{"status"})
+	if err := u.maybeNotifyAndCheck([]string{"status"}); err != nil {
+		t.Fatalf("maybeNotifyAndCheck() error = %v", err)
+	}
 
-	if !strings.Contains(stderr.String(), "A new version of no-mistakes is available: v1.2.2 -> v1.2.3") {
+	if !strings.Contains(stderr.String(), "A new version of no-slop is available: v1.2.2 -> v1.2.3") {
 		t.Fatalf("stderr = %q", stderr.String())
 	}
 	if !spawned {
@@ -909,7 +911,9 @@ func TestUpdaterMaybeNotifyAndCheck(t *testing.T) {
 
 	stderr.Reset()
 	spawned = false
-	u.maybeNotifyAndCheck([]string{"update"})
+	if err := u.maybeNotifyAndCheck([]string{"update"}); err != nil {
+		t.Fatalf("maybeNotifyAndCheck(update) error = %v", err)
+	}
 	if stderr.Len() != 0 {
 		t.Fatalf("update command should not notify, got %q", stderr.String())
 	}
@@ -924,7 +928,9 @@ func TestUpdaterMaybeNotifyAndCheck(t *testing.T) {
 	for _, versionArgs := range [][]string{{"--version"}, {"-v"}} {
 		stderr.Reset()
 		spawned = false
-		u.maybeNotifyAndCheck(versionArgs)
+		if err := u.maybeNotifyAndCheck(versionArgs); err != nil {
+			t.Fatalf("maybeNotifyAndCheck(%v) error = %v", versionArgs, err)
+		}
 		if stderr.Len() != 0 {
 			t.Fatalf("%v should not notify, got %q", versionArgs, stderr.String())
 		}
@@ -938,16 +944,16 @@ func TestUpdaterCheckLatestBetaUsesReleasesList(t *testing.T) {
 	allowInsecureDownloads = true
 	t.Cleanup(func() { allowInsecureDownloads = false })
 
-	archiveName := "no-mistakes-v1.3.0-beta.1-darwin-arm64.tar.gz"
+	archiveName := "no-slop-v1.3.0-beta.1-darwin-arm64.tar.gz"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/repos/kunchenguid/no-mistakes/releases":
+		case "/repos/kunchenguid/no-slop/releases":
 			fmt.Fprintf(w, `[
 				{"tag_name":"v1.3.0-beta.1","draft":false,"prerelease":true,"assets":[{"name":%q,"browser_download_url":"http://example.com/archive"},{"name":"checksums.txt","browser_download_url":"http://example.com/checksums"}]},
 				{"tag_name":"v1.2.3","draft":false,"prerelease":false,"assets":[]},
 				{"tag_name":"v1.4.0-draft","draft":true,"prerelease":true,"assets":[]}
 			]`, archiveName)
-		case "/repos/kunchenguid/no-mistakes/tags":
+		case "/repos/kunchenguid/no-slop/tags":
 			fmt.Fprint(w, `[{"name":"v1.3.0-beta.1"},{"name":"v1.2.3"}]`)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
@@ -956,8 +962,8 @@ func TestUpdaterCheckLatestBetaUsesReleasesList(t *testing.T) {
 	defer server.Close()
 
 	u := &updater{
-		appName:            "no-mistakes",
-		repo:               "kunchenguid/no-mistakes",
+		appName:            "no-slop",
+		repo:               "kunchenguid/no-slop",
 		currentVersion:     "v1.2.3",
 		platform:           platformSpec{GOOS: "darwin", GOARCH: "arm64"},
 		apiBaseURL:         server.URL,
@@ -986,16 +992,16 @@ func TestUpdaterCheckLatestBetaPicksHighestSemver(t *testing.T) {
 	allowInsecureDownloads = true
 	t.Cleanup(func() { allowInsecureDownloads = false })
 
-	archiveName := "no-mistakes-v1.3.0-beta.2-darwin-arm64.tar.gz"
+	archiveName := "no-slop-v1.3.0-beta.2-darwin-arm64.tar.gz"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/repos/kunchenguid/no-mistakes/releases":
+		case "/repos/kunchenguid/no-slop/releases":
 			fmt.Fprintf(w, `[
 				{"tag_name":"v1.3.0-beta.1","draft":false,"prerelease":true,"assets":[]},
 				{"tag_name":"v1.3.0-beta.2","draft":false,"prerelease":true,"assets":[{"name":%q,"browser_download_url":"http://example.com/archive"},{"name":"checksums.txt","browser_download_url":"http://example.com/checksums"}]},
 				{"tag_name":"v1.2.3","draft":false,"prerelease":false,"assets":[]}
 			]`, archiveName)
-		case "/repos/kunchenguid/no-mistakes/tags":
+		case "/repos/kunchenguid/no-slop/tags":
 			fmt.Fprint(w, `[{"name":"v1.3.0-beta.2"},{"name":"v1.3.0-beta.1"},{"name":"v1.2.3"}]`)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
@@ -1004,8 +1010,8 @@ func TestUpdaterCheckLatestBetaPicksHighestSemver(t *testing.T) {
 	defer server.Close()
 
 	u := &updater{
-		appName:            "no-mistakes",
-		repo:               "kunchenguid/no-mistakes",
+		appName:            "no-slop",
+		repo:               "kunchenguid/no-slop",
 		currentVersion:     "v1.2.3",
 		platform:           platformSpec{GOOS: "darwin", GOARCH: "arm64"},
 		apiBaseURL:         server.URL,
@@ -1028,17 +1034,17 @@ func TestUpdaterCheckLatestBetaFallsBackToTagsWhenListingStale(t *testing.T) {
 	allowInsecureDownloads = true
 	t.Cleanup(func() { allowInsecureDownloads = false })
 
-	archiveName := "no-mistakes-v1.3.0-beta.1-darwin-arm64.tar.gz"
+	archiveName := "no-slop-v1.3.0-beta.1-darwin-arm64.tar.gz"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/repos/kunchenguid/no-mistakes/releases":
+		case "/repos/kunchenguid/no-slop/releases":
 			fmt.Fprint(w, `[
 				{"tag_name":"v1.2.3","draft":false,"prerelease":false,"assets":[]},
 				{"tag_name":"v1.2.2","draft":false,"prerelease":false,"assets":[]}
 			]`)
-		case "/repos/kunchenguid/no-mistakes/tags":
+		case "/repos/kunchenguid/no-slop/tags":
 			fmt.Fprint(w, `[{"name":"v1.3.0-beta.1"},{"name":"v1.2.3"},{"name":"v1.2.2"}]`)
-		case "/repos/kunchenguid/no-mistakes/releases/tags/v1.3.0-beta.1":
+		case "/repos/kunchenguid/no-slop/releases/tags/v1.3.0-beta.1":
 			fmt.Fprintf(w, `{"tag_name":"v1.3.0-beta.1","draft":false,"prerelease":true,"assets":[{"name":%q,"browser_download_url":"http://example.com/archive"},{"name":"checksums.txt","browser_download_url":"http://example.com/checksums"}]}`, archiveName)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
@@ -1047,8 +1053,8 @@ func TestUpdaterCheckLatestBetaFallsBackToTagsWhenListingStale(t *testing.T) {
 	defer server.Close()
 
 	u := &updater{
-		appName:            "no-mistakes",
-		repo:               "kunchenguid/no-mistakes",
+		appName:            "no-slop",
+		repo:               "kunchenguid/no-slop",
 		currentVersion:     "v1.2.3",
 		platform:           platformSpec{GOOS: "darwin", GOARCH: "arm64"},
 		apiBaseURL:         server.URL,
@@ -1077,16 +1083,16 @@ func TestUpdaterCheckLatestBetaChecksListedReleaseAfterMissingTags(t *testing.T)
 	allowInsecureDownloads = true
 	t.Cleanup(func() { allowInsecureDownloads = false })
 
-	archiveName := "no-mistakes-v1.3.0-beta.1-darwin-arm64.tar.gz"
+	archiveName := "no-slop-v1.3.0-beta.1-darwin-arm64.tar.gz"
 	tagFetches := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/repos/kunchenguid/no-mistakes/releases":
+		case "/repos/kunchenguid/no-slop/releases":
 			fmt.Fprintf(w, `[
 				{"tag_name":"v1.3.0-beta.1","draft":false,"prerelease":true,"assets":[{"name":%q,"browser_download_url":"http://example.com/archive"},{"name":"checksums.txt","browser_download_url":"http://example.com/checksums"}]},
 				{"tag_name":"v1.2.3","draft":false,"prerelease":false,"assets":[]}
 			]`, archiveName)
-		case "/repos/kunchenguid/no-mistakes/tags":
+		case "/repos/kunchenguid/no-slop/tags":
 			fmt.Fprint(w, `[
 				{"name":"v1.3.0-beta.6"},
 				{"name":"v1.3.0-beta.5"},
@@ -1097,7 +1103,7 @@ func TestUpdaterCheckLatestBetaChecksListedReleaseAfterMissingTags(t *testing.T)
 				{"name":"v1.2.3"}
 			]`)
 		default:
-			if strings.HasPrefix(r.URL.Path, "/repos/kunchenguid/no-mistakes/releases/tags/") {
+			if strings.HasPrefix(r.URL.Path, "/repos/kunchenguid/no-slop/releases/tags/") {
 				tagFetches++
 				http.NotFound(w, r)
 				return
@@ -1108,8 +1114,8 @@ func TestUpdaterCheckLatestBetaChecksListedReleaseAfterMissingTags(t *testing.T)
 	defer server.Close()
 
 	u := &updater{
-		appName:            "no-mistakes",
-		repo:               "kunchenguid/no-mistakes",
+		appName:            "no-slop",
+		repo:               "kunchenguid/no-slop",
 		currentVersion:     "v1.2.3",
 		platform:           platformSpec{GOOS: "darwin", GOARCH: "arm64"},
 		apiBaseURL:         server.URL,

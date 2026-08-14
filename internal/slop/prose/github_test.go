@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/slop/prose"
+	"github.com/Blakeolson21/no-slop/internal/slop/prose"
 )
 
 func TestGHThreadReaderReadsPullRequestStateAndComments(t *testing.T) {

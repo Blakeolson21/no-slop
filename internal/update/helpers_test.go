@@ -8,23 +8,28 @@ import (
 	"fmt"
 	"os"
 	"testing"
+
+	"github.com/Blakeolson21/no-slop/internal/identity"
 )
 
 func TestMain(m *testing.M) {
-	root, err := os.MkdirTemp("", "nm-update-test-")
+	root, err := os.MkdirTemp("", "ns-update-test-")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "create test NM_HOME: %v\n", err)
+		fmt.Fprintf(os.Stderr, "create test NS_HOME: %v\n", err)
 		os.Exit(1)
 	}
-	home, err := os.MkdirTemp("", "nm-update-home-")
+	home, err := os.MkdirTemp("", "ns-update-home-")
 	if err != nil {
 		_ = os.RemoveAll(root)
 		fmt.Fprintf(os.Stderr, "create test HOME: %v\n", err)
 		os.Exit(1)
 	}
-	_ = os.Setenv("NM_HOME", root)
+	_ = os.Setenv("NS_HOME", root)
+	_ = os.Unsetenv(identity.LegacyHomeEnv)
+	_ = os.Unsetenv(noUpdateCheckEnv)
+	_ = os.Unsetenv(legacyNoUpdateCheckEnv)
 	_ = os.Setenv("HOME", home)
-	_ = os.Setenv("NO_MISTAKES_TELEMETRY", "off")
+	_ = os.Setenv("NS_TELEMETRY", "off")
 
 	code := m.Run()
 

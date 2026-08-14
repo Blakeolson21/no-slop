@@ -19,7 +19,7 @@ func runCodex(args []string, scenario *Scenario) int {
 
 	// Real codex constrains output to --output-schema, so the fake
 	// mirrors that by trimming the scenario's catch-all structured map
-	// to only fields declared in the schema. Otherwise no-mistakes'
+	// to only fields declared in the schema. Otherwise no-slop'
 	// schema validation rejects the extra fields the defaultScenario
 	// carries to satisfy other steps (e.g. pr's title/body).
 	if schemaPath := extractCodexOutputSchema(args); schemaPath != "" && action.Structured != nil {
@@ -31,7 +31,7 @@ func runCodex(args []string, scenario *Scenario) int {
 		action.Structured = filtered
 	}
 
-	// Replay recorded codex output if a fixture is available. no-mistakes
+	// Replay recorded codex output if a fixture is available. no-slop
 	// passes a schema file for structured calls, but Codex still surfaces
 	// the final answer as agent_message text, so the fixture patches that
 	// message body directly.
@@ -81,7 +81,7 @@ func runCodex(args []string, scenario *Scenario) int {
 // patchCodexFixture rewrites the agent_message item's text body to
 // match the scenario action. The wire envelope (thread.started,
 // turn.started, item.completed shape, turn.completed.usage) stays
-// real. no-mistakes parses JSON out of the agent_message text, so for
+// real. no-slop parses JSON out of the agent_message text, so for
 // structured responses we substitute the scenario JSON.
 func patchCodexFixture(raw []byte, action Action) ([]byte, error) {
 	body := action.textOrDefault()
@@ -145,7 +145,7 @@ func extractCodexOutputSchema(args []string) string {
 // filterStructuredToSchema drops fields from structured that are not
 // declared as properties on the top-level object schema at schemaPath.
 // Real codex would not emit undeclared fields under --output-schema, so
-// mirroring that behaviour keeps the fake consistent with no-mistakes'
+// mirroring that behavior keeps the fake consistent with no-slop'
 // additionalProperties:false validation. schemaPath == "" is a no-op.
 func filterStructuredToSchema(structured map[string]any, schemaPath string) (map[string]any, error) {
 	if schemaPath == "" {
@@ -212,7 +212,7 @@ func extractCodexPrompt(args []string) string {
 		if len(positionals) >= 3 {
 			return positionals[2] // resume <session-id> <prompt>
 		}
-		return "" // resume without id+prompt is not a shape no-mistakes emits
+		return "" // resume without id+prompt is not a shape no-slop emits
 	}
 	return positionals[0]
 }

@@ -8,14 +8,14 @@ import (
 	"sort"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/filelock"
+	"github.com/Blakeolson21/no-slop/internal/filelock"
 )
 
 // maxLanes bounds the persisted state so a misconfigured agent list cannot
 // grow the file forever. Entries closest to expiry are dropped first.
 const maxLanes = 32
 
-// Store persists lane outages in a small JSON file under NM_HOME so a mark
+// Store persists lane outages in a small JSON file under NS_HOME so a mark
 // discovered by one run is honored by every concurrent run and by every later
 // run, including after a daemon restart. Without that, each run pays a full
 // agent spawn to rediscover the same exhausted lane - the 2026-08-04 incident,

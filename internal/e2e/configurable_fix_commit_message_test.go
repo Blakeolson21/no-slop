@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func configurableFixCommitScenario(t *testing.T) string {
@@ -74,7 +74,7 @@ func TestConfigurableFixCommitMessageJourney(t *testing.T) {
 
 	const branch = "feature/configurable-fix-commit"
 	h.CommitChange(branch, "feature.txt", "unsafe\n", "add unsafe feature")
-	h.CommitChange(branch, ".no-mistakes.yaml", `ignore_patterns:
+	h.CommitChange(branch, ".no-slop.yaml", `ignore_patterns:
   - '*.generated.go'
   - 'vendor/**'
 allow_repo_commands: true

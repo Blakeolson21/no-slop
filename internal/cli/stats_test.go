@@ -4,15 +4,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/types"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/types"
 	"github.com/muesli/termenv"
 )
 
 func TestStatsCommandRendersAllRepoDashboard(t *testing.T) {
 	nmHome := makeSocketSafeTempDir(t)
+	t.Setenv("NS_HOME", nmHome)
 	t.Setenv("NM_HOME", nmHome)
 	p := paths.WithRoot(nmHome)
 	if err := p.EnsureDirs(); err != nil {
@@ -50,8 +51,8 @@ func TestStatsCommandRendersAllRepoDashboard(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"╭─ git push no-mistakes",
-		"_  _ ____    _  _ _ ____ ___ ____ _  _ ____ ____",
+		"╭─ git push no-slop",
+		"_  _ ____    ____ _    ____ ___",
 		"Total changes",
 		"Rescued changes",
 		"Rescue rate",
@@ -71,7 +72,7 @@ func TestStatsCommandRendersAllRepoDashboard(t *testing.T) {
 		}
 	}
 	assertOrder(t, out, "Total changes", "Rescued changes", "Rescue rate", "Mistakes", "Reported", "Fixed")
-	for _, notWant := range []string{"Saved", "Rescue runs", "Mistakes fixed", "auto-fix", "caught in review", "╭─ no-mistakes"} {
+	for _, notWant := range []string{"Saved", "Rescue runs", "Mistakes fixed", "auto-fix", "caught in review", "╭─ no-slop"} {
 		if strings.Contains(out, notWant) {
 			t.Fatalf("stats output should not contain %q:\n%s", notWant, out)
 		}
@@ -110,10 +111,10 @@ func TestStatsDashboardCapsTopReposAndUsesPipelineStepOrder(t *testing.T) {
 	}
 }
 
-func TestStatsDashboardTopBorderShowsGitPushNoMistakes(t *testing.T) {
+func TestStatsDashboardTopBorderShowsGitPushNoSlop(t *testing.T) {
 	out := renderStatsDashboard(&db.Stats{})
 	firstLine := strings.Split(out, "\n")[0]
-	if !strings.Contains(firstLine, "git push no-mistakes") {
+	if !strings.Contains(firstLine, "git push no-slop") {
 		t.Fatalf("top border should include eyebrow, got %q", firstLine)
 	}
 }
@@ -142,7 +143,7 @@ func TestStatsDashboardCentersBannerAsBlock(t *testing.T) {
 func TestStatsDashboardStylesBannerAndProgressBars(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.ANSI)
 	out := renderStatsDashboard(&db.Stats{TotalRuns: 1, RescueRuns: 1, ReportedFindings: 2, FixedFindings: 1})
-	if !strings.Contains(out, sCyan.Render("_  _ ____    _  _ _ ____ ___ ____ _  _ ____ ____")) {
+	if !strings.Contains(out, sCyan.Render("_  _ ____    ____ _    ____ ___")) {
 		t.Fatalf("stats banner should be cyan:\n%s", out)
 	}
 	if !strings.Contains(out, "\x1b[32m") {

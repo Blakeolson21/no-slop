@@ -161,9 +161,9 @@ func TestReadSurfaceGate_ConcurrentGatesEmitOnce(t *testing.T) {
 }
 
 func TestReadSurfaceGate_ConcurrentProcessesEmitOnce(t *testing.T) {
-	const helperEnv = "NO_MISTAKES_READ_GATE_HELPER"
+	const helperEnv = "NS_READ_GATE_HELPER"
 	if os.Getenv(helperEnv) == "1" {
-		gate := NewReadSurfaceGate(os.Getenv("NO_MISTAKES_READ_GATE_PATH"), 10*time.Minute, func() time.Time {
+		gate := NewReadSurfaceGate(os.Getenv("NS_READ_GATE_PATH"), 10*time.Minute, func() time.Time {
 			return time.Unix(1_700_000_000, 0)
 		})
 		if gate.ShouldEmit("axi-status", "run-1|running") {
@@ -182,7 +182,7 @@ func TestReadSurfaceGate_ConcurrentProcessesEmitOnce(t *testing.T) {
 	for range callers {
 		go func() {
 			cmd := exec.Command(os.Args[0], "-test.run=^TestReadSurfaceGate_ConcurrentProcessesEmitOnce$")
-			cmd.Env = append(os.Environ(), helperEnv+"=1", "NO_MISTAKES_READ_GATE_PATH="+path)
+			cmd.Env = append(os.Environ(), helperEnv+"=1", "NS_READ_GATE_PATH="+path)
 			output, err := cmd.CombinedOutput()
 			results <- commandResult{output: string(output), err: err}
 		}()

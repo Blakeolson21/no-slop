@@ -9,7 +9,7 @@ import (
 // performance metrics and their boundaries. Every count, category, and timing
 // split recorded to agent_invocations is defined here so the semantics live in
 // exactly one place; the codex adapter fills them from its event stream, the
-// pipeline records them, and `no-mistakes stats` renders them, all against
+// pipeline records them, and `no-slop stats` renders them, all against
 // these definitions. Nothing here reads or stores prompts, outputs, diffs, or
 // raw command arguments - only bounded counts, categories, and durations.
 

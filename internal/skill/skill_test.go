@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/testguidance"
+	"github.com/Blakeolson21/no-slop/internal/testguidance"
 )
 
 func TestMarkdownFrontmatter(t *testing.T) {
@@ -27,7 +27,7 @@ func TestMarkdownFrontmatter(t *testing.T) {
 	if strings.Count(md, "---\n") < 2 {
 		t.Errorf("frontmatter not closed with a second --- delimiter")
 	}
-	if !strings.Contains(md, "no-mistakes axi run") {
+	if !strings.Contains(md, "no-slop axi run") {
 		t.Errorf("body should document the axi run command")
 	}
 	// The user-level install is a genuine user installation, so it must stay
@@ -45,7 +45,7 @@ func TestBodyIncludesGeneratedGateStepGuard(t *testing.T) {
 		"must inspect, fix, and return only its assigned phase",
 		"`error.code: nested_gate_context`",
 		"return control to the outer executor",
-		"`no-mistakes axi status`",
+		"`no-slop axi status`",
 	} {
 		if !strings.Contains(md, want) {
 			t.Errorf("installed skill guard snapshot missing %q", want)
@@ -74,8 +74,8 @@ func TestBodyDocumentsTaskFirstFlow(t *testing.T) {
 func TestBodyDocumentsAxiGateGuidance(t *testing.T) {
 	md := Markdown()
 	for _, want := range []string{
-		"inspect it with `no-mistakes axi status`",
-		"drive it with `no-mistakes axi respond`",
+		"inspect it with `no-slop axi status`",
+		"drive it with `no-slop axi respond`",
 		"when it still matches your current `HEAD`",
 		"**Review auto-fix is disabled by default**",
 		"blocking and",
@@ -99,7 +99,9 @@ func TestInstallWritesBothPaths(t *testing.T) {
 	}
 	wantRel := []string{
 		filepath.Join(".claude", "skills", Name, "SKILL.md"),
+		filepath.Join(".claude", "skills", LegacyName, "SKILL.md"),
 		filepath.Join(".agents", "skills", Name, "SKILL.md"),
+		filepath.Join(".agents", "skills", LegacyName, "SKILL.md"),
 	}
 	if len(written) != len(wantRel) {
 		t.Fatalf("written = %v, want %v", written, wantRel)
@@ -112,8 +114,12 @@ func TestInstallWritesBothPaths(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s: %v", rel, err)
 		}
-		if string(data) != Markdown() {
-			t.Errorf("%s content does not match Markdown()", rel)
+		wantContent := Markdown()
+		if strings.Contains(rel, LegacyName) {
+			wantContent = LegacyMarkdown()
+		}
+		if string(data) != wantContent {
+			t.Errorf("%s content does not match generated rendering", rel)
 		}
 	}
 }
@@ -131,8 +137,8 @@ func TestInstallUserWritesUnderHome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InstallUser: %v", err)
 	}
-	if len(written) != len(InstallBases) {
-		t.Fatalf("written = %v, want one path per base", written)
+	if len(written) != len(InstallBases)*2 {
+		t.Fatalf("written = %v, want canonical and legacy path per base", written)
 	}
 	for _, base := range InstallBases {
 		data, err := os.ReadFile(filepath.Join(home, base, Name, "SKILL.md"))
@@ -227,8 +233,12 @@ func TestInstallSymlinkLayouts(t *testing.T) {
 				if err != nil {
 					t.Fatalf("read reported %s: %v", rel, err)
 				}
-				if string(data) != Markdown() {
-					t.Errorf("%s content does not match Markdown()", rel)
+				want := Markdown()
+				if strings.Contains(rel, LegacyName) {
+					want = LegacyMarkdown()
+				}
+				if string(data) != want {
+					t.Errorf("%s content does not match generated rendering", rel)
 				}
 			}
 
@@ -281,7 +291,7 @@ func TestInstallRejectsSymlinkCycle(t *testing.T) {
 }
 
 // TestVendored covers the legacy-detection helper init uses to tell users a
-// repo still carries a vendored skill copy from an older no-mistakes version.
+// repo still carries a vendored skill copy from an older no-slop version.
 func TestVendored(t *testing.T) {
 	t.Run("clean_repo", func(t *testing.T) {
 		if got := Vendored(t.TempDir()); len(got) != 0 {
@@ -292,15 +302,19 @@ func TestVendored(t *testing.T) {
 	t.Run("both_copies", func(t *testing.T) {
 		root := t.TempDir()
 		for _, base := range InstallBases {
-			dir := filepath.Join(root, base, Name)
-			mkdirAll(t, dir)
-			if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("legacy"), 0o644); err != nil {
-				t.Fatal(err)
+			for _, name := range []string{Name, LegacyName} {
+				dir := filepath.Join(root, base, name)
+				mkdirAll(t, dir)
+				if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("legacy"), 0o644); err != nil {
+					t.Fatal(err)
+				}
 			}
 		}
 		want := []string{
 			filepath.Join(".claude", "skills", Name, "SKILL.md"),
+			filepath.Join(".claude", "skills", LegacyName, "SKILL.md"),
 			filepath.Join(".agents", "skills", Name, "SKILL.md"),
+			filepath.Join(".agents", "skills", LegacyName, "SKILL.md"),
 		}
 		got := Vendored(root)
 		if len(got) != len(want) {
@@ -315,13 +329,13 @@ func TestVendored(t *testing.T) {
 
 	t.Run("single_copy", func(t *testing.T) {
 		root := t.TempDir()
-		dir := filepath.Join(root, ".agents", "skills", Name)
+		dir := filepath.Join(root, ".agents", "skills", LegacyName)
 		mkdirAll(t, dir)
 		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("legacy"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		got := Vendored(root)
-		if len(got) != 1 || got[0] != filepath.Join(".agents", "skills", Name, "SKILL.md") {
+		if len(got) != 1 || got[0] != filepath.Join(".agents", "skills", LegacyName, "SKILL.md") {
 			t.Errorf("Vendored = %v, want only the .agents copy", got)
 		}
 	})

@@ -3,11 +3,11 @@ package steps
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/pipeline"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/identity"
+	"github.com/Blakeolson21/no-slop/internal/pipeline"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 var demoWait = func(ctx context.Context, d time.Duration) bool {
@@ -28,9 +28,19 @@ var demoWait = func(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// IsDemoMode returns true when the NM_DEMO environment variable is set.
+// IsDemoMode returns true when NS_DEMO or its NM_DEMO compatibility alias is set.
 func IsDemoMode() bool {
-	return os.Getenv("NM_DEMO") == "1"
+	enabled, _ := DemoMode()
+	return enabled
+}
+
+func DemoMode() (bool, error) {
+	return identity.EnvEnabled("NS_DEMO", "NM_DEMO")
+}
+
+func ValidateDemoModeConfig() error {
+	_, err := DemoMode()
+	return err
 }
 
 // DemoSteps returns mock pipeline steps for demo recordings.
@@ -64,7 +74,7 @@ func DemoSteps() []pipeline.Step {
 			name:       types.StepTest,
 			delay:      4 * time.Second,
 			displayDur: 32 * time.Second,
-			log:        "Running: go test -race ./...\n\nok  \tgithub.com/kunchenguid/no-mistakes/internal/handler\t1.2s\nok  \tgithub.com/kunchenguid/no-mistakes/internal/config\t0.8s\nok  \tgithub.com/kunchenguid/no-mistakes/internal/server\t1.5s\n\nPASS",
+			log:        "Running: go test -race ./...\n\nok  \tgithub.com/Blakeolson21/no-slop/internal/handler\t1.2s\nok  \tgithub.com/Blakeolson21/no-slop/internal/config\t0.8s\nok  \tgithub.com/Blakeolson21/no-slop/internal/server\t1.5s\n\nPASS",
 		},
 		&demoStep{
 			name:       types.StepDocument,
@@ -91,14 +101,14 @@ func DemoSteps() []pipeline.Step {
 			name:       types.StepPush,
 			delay:      2 * time.Second,
 			displayDur: 5 * time.Second,
-			log:        "Pushing to origin...\nTo github.com:kunchenguid/no-mistakes.git\n   a1b2c3d..e4f5g6h  fix/nil-check -> fix/nil-check",
+			log:        "Pushing to origin...\nTo github.com:Blakeolson21/no-slop.git\n   a1b2c3d..e4f5g6h  fix/nil-check -> fix/nil-check",
 		},
 		&demoStep{
 			name:       types.StepPR,
 			delay:      3 * time.Second,
 			displayDur: 8 * time.Second,
-			log:        "Creating pull request...\nhttps://github.com/kunchenguid/no-mistakes/pull/42",
-			prURL:      "https://github.com/kunchenguid/no-mistakes/pull/42",
+			log:        "Creating pull request...\nhttps://github.com/Blakeolson21/no-slop/pull/42",
+			prURL:      "https://github.com/Blakeolson21/no-slop/pull/42",
 		},
 		&demoCIStep{
 			displayDur: 120 * time.Second,

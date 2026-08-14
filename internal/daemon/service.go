@@ -3,6 +3,7 @@ package daemon
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"os/user"
@@ -11,22 +12,24 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/identity"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
 // Base identifiers for the managed-service artifacts. The live identifiers
 // returned by launchdServiceLabel/systemdServiceName/windowsTaskName include
-// a short stable suffix derived from p.Root() so two no-mistakes installs
-// with different NM_HOMEs cannot collide in the global launchctl/systemctl/
+// a short stable suffix derived from p.Root() so two no-slop installs
+// with different NS_HOMEs cannot collide in the global launchctl/systemctl/
 // schtasks namespace. See serviceInstanceSuffix for the full rationale.
 const (
-	launchdServiceLabelBase = "com.kunchenguid.no-mistakes.daemon"
-	systemdServiceNameBase  = "no-mistakes-daemon"
-	windowsTaskNameBase     = "no-mistakes-daemon"
+	launchdServiceLabelBase = "com.kunchenguid.no-slop.daemon"
+	systemdServiceNameBase  = "no-slop-daemon"
+	windowsTaskNameBase     = "no-slop-daemon"
 )
 
-// Legacy (pre-scoping) identifiers, retained only so that a new binary can
-// clean up artifacts installed by a pre-fix binary on first `daemon start`.
+// Legacy identity bases cover both the original unscoped service and the
+// later root-scoped service. A new binary must stop or remove either spelling
+// before it starts the canonical service for the same root.
 const (
 	legacyLaunchdServiceLabel = "com.kunchenguid.no-mistakes.daemon"
 	legacySystemdServiceName  = "no-mistakes-daemon.service"
@@ -42,6 +45,36 @@ var serviceManagerBypassed = defaultServiceManagerBypassed
 var prepareManagedDaemonLaunch = managedDaemonLaunch
 var inspectManagedDaemonService = managedDaemonServiceState
 
+type managedServiceCleanupError struct {
+	err error
+}
+
+func (e *managedServiceCleanupError) Error() string {
+	return e.err.Error()
+}
+
+func (e *managedServiceCleanupError) Unwrap() error {
+	return e.err
+}
+
+func managedServiceCleanupFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &managedServiceCleanupError{err: err}
+}
+
+func readLegacyServiceDefinition(path, kind string) ([]byte, bool, error) {
+	data, err := os.ReadFile(path)
+	if err == nil {
+		return data, true, nil
+	}
+	if os.IsNotExist(err) {
+		return nil, false, nil
+	}
+	return nil, false, fmt.Errorf("inspect legacy %s: %w", kind, err)
+}
+
 type managedServiceState int
 
 type managedServiceLaunch struct {
@@ -55,7 +88,11 @@ const (
 )
 
 func managedDaemonLaunch(p *paths.Paths) (managedServiceLaunch, error) {
-	if serviceManagerBypassed() || runtimeGOOS != "windows" {
+	bypassed, err := serviceManagerBypassed()
+	if err != nil {
+		return managedServiceLaunch{}, err
+	}
+	if bypassed || runtimeGOOS != "windows" {
 		return managedServiceLaunch{}, nil
 	}
 	observation, err := inspectWindowsManagedDaemon(p)
@@ -66,7 +103,11 @@ func managedDaemonLaunch(p *paths.Paths) (managedServiceLaunch, error) {
 }
 
 func managedDaemonServiceState(p *paths.Paths, launch managedServiceLaunch) (managedServiceState, error) {
-	if serviceManagerBypassed() {
+	bypassed, err := serviceManagerBypassed()
+	if err != nil {
+		return managedServiceUnknown, err
+	}
+	if bypassed {
 		return managedServiceUnknown, nil
 	}
 	switch runtimeGOOS {
@@ -256,7 +297,7 @@ func writeFileAtomic(path string, content []byte, mode os.FileMode) error {
 // defaultServiceManagerBypassed reports whether managed-service plumbing
 // (launchctl/systemctl/schtasks) should be skipped.
 //
-// It returns true when NM_TEST_START_DAEMON=1 is set (the production escape
+// It returns true when NS_TEST_START_DAEMON=1 is set (the production escape
 // hatch used by demo recordings and similar) or when the process is running
 // under `go test`. The test-binary guard is critical because the managed
 // service label, plist path, systemd unit path, and schtasks task name are
@@ -267,11 +308,15 @@ func writeFileAtomic(path string, content []byte, mode os.FileMode) error {
 // and tear down a live daemon. Tests that specifically want to exercise the
 // managed path (service_test.go) override serviceManagerBypassed via
 // stubServiceRuntime.
-func defaultServiceManagerBypassed() bool {
-	if os.Getenv("NM_TEST_START_DAEMON") == "1" {
-		return true
+func defaultServiceManagerBypassed() (bool, error) {
+	testStart, err := identity.EnvEnabled("NS_TEST_START_DAEMON", "NM_TEST_START_DAEMON")
+	if err != nil {
+		return false, err
 	}
-	return testing.Testing()
+	if testStart {
+		return true, nil
+	}
+	return testing.Testing(), nil
 }
 
 // serviceInstanceSuffix returns a short stable suffix derived from p.Root()
@@ -279,9 +324,9 @@ func defaultServiceManagerBypassed() bool {
 // name + path, Windows task name) are scoped per-install instead of sharing
 // a single globally unique identifier per user.
 //
-// Without scoping, the launchd label com.kunchenguid.no-mistakes.daemon (and
-// its systemd/Windows equivalents) is a shared slot. Any no-mistakes process
-// on the machine can `launchctl bootout gui/<uid>/com.kunchenguid.no-mistakes.daemon`
+// Without scoping, the launchd label com.kunchenguid.no-slop.daemon (and
+// its systemd/Windows equivalents) is a shared slot. Any no-slop process
+// on the machine can `launchctl bootout gui/<uid>/com.kunchenguid.no-slop.daemon`
 // and tear down another install's daemon. The failure mode observed twice in
 // practice: a pipeline review step ran `go test ./internal/daemon` in a
 // worktree, that test binary reached TestStopNotRunningIsNoop which calls
@@ -290,11 +335,11 @@ func defaultServiceManagerBypassed() bool {
 //
 // By scoping every identifier by sha256(p.Root()), the test's Stop(p)
 // inspects a path and label that belong to its own tmpdir, not the live
-// daemon's NM_HOME. managedServiceInstalled(p) stats a non-existent scoped
+// daemon's NS_HOME. managedServiceInstalled(p) stats a non-existent scoped
 // plist, returns false, and Stop never reaches serviceCommandRunner.
 //
-// A secondary benefit: multiple concurrent NM_HOMEs (e.g. a dev vs prod
-// no-mistakes install) each get their own managed daemon and can coexist.
+// A secondary benefit: multiple concurrent NS_HOMEs (e.g. a dev vs prod
+// no-slop install) each get their own managed daemon and can coexist.
 func serviceInstanceSuffix(p *paths.Paths) string {
 	root := ""
 	if p != nil {
@@ -334,16 +379,32 @@ func launchdServiceLabel(p *paths.Paths) string {
 	return launchdServiceLabelBase + "." + serviceInstanceSuffix(p)
 }
 
+func legacyScopedLaunchdServiceLabel(p *paths.Paths) string {
+	return legacyLaunchdServiceLabel + "." + serviceInstanceSuffix(p)
+}
+
 func systemdServiceName(p *paths.Paths) string {
 	return systemdServiceNameBase + "-" + serviceInstanceSuffix(p) + ".service"
+}
+
+func legacyScopedSystemdServiceName(p *paths.Paths) string {
+	return strings.TrimSuffix(legacySystemdServiceName, ".service") + "-" + serviceInstanceSuffix(p) + ".service"
 }
 
 func windowsTaskName(p *paths.Paths) string {
 	return windowsTaskNameBase + "-" + serviceInstanceSuffix(p)
 }
 
+func legacyScopedWindowsTaskName(p *paths.Paths) string {
+	return legacyWindowsTaskName + "-" + serviceInstanceSuffix(p)
+}
+
 func installManagedService(p *paths.Paths) (bool, error) {
-	if serviceManagerBypassed() {
+	bypassed, err := serviceManagerBypassed()
+	if err != nil {
+		return false, err
+	}
+	if bypassed {
 		return false, nil
 	}
 	exe, err := serviceExecutablePath()
@@ -367,7 +428,11 @@ func installManagedServiceWithExecutable(p *paths.Paths, exe string) (bool, erro
 }
 
 func startManagedService(p *paths.Paths) (bool, error) {
-	if serviceManagerBypassed() {
+	bypassed, err := serviceManagerBypassed()
+	if err != nil {
+		return false, err
+	}
+	if bypassed {
 		return false, nil
 	}
 	switch runtimeGOOS {
@@ -383,21 +448,33 @@ func startManagedService(p *paths.Paths) (bool, error) {
 }
 
 func restartManagedService(p *paths.Paths) (bool, error) {
-	if serviceManagerBypassed() {
+	bypassed, err := serviceManagerBypassed()
+	if err != nil {
+		return false, err
+	}
+	if bypassed {
 		return false, nil
 	}
+	legacyStopped, legacyErr := stopLegacyManagedService(p)
+	var restartErr error
 	switch runtimeGOOS {
 	case "darwin":
-		return true, startLaunchAgent(p)
+		restartErr = startLaunchAgent(p)
 	case "linux":
-		return true, restartSystemdUserService(p)
+		restartErr = restartSystemdUserService(p)
 	default:
-		return startManagedService(p)
+		started, startErr := startManagedService(p)
+		return started || legacyStopped, errors.Join(startErr, legacyErr)
 	}
+	return true, errors.Join(restartErr, legacyErr)
 }
 
 func reloadManagedServiceDefinition(p *paths.Paths) error {
-	if serviceManagerBypassed() {
+	bypassed, err := serviceManagerBypassed()
+	if err != nil {
+		return err
+	}
+	if bypassed {
 		return nil
 	}
 	switch runtimeGOOS {
@@ -411,19 +488,84 @@ func reloadManagedServiceDefinition(p *paths.Paths) error {
 }
 
 func stopManagedService(p *paths.Paths) (bool, error) {
-	if serviceManagerBypassed() || !managedServiceInstalled(p) {
+	bypassed, err := serviceManagerBypassed()
+	if err != nil {
+		return false, err
+	}
+	if bypassed {
 		return false, nil
 	}
+	installed, err := managedServiceInstalled(p)
+	if err != nil {
+		return false, err
+	}
+	var stopErr error
 	switch runtimeGOOS {
 	case "darwin":
-		return true, stopLaunchAgent(p)
+		if installed {
+			stopErr = stopLaunchAgent(p)
+		}
 	case "linux":
-		return true, stopSystemdUserService(p)
+		if installed {
+			stopErr = stopSystemdUserService(p)
+		}
 	case "windows":
-		return true, stopWindowsTask(p)
+		if installed {
+			stopErr = stopWindowsTask(p)
+		}
+	}
+	legacyStopped, legacyErr := stopLegacyManagedService(p)
+	return installed || legacyStopped, errors.Join(stopErr, legacyErr)
+}
+
+func stopLegacyManagedService(p *paths.Paths) (bool, error) {
+	switch runtimeGOOS {
+	case "darwin":
+		return stopLegacyLaunchAgent(p)
+	case "linux":
+		return stopLegacySystemdUserService(p)
+	case "windows":
+		return stopLegacyWindowsTask(p)
 	default:
 		return false, nil
 	}
+}
+
+func legacyManagedServiceDefinitionExists(p *paths.Paths) (bool, error) {
+	var definitions []struct {
+		path string
+		kind string
+	}
+	switch runtimeGOOS {
+	case "darwin":
+		definitions = []struct {
+			path string
+			kind string
+		}{
+			{legacyScopedLaunchAgentPath(p), "launch agent"},
+			{legacyLaunchAgentPath(), "launch agent"},
+		}
+	case "linux":
+		definitions = []struct {
+			path string
+			kind string
+		}{
+			{legacyScopedSystemdUserServicePath(p), "systemd unit"},
+			{legacySystemdUserServicePath(), "systemd unit"},
+		}
+	default:
+		return false, nil
+	}
+	for _, definition := range definitions {
+		data, ok, err := readLegacyServiceDefinition(definition.path, definition.kind)
+		if err != nil {
+			return false, err
+		}
+		if ok && serviceDefinitionMatchesRoot(data, p) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // resetFailedManagedService clears failed-unit bookkeeping for the daemon's
@@ -433,7 +575,8 @@ func stopManagedService(p *paths.Paths) (bool, error) {
 // install in Start() begin from a clean slate. No-op on platforms without an
 // equivalent and when the service manager is bypassed.
 func resetFailedManagedService(p *paths.Paths) {
-	if serviceManagerBypassed() {
+	bypassed, err := serviceManagerBypassed()
+	if err != nil || bypassed {
 		return
 	}
 	switch runtimeGOOS {
@@ -442,24 +585,28 @@ func resetFailedManagedService(p *paths.Paths) {
 	}
 }
 
-func managedServiceInstalled(p *paths.Paths) bool {
-	if serviceManagerBypassed() {
-		return false
+func managedServiceInstalled(p *paths.Paths) (bool, error) {
+	bypassed, err := serviceManagerBypassed()
+	if err != nil {
+		return false, err
+	}
+	if bypassed {
+		return false, nil
 	}
 	switch runtimeGOOS {
 	case "darwin":
 		_, err := os.Stat(launchAgentPath(p))
-		return err == nil
+		return err == nil, nil
 	case "linux":
 		_, err := os.Stat(systemdUserServicePath(p))
-		return err == nil
+		return err == nil, nil
 	case "windows":
 		if p == nil {
-			return false
+			return false, nil
 		}
 		_, err := serviceCommandRunner("schtasks", "/Query", "/TN", windowsTaskName(p))
-		return err == nil
+		return err == nil, nil
 	default:
-		return false
+		return false, nil
 	}
 }

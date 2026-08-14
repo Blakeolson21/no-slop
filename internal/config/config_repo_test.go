@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestLoadRepo_Defaults(t *testing.T) {
-	// Non-existent directory or no .no-mistakes.yaml
+	// Non-existent directory or no .no-slop.yaml
 	cfg, err := LoadRepo("/nonexistent/dir")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -35,7 +35,7 @@ func TestLoadRepo_Defaults(t *testing.T) {
 
 func TestLoadRepo_FromFile(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, ".no-mistakes.yaml")
+	path := filepath.Join(dir, ".no-slop.yaml")
 	data := `agent: codex
 commands:
   lint: "golangci-lint run ./..."
@@ -76,11 +76,103 @@ ignore_patterns:
 	}
 }
 
+func TestLoadRepo_AcceptsLegacyFileName(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte("agent: codex\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadRepo(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent != types.AgentCodex {
+		t.Fatalf("agent = %q, want %q", cfg.Agent, types.AgentCodex)
+	}
+}
+
+func TestLoadRepo_AcceptsIdenticalConfigAliases(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{".no-slop.yaml", ".no-mistakes.yaml"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("agent: codex\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg, err := LoadRepo(dir)
+	if err != nil {
+		t.Fatalf("LoadRepo: %v", err)
+	}
+	if cfg.Agent != types.AgentCodex {
+		t.Fatalf("agent = %q, want %q", cfg.Agent, types.AgentCodex)
+	}
+}
+
+func TestLoadRepo_AcceptsSemanticallyEqualConfigAliases(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".no-slop.yaml"), []byte("agent: codex\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte("agent: codex\nignore_patterns: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadRepo(dir)
+	if err != nil {
+		t.Fatalf("LoadRepo: %v", err)
+	}
+	if cfg.Agent != types.AgentCodex {
+		t.Fatalf("agent = %q, want %q", cfg.Agent, types.AgentCodex)
+	}
+}
+
+func TestLoadRepo_AcceptsDefaultEquivalentConfigAliases(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".no-slop.yaml"), []byte("review:\n  convergence:\n    non_decreasing_rounds: 3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadRepo(dir); err != nil {
+		t.Fatalf("LoadRepo: %v", err)
+	}
+}
+
+func TestLoadRepo_RejectsDivergentConfigAliases(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".no-slop.yaml"), []byte("agent: codex\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte("agent: claude\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadRepo(dir); err == nil || !strings.Contains(err.Error(), "same repo config with different values") {
+		t.Fatalf("LoadRepo error = %v, want divergent-alias refusal", err)
+	}
+}
+
+func TestLoadRepo_RejectsAliasPairParseFailure(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".no-slop.yaml"), []byte("agent: codex\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte("agent: : : {{bad\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadRepo(dir); err == nil || !strings.Contains(err.Error(), ".no-mistakes.yaml is unparseable") {
+		t.Fatalf("LoadRepo error = %v, want legacy parse refusal", err)
+	}
+}
+
 func TestLoadRepo_AgentAcceptsList(t *testing.T) {
 	dir := t.TempDir()
 	data := `agent: [codex, claude]
 `
-	if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".no-slop.yaml"), []byte(data), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -106,7 +198,7 @@ func TestLoadRepo_AgentStringPreservesSingleAgent(t *testing.T) {
 	dir := t.TempDir()
 	data := `agent: codex
 `
-	if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".no-slop.yaml"), []byte(data), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -124,7 +216,7 @@ func TestLoadRepo_AgentStringPreservesSingleAgent(t *testing.T) {
 
 func TestLoadRepo_PartialCommands(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, ".no-mistakes.yaml")
+	path := filepath.Join(dir, ".no-slop.yaml")
 	data := `commands:
   test: "make test"
 `
@@ -210,7 +302,7 @@ func TestLoadRepo_RejectsInvalidSlopThresholds(t *testing.T) {
 
 func TestLoadRepo_InvalidYAML(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, ".no-mistakes.yaml")
+	path := filepath.Join(dir, ".no-slop.yaml")
 	if err := os.WriteFile(path, []byte("{{invalid"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +315,7 @@ func TestLoadRepo_InvalidYAML(t *testing.T) {
 
 func TestLoadRepo_AutoFixFromFile(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, ".no-mistakes.yaml")
+	path := filepath.Join(dir, ".no-slop.yaml")
 	data := `auto_fix:
   review: 0
   ci: 2
@@ -266,7 +358,7 @@ func TestMerge_CIRerunTransientFromRepoConfig(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(dir, ".no-mistakes.yaml"), []byte(tc.yaml), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, ".no-slop.yaml"), []byte(tc.yaml), 0o644); err != nil {
 				t.Fatal(err)
 			}
 			repo, err := LoadRepo(dir)
@@ -359,7 +451,7 @@ func TestEffectiveRepoConfig_CIRerunTransientTrustedOnly(t *testing.T) {
 
 func TestLoadRepo_ReviewPathInstructions(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, ".no-mistakes.yaml")
+	path := filepath.Join(dir, ".no-slop.yaml")
 	data := `review:
   path_instructions:
     - path: "internal/scm/**"
@@ -571,7 +663,7 @@ func TestReviewPathInstructionsBytes_CountsTheWholeSection(t *testing.T) {
 
 func TestLoadRepo_LegacyAutoFixBabysit(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, ".no-mistakes.yaml")
+	path := filepath.Join(dir, ".no-slop.yaml")
 	if err := os.WriteFile(path, []byte("auto_fix:\n  babysit: 0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

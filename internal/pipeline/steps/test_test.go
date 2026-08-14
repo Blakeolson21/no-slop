@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
-	"github.com/kunchenguid/no-mistakes/internal/config"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestTestStep_FixMode(t *testing.T) {
@@ -72,7 +72,7 @@ func TestTestStep_FixMode(t *testing.T) {
 	if status := gitStatusPorcelain(t, dir); status != "" {
 		t.Fatalf("expected clean worktree after fix commit, got %q", status)
 	}
-	if got := lastCommitMessage(t, dir); got != "no-mistakes(test): fix test failures" {
+	if got := lastCommitMessage(t, dir); got != "no-slop(test): fix test failures" {
 		t.Fatalf("last commit message = %q", got)
 	}
 }
@@ -130,7 +130,7 @@ func TestTestStep_FixMode_UsesFallbackSummaryWhenStructuredSummaryMalformed(t *t
 	if outcome.NeedsApproval {
 		t.Fatal("expected no approval after fallback summary commit and passing tests")
 	}
-	if got := lastCommitMessage(t, dir); got != "no-mistakes(test): fix test failures" {
+	if got := lastCommitMessage(t, dir); got != "no-slop(test): fix test failures" {
 		t.Fatalf("last commit message = %q", got)
 	}
 }
@@ -233,7 +233,7 @@ func TestTestStep_UserIntentRunsConfiguredCommandThenEvidenceAgent(t *testing.T)
 		"DOM snapshots, selector assertions, and text-only render summaries are not substitutes for visual evidence when a rendered surface is available",
 		"If a UI-facing change has no screenshot, image, video, GIF, or rendered HTML artifact, state why in testing_summary",
 		"Write new evidence files into this temporary evidence directory:",
-		filepath.Join(os.TempDir(), "no-mistakes-evidence", sctx.Run.ID),
+		filepath.Join(os.TempDir(), "no-slop-evidence", sctx.Run.ID),
 		"Do not move, commit, or modify source files only to make evidence linkable",
 		"If no existing test produces sufficient evidence, write or improve a focused test",
 		"If automated testing cannot produce the needed evidence, execute manual verification steps",
@@ -248,7 +248,7 @@ func TestTestStep_UserIntentRunsConfiguredCommandThenEvidenceAgent(t *testing.T)
 	if strings.Contains(prompt, "will be available from the pushed commit") || strings.Contains(prompt, "files that already exist in the repository") {
 		t.Fatalf("expected prompt not to make the testing agent worry about committed evidence files, got:\n%s", prompt)
 	}
-	if _, err := os.Stat(filepath.Join(os.TempDir(), "no-mistakes-evidence", sctx.Run.ID)); err != nil {
+	if _, err := os.Stat(filepath.Join(os.TempDir(), "no-slop-evidence", sctx.Run.ID)); err != nil {
 		t.Fatalf("expected temporary evidence directory to exist: %v", err)
 	}
 
@@ -282,7 +282,7 @@ func TestTestStep_InRepoEvidenceFallsBackWhenConfiguredDirEscapesWorktree(t *tes
 	}
 
 	prompt := ag.calls[0].Prompt
-	wantDir := filepath.Join(os.TempDir(), "no-mistakes-evidence", sctx.Run.ID)
+	wantDir := filepath.Join(os.TempDir(), "no-slop-evidence", sctx.Run.ID)
 	if !strings.Contains(prompt, "Write new evidence files into this temporary evidence directory: "+wantDir) {
 		t.Fatalf("expected temporary evidence guidance for unsafe in-repo dir, got:\n%s", prompt)
 	}
@@ -314,7 +314,7 @@ func TestTestStep_InRepoEvidenceFallsBackWhenEvidenceDirIsIgnored(t *testing.T) 
 	}
 
 	prompt := ag.calls[0].Prompt
-	wantDir := filepath.Join(os.TempDir(), "no-mistakes-evidence", sctx.Run.ID)
+	wantDir := filepath.Join(os.TempDir(), "no-slop-evidence", sctx.Run.ID)
 	if !strings.Contains(prompt, "Write new evidence files into this temporary evidence directory: "+wantDir) {
 		t.Fatalf("expected temporary evidence guidance for ignored in-repo dir, got:\n%s", prompt)
 	}

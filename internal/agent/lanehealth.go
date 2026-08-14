@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/lanehealth"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/lanehealth"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 // resetTimeLayout renders a lane's recovery time in the operator's local zone,

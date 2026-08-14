@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
 func TestSplitCommandLineTokens(t *testing.T) {
@@ -20,9 +20,9 @@ func TestSplitCommandLineTokens(t *testing.T) {
 		in   string
 		want []string
 	}{
-		{name: "plain", in: `/x/no-mistakes daemon run --root /a/b`, want: []string{"/x/no-mistakes", "daemon", "run", "--root", "/a/b"}},
-		{name: "equals form", in: `/x/no-mistakes daemon run --root=/a/b`, want: []string{"/x/no-mistakes", "daemon", "run", "--root=/a/b"}},
-		{name: "quoted spaced root", in: `"/x no-mistakes" daemon run --root "/a b/c"`, want: []string{"/x no-mistakes", "daemon", "run", "--root", "/a b/c"}},
+		{name: "plain", in: `/x/no-slop daemon run --root /a/b`, want: []string{"/x/no-slop", "daemon", "run", "--root", "/a/b"}},
+		{name: "equals form", in: `/x/no-slop daemon run --root=/a/b`, want: []string{"/x/no-slop", "daemon", "run", "--root=/a/b"}},
+		{name: "quoted spaced root", in: `"/x no-slop" daemon run --root "/a b/c"`, want: []string{"/x no-slop", "daemon", "run", "--root", "/a b/c"}},
 		{name: "escaped quote", in: `daemon run --root a\"b`, want: []string{"daemon", "run", "--root", `a"b`}},
 		{name: "empty", in: ``, want: []string(nil)},
 	}
@@ -46,11 +46,11 @@ func TestLooksLikeDaemonRunCommand(t *testing.T) {
 		in   string
 		want bool
 	}{
-		{`/x/no-mistakes daemon run --root /a`, true},
-		{`/x/no-mistakes run daemon --root /a`, true}, // order-insensitive
-		{`/x/no-mistakes`, false},                     // detached: bare exe
-		{`postgres --root /a daemon`, false},          // missing "run"
-		{`no-mistakes daemon --root /a`, false},       // missing "run"
+		{`/x/no-slop daemon run --root /a`, true},
+		{`/x/no-slop run daemon --root /a`, true}, // order-insensitive
+		{`/x/no-slop`, false},                     // detached: bare exe
+		{`postgres --root /a daemon`, false},      // missing "run"
+		{`no-slop daemon --root /a`, false},       // missing "run"
 		{``, false},
 	}
 	for _, tc := range tests {
@@ -82,10 +82,10 @@ func TestExtractRootFromCommand(t *testing.T) {
 
 func TestParseDaemonProcessOutput(t *testing.T) {
 	output := strings.Join([]string{
-		"1234 /home/u/no-mistakes daemon run --root /home/u/.no-mistakes",
-		"  5678 \t/usr/bin/no-mistakes daemon run --root=/tmp/link",
-		`9 "/x no-mistakes" daemon run --root "/a b/c"`,
-		`10 /x/no-mistakes`,             // detached daemon, must be skipped
+		"1234 /home/u/no-slop daemon run --root /home/u/.no-slop",
+		"  5678 \t/usr/bin/no-slop daemon run --root=/tmp/link",
+		`9 "/x no-slop" daemon run --root "/a b/c"`,
+		`10 /x/no-slop`,                 // detached daemon, must be skipped
 		`11 other --root /x daemon run`, // recovered but still daemon-run; root=/x
 		`12 postgres daemon`,            // not daemon-run
 		`bogus not a pid line`,          // unparseable pid
@@ -108,7 +108,7 @@ func TestParseDaemonProcessOutput(t *testing.T) {
 	}
 	got := parseDaemonProcessOutput(output, splitter)
 	wantRoots := map[int]string{
-		1234: "/home/u/.no-mistakes",
+		1234: "/home/u/.no-slop",
 		5678: "/tmp/link",
 		9:    "/a b/c",
 		11:   "/x",

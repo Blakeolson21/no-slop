@@ -10,13 +10,14 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/buildinfo"
-	"github.com/kunchenguid/no-mistakes/internal/daemon"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/buildinfo"
+	"github.com/Blakeolson21/no-slop/internal/daemon"
+	"github.com/Blakeolson21/no-slop/internal/identity"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
 const (
-	appName = "no-mistakes"
+	appName = "no-slop"
 	// This binary is built from the Blakeolson21/no-slop fork, which carries
 	// local document-guard patches that exist in no published release. Its
 	// version string (v1.41.2-no-slop-document-guard) is valid semver, so
@@ -34,14 +35,15 @@ const (
 	// this build forward is to rebuild from source. Every exported entry point
 	// below fails closed; repoName stays off upstream so that no code path,
 	// including a directly constructed updater, can reach it.
-	repoName           = "Blakeolson21/no-slop"
-	backgroundFlag     = "--update-check"
-	noUpdateCheckEnv   = "NO_MISTAKES_NO_UPDATE_CHECK"
-	checksumsAssetName = "checksums.txt"
-	cacheTTL           = 24 * time.Hour
-	maxAPIResponseSize = 5 << 20
-	maxDownloadSize    = 100 << 20
-	maxExtractedSize   = 100 << 20
+	repoName               = "Blakeolson21/no-slop"
+	backgroundFlag         = "--update-check"
+	noUpdateCheckEnv       = "NS_NO_UPDATE_CHECK"
+	legacyNoUpdateCheckEnv = "NO_MISTAKES_NO_UPDATE_CHECK"
+	checksumsAssetName     = "checksums.txt"
+	cacheTTL               = 24 * time.Hour
+	maxAPIResponseSize     = 5 << 20
+	maxDownloadSize        = 100 << 20
+	maxExtractedSize       = 100 << 20
 )
 
 var allowInsecureDownloads bool
@@ -99,17 +101,17 @@ archive and overwrite this binary in place, silently dropping every patch.
 To move this build forward, rebuild from a checkout of
 github.com/Blakeolson21/no-slop:
 
-    go build -o ~/.no-mistakes/bin/no-mistakes.new ./cmd/no-mistakes
-    mv ~/.no-mistakes/bin/no-mistakes.new ~/.no-mistakes/bin/no-mistakes
-    no-mistakes daemon restart
+    go build -o ~/.no-mistakes/bin/no-slop.new ./cmd/no-slop
+    mv ~/.no-mistakes/bin/no-slop.new ~/.no-mistakes/bin/no-slop
+    no-slop daemon restart
 
 Target the real binary, not the symlink command -v reports: go build -o leaves
 a symlink in place and truncates its target, which fails with ETXTBSY on Linux
 while the daemon is executing that file. Staging beside the destination keeps
 the move an atomic rename instead of a cross-filesystem copy from /tmp.
 
-The install directory comes from NO_MISTAKES_INSTALL_DIR and defaults to
-~/.no-mistakes/bin; NM_HOME does not affect it. A go install layout puts the
+The install directory comes from NS_INSTALL_DIR and defaults to
+~/.no-mistakes/bin; NS_HOME does not affect it. A go install layout puts the
 binary in GOBIN instead.`)
 
 // selfUpdateEnabled gates every exported entry point in this package. It is a
@@ -117,6 +119,15 @@ binary in GOBIN instead.`)
 // compiler and to tests, which still exercise it directly against a stub
 // GitHub API. See the repoName comment for why it is false.
 var selfUpdateEnabled = false
+
+func updateCheckDisabled() (bool, error) {
+	return identity.EnvEnabled(noUpdateCheckEnv, legacyNoUpdateCheckEnv)
+}
+
+func ValidateEnv() error {
+	_, err := updateCheckDisabled()
+	return err
+}
 
 func Run(ctx context.Context, stdout, stderr io.Writer, opts RunOptions) error {
 	if !selfUpdateEnabled {
@@ -139,9 +150,13 @@ func MaybeHandleBackgroundCheck(args []string) (bool, error) {
 	if len(args) != 2 || args[0] != backgroundFlag {
 		return false, nil
 	}
+	disabled, err := updateCheckDisabled()
+	if err != nil {
+		return true, err
+	}
 	// Still report the flag as handled so a stray background invocation exits
 	// quietly instead of falling through to the CLI as an unknown command.
-	if !selfUpdateEnabled {
+	if !selfUpdateEnabled || disabled {
 		return true, nil
 	}
 	u, err := defaultUpdater(io.Discard, io.Discard)
@@ -152,18 +167,22 @@ func MaybeHandleBackgroundCheck(args []string) (bool, error) {
 	return true, u.refreshCache(context.Background())
 }
 
-func MaybeNotifyAndCheck(args []string, stderr io.Writer) {
+func MaybeNotifyAndCheck(args []string, stderr io.Writer) error {
+	disabled, err := updateCheckDisabled()
+	if err != nil {
+		return err
+	}
 	// Without this guard every command would spawn a background probe and print
 	// an upgrade notice inviting the reader to run the very command that would
 	// destroy this build's local patches.
-	if !selfUpdateEnabled {
-		return
+	if !selfUpdateEnabled || disabled {
+		return nil
 	}
 	u, err := defaultUpdater(io.Discard, stderr)
 	if err != nil {
-		return
+		return err
 	}
-	u.maybeNotifyAndCheck(args)
+	return u.maybeNotifyAndCheck(args)
 }
 
 func CachedLatestVersion() string {
@@ -219,16 +238,20 @@ func (u *updater) refreshCache(ctx context.Context) error {
 	})
 }
 
-func (u *updater) maybeNotifyAndCheck(args []string) {
-	if u.disableBackground || isDevVersion(u.currentVersion) || os.Getenv(noUpdateCheckEnv) == "1" {
-		return
+func (u *updater) maybeNotifyAndCheck(args []string) error {
+	disabled, err := updateCheckDisabled()
+	if err != nil {
+		return err
+	}
+	if u.disableBackground || isDevVersion(u.currentVersion) || disabled {
+		return nil
 	}
 	// Informational commands must be side-effect-free probes: `update` and the
 	// background refresh must not re-enter it, and a version query (`--version`
 	// / `-v`) must never print a notice or spawn a background refresh so that
 	// supervision scripts can call it as an innocuous health check (#401).
 	if len(args) > 0 && (args[0] == "update" || args[0] == backgroundFlag || args[0] == "--version" || args[0] == "-v") {
-		return
+		return nil
 	}
 	cache := readCache(u.cachePath)
 	if cache != nil {
@@ -240,10 +263,12 @@ func (u *updater) maybeNotifyAndCheck(args []string) {
 	if cacheStale(cache, u.currentVersion, u.now()) && u.spawnBackground != nil {
 		_ = u.spawnBackground(u.currentVersion)
 	}
+	return nil
 }
 
 func (u *updater) cachedLatestVersion() string {
-	if u == nil || u.disableBackground || isDevVersion(u.currentVersion) || os.Getenv(noUpdateCheckEnv) == "1" {
+	disabled, err := updateCheckDisabled()
+	if err != nil || u == nil || u.disableBackground || isDevVersion(u.currentVersion) || disabled {
 		return ""
 	}
 	cache := readCache(u.cachePath)

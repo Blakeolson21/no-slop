@@ -1,11 +1,17 @@
 package main
 
 import (
+	"context"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Blakeolson21/no-slop/internal/shellenv"
 	"gopkg.in/yaml.v3"
 )
 
@@ -22,15 +28,17 @@ import (
 // The permanent signing identity. These MUST NEVER change once the first signed
 // release ships: the executable identifier and Team ID are the invariant part of
 // the Developer ID designated requirement that lets macOS permissions survive
-// `no-mistakes update`.
+// `no-slop update`.
 const (
-	signingIdentifier = "com.kunchenguid.no-mistakes"
+	signingIdentifier = "com.kunchenguid.no-slop"
 	signingTeamID     = "9T2J7MNUP9"
 
 	cscLinkSecret    = "CSC_LINK"
 	cscKeyPassSecret = "CSC_KEY_PASSWORD"
 	signingEnv       = "release-signing"
 )
+
+const releaseWorkflowStepTimeout = 10 * time.Second
 
 // signingDarwinArches is the set of macOS architectures every official release
 // must ship as a signed thin binary.
@@ -388,7 +396,7 @@ func TestReleaseWorkflowSignsBeforeArchiveAndChecksum(t *testing.T) {
 		}
 	}
 
-	checksums := wf.jobByRunContains("sha256sum", "checksums.txt")
+	checksums := wf.Jobs["checksums"]
 	if checksums == nil {
 		t.Fatal("no checksums job found")
 	}
@@ -493,21 +501,9 @@ func TestReleaseWorkflowCleansUpKeychainAlways(t *testing.T) {
 }
 
 // TestReleaseWorkflowPreservesArtifactContract pins the installer/updater and
-// checksum contracts: per-arch tarball names, an unchanged linux/windows path,
-// and finalize still publishing a prerelease.
+// checksum contracts: per-arch tarball names and an unchanged linux/windows path.
 func TestReleaseWorkflowPreservesArtifactContract(t *testing.T) {
 	wf := loadReleaseWorkflowDoc(t)
-
-	for _, arch := range signingDarwinArches {
-		job := wf.darwinJobForArch(arch)
-		if job == nil {
-			t.Fatalf("no darwin build job for %s", arch)
-		}
-		run := job.allRun()
-		if !strings.Contains(run, "no-mistakes-") || !strings.Contains(run, "${GOOS}-${GOARCH}.tar.gz") {
-			t.Errorf("darwin job %q must preserve the no-mistakes-<tag>-<goos>-<goarch>.tar.gz name", job.name)
-		}
-	}
 
 	lw := wf.nonDarwinBuildJob()
 	if lw == nil {
@@ -532,22 +528,289 @@ func TestReleaseWorkflowPreservesArtifactContract(t *testing.T) {
 			t.Errorf("linux/windows job %q missing target %s", lw.name, target)
 		}
 	}
-	if strings.Contains(lw.allRun(), "codesign") {
+	if workflowJobRunsCommand(lw, "codesign") {
 		t.Errorf("linux/windows job %q must not sign", lw.name)
 	}
-	if uploadStepIndex(lw) < 0 {
-		t.Errorf("linux/windows job %q must still upload the release asset", lw.name)
+	workflowStepByName(t, lw, "Upload release asset")
+
+	checksums := wf.Jobs["checksums"]
+	if checksums == nil {
+		t.Fatal("no checksums job found")
+	}
+	workflowStepByName(t, checksums, "Generate checksums")
+
+	finalize := wf.Jobs["finalize"]
+	if finalize == nil {
+		t.Fatal("no finalize job found")
+	}
+	workflowStepByName(t, finalize, "Publish draft release as prerelease")
+}
+
+func TestReleaseWorkflowFinalizePublishesPrerelease(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executes POSIX shell workflow steps")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is required to execute workflow shell steps")
+	}
+	wf := loadReleaseWorkflowDoc(t)
+	finalize := wf.Jobs["finalize"]
+	if finalize == nil {
+		t.Fatal("no finalize job found")
+	}
+	ghLog := filepath.Join(t.TempDir(), "gh.log")
+	fakeBin := makeReleaseWorkflowFakeBin(t, ghLog)
+	runReleaseWorkflowStep(t, workflowStepByName(t, finalize, "Publish draft release as prerelease"), t.TempDir(), fakeBin, map[string]string{
+		"TAG": "v1.2.3",
+	})
+	commands := readReleaseWorkflowLines(t, ghLog)
+	if len(commands) != 1 {
+		t.Fatalf("release finalize commands = %v, want one invocation", commands)
+	}
+	fields := strings.Fields(commands[0])
+	for _, want := range []string{"release", "edit", "v1.2.3", "--draft=false", "--prerelease=true"} {
+		if !slicesContains(fields, want) {
+			t.Fatalf("release finalize args = %q, missing %s", commands[0], want)
+		}
+	}
+}
+
+func TestReleaseWorkflowPublishesLegacyArchiveAliases(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executes POSIX shell workflow steps")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is required to execute workflow shell steps")
+	}
+	wf := loadReleaseWorkflowDoc(t)
+	ghLog := filepath.Join(t.TempDir(), "gh.log")
+	fakeBin := makeReleaseWorkflowFakeBin(t, ghLog)
+
+	darwinJob := wf.darwinJobForArch("amd64")
+	if darwinJob == nil {
+		t.Fatal("no darwin/amd64 build job")
+	}
+	darwinDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(darwinDir, "dist"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(darwinDir, "dist", "no-slop"), []byte("signed darwin binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runReleaseWorkflowStep(t, workflowStepByName(t, darwinJob, "Archive signed binary"), darwinDir, fakeBin, map[string]string{
+		"GOOS":   "darwin",
+		"GOARCH": "amd64",
+		"TAG":    "v1.2.3",
+	})
+	assertWorkflowFileExists(t, filepath.Join(darwinDir, "dist", "no-slop-v1.2.3-darwin-amd64.tar.gz"))
+	assertWorkflowFileExists(t, filepath.Join(darwinDir, "dist", "no-mistakes-v1.2.3-darwin-amd64.tar.gz"))
+	runReleaseWorkflowStep(t, workflowStepByName(t, darwinJob, "Upload release asset"), darwinDir, fakeBin, map[string]string{
+		"TAG":            "v1.2.3",
+		"ARCHIVE":        "dist/no-slop-v1.2.3-darwin-amd64.tar.gz",
+		"LEGACY_ARCHIVE": "dist/no-mistakes-v1.2.3-darwin-amd64.tar.gz",
+	})
+
+	lw := wf.nonDarwinBuildJob()
+	if lw == nil {
+		t.Fatal("no linux/windows build job found")
+	}
+	for _, target := range []struct {
+		goos   string
+		goarch string
+		ext    string
+	}{
+		{"linux", "amd64", ".tar.gz"},
+		{"windows", "amd64", ".zip"},
+	} {
+		dir := t.TempDir()
+		runReleaseWorkflowStep(t, workflowStepByName(t, lw, "Build archive"), dir, fakeBin, map[string]string{
+			"GOOS":             target.goos,
+			"GOARCH":           target.goarch,
+			"TAG":              "v1.2.3",
+			"UMAMI_HOST":       "https://a.kunchenguid.com",
+			"UMAMI_WEBSITE_ID": "website",
+		})
+		assertWorkflowFileExists(t, filepath.Join(dir, "dist", "no-slop-v1.2.3-"+target.goos+"-"+target.goarch+target.ext))
+		assertWorkflowFileExists(t, filepath.Join(dir, "dist", "no-mistakes-v1.2.3-"+target.goos+"-"+target.goarch+target.ext))
 	}
 
-	checksums := wf.jobByRunContains("sha256sum", "checksums.txt")
-	if checksums == nil || !strings.Contains(checksums.allRun(), "sha256sum no-mistakes-*") {
-		t.Error("checksums job must still compute `sha256sum no-mistakes-*`")
+	checksums := wf.Jobs["checksums"]
+	if checksums == nil {
+		t.Fatal("no checksums job found")
+	}
+	checksumDir := t.TempDir()
+	distDir := filepath.Join(checksumDir, "dist")
+	if err := os.MkdirAll(distDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"no-slop-v1.2.3-linux-amd64.tar.gz", "no-mistakes-v1.2.3-linux-amd64.tar.gz"} {
+		if err := os.WriteFile(filepath.Join(distDir, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runReleaseWorkflowStep(t, workflowStepByName(t, checksums, "Generate checksums"), checksumDir, fakeBin, nil)
+	checksumData, err := os.ReadFile(filepath.Join(checksumDir, "checksums.txt"))
+	if err != nil {
+		t.Fatalf("read checksums.txt: %v", err)
+	}
+	checksumText := string(checksumData)
+	for _, name := range []string{"no-slop-v1.2.3-linux-amd64.tar.gz", "no-mistakes-v1.2.3-linux-amd64.tar.gz"} {
+		if !strings.Contains(checksumText, name) {
+			t.Fatalf("checksums.txt = %q, missing %s", checksumText, name)
+		}
 	}
 
-	finalize := wf.jobByRunContains("--prerelease=true")
-	if finalize == nil || !wfContainsAll(finalize.allRun(), "--draft=false", "--prerelease=true") {
-		t.Error("finalize job must still run `gh release edit --draft=false --prerelease=true`")
+	uploads := readReleaseWorkflowLines(t, ghLog)
+	if len(uploads) != 1 {
+		t.Fatalf("release uploads = %v, want one upload invocation", uploads)
 	}
+	for _, want := range []string{"dist/no-slop-v1.2.3-darwin-amd64.tar.gz", "dist/no-mistakes-v1.2.3-darwin-amd64.tar.gz"} {
+		if !slicesContains(strings.Fields(uploads[0]), want) {
+			t.Fatalf("release upload args = %q, missing %s", uploads[0], want)
+		}
+	}
+}
+
+func workflowStepByName(t *testing.T, job *wfJob, name string) wfStep {
+	t.Helper()
+	for _, step := range job.Steps {
+		if step.Name == name {
+			return step
+		}
+	}
+	t.Fatalf("job %q has no step named %q", job.name, name)
+	return wfStep{}
+}
+
+func runReleaseWorkflowStep(t *testing.T, step wfStep, dir, fakeBin string, env map[string]string) {
+	t.Helper()
+	githubEnv := filepath.Join(dir, "github.env")
+	ctx, cancel := context.WithTimeout(context.Background(), releaseWorkflowStepTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bash", "-c", step.Run)
+	cmd.WaitDelay = 2 * time.Second
+	shellenv.ConfigureShellCommand(cmd)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"GITHUB_ENV="+githubEnv,
+	)
+	for key, value := range step.Env {
+		cmd.Env = append(cmd.Env, key+"="+value)
+	}
+	for key, value := range env {
+		cmd.Env = append(cmd.Env, key+"="+value)
+	}
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("run workflow step %q timed out after %s\n%s", step.Name, releaseWorkflowStepTimeout, output)
+	}
+	if err != nil {
+		t.Fatalf("run workflow step %q: %v\n%s", step.Name, err, output)
+	}
+}
+
+func makeReleaseWorkflowFakeBin(t *testing.T, ghLog string) string {
+	t.Helper()
+	bin := t.TempDir()
+	writeExecutable(t, filepath.Join(bin, "git"), `#!/bin/sh
+if [ "$1" = "rev-parse" ]; then
+  printf 'abc1234\n'
+  exit 0
+fi
+exit 2
+`)
+	writeExecutable(t, filepath.Join(bin, "go"), `#!/bin/sh
+out=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [ -z "$out" ]; then
+  exit 2
+fi
+mkdir -p "$(dirname "$out")"
+printf 'fake built binary\n' > "$out"
+`)
+	writeExecutable(t, filepath.Join(bin, "zip"), `#!/bin/sh
+while [ "$1" = "-q" ]; do
+  shift
+done
+if [ -z "$1" ]; then
+  exit 2
+fi
+printf 'fake zip\n' > "$1"
+`)
+	writeExecutable(t, filepath.Join(bin, "gh"), `#!/bin/sh
+printf '%s\n' "$*" >> "$GH_LOG"
+`)
+	writeExecutable(t, filepath.Join(bin, "sha256sum"), `#!/bin/sh
+for path in "$@"; do
+  printf 'hash  %s\n' "$path"
+done
+`)
+	t.Setenv("GH_LOG", ghLog)
+	return bin
+}
+
+func assertWorkflowFileExists(t *testing.T, path string) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	if info.Size() == 0 {
+		t.Fatalf("%s is empty", path)
+	}
+}
+
+func readReleaseWorkflowLines(t *testing.T, path string) []string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	var lines []string
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+func slicesContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func workflowJobRunsCommand(job *wfJob, command string) bool {
+	for _, step := range job.Steps {
+		if shellRunsCommand(step.Run, command) {
+			return true
+		}
+	}
+	return false
+}
+
+func shellRunsCommand(script, command string) bool {
+	for _, line := range strings.Split(script, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) > 0 && fields[0] == command {
+			return true
+		}
+	}
+	return false
 }
 
 // TestReleaseWorkflowStaysPhase1NoNotarization enforces the Phase 1 scope:

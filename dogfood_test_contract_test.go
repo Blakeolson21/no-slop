@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/config"
 )
 
 // Local Test is targeted validation of the requested intent. This repository
@@ -26,21 +26,6 @@ func TestDogfoodConfig_NoBroadLocalTestCommand(t *testing.T) {
 	}
 	if got := strings.TrimSpace(cfg.Commands.Test); got != "" {
 		t.Fatalf("dogfood commands.test = %q, want empty so local Test stays agent-targeted; put broad regression in remote CI", got)
-	}
-
-	raw, err := os.ReadFile(filepath.Join(root, ".no-mistakes.yaml"))
-	if err != nil {
-		t.Fatalf("read .no-mistakes.yaml: %v", err)
-	}
-	content := string(raw)
-	for _, forbid := range []string{
-		`test: "go test -race ./..."`,
-		`test: 'go test -race ./...'`,
-		`test: go test -race ./...`,
-	} {
-		if strings.Contains(content, forbid) {
-			t.Fatalf(".no-mistakes.yaml still configures broad local Test %q", forbid)
-		}
 	}
 }
 

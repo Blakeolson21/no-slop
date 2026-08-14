@@ -6,9 +6,9 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/git"
-	"github.com/kunchenguid/no-mistakes/internal/scm"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/scm"
 )
 
 // RefreshFailureReason is a bounded, URL-free reason safe to emit in logs.
@@ -84,7 +84,7 @@ func RefreshRepoURLs(ctx context.Context, database *db.DB, repo *db.Repo) (*db.R
 		}
 		var candidates []forkCandidate
 		for _, name := range strings.Fields(remoteNames) {
-			if name == "origin" || name == RemoteName {
+			if name == "origin" || name == RemoteName || name == LegacyRemoteName {
 				continue
 			}
 			candidateURLs, readErr := git.GetConfiguredRemoteURLs(ctx, repo.WorkingPath, name)

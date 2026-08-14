@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/daemon"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/daemon"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
 type daemonResetError struct {

@@ -1,11 +1,12 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
 // installWindowsTask registers the daemon as a per-user scheduled task.
@@ -30,17 +31,28 @@ func installWindowsTask(p *paths.Paths, exe string) error {
 	if _, err := serviceCommandRunner("schtasks", args...); err != nil {
 		return fmt.Errorf("schtasks create: %w", err)
 	}
-	cleanupLegacyWindowsTask(p)
-	return nil
+	return managedServiceCleanupFailure(cleanupLegacyWindowsTask(p))
 }
 
-func cleanupLegacyWindowsTask(p *paths.Paths) {
-	data, err := serviceCommandRunner("schtasks", "/Query", "/TN", legacyWindowsTaskName, "/XML")
-	if err != nil || !serviceDefinitionMatchesRoot(data, p) {
-		return
+func cleanupLegacyWindowsTask(p *paths.Paths) error {
+	var errs []error
+	for _, name := range []string{legacyScopedWindowsTaskName(p), legacyWindowsTaskName} {
+		data, ok, err := queryLegacyWindowsTask(name)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if !ok || !serviceDefinitionMatchesRoot(data, p) {
+			continue
+		}
+		if output, err := serviceCommandRunner("schtasks", "/End", "/TN", name); err != nil && !windowsTaskEndNotRunning(output, err) {
+			errs = append(errs, fmt.Errorf("schtasks end legacy task: %w", err))
+		}
+		if _, err := serviceCommandRunner("schtasks", "/Delete", "/TN", name, "/F"); err != nil {
+			errs = append(errs, fmt.Errorf("schtasks delete legacy task: %w", err))
+		}
 	}
-	_, _ = serviceCommandRunner("schtasks", "/End", "/TN", legacyWindowsTaskName)
-	_, _ = serviceCommandRunner("schtasks", "/Delete", "/TN", legacyWindowsTaskName, "/F")
+	return errors.Join(errs...)
 }
 
 func startWindowsTask(p *paths.Paths) error {
@@ -52,11 +64,60 @@ func startWindowsTask(p *paths.Paths) error {
 }
 
 func stopWindowsTask(p *paths.Paths) error {
-	_, err := serviceCommandRunner("schtasks", "/End", "/TN", windowsTaskName(p))
-	if err != nil {
+	output, err := serviceCommandRunner("schtasks", "/End", "/TN", windowsTaskName(p))
+	if err != nil && !windowsTaskEndNotRunning(output, err) {
 		return fmt.Errorf("schtasks end: %w", err)
 	}
 	return nil
+}
+
+func stopLegacyWindowsTask(p *paths.Paths) (bool, error) {
+	stopped := false
+	var errs []error
+	for _, name := range []string{legacyScopedWindowsTaskName(p), legacyWindowsTaskName} {
+		data, ok, err := queryLegacyWindowsTask(name)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if !ok || !serviceDefinitionMatchesRoot(data, p) {
+			continue
+		}
+		stopped = true
+		if output, err := serviceCommandRunner("schtasks", "/End", "/TN", name); err != nil && !windowsTaskEndNotRunning(output, err) {
+			errs = append(errs, fmt.Errorf("schtasks end legacy task: %w", err))
+		}
+	}
+	return stopped, errors.Join(errs...)
+}
+
+func windowsTaskEndNotRunning(output []byte, err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(string(output) + " " + err.Error())
+	return strings.Contains(text, "not currently running") ||
+		strings.Contains(text, "currently not running") ||
+		strings.Contains(text, "is not running")
+}
+
+func queryLegacyWindowsTask(name string) ([]byte, bool, error) {
+	data, err := serviceCommandRunner("schtasks", "/Query", "/TN", name, "/XML")
+	if err == nil {
+		return data, true, nil
+	}
+	if windowsTaskQueryNotFound(data, err) {
+		return nil, false, nil
+	}
+	return nil, false, fmt.Errorf("inspect legacy windows task %s: %w", name, err)
+}
+
+func windowsTaskQueryNotFound(output []byte, err error) bool {
+	text := strings.ToLower(string(output) + " " + err.Error())
+	return strings.Contains(text, "not found") ||
+		strings.Contains(text, "cannot find") ||
+		strings.Contains(text, "does not exist") ||
+		strings.Contains(text, "not exist")
 }
 
 type windowsManagedDaemonObservation struct {

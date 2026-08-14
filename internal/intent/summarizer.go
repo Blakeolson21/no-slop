@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/agent"
 )
 
 // maxTranscriptBytes caps the size of transcript text we send to the
@@ -28,7 +28,7 @@ type Summarizer interface {
 	Summarize(ctx context.Context, s *Session) (string, error)
 }
 
-// agentSummarizer calls a no-mistakes agent to produce the summary.
+// agentSummarizer calls a no-slop agent to produce the summary.
 //
 // cwd is the working directory passed to the agent. This MUST be set to
 // the same directory the pipeline steps will run in (the worktree). Some

@@ -21,7 +21,7 @@ var WorktreeSteering = fmt.Sprintf(`Workspace boundary (important):
 - Ephemeral temp/cache writes that are incidental side effects of running the project development toolchain are allowed outside the worktree for tests, linters, formatters, builds, and manual verification commands.
 - You may read files outside the worktree and run read-only commands, but every other intentional write must stay inside the worktree.
 
-`, filepath.Join(os.TempDir(), "no-mistakes-evidence"))
+`, filepath.Join(os.TempDir(), "no-slop-evidence"))
 
 // steeredAgent wraps an Agent and prepends WorktreeSteering to each prompt.
 type steeredAgent struct {

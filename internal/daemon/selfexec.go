@@ -11,8 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/ipc"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/identity"
+	"github.com/Blakeolson21/no-slop/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
 var daemonHealthCheck = daemonIsRunningViaIPC
@@ -23,11 +24,16 @@ var daemonProcessStartTime = processStartTime
 var daemonKillPID = killPID
 var daemonEndpointUsesRegularFile = func() bool { return runtime.GOOS == "windows" }
 
-func daemonStartTimeout() time.Duration {
+const (
+	daemonHelperProcessEnv       = "NS_DAEMON_HELPER_PROCESS"
+	legacyDaemonHelperProcessEnv = "NM_DAEMON_HELPER_PROCESS"
+)
+
+func daemonStartTimeout() (time.Duration, error) {
 	// Login-shell environment resolution alone has a 30s safety budget. A
 	// production readiness deadline must cover that cold work plus exclusive
 	// recovery, while remaining bounded for genuine startup failures.
-	return durationFromEnv("NM_TEST_DAEMON_START_TIMEOUT", 45*time.Second)
+	return durationFromEnv("NS_TEST_DAEMON_START_TIMEOUT", "NM_TEST_DAEMON_START_TIMEOUT", 45*time.Second)
 }
 
 // daemonStopTimeout bounds how long waitForDaemonStop polls for a graceful
@@ -37,28 +43,46 @@ func daemonStartTimeout() time.Duration {
 // pending/racing connections fail as immediately as a Unix domain socket
 // unlink does, so the health check can keep reporting an ambiguous error
 // for longer after a graceful shutdown request has already succeeded.
-func daemonStopTimeout() time.Duration {
+func daemonStopTimeout() (time.Duration, error) {
 	fallback := 5 * time.Second
 	if runtimeGOOS == "windows" {
 		fallback = 15 * time.Second
 	}
-	return durationFromEnv("NM_TEST_DAEMON_STOP_TIMEOUT", fallback)
+	return durationFromEnv("NS_TEST_DAEMON_STOP_TIMEOUT", "NM_TEST_DAEMON_STOP_TIMEOUT", fallback)
 }
 
-func daemonStartPollInterval() time.Duration {
-	return durationFromEnv("NM_TEST_DAEMON_START_POLL_INTERVAL", 100*time.Millisecond)
+func daemonStartPollInterval() (time.Duration, error) {
+	return durationFromEnv("NS_TEST_DAEMON_START_POLL_INTERVAL", "NM_TEST_DAEMON_START_POLL_INTERVAL", 100*time.Millisecond)
 }
 
-func durationFromEnv(name string, fallback time.Duration) time.Duration {
-	value := os.Getenv(name)
+func durationFromEnv(canonical, legacy string, fallback time.Duration) (time.Duration, error) {
+	value, err := identity.LookupEnv(canonical, legacy)
+	if err != nil {
+		return 0, err
+	}
 	if value == "" {
-		return fallback
+		return fallback, nil
 	}
 	d, err := time.ParseDuration(value)
 	if err != nil || d <= 0 {
-		return fallback
+		return fallback, nil
 	}
-	return d
+	return d, nil
+}
+
+func ValidateControlEnv() error {
+	for _, pair := range [][2]string{
+		{"NS_TEST_DAEMON_START_TIMEOUT", "NM_TEST_DAEMON_START_TIMEOUT"},
+		{"NS_TEST_DAEMON_STOP_TIMEOUT", "NM_TEST_DAEMON_STOP_TIMEOUT"},
+		{"NS_TEST_DAEMON_START_POLL_INTERVAL", "NM_TEST_DAEMON_START_POLL_INTERVAL"},
+		{"NS_TEST_START_DAEMON", "NM_TEST_START_DAEMON"},
+		{daemonHelperProcessEnv, legacyDaemonHelperProcessEnv},
+	} {
+		if _, err := identity.LookupEnv(pair[0], pair[1]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Start installs or refreshes the managed daemon service when supported and
@@ -87,7 +111,7 @@ func Start(p *paths.Paths) error {
 		return fmt.Errorf("daemon already running")
 	}
 	// Canonical socket is dead. A daemon for the same logical root may still be
-	// alive under a different path spelling (symlinked or relative NM_HOME),
+	// alive under a different path spelling (symlinked or relative NS_HOME),
 	// which the socket-keyed health check above cannot see. Detect via the OS
 	// process list: refuse if a healthy stray is serving this root, or reap a
 	// stale stray (including a crash-looping managed unit) before starting.
@@ -110,6 +134,10 @@ func Start(p *paths.Paths) error {
 			}
 		}
 	} else {
+		var cleanupErr *managedServiceCleanupError
+		if errors.As(err, &cleanupErr) {
+			return fmt.Errorf("install managed service: %w", err)
+		}
 		if alive, _ := daemonHealthCheck(p); alive {
 			return nil
 		}
@@ -134,19 +162,19 @@ func Start(p *paths.Paths) error {
 // differs from what the current binary would generate. Returns true when a
 // reload actually happened. Called from Start() so that `daemon start` after
 // a binary upgrade re-applies the new service definition without forcing
-// users to run `daemon restart` explicitly. No-op on Windows and when the
-// service manager is bypassed (i.e., under `go test`).
+// users to run `daemon restart` explicitly. No-op when the service manager is
+// bypassed (i.e., under `go test`).
 func reinstallManagedServiceIfChanged(p *paths.Paths) (bool, error) {
-	if serviceManagerBypassed() {
+	bypassed, err := serviceManagerBypassed()
+	if err != nil {
+		return false, err
+	}
+	if bypassed {
 		return false, nil
 	}
 	exe, err := serviceExecutablePath()
 	if err != nil {
 		return false, fmt.Errorf("resolve executable: %w", err)
-	}
-	home, err := serviceUserHomeDir()
-	if err != nil {
-		return false, fmt.Errorf("resolve user home: %w", err)
 	}
 
 	var installPath, wanted string
@@ -156,11 +184,26 @@ func reinstallManagedServiceIfChanged(p *paths.Paths) (bool, error) {
 		installPath = launchAgentPath(p)
 	case "linux":
 		installPath = systemdUserServicePath(p)
+	case "windows":
+		return reinstallWindowsManagedServiceIfMissing(p, exe)
 	default:
 		return false, nil
 	}
+	home, err := serviceUserHomeDir()
+	if err != nil {
+		return false, fmt.Errorf("resolve user home: %w", err)
+	}
 
 	existing, readErr := os.ReadFile(installPath)
+	if os.IsNotExist(readErr) {
+		legacyExists, err := legacyManagedServiceDefinitionExists(p)
+		if err != nil {
+			return false, err
+		}
+		if !legacyExists {
+			return false, nil
+		}
+	}
 	// Inherit any proxy already baked into the existing definition so an
 	// env-less `daemon start` does not render a no-proxy target, falsely detect
 	// drift, and reinstall - which would strip the proxy and re-break the daemon
@@ -194,17 +237,19 @@ func reinstallManagedServiceIfChanged(p *paths.Paths) (bool, error) {
 	switch {
 	case readErr == nil && string(existing) == wanted:
 		return false, nil
-	case os.IsNotExist(readErr):
-		return false, nil
 	case readErr != nil && !os.IsNotExist(readErr):
 		return false, fmt.Errorf("read managed service definition: %w", readErr)
 	}
+	hadExisting := readErr == nil
 	restoreMode := os.FileMode(0o644)
 	if info, err := os.Stat(installPath); err == nil {
 		restoreMode = info.Mode().Perm()
 	}
 	stoppedForRefresh := false
 	restoreOnFailure := func(cause error) (bool, error) {
+		if !hadExisting {
+			return false, cause
+		}
 		if err := writeFileAtomic(installPath, existing, restoreMode); err != nil {
 			return false, fmt.Errorf("%w; restore managed service definition: %v", cause, err)
 		}
@@ -235,6 +280,29 @@ func reinstallManagedServiceIfChanged(p *paths.Paths) (bool, error) {
 	return true, nil
 }
 
+func reinstallWindowsManagedServiceIfMissing(p *paths.Paths, exe string) (bool, error) {
+	installed, err := managedServiceInstalled(p)
+	if err != nil {
+		return false, err
+	}
+	if installed {
+		return false, nil
+	}
+	if _, err := installManagedServiceWithExecutable(p, exe); err != nil {
+		return false, err
+	}
+	if err := stopCurrentDaemonBeforeManagedRestart(p); err != nil {
+		return false, err
+	}
+	if _, err := restartManagedService(p); err != nil {
+		return false, err
+	}
+	if err := waitForDaemonStart(p, 0, time.Time{}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func stopCurrentDaemonBeforeManagedRestart(p *paths.Paths) error {
 	instance := captureRunningDaemon(p)
 	if managed, err := stopManagedService(p); managed {
@@ -256,6 +324,15 @@ func stopCurrentDaemonBeforeManagedRestart(p *paths.Paths) error {
 			default:
 				return fmt.Errorf("wait for managed daemon exit before restart: %w", waitErr)
 			}
+		}
+		if err != nil {
+			if detachedErr != nil {
+				return fmt.Errorf("stop managed daemon before restart: %w; detached shutdown: %v", err, detachedErr)
+			}
+			return fmt.Errorf("stop managed daemon before restart: %w", err)
+		}
+		if detachedErr != nil {
+			return fmt.Errorf("detached shutdown before managed restart: %w", detachedErr)
 		}
 		return nil
 	}
@@ -331,7 +408,14 @@ func startDetachedDaemon(p *paths.Paths) error {
 	defer logFile.Close()
 
 	cmd := exec.Command(exe, "daemon", "run", "--root", p.Root())
-	cmd.Env = upsertEnv(os.Environ(), "NM_HOME", p.Root())
+	cmd.Env = upsertEnv(os.Environ(), "NS_HOME", p.Root())
+	cmd.Env = upsertEnv(cmd.Env, "NM_HOME", p.Root())
+	if helper, err := identity.LookupEnvSlice(cmd.Env, daemonHelperProcessEnv, legacyDaemonHelperProcessEnv); err != nil {
+		return err
+	} else if helper != "" {
+		cmd.Env = upsertEnv(cmd.Env, daemonHelperProcessEnv, helper)
+		cmd.Env = upsertEnv(cmd.Env, legacyDaemonHelperProcessEnv, helper)
+	}
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	// Detach from parent process group so daemon survives CLI exit.
@@ -385,8 +469,14 @@ func waitForDaemonStart(p *paths.Paths, pid int, startedAt time.Time) error {
 }
 
 func waitForDaemonStartWithProcess(p *paths.Paths, proc *os.Process, exitCh <-chan error, pid int, startedAt time.Time, launch managedServiceLaunch) error {
-	timeout := daemonStartTimeout()
-	pollInterval := daemonStartPollInterval()
+	timeout, err := daemonStartTimeout()
+	if err != nil {
+		return fmt.Errorf("resolve daemon start timeout: %w", err)
+	}
+	pollInterval, err := daemonStartPollInterval()
+	if err != nil {
+		return fmt.Errorf("resolve daemon start poll interval: %w", err)
+	}
 	deadline := time.Now().Add(timeout)
 	managedPID := 0
 	nextManagedProbe := time.Time{}
@@ -579,8 +669,10 @@ func Stop(p *paths.Paths) error {
 	instance := captureRunningDaemon(p)
 	if managed, err := stopManagedService(p); managed {
 		var detachedErr error
+		detachedAttempted := false
 		if err != nil {
 			if alive, _ := daemonHealthCheck(p); alive {
+				detachedAttempted = true
 				detachedErr = stopDetachedDaemon(p)
 			}
 		}
@@ -593,6 +685,18 @@ func Stop(p *paths.Paths) error {
 			default:
 				return waitErr
 			}
+		}
+		if err != nil {
+			if detachedErr != nil {
+				return fmt.Errorf("%w; detached shutdown: %v", err, detachedErr)
+			}
+			if detachedAttempted {
+				return nil
+			}
+			return err
+		}
+		if detachedErr != nil {
+			return fmt.Errorf("detached shutdown: %w", detachedErr)
 		}
 		return nil
 	}
@@ -815,7 +919,7 @@ func daemonSocketAcceptingConnections(path string) (bool, error) {
 // closes its IPC listener at the START of shutdown, and closing a Unix
 // listener unlinks the socket, so the health check reports "not running"
 // while the process is still draining runs, closing the database, flushing
-// logs, and reaping its bootstrap log-sink child. The NM_HOME singleton lock
+// logs, and reaping its bootstrap log-sink child. The NS_HOME singleton lock
 // is an OS file lock the kernel releases only when the owning process
 // actually dies, so a stop that returned at "socket gone" handed the caller a
 // root whose lock was still held - and the very next `daemon start` (that is,
@@ -830,7 +934,11 @@ func waitForDaemonStop(p *paths.Paths, instance daemonInstance) error {
 	if cleanupIfRecordedDaemonProvablyGone(p) {
 		return nil
 	}
-	deadline := time.Now().Add(daemonStopTimeout())
+	timeout, err := daemonStopTimeout()
+	if err != nil {
+		return fmt.Errorf("resolve daemon stop timeout: %w", err)
+	}
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		alive, err := daemonHealthCheck(p)
 		if err == nil && !alive {
@@ -992,7 +1100,7 @@ func upsertEnv(env []string, key, value string) []string {
 func EnsureDaemon(p *paths.Paths) error {
 	alive, err := daemonHealthCheck(p)
 	if err != nil {
-		return fmt.Errorf("%w (run 'no-mistakes daemon start' to recover)", err)
+		return fmt.Errorf("%w (run 'no-slop daemon start' to recover)", err)
 	}
 	if alive {
 		return nil

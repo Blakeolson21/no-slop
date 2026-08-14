@@ -5,11 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/gate"
-	"github.com/kunchenguid/no-mistakes/internal/ipc"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/wizard"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/gate"
+	"github.com/Blakeolson21/no-slop/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/wizard"
 )
 
 // TestRootInteractiveWizardFailsLoudlyWhenRunRegistrationIsSlow covers
@@ -21,7 +21,7 @@ import (
 func TestRootInteractiveWizardFailsLoudlyWhenRunRegistrationIsSlow(t *testing.T) {
 	setupTestRepo(t)
 	nmHome := makeSocketSafeTempDir(t)
-	t.Setenv("NM_HOME", nmHome)
+	t.Setenv("NS_HOME", nmHome)
 	p := paths.WithRoot(nmHome)
 
 	d, err := db.Open(p.DB())

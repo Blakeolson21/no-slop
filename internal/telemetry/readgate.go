@@ -7,7 +7,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/filelock"
+	"github.com/Blakeolson21/no-slop/internal/filelock"
 )
 
 // maxReadSurfaceEntries bounds the persisted gate state so an unbounded set of

@@ -3,9 +3,10 @@ package telemetry
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/buildinfo"
+	"github.com/Blakeolson21/no-slop/internal/buildinfo"
 )
 
 func TestDefaultUsesDotEnvInDevBuildWhenEnvMissing(t *testing.T) {
@@ -23,12 +24,15 @@ func TestDefaultUsesDotEnvInDevBuildWhenEnvMissing(t *testing.T) {
 	buildinfo.TelemetryWebsiteID = ""
 
 	t.Setenv(telemetryEnv, "")
+	t.Setenv(legacyTelemetryEnv, "")
 	t.Setenv(umamiHostEnv, "")
+	t.Setenv(legacyUmamiHostEnv, "")
 	t.Setenv(umamiWebsiteIDEnv, "")
+	t.Setenv(legacyUmamiWebsiteIDEnv, "")
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".env")
-	content := "NO_MISTAKES_UMAMI_HOST=https://dotenv.example\nNO_MISTAKES_UMAMI_WEBSITE_ID=website-from-dotenv\n"
+	content := "NS_UMAMI_HOST=https://dotenv.example\nNS_UMAMI_WEBSITE_ID=website-from-dotenv\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write .env: %v", err)
 	}
@@ -42,7 +46,10 @@ func TestDefaultUsesDotEnvInDevBuildWhenEnvMissing(t *testing.T) {
 	}
 	defer os.Chdir(prevWD)
 
-	sink := Default()
+	sink, err := Default()
+	if err != nil {
+		t.Fatalf("Default() error = %v", err)
+	}
 	client, ok := sink.(*Client)
 	if !ok {
 		t.Fatalf("Default() type = %T, want *Client", sink)
@@ -52,6 +59,59 @@ func TestDefaultUsesDotEnvInDevBuildWhenEnvMissing(t *testing.T) {
 	}
 	if client.websiteID != "website-from-dotenv" {
 		t.Fatalf("websiteID = %q, want %q", client.websiteID, "website-from-dotenv")
+	}
+}
+
+func TestDefaultUsesLegacyDotEnvAliasesInDevBuildWhenEnvMissing(t *testing.T) {
+	prevSink := defaultSink
+	defaultSink = nil
+	defer func() { defaultSink = prevSink }()
+
+	prevHost := buildinfo.TelemetryHost
+	prevWebsiteID := buildinfo.TelemetryWebsiteID
+	defer func() {
+		buildinfo.TelemetryHost = prevHost
+		buildinfo.TelemetryWebsiteID = prevWebsiteID
+	}()
+	buildinfo.TelemetryHost = ""
+	buildinfo.TelemetryWebsiteID = ""
+
+	t.Setenv(telemetryEnv, "")
+	t.Setenv(legacyTelemetryEnv, "")
+	t.Setenv(umamiHostEnv, "")
+	t.Setenv(legacyUmamiHostEnv, "")
+	t.Setenv(umamiWebsiteIDEnv, "")
+	t.Setenv(legacyUmamiWebsiteIDEnv, "")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".env")
+	content := "NO_MISTAKES_UMAMI_HOST=https://legacy-dotenv.example\nNO_MISTAKES_UMAMI_WEBSITE_ID=legacy-website\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write .env: %v", err)
+	}
+
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd(): %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir(): %v", err)
+	}
+	defer os.Chdir(prevWD)
+
+	sink, err := Default()
+	if err != nil {
+		t.Fatalf("Default() error = %v", err)
+	}
+	client, ok := sink.(*Client)
+	if !ok {
+		t.Fatalf("Default() type = %T, want *Client", sink)
+	}
+	if client.endpoint != "https://legacy-dotenv.example/api/send" {
+		t.Fatalf("endpoint = %q, want %q", client.endpoint, "https://legacy-dotenv.example/api/send")
+	}
+	if client.websiteID != "legacy-website" {
+		t.Fatalf("websiteID = %q, want %q", client.websiteID, "legacy-website")
 	}
 }
 
@@ -73,12 +133,15 @@ func TestDefaultPrefersEnvVarsOverDotEnvAndEmbeddedConfig(t *testing.T) {
 	buildinfo.TelemetryWebsiteID = "embedded-website"
 
 	t.Setenv(telemetryEnv, "")
+	t.Setenv(legacyTelemetryEnv, "")
 	t.Setenv(umamiHostEnv, "https://env.example")
+	unsetTestEnv(t, legacyUmamiHostEnv)
 	t.Setenv(umamiWebsiteIDEnv, "website-from-env")
+	unsetTestEnv(t, legacyUmamiWebsiteIDEnv)
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".env")
-	content := "NO_MISTAKES_UMAMI_HOST=https://dotenv.example\nNO_MISTAKES_UMAMI_WEBSITE_ID=website-from-dotenv\n"
+	content := "NS_UMAMI_HOST=https://dotenv.example\nNS_UMAMI_WEBSITE_ID=website-from-dotenv\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write .env: %v", err)
 	}
@@ -92,7 +155,10 @@ func TestDefaultPrefersEnvVarsOverDotEnvAndEmbeddedConfig(t *testing.T) {
 	}
 	defer os.Chdir(prevWD)
 
-	sink := Default()
+	sink, err := Default()
+	if err != nil {
+		t.Fatalf("Default() error = %v", err)
+	}
 	client, ok := sink.(*Client)
 	if !ok {
 		t.Fatalf("Default() type = %T, want *Client", sink)
@@ -123,10 +189,16 @@ func TestDefaultUsesEmbeddedTelemetryHostAndWebsiteID(t *testing.T) {
 	buildinfo.TelemetryWebsiteID = "embedded-website"
 
 	t.Setenv(telemetryEnv, "")
+	t.Setenv(legacyTelemetryEnv, "")
 	t.Setenv(umamiHostEnv, "")
+	t.Setenv(legacyUmamiHostEnv, "")
 	t.Setenv(umamiWebsiteIDEnv, "")
+	t.Setenv(legacyUmamiWebsiteIDEnv, "")
 
-	sink := Default()
+	sink, err := Default()
+	if err != nil {
+		t.Fatalf("Default() error = %v", err)
+	}
 	client, ok := sink.(*Client)
 	if !ok {
 		t.Fatalf("Default() type = %T, want *Client", sink)
@@ -157,10 +229,16 @@ func TestDefaultUsesSelfHostedHostWhenHostConfigMissing(t *testing.T) {
 	buildinfo.TelemetryWebsiteID = "embedded-website"
 
 	t.Setenv(telemetryEnv, "")
+	t.Setenv(legacyTelemetryEnv, "")
 	t.Setenv(umamiHostEnv, "")
+	t.Setenv(legacyUmamiHostEnv, "")
 	t.Setenv(umamiWebsiteIDEnv, "")
+	t.Setenv(legacyUmamiWebsiteIDEnv, "")
 
-	sink := Default()
+	sink, err := Default()
+	if err != nil {
+		t.Fatalf("Default() error = %v", err)
+	}
 	client, ok := sink.(*Client)
 	if !ok {
 		t.Fatalf("Default() type = %T, want *Client", sink)
@@ -181,11 +259,185 @@ func TestDefaultDisablesTelemetryWhenEnvIsOff(t *testing.T) {
 	}()
 	buildinfo.TelemetryWebsiteID = "embedded-website"
 
-	t.Setenv("NO_MISTAKES_TELEMETRY", "off")
+	t.Setenv("NS_TELEMETRY", "off")
+	unsetTestEnv(t, legacyTelemetryEnv)
 	t.Setenv(umamiWebsiteIDEnv, "website-from-env")
+	unsetTestEnv(t, legacyUmamiWebsiteIDEnv)
 
-	if _, ok := Default().(*Client); ok {
-		t.Fatal("Default() should disable telemetry when NO_MISTAKES_TELEMETRY=off")
+	sink, err := Default()
+	if err != nil {
+		t.Fatalf("Default() error = %v", err)
+	}
+	if _, ok := sink.(*Client); ok {
+		t.Fatal("Default() should disable telemetry when NS_TELEMETRY=off")
+	}
+}
+
+func unsetTestEnv(t *testing.T, name string) {
+	t.Helper()
+	value, existed := os.LookupEnv(name)
+	if err := os.Unsetenv(name); err != nil {
+		t.Fatalf("unset %s: %v", name, err)
+	}
+	t.Cleanup(func() {
+		if existed {
+			_ = os.Setenv(name, value)
+			return
+		}
+		_ = os.Unsetenv(name)
+	})
+}
+
+func TestValidateDefaultConfigRejectsConflictingTelemetryAliases(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+	}{
+		{
+			name: "telemetry flag",
+			env: map[string]string{
+				telemetryEnv:       "off",
+				legacyTelemetryEnv: "on",
+			},
+		},
+		{
+			name: "host",
+			env: map[string]string{
+				umamiHostEnv:       "https://canonical.example",
+				legacyUmamiHostEnv: "https://legacy.example",
+			},
+		},
+		{
+			name: "website id",
+			env: map[string]string{
+				umamiWebsiteIDEnv:       "canonical-site",
+				legacyUmamiWebsiteIDEnv: "legacy-site",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prevSink := defaultSink
+			defaultSink = nil
+			defer func() { defaultSink = prevSink }()
+
+			prevHost := buildinfo.TelemetryHost
+			prevWebsiteID := buildinfo.TelemetryWebsiteID
+			defer func() {
+				buildinfo.TelemetryHost = prevHost
+				buildinfo.TelemetryWebsiteID = prevWebsiteID
+			}()
+			buildinfo.TelemetryHost = "https://embedded.example"
+			buildinfo.TelemetryWebsiteID = "embedded-website"
+
+			for _, key := range []string{
+				telemetryEnv, legacyTelemetryEnv,
+				umamiHostEnv, legacyUmamiHostEnv,
+				umamiWebsiteIDEnv, legacyUmamiWebsiteIDEnv,
+			} {
+				t.Setenv(key, "")
+			}
+			for key, value := range tc.env {
+				t.Setenv(key, value)
+			}
+
+			if err := ValidateDefaultConfig(); err == nil {
+				t.Fatal("ValidateDefaultConfig() should reject conflicting canonical and legacy aliases")
+			}
+		})
+	}
+}
+
+func TestValidateDefaultConfigRejectsConflictingDotEnvAliases(t *testing.T) {
+	prevSink := defaultSink
+	defaultSink = nil
+	defer func() { defaultSink = prevSink }()
+
+	prevHost := buildinfo.TelemetryHost
+	prevWebsiteID := buildinfo.TelemetryWebsiteID
+	defer func() {
+		buildinfo.TelemetryHost = prevHost
+		buildinfo.TelemetryWebsiteID = prevWebsiteID
+	}()
+	buildinfo.TelemetryHost = ""
+	buildinfo.TelemetryWebsiteID = ""
+
+	for _, key := range []string{
+		telemetryEnv, legacyTelemetryEnv,
+		umamiHostEnv, legacyUmamiHostEnv,
+		umamiWebsiteIDEnv, legacyUmamiWebsiteIDEnv,
+	} {
+		t.Setenv(key, "")
+	}
+
+	dir := t.TempDir()
+	content := strings.Join([]string{
+		"NS_UMAMI_HOST=https://canonical-dotenv.example",
+		"NO_MISTAKES_UMAMI_HOST=https://legacy-dotenv.example",
+		"NS_UMAMI_WEBSITE_ID=canonical-website",
+		"NO_MISTAKES_UMAMI_WEBSITE_ID=legacy-website",
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write .env: %v", err)
+	}
+
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd(): %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir(): %v", err)
+	}
+	defer os.Chdir(prevWD)
+
+	if err := ValidateDefaultConfig(); err == nil {
+		t.Fatal("ValidateDefaultConfig() should reject conflicting dotenv aliases")
+	}
+}
+
+func TestValidateDefaultConfigRejectsEmptyDotEnvAliasConflict(t *testing.T) {
+	prevSink := defaultSink
+	defaultSink = nil
+	defer func() { defaultSink = prevSink }()
+
+	prevHost := buildinfo.TelemetryHost
+	prevWebsiteID := buildinfo.TelemetryWebsiteID
+	defer func() {
+		buildinfo.TelemetryHost = prevHost
+		buildinfo.TelemetryWebsiteID = prevWebsiteID
+	}()
+	buildinfo.TelemetryHost = ""
+	buildinfo.TelemetryWebsiteID = ""
+
+	for _, key := range []string{
+		telemetryEnv, legacyTelemetryEnv,
+		umamiHostEnv, legacyUmamiHostEnv,
+		umamiWebsiteIDEnv, legacyUmamiWebsiteIDEnv,
+	} {
+		t.Setenv(key, "")
+	}
+
+	dir := t.TempDir()
+	content := strings.Join([]string{
+		"NS_UMAMI_HOST=",
+		"NO_MISTAKES_UMAMI_HOST=https://legacy-dotenv.example",
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write .env: %v", err)
+	}
+
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd(): %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir(): %v", err)
+	}
+	defer os.Chdir(prevWD)
+
+	if err := ValidateDefaultConfig(); err == nil {
+		t.Fatal("ValidateDefaultConfig() should reject empty dotenv alias conflicts")
 	}
 }
 
@@ -201,9 +453,12 @@ func TestDefaultIgnoresDotEnvOutsideRepo(t *testing.T) {
 	buildinfo.TelemetryWebsiteID = ""
 
 	t.Setenv(umamiWebsiteIDEnv, "")
+	t.Setenv(legacyUmamiWebsiteIDEnv, "")
+	t.Setenv(telemetryEnv, "")
+	t.Setenv(legacyTelemetryEnv, "")
 
 	parentDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(parentDir, ".env"), []byte("NO_MISTAKES_UMAMI_WEBSITE_ID=outside-repo\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(parentDir, ".env"), []byte("NS_UMAMI_WEBSITE_ID=outside-repo\n"), 0o644); err != nil {
 		t.Fatalf("write parent .env: %v", err)
 	}
 
@@ -228,13 +483,17 @@ func TestDefaultIgnoresDotEnvOutsideRepo(t *testing.T) {
 	}
 	defer os.Chdir(prevWD)
 
-	if _, ok := Default().(*Client); ok {
+	sink, err := Default()
+	if err != nil {
+		t.Fatalf("Default() error = %v", err)
+	}
+	if _, ok := sink.(*Client); ok {
 		t.Fatal("Default() should ignore dotenv outside repo")
 	}
 }
 
 func TestParseDotEnvStripsInlineCommentsFromUnquotedValues(t *testing.T) {
-	values := parseDotEnv([]byte("NO_MISTAKES_UMAMI_WEBSITE_ID=abc123 # dev\n"))
+	values := parseDotEnv([]byte("NS_UMAMI_WEBSITE_ID=abc123 # dev\n"))
 
 	if got := values[umamiWebsiteIDEnv]; got != "abc123" {
 		t.Fatalf("website ID = %q, want %q", got, "abc123")
@@ -242,7 +501,7 @@ func TestParseDotEnvStripsInlineCommentsFromUnquotedValues(t *testing.T) {
 }
 
 func TestParseDotEnvPreservesHashesInQuotedValues(t *testing.T) {
-	values := parseDotEnv([]byte("NO_MISTAKES_UMAMI_WEBSITE_ID=\"abc # dev\"\n"))
+	values := parseDotEnv([]byte("NS_UMAMI_WEBSITE_ID=\"abc # dev\"\n"))
 
 	if got := values[umamiWebsiteIDEnv]; got != "abc # dev" {
 		t.Fatalf("website ID = %q, want %q", got, "abc # dev")

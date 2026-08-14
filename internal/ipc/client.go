@@ -7,12 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"os"
 	"sync"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/config"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/identity"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
 var dialNetworkWithTimeout = func(network, address string, timeout time.Duration) (net.Conn, error) {
@@ -42,24 +42,27 @@ func IsConnectTimeout(err error) bool {
 	return errors.As(err, &timeoutErr)
 }
 
-func connectTimeout() time.Duration {
-	value := os.Getenv("NM_DAEMON_CONNECT_TIMEOUT")
+func connectTimeout() (time.Duration, error) {
+	value, err := identity.LookupEnv("NS_DAEMON_CONNECT_TIMEOUT", "NM_DAEMON_CONNECT_TIMEOUT")
+	if err != nil {
+		return 0, err
+	}
 	if value == "" {
 		p, err := paths.New()
 		if err != nil {
-			return config.DefaultDaemonConnectTimeout
+			return config.DefaultDaemonConnectTimeout, nil
 		}
 		cfg, err := config.LoadGlobal(p.ConfigFile())
 		if err != nil {
-			return config.DefaultDaemonConnectTimeout
+			return config.DefaultDaemonConnectTimeout, nil
 		}
-		return cfg.DaemonConnectTimeout
+		return cfg.DaemonConnectTimeout, nil
 	}
 	d, err := time.ParseDuration(value)
 	if err != nil || d <= 0 {
-		return config.DefaultDaemonConnectTimeout
+		return config.DefaultDaemonConnectTimeout, nil
 	}
-	return d
+	return d, nil
 }
 
 // Client connects to the IPC server over the platform transport.
@@ -93,7 +96,10 @@ func Dial(socketPath string) (*Client, error) {
 }
 
 func dialEndpoint(socketPath string) (net.Conn, error) {
-	timeout := connectTimeout()
+	timeout, err := connectTimeout()
+	if err != nil {
+		return nil, fmt.Errorf("resolve daemon connect timeout: %w", err)
+	}
 	conn, err := dial(socketPath, timeout)
 	if err != nil {
 		var netErr net.Error

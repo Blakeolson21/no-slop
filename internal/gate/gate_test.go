@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	gitpkg "github.com/kunchenguid/no-mistakes/internal/git"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	gitpkg "github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
 func TestMain(m *testing.M) {
@@ -176,8 +176,8 @@ func TestInit(t *testing.T) {
 		t.Fatalf("receive.advertisePushOptions = %q, want true", got)
 	}
 
-	// Verify no-mistakes remote was added to working repo.
-	url, err := gitpkg.GetRemoteURL(ctx, workDir, "no-mistakes")
+	// Verify no-slop remote was added to working repo.
+	url, err := gitpkg.GetRemoteURL(ctx, workDir, "no-slop")
 	if err != nil {
 		t.Fatalf("get remote url: %v", err)
 	}
@@ -257,6 +257,85 @@ func TestInitRepoID(t *testing.T) {
 	id3 := repoID("/other/path")
 	if id1 == id3 {
 		t.Error("different paths should produce different IDs")
+	}
+}
+
+func TestReattachRelocatedRepoRejectsConflictingRemoteAliases(t *testing.T) {
+	workDir := setupTestRepo(t)
+	p := paths.WithRoot(t.TempDir())
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	database := openTestDB(t, p)
+	ctx := context.Background()
+	if err := gitpkg.AddRemote(ctx, workDir, RemoteName, p.RepoDir("canonical")); err != nil {
+		t.Fatal(err)
+	}
+	if err := gitpkg.AddRemote(ctx, workDir, LegacyRemoteName, p.RepoDir("legacy")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := reattachRelocatedRepo(ctx, database, p, workDir); err == nil || !strings.Contains(err.Error(), "same gate with different URLs") {
+		t.Fatalf("reattach error = %v, want conflicting-alias refusal", err)
+	}
+}
+
+func TestValidateWorkingRemoteAliasesAcceptsEquivalentLocalPaths(t *testing.T) {
+	workDir := setupTestRepo(t)
+	ctx := context.Background()
+	realGate := filepath.Join(t.TempDir(), "gate.git")
+	if err := os.MkdirAll(realGate, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	aliasGate := filepath.Join(t.TempDir(), "gate.git")
+	if err := os.Symlink(realGate, aliasGate); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if err := gitpkg.AddRemote(ctx, workDir, RemoteName, realGate); err != nil {
+		t.Fatal(err)
+	}
+	if err := gitpkg.AddRemote(ctx, workDir, LegacyRemoteName, aliasGate); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := validateWorkingRemoteAliases(ctx, workDir); err != nil {
+		t.Fatalf("validate equivalent remotes: %v", err)
+	}
+}
+
+func TestReattachRelocatedRepoAcceptsEquivalentRemoteAliases(t *testing.T) {
+	workDir := setupTestRepo(t)
+	p := paths.WithRoot(t.TempDir())
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	database := openTestDB(t, p)
+	ctx := context.Background()
+	id := "relocated"
+	realGate := p.RepoDir(id)
+	if err := os.MkdirAll(realGate, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	aliasGate := filepath.Join(t.TempDir(), id+".git")
+	if err := os.Symlink(realGate, aliasGate); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := database.InsertRepoWithID(id, filepath.Join(t.TempDir(), "missing"), "https://example.com/repo.git", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := gitpkg.AddRemote(ctx, workDir, RemoteName, realGate); err != nil {
+		t.Fatal(err)
+	}
+	if err := gitpkg.AddRemote(ctx, workDir, LegacyRemoteName, aliasGate); err != nil {
+		t.Fatal(err)
+	}
+
+	repo, err := reattachRelocatedRepo(ctx, database, p, workDir)
+	if err != nil {
+		t.Fatalf("reattach equivalent remotes: %v", err)
+	}
+	if repo == nil || repo.ID != id || repo.WorkingPath != workDir {
+		t.Fatalf("reattach repo = %#v, want migrated %s at %s", repo, id, workDir)
 	}
 }
 
@@ -350,9 +429,14 @@ func TestInitIsIdempotent(t *testing.T) {
 		t.Error("post-receive hook missing after re-init")
 	}
 	if url, err := gitpkg.GetRemoteURL(ctx, workDir, RemoteName); err != nil {
-		t.Errorf("no-mistakes remote missing after re-init: %v", err)
+		t.Errorf("no-slop remote missing after re-init: %v", err)
 	} else if url != bareDir {
 		t.Errorf("remote url = %q, want %q", url, bareDir)
+	}
+	if url, err := gitpkg.GetRemoteURL(ctx, workDir, LegacyRemoteName); err != nil {
+		t.Errorf("no-slop compatibility remote missing after re-init: %v", err)
+	} else if url != bareDir {
+		t.Errorf("legacy remote url = %q, want %q", url, bareDir)
 	}
 	dbRepo, err := d.GetRepoByPath(workDir)
 	if err != nil {
@@ -360,6 +444,42 @@ func TestInitIsIdempotent(t *testing.T) {
 	}
 	if dbRepo == nil || dbRepo.ID != first.ID {
 		t.Errorf("expected single repo record %q, got %+v", first.ID, dbRepo)
+	}
+}
+
+func TestInitRefreshRejectsConflictingRemoteAliasesBeforeRepair(t *testing.T) {
+	workDir := setupTestRepo(t)
+	nmRoot := t.TempDir()
+	p := paths.WithRoot(nmRoot)
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatalf("ensure dirs: %v", err)
+	}
+	d := openTestDB(t, p)
+	ctx := context.Background()
+
+	first, _, err := Init(ctx, d, p, workDir)
+	if err != nil {
+		t.Fatalf("first init: %v", err)
+	}
+	canonicalURL := p.RepoDir(first.ID)
+	legacyURL := p.RepoDir("other-gate")
+	if err := gitpkg.EnsureRemote(ctx, workDir, LegacyRemoteName, legacyURL); err != nil {
+		t.Fatalf("poison legacy remote: %v", err)
+	}
+
+	_, _, err = Init(ctx, d, p, workDir)
+	if err == nil || !strings.Contains(err.Error(), "same gate with different URLs") {
+		t.Fatalf("refresh error = %v, want conflicting-alias refusal", err)
+	}
+	if url, err := gitpkg.GetRemoteURL(ctx, workDir, RemoteName); err != nil {
+		t.Fatalf("get canonical remote: %v", err)
+	} else if url != canonicalURL {
+		t.Fatalf("canonical remote = %q, want %q", url, canonicalURL)
+	}
+	if url, err := gitpkg.GetRemoteURL(ctx, workDir, LegacyRemoteName); err != nil {
+		t.Fatalf("get legacy remote: %v", err)
+	} else if url != legacyURL {
+		t.Fatalf("legacy remote was repaired before conflict rejection: got %q, want %q", url, legacyURL)
 	}
 }
 
@@ -542,10 +662,10 @@ func TestInitRefreshUsesPersistedRepoID(t *testing.T) {
 	legacyBareDir := p.RepoDir(legacyID)
 	url, err := gitpkg.GetRemoteURL(ctx, workDir, RemoteName)
 	if err != nil {
-		t.Fatalf("get no-mistakes remote: %v", err)
+		t.Fatalf("get no-slop remote: %v", err)
 	}
 	if url != legacyBareDir {
-		t.Errorf("no-mistakes remote = %q, want %q", url, legacyBareDir)
+		t.Errorf("no-slop remote = %q, want %q", url, legacyBareDir)
 	}
 	if out, err := exec.Command("git", "-C", legacyBareDir, "rev-parse", "--is-bare-repository").Output(); err != nil {
 		t.Errorf("legacy bare repo check failed: %v", err)
@@ -594,14 +714,14 @@ func TestInitRepairsBrokenGate(t *testing.T) {
 		t.Error("post-receive hook not restored after repair re-init")
 	}
 	if url, err := gitpkg.GetRemoteURL(ctx, workDir, RemoteName); err != nil {
-		t.Errorf("no-mistakes remote not restored after repair re-init: %v", err)
+		t.Errorf("no-slop remote not restored after repair re-init: %v", err)
 	} else if url != bareDir {
 		t.Errorf("restored remote url = %q, want %q", url, bareDir)
 	}
 }
 
 // TestInitReattachesGateAfterWorkingDirRename verifies that renaming or moving
-// a working directory does not break init idempotency: the leftover no-mistakes
+// a working directory does not break init idempotency: the leftover no-slop
 // remote identifies the existing gate, and re-running init from the new
 // location reattaches it (same repo ID, same bare repo, run history intact)
 // instead of failing with "remote already exists".
@@ -645,7 +765,7 @@ func TestInitReattachesGateAfterWorkingDirRename(t *testing.T) {
 	// The remote must still point at the original gate.
 	bareDir := p.RepoDir(first.ID)
 	if url, err := gitpkg.GetRemoteURL(ctx, renamed, RemoteName); err != nil {
-		t.Errorf("no-mistakes remote missing after reattach: %v", err)
+		t.Errorf("no-slop remote missing after reattach: %v", err)
 	} else if url != bareDir {
 		t.Errorf("remote url = %q, want %q", url, bareDir)
 	}
@@ -676,7 +796,7 @@ func TestInitReattachesGateAfterWorkingDirRename(t *testing.T) {
 
 // TestInitCreatesFreshGateForCopiedWorkingDir verifies that when a working
 // directory is copied (the original still exists), init treats the copy as a
-// new repo: it gets its own gate and the copied no-mistakes remote is
+// new repo: it gets its own gate and the copied no-slop remote is
 // repointed, while the original repo's gate is left untouched.
 func TestInitCreatesFreshGateForCopiedWorkingDir(t *testing.T) {
 	workDir := setupTestRepo(t)
@@ -709,14 +829,14 @@ func TestInitCreatesFreshGateForCopiedWorkingDir(t *testing.T) {
 
 	// The copy's remote must point at its own gate.
 	if url, err := gitpkg.GetRemoteURL(ctx, copyDir, RemoteName); err != nil {
-		t.Errorf("no-mistakes remote missing on copy: %v", err)
+		t.Errorf("no-slop remote missing on copy: %v", err)
 	} else if url != p.RepoDir(second.ID) {
 		t.Errorf("copy remote url = %q, want %q", url, p.RepoDir(second.ID))
 	}
 
 	// The original must be untouched.
 	if url, err := gitpkg.GetRemoteURL(ctx, workDir, RemoteName); err != nil {
-		t.Errorf("original no-mistakes remote missing: %v", err)
+		t.Errorf("original no-slop remote missing: %v", err)
 	} else if url != p.RepoDir(first.ID) {
 		t.Errorf("original remote url = %q, want %q", url, p.RepoDir(first.ID))
 	}
@@ -726,7 +846,7 @@ func TestInitCreatesFreshGateForCopiedWorkingDir(t *testing.T) {
 }
 
 // TestInitRepointsOrphanGateRemoteOnFreshInit verifies that a leftover
-// no-mistakes remote pointing into our repos dir with no matching DB record
+// no-slop remote pointing into our repos dir with no matching DB record
 // (a half-ejected gate) is repointed to the fresh gate instead of failing.
 func TestInitRepointsOrphanGateRemoteOnFreshInit(t *testing.T) {
 	workDir := setupTestRepo(t)
@@ -760,7 +880,7 @@ func TestInitRepointsOrphanGateRemoteOnFreshInit(t *testing.T) {
 		t.Error("init with orphan remote should report created=true")
 	}
 	if url, err := gitpkg.GetRemoteURL(ctx, renamed, RemoteName); err != nil {
-		t.Errorf("no-mistakes remote missing: %v", err)
+		t.Errorf("no-slop remote missing: %v", err)
 	} else if url != p.RepoDir(repo.ID) {
 		t.Errorf("remote url = %q, want %q", url, p.RepoDir(repo.ID))
 	}
@@ -786,7 +906,7 @@ func TestInitDoesNotOverwriteExistingNoMistakesRemoteOnFreshInit(t *testing.T) {
 
 	_, _, err := Init(ctx, d, p, workDir)
 	if err == nil {
-		t.Fatal("expected init to fail when no-mistakes remote already exists")
+		t.Fatal("expected init to fail when no-slop remote already exists")
 	}
 
 	url, err := gitpkg.GetRemoteURL(ctx, workDir, RemoteName)
@@ -794,7 +914,7 @@ func TestInitDoesNotOverwriteExistingNoMistakesRemoteOnFreshInit(t *testing.T) {
 		t.Fatalf("get custom remote: %v", err)
 	}
 	if url != customRemote {
-		t.Errorf("no-mistakes remote = %q, want %q", url, customRemote)
+		t.Errorf("no-slop remote = %q, want %q", url, customRemote)
 	}
 }
 
@@ -949,9 +1069,9 @@ func TestEject(t *testing.T) {
 	}
 
 	// Verify remote was removed.
-	_, err = gitpkg.GetRemoteURL(ctx, workDir, "no-mistakes")
+	_, err = gitpkg.GetRemoteURL(ctx, workDir, "no-slop")
 	if err == nil {
-		t.Error("expected no-mistakes remote to be removed")
+		t.Error("expected no-slop remote to be removed")
 	}
 
 	// Verify bare repo was deleted.
@@ -1076,7 +1196,7 @@ func TestInit_PostReceiveSurvivesHooksPathPoisoning(t *testing.T) {
 
 	// Push to the gate. The bare repo's own core.hookspath must still
 	// resolve to its hooks dir so post-receive fires.
-	if out, err := exec.Command("git", "-C", workDir, "push", "no-mistakes", "HEAD:refs/heads/test-branch").CombinedOutput(); err != nil {
+	if out, err := exec.Command("git", "-C", workDir, "push", "no-slop", "HEAD:refs/heads/test-branch").CombinedOutput(); err != nil {
 		t.Fatalf("push: %v: %s", err, out)
 	}
 

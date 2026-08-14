@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 const largeCommandMiddleMarker = "OMITTED_SECRET_MIDDLE_MARKER_7f9c"
@@ -32,7 +32,7 @@ func TestLargeConfiguredTestAndLintFailuresRemainUsableThroughAXIFix(t *testing.
 				t.Fatalf("init: %v\n%s", err, out)
 			}
 
-			commandName := "nm-large-" + tc.name + "-failure"
+			commandName := "ns-large-" + tc.name + "-failure"
 			commandPath := filepath.Join(h.BinDir, commandName)
 			script := `#!/bin/sh
 printf 'HEAD_MARKER context line\n'
@@ -48,7 +48,7 @@ exit 1
 
 			config := "allow_repo_commands: true\ncommands:\n  test: true\n  lint: true\n"
 			config = strings.Replace(config, "  "+tc.commandKey+": true", "  "+tc.commandKey+": "+commandName, 1)
-			h.CommitChange(tc.branch, ".no-mistakes.yaml", config, "configure large "+tc.name+" failure")
+			h.CommitChange(tc.branch, ".no-slop.yaml", config, "configure large "+tc.name+" failure")
 			h.PushToGate(tc.branch)
 			run := waitForStepStatus(t, h, tc.branch, tc.step, types.StepStatusAwaitingApproval, 60*time.Second)
 

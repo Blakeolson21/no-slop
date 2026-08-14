@@ -12,15 +12,15 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
-	"github.com/kunchenguid/no-mistakes/internal/config"
-	"github.com/kunchenguid/no-mistakes/internal/git"
-	"github.com/kunchenguid/no-mistakes/internal/slop/corpus"
-	"github.com/kunchenguid/no-mistakes/internal/slop/engine"
-	"github.com/kunchenguid/no-mistakes/internal/slop/leakscan"
-	"github.com/kunchenguid/no-mistakes/internal/slop/prose"
-	"github.com/kunchenguid/no-mistakes/internal/slop/provenance"
-	"github.com/kunchenguid/no-mistakes/internal/slop/risk"
+	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/slop/corpus"
+	"github.com/Blakeolson21/no-slop/internal/slop/engine"
+	"github.com/Blakeolson21/no-slop/internal/slop/leakscan"
+	"github.com/Blakeolson21/no-slop/internal/slop/prose"
+	"github.com/Blakeolson21/no-slop/internal/slop/provenance"
+	"github.com/Blakeolson21/no-slop/internal/slop/risk"
 )
 
 // Options supplies test seams without widening the command interface.

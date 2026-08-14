@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/branchsync"
-	"github.com/kunchenguid/no-mistakes/internal/daemon"
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/safeurl"
+	"github.com/Blakeolson21/no-slop/internal/branchsync"
+	"github.com/Blakeolson21/no-slop/internal/daemon"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/safeurl"
 	"github.com/spf13/cobra"
 )
 

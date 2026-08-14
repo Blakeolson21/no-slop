@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestLoadGlobal_AgentArgsOverride(t *testing.T) {
@@ -132,8 +132,8 @@ func TestLoadGlobal_AgentArgsOverride_ReservedArgsRejected(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected error for reserved arg %q on agent %q", tt.arg, tt.agent)
 			}
-			if !strings.Contains(err.Error(), "managed by no-mistakes") {
-				t.Errorf("error should mention 'managed by no-mistakes', got: %v", err)
+			if !strings.Contains(err.Error(), "managed by no-slop") {
+				t.Errorf("error should mention 'managed by no-slop', got: %v", err)
 			}
 			if !strings.Contains(err.Error(), tt.arg) {
 				t.Errorf("error should name reserved arg %q, got: %v", tt.arg, err)

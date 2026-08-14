@@ -5,12 +5,12 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
-	"github.com/kunchenguid/no-mistakes/internal/branchsync"
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/pipeline"
-	"github.com/kunchenguid/no-mistakes/internal/scm"
-	"github.com/kunchenguid/no-mistakes/internal/testguidance"
+	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/branchsync"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/pipeline"
+	"github.com/Blakeolson21/no-slop/internal/scm"
+	"github.com/Blakeolson21/no-slop/internal/testguidance"
 )
 
 // autoFixCI runs the agent to fix CI failures and/or merge conflicts, then
@@ -137,7 +137,7 @@ func (s *CIStep) commitAndPush(sctx *pipeline.StepContext) (bool, error) {
 	if _, err := stepGitRun(sctx, "add", "-A"); err != nil {
 		return false, fmt.Errorf("stage CI changes: %w", err)
 	}
-	if _, err := stepGitRun(sctx, "commit", "-m", "no-mistakes: apply CI fixes"); err != nil {
+	if _, err := stepGitRun(sctx, "commit", "-m", "no-slop: apply CI fixes"); err != nil {
 		return false, fmt.Errorf("commit: %w", err)
 	}
 	headSHA, err := stepGitHeadSHA(sctx)

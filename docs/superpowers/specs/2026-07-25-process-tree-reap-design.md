@@ -142,7 +142,7 @@ incident's `xctest` processes lived about 16 minutes, so they would be sampled r
 
 ### Persistence and startup recovery
 
-The tracker writes `<NM_HOME>/proctrees/<leader>.json` holding the leader pid and start
+The tracker writes `<NS_HOME>/proctrees/<leader>.json` holding the leader pid and start
 time, the descendant set, and the observed groups. `shellenv` exposes
 `SetProcessRecordDir(dir)`, called once by the daemon. Unset is a no-op, so the CLI and
 tests do not touch disk.
@@ -216,7 +216,7 @@ code lands. The doc comments on `ConfigureShellCommand` and
 ## Bootstrapping risk
 
 This branch changes the reaper that the gate runs for branches 2 and 3 depend on.
-After each `nm-smart-run`, verify the gate terminated cleanly and left no strays:
+After each `ns-smart-run`, verify the gate terminated cleanly and left no strays:
 
 ```
 ps -Ao pid,ppid,etime,command | awk '$2==1 && /go-build.*\.test/'

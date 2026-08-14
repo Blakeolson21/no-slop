@@ -5,23 +5,29 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/gatecontext"
-	"github.com/kunchenguid/no-mistakes/internal/git"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/safeurl"
-	"github.com/kunchenguid/no-mistakes/internal/scm"
-	"github.com/kunchenguid/no-mistakes/internal/scm/github"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/gatecontext"
+	"github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/safeurl"
+	"github.com/Blakeolson21/no-slop/internal/scm"
+	"github.com/Blakeolson21/no-slop/internal/scm/github"
 )
 
 var ensureGateHooksPathIsolation = git.EnsureHooksPathIsolation
 
-// RemoteName is the name of the git remote that points to the local gate.
-const RemoteName = "no-mistakes"
+// RemoteName is the canonical Git remote that points to the local gate.
+// LegacyRemoteName remains wired to the exact same bare repository.
+const (
+	RemoteName       = "no-slop"
+	LegacyRemoteName = "no-mistakes"
+)
 
 // repoID generates a deterministic 12-char hex ID from an absolute path.
 func repoID(absPath string) string {
@@ -29,19 +35,20 @@ func repoID(absPath string) string {
 	return fmt.Sprintf("%x", h[:6])
 }
 
-// Init sets up a no-mistakes gate for the git repo at workDir.
+// Init sets up a no-slop gate for the git repo at workDir.
 // It creates a bare repo, installs the post-receive hook, best-effort
 // isolates the bare repo's hooks path from shared local config writes when
-// Git supports config --worktree, adds the no-mistakes remote, and records
-// the repo in the database.
+// Git supports config --worktree, adds the canonical no-slop remote and the
+// no-mistakes compatibility remote, and records the repo in the database.
 //
 // Init is idempotent: re-running it on an already-initialized repo repairs and
 // refreshes the gate (for example installing a newer hook, picking up hook-path
 // isolation, or restoring a missing remote) instead of failing. This includes
 // a working directory that was renamed or moved since the gate was created:
-// the gate identified by the leftover no-mistakes remote is reattached at the
-// new path, preserving its run history. The returned bool reports whether a
-// new gate was created (true) or an existing one was refreshed (false).
+// the gate identified by a leftover no-slop or no-mistakes remote is
+// reattached at the new path, preserving its run history. The returned bool
+// reports whether a new gate was created (true) or an existing one was
+// refreshed (false).
 func Init(ctx context.Context, d *db.DB, p *paths.Paths, workDir string) (*db.Repo, bool, error) {
 	return InitWithFork(ctx, d, p, workDir, "")
 }
@@ -97,7 +104,7 @@ func InitWithFork(ctx context.Context, d *db.DB, p *paths.Paths, workDir, forkUR
 		if listErr == nil && !hasOrigin {
 			return nil, false, fmt.Errorf(
 				"no 'origin' remote in %s\n\n"+
-					"no-mistakes pushes your branch and opens a pull request, so it needs a remote to push to.\n"+
+					"no-slop pushes your branch and opens a pull request, so it needs a remote to push to.\n"+
 					"Add one, then re-run:\n\n"+
 					"  git remote add origin <url>",
 				absRoot)
@@ -128,8 +135,10 @@ func InitWithFork(ctx context.Context, d *db.DB, p *paths.Paths, workDir, forkUR
 		// Only tear down a gate we created in this call; never destroy an
 		// already-initialized gate when a repair pass fails.
 		if existing == nil {
-			if remoteURL, remoteErr := git.GetRemoteURL(ctx, absRoot, RemoteName); remoteErr == nil && remoteURL == bareDir {
-				git.RemoveRemote(ctx, absRoot, RemoteName)
+			for _, remoteName := range []string{RemoteName, LegacyRemoteName} {
+				if remoteURL, remoteErr := git.GetRemoteURL(ctx, absRoot, remoteName); remoteErr == nil && remoteURL == bareDir {
+					git.RemoveRemote(ctx, absRoot, remoteName)
+				}
 			}
 			os.RemoveAll(bareDir)
 		}
@@ -157,7 +166,7 @@ func InitWithFork(ctx context.Context, d *db.DB, p *paths.Paths, workDir, forkUR
 	repo, err := d.InsertRepoWithIDAndFork(id, absRoot, redactedUpstreamURL, forkURL, branch)
 	if err != nil {
 		// Rollback: remove remote and bare repo.
-		git.RemoveRemote(ctx, absRoot, RemoteName)
+		_ = removeWorkingRemotes(ctx, absRoot)
 		os.RemoveAll(bareDir)
 		return nil, false, fmt.Errorf("insert repo: %w", err)
 	}
@@ -222,39 +231,84 @@ func provisionGate(ctx context.Context, bareDir, absRoot, upstreamURL, reposDir 
 }
 
 func ensureWorkingRemote(ctx context.Context, absRoot, bareDir, reposDir string, refresh bool) error {
+	if err := validateWorkingRemoteAliases(ctx, absRoot); err != nil {
+		return err
+	}
+	for _, name := range []string{RemoteName, LegacyRemoteName} {
+		if err := ensureNamedWorkingRemote(ctx, absRoot, bareDir, reposDir, refresh, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateWorkingRemoteAliases(ctx context.Context, absRoot string) error {
+	remotes := map[string]string{}
+	for _, name := range []string{RemoteName, LegacyRemoteName} {
+		url, err := git.GetRemoteURL(ctx, absRoot, name)
+		if err != nil || strings.TrimSpace(url) == "" {
+			continue
+		}
+		remotes[name] = url
+	}
+	if remotes[RemoteName] != "" && remotes[LegacyRemoteName] != "" && !sameWorkingRemoteURL(absRoot, remotes[RemoteName], remotes[LegacyRemoteName]) {
+		return fmt.Errorf("%s and %s name the same gate with different URLs", RemoteName, LegacyRemoteName)
+	}
+	return nil
+}
+
+func ensureNamedWorkingRemote(ctx context.Context, absRoot, bareDir, reposDir string, refresh bool, name string) error {
 	if refresh {
-		return git.EnsureRemote(ctx, absRoot, RemoteName, bareDir)
+		return git.EnsureRemote(ctx, absRoot, name, bareDir)
 	}
-	existingURL, err := git.GetRemoteURL(ctx, absRoot, RemoteName)
+	existingURL, err := git.GetRemoteURL(ctx, absRoot, name)
 	if err != nil {
-		return git.AddRemote(ctx, absRoot, RemoteName, bareDir)
+		return git.AddRemote(ctx, absRoot, name, bareDir)
 	}
-	if existingURL == bareDir {
+	if sameWorkingRemoteURL(absRoot, existingURL, bareDir) {
 		return nil
 	}
 	// A leftover remote pointing into our own repos dir is stale gate wiring
 	// (e.g. the working directory was copied, or its gate was half-ejected);
 	// repoint it. Anything else is a user-managed remote we must not touch.
-	if filepath.Dir(existingURL) == reposDir {
-		return git.EnsureRemote(ctx, absRoot, RemoteName, bareDir)
+	if workingRemoteURLDirEquals(absRoot, existingURL, reposDir) {
+		return git.EnsureRemote(ctx, absRoot, name, bareDir)
 	}
-	return fmt.Errorf("remote %q already exists with url %q", RemoteName, existingURL)
+	return fmt.Errorf("remote %q already exists with url %q", name, existingURL)
 }
 
 // reattachRelocatedRepo detects a working directory that was renamed or moved
-// after init: it carries a no-mistakes remote pointing at a gate in our repos
-// dir, but its repo record references the old path. When the old path no
-// longer exists, the record is migrated to the new path so the existing gate
+// after init: it carries a no-slop or no-mistakes remote pointing at a gate in
+// our repos dir, but its repo record references the old path. When the old path
+// no longer exists, the record is migrated to the new path so the existing gate
 // and its run history are reattached. It returns nil when the repo should be
 // treated as a fresh init instead: no gate remote, an orphan gate with no
 // record, or a copy whose original still exists on disk.
 func reattachRelocatedRepo(ctx context.Context, d *db.DB, p *paths.Paths, absRoot string) (*db.Repo, error) {
-	remoteURL, err := git.GetRemoteURL(ctx, absRoot, RemoteName)
-	if err != nil {
+	remoteURLs := make(map[string]string, 2)
+	for _, name := range []string{RemoteName, LegacyRemoteName} {
+		if candidate, err := git.GetRemoteURL(ctx, absRoot, name); err == nil {
+			remoteURLs[name] = candidate
+		}
+	}
+	if canonical, canonicalOK := remoteURLs[RemoteName]; canonicalOK {
+		if legacy, legacyOK := remoteURLs[LegacyRemoteName]; legacyOK && !sameWorkingRemoteURL(absRoot, canonical, legacy) {
+			return nil, fmt.Errorf("remotes %q and %q name the same gate with different URLs", RemoteName, LegacyRemoteName)
+		}
+	}
+	remoteURL := remoteURLs[RemoteName]
+	if remoteURL == "" {
+		remoteURL = remoteURLs[LegacyRemoteName]
+	}
+	if remoteURL == "" {
 		return nil, nil
 	}
-	id := strings.TrimSuffix(filepath.Base(remoteURL), ".git")
-	if p.RepoDir(id) != remoteURL {
+	remotePath, ok := workingRemoteLocalPath(absRoot, remoteURL)
+	if !ok {
+		return nil, nil
+	}
+	id := strings.TrimSuffix(filepath.Base(remotePath), ".git")
+	if !sameWorkingRemoteURL(absRoot, p.RepoDir(id), remoteURL) {
 		// Not one of our gate paths; fresh init decides what to do with it.
 		return nil, nil
 	}
@@ -278,8 +332,84 @@ func reattachRelocatedRepo(ctx context.Context, d *db.DB, p *paths.Paths, absRoo
 	return migrated, nil
 }
 
-// Eject removes the no-mistakes gate from the repo at workDir.
-// It removes the remote, deletes the bare repo and worktrees,
+func sameWorkingRemoteURL(baseDir, a, b string) bool {
+	a = strings.TrimSpace(a)
+	b = strings.TrimSpace(b)
+	if a == "" || b == "" {
+		return a == b
+	}
+	aPath, aOK := workingRemoteLocalPath(baseDir, a)
+	bPath, bOK := workingRemoteLocalPath(baseDir, b)
+	if aOK && bOK {
+		return canonicalWorkingRemotePath(aPath) == canonicalWorkingRemotePath(bPath)
+	}
+	return a == b
+}
+
+func workingRemoteURLDirEquals(baseDir, remoteURL, dir string) bool {
+	remotePath, ok := workingRemoteLocalPath(baseDir, remoteURL)
+	if !ok {
+		return false
+	}
+	return canonicalWorkingRemotePath(filepath.Dir(remotePath)) == canonicalWorkingRemotePath(dir)
+}
+
+func workingRemoteLocalPath(baseDir, raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", false
+	}
+	if parsed, err := url.Parse(raw); err == nil && parsed.Scheme == "file" {
+		if parsed.Host != "" && parsed.Host != "localhost" {
+			return "", false
+		}
+		return filepath.Clean(filepath.FromSlash(parsed.Path)), true
+	}
+	if strings.Contains(raw, "://") || (strings.Contains(raw, "@") && strings.Contains(raw, ":") && !filepath.IsAbs(raw)) {
+		return "", false
+	}
+	path := raw
+	if !filepath.IsAbs(path) {
+		if strings.TrimSpace(baseDir) == "" {
+			return "", false
+		}
+		path = filepath.Join(baseDir, path)
+	}
+	return filepath.Clean(path), true
+}
+
+func canonicalWorkingRemotePath(path string) string {
+	path = filepath.Clean(path)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	} else if resolved := canonicalWorkingRemoteExistingPrefix(path); resolved != "" {
+		path = resolved
+	}
+	if runtime.GOOS == "windows" {
+		path = strings.ToLower(path)
+	}
+	return path
+}
+
+func canonicalWorkingRemoteExistingPrefix(path string) string {
+	path = filepath.Clean(path)
+	var suffix []string
+	for {
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			parts := append([]string{resolved}, suffix...)
+			return filepath.Join(parts...)
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return ""
+		}
+		suffix = append([]string{filepath.Base(path)}, suffix...)
+		path = parent
+	}
+}
+
+// Eject removes the no-slop gate from the repo at workDir.
+// It removes both working-tree remotes, deletes the bare repo and worktrees,
 // and deletes the repo record from the database.
 func Eject(ctx context.Context, d *db.DB, p *paths.Paths, workDir string) (*db.Repo, error) {
 	if classified, err := (gatecontext.Inspector{DB: d, Paths: p}).Inspect(ctx, gatecontext.Request{CWD: workDir, MarkerPresent: gatecontext.MarkerPresent()}); err != nil {
@@ -305,7 +435,7 @@ func Eject(ctx context.Context, d *db.DB, p *paths.Paths, workDir string) (*db.R
 	}
 
 	// Remove remote from working repo (non-fatal).
-	_ = git.RemoveRemote(ctx, absRoot, RemoteName)
+	_ = removeWorkingRemotes(ctx, absRoot)
 
 	// Delete bare repo.
 	bareDir := p.RepoDir(repo.ID)
@@ -322,4 +452,14 @@ func Eject(ctx context.Context, d *db.DB, p *paths.Paths, workDir string) (*db.R
 
 	slog.Info("gate ejected", "repo_id", repo.ID, "path", absRoot)
 	return repo, nil
+}
+
+func removeWorkingRemotes(ctx context.Context, absRoot string) error {
+	var first error
+	for _, name := range []string{RemoteName, LegacyRemoteName} {
+		if err := git.RemoveRemote(ctx, absRoot, name); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
 }

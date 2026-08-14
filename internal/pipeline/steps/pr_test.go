@@ -13,11 +13,11 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
-	"github.com/kunchenguid/no-mistakes/internal/config"
-	"github.com/kunchenguid/no-mistakes/internal/pipeline"
-	"github.com/kunchenguid/no-mistakes/internal/scm"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/pipeline"
+	"github.com/Blakeolson21/no-slop/internal/scm"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestPRStep_GhNotAvailable(t *testing.T) {
@@ -84,7 +84,7 @@ func TestPRStep_UpdatesExistingPR(t *testing.T) {
 		t.Errorf("expected --body flag in gh pr edit, got:\n%s", ghLog)
 	}
 	if !strings.Contains(ghLog, noMistakesPRSignature) {
-		t.Errorf("expected updated PR body to include no-mistakes signature, got:\n%s", ghLog)
+		t.Errorf("expected updated PR body to include no-slop signature, got:\n%s", ghLog)
 	}
 
 	// Verify PR URL was stored
@@ -326,8 +326,8 @@ func TestPRStep_GitHubForkCreatesParentPRWithForkHead(t *testing.T) {
 	}
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Env = env
-	sctx.Repo.UpstreamURL = "https://github.com/parent-owner/no-mistakes.git"
-	sctx.Repo.ForkURL = "https://github.com/fork-owner/no-mistakes.git"
+	sctx.Repo.UpstreamURL = "https://github.com/parent-owner/no-slop.git"
+	sctx.Repo.ForkURL = "https://github.com/fork-owner/no-slop.git"
 	sctx.Run.Branch = "refs/heads/feature"
 
 	step := &PRStep{}
@@ -340,16 +340,16 @@ func TestPRStep_GitHubForkCreatesParentPRWithForkHead(t *testing.T) {
 		t.Fatal(err)
 	}
 	ghLog := string(logData)
-	if !strings.Contains(ghLog, "pr list --head feature --base main --repo parent-owner/no-mistakes --state open --json number,url,headRefName,headRepositoryOwner") {
+	if !strings.Contains(ghLog, "pr list --head feature --base main --repo parent-owner/no-slop --state open --json number,url,headRefName,headRepositoryOwner") {
 		t.Fatalf("expected PR lookup to use parent repo and bare head branch, got:\n%s", ghLog)
 	}
 	if strings.Contains(ghLog, "pr list --head fork-owner:feature") {
 		t.Fatalf("PR lookup used unsupported owner-qualified --head, got:\n%s", ghLog)
 	}
-	if !strings.Contains(ghLog, "pr create --head fork-owner:feature --base main --repo parent-owner/no-mistakes") {
+	if !strings.Contains(ghLog, "pr create --head fork-owner:feature --base main --repo parent-owner/no-slop") {
 		t.Fatalf("expected PR create to target parent repo with fork owner head, got:\n%s", ghLog)
 	}
-	if strings.Contains(ghLog, "--repo fork-owner/no-mistakes") {
+	if strings.Contains(ghLog, "--repo fork-owner/no-slop") {
 		t.Fatalf("expected no self-PR against fork repo, got:\n%s", ghLog)
 	}
 	if strings.Contains(ghLog, "pr create --head feature --") {
@@ -497,9 +497,9 @@ func TestPRStep_BitbucketMissingEnvSkipsBeforeBuildingContent(t *testing.T) {
 func TestPRStep_BitbucketUsesProcessEnvWhenStepEnvIsNil(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	api := newFakeBitbucketPRAPI(t, 0, "")
-	t.Setenv("NO_MISTAKES_BITBUCKET_EMAIL", "test@example.com")
-	t.Setenv("NO_MISTAKES_BITBUCKET_API_TOKEN", "test-token")
-	t.Setenv("NO_MISTAKES_BITBUCKET_API_BASE_URL", api.server.URL)
+	t.Setenv("NS_BITBUCKET_EMAIL", "test@example.com")
+	t.Setenv("NS_BITBUCKET_API_TOKEN", "test-token")
+	t.Setenv("NS_BITBUCKET_API_BASE_URL", api.server.URL)
 
 	ag := &mockAgent{
 		name: "test",
@@ -1384,7 +1384,7 @@ func TestFallbackPRContentCapsBodyAfterPrependedIntent(t *testing.T) {
 
 func pipelineMarkdownForTest(rounds ...string) string {
 	var b strings.Builder
-	b.WriteString("## Pipeline\n\nUpdates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)\n\n")
+	b.WriteString("## Pipeline\n\nUpdates from [git push no-slop](https://github.com/Blakeolson21/no-slop)\n\n")
 	b.WriteString("<details>\n")
 	b.WriteString("<summary>🔧 **Review** - update rounds</summary>\n\n")
 	for _, round := range rounds {

@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/git"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 )
 
 func TestMigrateGateConfigsRejectsInvalidDirectoriesAndSkipsCurrentGates(t *testing.T) {
@@ -23,7 +23,7 @@ func TestMigrateGateConfigsRejectsInvalidDirectoriesAndSkipsCurrentGates(t *test
 		t.Fatal(err)
 	}
 
-	p := paths.WithRoot(filepath.Join(parent, "scratch", "nm-home"))
+	p := paths.WithRoot(filepath.Join(parent, "scratch", "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestMigrateGateConfigsRejectsInvalidDirectoriesAndSkipsCurrentGates(t *test
 	snapshots := make(map[string]snapshot)
 	for _, id := range []string{registeredID, legacyID} {
 		bareDir := p.RepoDir(id)
-		for _, name := range []string{"config", "config.worktree", "hooks/post-receive", "no-mistakes-gate-config"} {
+		for _, name := range []string{"config", "config.worktree", "hooks/post-receive", "no-slop-gate-config"} {
 			path := filepath.Join(bareDir, filepath.FromSlash(name))
 			content, err := os.ReadFile(path)
 			if err != nil {
@@ -136,7 +136,7 @@ func TestMigrateGateConfigsRejectsInvalidDirectoriesAndSkipsCurrentGates(t *test
 }
 
 func TestMigrateGateConfigsDoesNotStampUnsupportedIsolation(t *testing.T) {
-	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm-home"))
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}

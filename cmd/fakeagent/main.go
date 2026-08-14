@@ -1,5 +1,5 @@
 // fakeagent is a deterministic stand-in for the real Claude, Codex, and
-// OpenCode CLIs used by no-mistakes' e2e tests. One binary is compiled and
+// OpenCode CLIs used by no-slop' e2e tests. One binary is compiled and
 // then symlinked under each agent name; argv[0]'s basename selects which
 // wire protocol to speak.
 //
@@ -8,7 +8,7 @@
 //
 // Behaviour is driven by $FAKEAGENT_SCENARIO (a YAML file). When unset the
 // agent returns an "all clean" canned response that satisfies every schema
-// no-mistakes asks of it.
+// no-slop asks of it.
 package main
 
 import (

@@ -3,9 +3,9 @@ package steps
 import (
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/intent"
-	"github.com/kunchenguid/no-mistakes/internal/pipeline"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/intent"
+	"github.com/Blakeolson21/no-slop/internal/pipeline"
 )
 
 // userIntentPromptSection returns a prompt fragment describing the user intent

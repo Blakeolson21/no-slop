@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/ipc"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestFixtureRootFromRepoRoot(t *testing.T) {
@@ -45,6 +45,31 @@ func TestDaemonStartTimeoutLeavesRoomForLoginShellProbe(t *testing.T) {
 	}
 	if timeout <= 30*time.Second {
 		t.Fatalf("e2eDaemonStartTimeout = %v, want more than the 30s login-shell probe budget", timeout)
+	}
+}
+
+func TestSynchronizedAliasOverridesMirrorsMissingAlias(t *testing.T) {
+	overrides := synchronizedAliasOverrides(map[string]string{
+		"NS_HOME":               "/tmp/ns-home",
+		"NO_MISTAKES_TELEMETRY": "off",
+	})
+
+	if overrides["NM_HOME"] != "/tmp/ns-home" {
+		t.Fatalf("NM_HOME = %q, want mirrored NS_HOME", overrides["NM_HOME"])
+	}
+	if overrides["NS_TELEMETRY"] != "off" {
+		t.Fatalf("NS_TELEMETRY = %q, want mirrored legacy telemetry", overrides["NS_TELEMETRY"])
+	}
+}
+
+func TestSynchronizedAliasOverridesPreservesExplicitConflict(t *testing.T) {
+	overrides := synchronizedAliasOverrides(map[string]string{
+		"NS_HOME": "/tmp/ns-home",
+		"NM_HOME": "/tmp/nm-home",
+	})
+
+	if overrides["NS_HOME"] != "/tmp/ns-home" || overrides["NM_HOME"] != "/tmp/nm-home" {
+		t.Fatalf("overrides = %#v, want explicit conflict preserved", overrides)
 	}
 }
 
@@ -108,7 +133,7 @@ func TestDaemonStopDirFallsBackWhenWorkDirMoved(t *testing.T) {
 }
 
 func TestWaitForRunPrefersNewestRunOnBranch(t *testing.T) {
-	nmHome, err := os.MkdirTemp("/tmp", "nm-e2e-")
+	nmHome, err := os.MkdirTemp("/tmp", "ns-e2e-")
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
 	}

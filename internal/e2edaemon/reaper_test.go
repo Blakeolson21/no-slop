@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Blakeolson21/no-slop/internal/identity"
 )
 
 // labRoot creates a mode-0700 isolation root under /private/tmp (or /tmp).
@@ -19,7 +21,7 @@ func labRoot(t *testing.T) string {
 	if st, err := os.Stat("/private/tmp"); err == nil && st.IsDir() {
 		base = "/private/tmp"
 	}
-	dir, err := os.MkdirTemp(base, "nm-e2e-own-test-*")
+	dir, err := os.MkdirTemp(base, "ns-e2e-own-test-*")
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
 	}
@@ -37,15 +39,15 @@ func buildTestNMBin(t *testing.T) string {
 		t.Fatalf("repo root: %v", err)
 	}
 	outDir := t.TempDir()
-	bin := filepath.Join(outDir, "no-mistakes")
+	bin := filepath.Join(outDir, "no-slop")
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
 	}
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/no-mistakes")
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/no-slop")
 	cmd.Dir = repoRoot
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("build no-mistakes: %v\n%s", err, out)
+		t.Fatalf("build no-slop: %v\n%s", err, out)
 	}
 	return bin
 }
@@ -68,6 +70,76 @@ func findRepoRoot() (string, error) {
 	}
 }
 
+func TestReapMainRejectsConflictingVerboseAliases(t *testing.T) {
+	repoRoot, err := findRepoRoot()
+	if err != nil {
+		t.Fatalf("repo root: %v", err)
+	}
+	inventoryDir := filepath.Join(t.TempDir(), "inventory")
+	blocked := map[string]bool{
+		"NS_E2E_DAEMON_INVENTORY":        true,
+		"NM_E2E_DAEMON_INVENTORY":        true,
+		"NS_E2E_REAP_ABANDONED":          true,
+		"NM_E2E_REAP_ABANDONED":          true,
+		"NS_E2E_REAP_VERBOSE":            true,
+		"NM_E2E_REAP_VERBOSE":            true,
+		"NS_E2E_DAEMON_INVENTORY_PARENT": true,
+		"NM_E2E_DAEMON_INVENTORY_PARENT": true,
+	}
+	env := make([]string, 0, len(os.Environ())+4)
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if !blocked[key] {
+			env = append(env, entry)
+		}
+	}
+	env = append(env,
+		"NS_E2E_DAEMON_INVENTORY="+inventoryDir,
+		"NM_E2E_DAEMON_INVENTORY="+inventoryDir,
+		"NS_E2E_REAP_VERBOSE=1",
+		"NM_E2E_REAP_VERBOSE=0",
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "run", "./internal/e2edaemon/reapmain.go")
+	cmd.Dir = repoRoot
+	cmd.Env = env
+	cmd.WaitDelay = 2 * time.Second
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("reaper entrypoint timed out\n%s", output)
+	}
+	if err == nil {
+		t.Fatalf("reaper accepted conflicting verbose aliases\n%s", output)
+	}
+	if !strings.Contains(string(output), "configure the same setting with different values") {
+		t.Fatalf("reaper output = %q, want alias conflict", output)
+	}
+}
+
+func TestTempDaemonCommandEnvSetsCompatibilityAliases(t *testing.T) {
+	env := tempDaemonCommandEnv("/tmp/ns-home")
+	for _, pair := range []struct {
+		canonical string
+		legacy    string
+		want      string
+	}{
+		{"NS_HOME", "NM_HOME", "/tmp/ns-home"},
+		{"NS_TEST_START_DAEMON", "NM_TEST_START_DAEMON", "1"},
+		{"NS_TELEMETRY", "NO_MISTAKES_TELEMETRY", "off"},
+		{"NS_NO_UPDATE_CHECK", "NO_MISTAKES_NO_UPDATE_CHECK", "1"},
+	} {
+		got, err := identity.LookupEnvSlice(env, pair.canonical, pair.legacy)
+		if err != nil {
+			t.Fatalf("LookupEnvSlice(%s, %s): %v", pair.canonical, pair.legacy, err)
+		}
+		if got != pair.want {
+			t.Fatalf("LookupEnvSlice(%s, %s) = %q, want %q", pair.canonical, pair.legacy, got, pair.want)
+		}
+	}
+}
+
 func startDetachedTestDaemon(t *testing.T, bin, nmHome string) int {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Join(nmHome, "logs"), 0o755); err != nil {
@@ -83,12 +155,7 @@ func startDetachedTestDaemon(t *testing.T, bin, nmHome string) int {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(bin, "daemon", "run", "--root", nmHome)
-	cmd.Env = append(os.Environ(),
-		"NM_HOME="+nmHome,
-		"NM_TEST_START_DAEMON=1",
-		"NO_MISTAKES_TELEMETRY=off",
-		"NO_MISTAKES_NO_UPDATE_CHECK=1",
-	)
+	cmd.Env = tempDaemonCommandEnv(nmHome)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	detachTestProcess(cmd)
@@ -105,12 +172,7 @@ func startDetachedTestDaemon(t *testing.T, bin, nmHome string) int {
 		if MatchesDaemonRoot(pid, nmHome) {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			status := exec.CommandContext(ctx, bin, "daemon", "status")
-			status.Env = append(os.Environ(),
-				"NM_HOME="+nmHome,
-				"NM_TEST_START_DAEMON=1",
-				"NO_MISTAKES_TELEMETRY=off",
-				"NO_MISTAKES_NO_UPDATE_CHECK=1",
-			)
+			status.Env = tempDaemonCommandEnv(nmHome)
 			out, _ := status.CombinedOutput()
 			cancel()
 			if strings.Contains(string(out), "running") {
@@ -166,7 +228,7 @@ func TestReapAll_NormalCompletion(t *testing.T) {
 	t.Setenv(EnvInventory, filepath.Join(lab, "inv"))
 	safetyReap(t)
 	bin := buildTestNMBin(t)
-	nmHome := filepath.Join(lab, "nm-e2e-normal", "nmhome")
+	nmHome := filepath.Join(lab, "ns-e2e-normal", "nmhome")
 	pid := startDetachedTestDaemon(t, bin, nmHome)
 
 	inv, err := Open()
@@ -198,7 +260,7 @@ func TestReapAll_CallerInterrupt(t *testing.T) {
 	t.Setenv(EnvInventory, filepath.Join(lab, "inv"))
 	safetyReap(t)
 	bin := buildTestNMBin(t)
-	nmHome := filepath.Join(lab, "nm-e2e-interrupt", "nmhome")
+	nmHome := filepath.Join(lab, "ns-e2e-interrupt", "nmhome")
 	pid := startDetachedTestDaemon(t, bin, nmHome)
 
 	inv, err := Open()
@@ -227,7 +289,7 @@ func TestReapAll_Timeout(t *testing.T) {
 	t.Setenv(EnvInventory, filepath.Join(lab, "inv"))
 	safetyReap(t)
 	bin := buildTestNMBin(t)
-	nmHome := filepath.Join(lab, "nm-e2e-timeout", "nmhome")
+	nmHome := filepath.Join(lab, "ns-e2e-timeout", "nmhome")
 	pid := startDetachedTestDaemon(t, bin, nmHome)
 
 	inv, err := Open()
@@ -262,7 +324,7 @@ func TestReapAll_ChildSIGKILL_WrapperReaps(t *testing.T) {
 	t.Setenv(EnvInventory, invDir)
 	safetyReap(t)
 	bin := buildTestNMBin(t)
-	nmHome := filepath.Join(lab, "nm-e2e-sigkill", "nmhome")
+	nmHome := filepath.Join(lab, "ns-e2e-sigkill", "nmhome")
 
 	cmd := exec.Command(os.Args[0], "-test.run=^TestReapAll_ChildSIGKILL_WrapperReaps$", "-test.count=1")
 	cmd.Env = append(os.Environ(),
@@ -346,12 +408,7 @@ func runSigkillChildHelper() {
 		os.Exit(1)
 	}
 	cmd := exec.Command(bin, "daemon", "run", "--root", nmHome)
-	cmd.Env = append(os.Environ(),
-		"NM_HOME="+nmHome,
-		"NM_TEST_START_DAEMON=1",
-		"NO_MISTAKES_TELEMETRY=off",
-		"NO_MISTAKES_NO_UPDATE_CHECK=1",
-	)
+	cmd.Env = tempDaemonCommandEnv(nmHome)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	detachTestProcess(cmd)
@@ -397,7 +454,7 @@ func TestReapAll_StaleInventoryRecovery(t *testing.T) {
 	t.Setenv(EnvInventory, filepath.Join(lab, "inv"))
 	safetyReap(t)
 	bin := buildTestNMBin(t)
-	nmHome := filepath.Join(lab, "nm-e2e-stale", "nmhome")
+	nmHome := filepath.Join(lab, "ns-e2e-stale", "nmhome")
 	_ = startDetachedTestDaemon(t, bin, nmHome)
 
 	inv, err := Open()
@@ -421,14 +478,14 @@ func TestReapAll_DoesNotTouchSharedDaemon(t *testing.T) {
 	lab := labRoot(t)
 	t.Setenv(EnvInventory, filepath.Join(lab, "inv"))
 
-	sharedHome := filepath.Join(mustUserHome(t), ".no-mistakes")
+	sharedHome := filepath.Join(mustUserHome(t), ".no-slop")
 	before, _ := FindDaemonsForRoot(sharedHome)
 
 	inv, err := Open()
 	if err != nil {
 		t.Fatal(err)
 	}
-	tempHome := filepath.Join(lab, "nm-e2e-safe", "nmhome")
+	tempHome := filepath.Join(lab, "ns-e2e-safe", "nmhome")
 	_ = os.MkdirAll(tempHome, 0o700)
 	if err := inv.Register("safe", tempHome, "", 0, os.Getpid()); err != nil {
 		t.Fatal(err)

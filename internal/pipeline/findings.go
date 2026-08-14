@@ -3,7 +3,7 @@ package pipeline
 import (
 	"encoding/json"
 
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 // findingIDsJSON extracts the finding IDs from a findings JSON payload and

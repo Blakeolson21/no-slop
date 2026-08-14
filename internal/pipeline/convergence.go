@@ -6,9 +6,9 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/convergence"
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/convergence"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/git"
 )
 
 // submittedDiffFiles returns the changed-file list of the originally submitted

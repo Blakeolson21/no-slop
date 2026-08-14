@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -51,15 +52,16 @@ func TestPrepareDaemonEnvironment_RemovesClaudeSessionVarsAndAppliesShellEnv(t *
 	}
 }
 
-func TestPrepareDaemonEnvironment_PreservesExistingNMHome(t *testing.T) {
-	t.Setenv("NM_HOME", "/service/root")
+func TestPrepareDaemonEnvironment_PreservesExistingNSHome(t *testing.T) {
+	t.Setenv("NS_HOME", "/service/root")
+	unsetEnv(t, "NM_HOME")
 	t.Setenv("PATH", os.Getenv("PATH"))
 
 	oldApply := applyShellEnvToProcess
 	defer func() { applyShellEnvToProcess = oldApply }()
 
 	applyShellEnvToProcess = func() error {
-		if err := os.Setenv("NM_HOME", "/login/shell/root"); err != nil {
+		if err := os.Setenv("NS_HOME", "/login/shell/root"); err != nil {
 			return err
 		}
 		return os.Setenv("PATH", "/resolved/bin")
@@ -68,11 +70,49 @@ func TestPrepareDaemonEnvironment_PreservesExistingNMHome(t *testing.T) {
 	if err := prepareDaemonEnvironment(); err != nil {
 		t.Fatal(err)
 	}
-	if got := os.Getenv("NM_HOME"); got != "/service/root" {
-		t.Fatalf("NM_HOME = %q, want %q", got, "/service/root")
+	if got := os.Getenv("NS_HOME"); got != "/service/root" {
+		t.Fatalf("NS_HOME = %q, want %q", got, "/service/root")
 	}
 	if got := os.Getenv("PATH"); got != "/resolved/bin" {
 		t.Fatalf("PATH = %q, want %q", got, "/resolved/bin")
+	}
+}
+
+func TestPrepareDaemonEnvironmentAcceptsEquivalentRootAliases(t *testing.T) {
+	base := t.TempDir()
+	realRoot := filepath.Join(base, "real-root")
+	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	aliasRoot := filepath.Join(base, "alias-root")
+	if err := os.Symlink(realRoot, aliasRoot); err != nil {
+		t.Skipf("symlink setup unavailable: %v", err)
+	}
+
+	t.Setenv("NS_HOME", realRoot)
+	t.Setenv("NM_HOME", aliasRoot)
+	t.Setenv("PATH", os.Getenv("PATH"))
+
+	oldApply := applyShellEnvToProcess
+	defer func() { applyShellEnvToProcess = oldApply }()
+	applyShellEnvToProcess = func() error {
+		if err := os.Setenv("NS_HOME", "/login/shell/root"); err != nil {
+			return err
+		}
+		if err := os.Setenv("NM_HOME", "/login/shell/legacy-root"); err != nil {
+			return err
+		}
+		return os.Setenv("PATH", "/resolved/bin")
+	}
+
+	if err := prepareDaemonEnvironment(); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("NS_HOME"); got != realRoot {
+		t.Fatalf("NS_HOME = %q, want %q", got, realRoot)
+	}
+	if got := os.Getenv("NM_HOME"); got != realRoot {
+		t.Fatalf("NM_HOME = %q, want %q", got, realRoot)
 	}
 }
 
@@ -107,5 +147,46 @@ func TestPrepareDaemonEnvironment_LogsPathSummary(t *testing.T) {
 	}
 	if !strings.Contains(out, "/a/bin") {
 		t.Fatalf("expected full PATH in log for debuggability, got %q", out)
+	}
+}
+
+func TestValidateControlEnvRejectsConflictingAliases(t *testing.T) {
+	t.Setenv("NS_TEST_DAEMON_START_TIMEOUT", "1s")
+	t.Setenv("NM_TEST_DAEMON_START_TIMEOUT", "2s")
+
+	err := ValidateControlEnv()
+	if err == nil {
+		t.Fatal("expected conflicting daemon control aliases to fail")
+	}
+	if !strings.Contains(err.Error(), "same setting with different values") {
+		t.Fatalf("ValidateControlEnv error = %v", err)
+	}
+}
+
+func unsetEnv(t *testing.T, key string) {
+	t.Helper()
+	oldValue, hadValue := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if hadValue {
+			_ = os.Setenv(key, oldValue)
+		} else {
+			_ = os.Unsetenv(key)
+		}
+	})
+}
+
+func TestValidateControlEnvRejectsConflictingHelperAliases(t *testing.T) {
+	t.Setenv(daemonHelperProcessEnv, "daemon")
+	t.Setenv(legacyDaemonHelperProcessEnv, "block")
+
+	err := ValidateControlEnv()
+	if err == nil {
+		t.Fatal("expected conflicting daemon helper aliases to fail")
+	}
+	if !strings.Contains(err.Error(), "same setting with different values") {
+		t.Fatalf("ValidateControlEnv error = %v", err)
 	}
 }

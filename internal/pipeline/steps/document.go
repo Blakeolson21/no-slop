@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
-	"github.com/kunchenguid/no-mistakes/internal/git"
-	"github.com/kunchenguid/no-mistakes/internal/pipeline"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/pipeline"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 // DocumentStep keeps documentation accurate for the change under its
@@ -286,7 +286,7 @@ Previous findings to address:
 
 // trustedDocumentPolicySection renders the repository-specific documentation
 // ownership policy. The value comes from the trusted default-branch copy of
-// .no-mistakes.yaml (config.EffectiveRepoConfig), so a contributor's pushed
+// .no-slop.yaml (config.EffectiveRepoConfig), so a contributor's pushed
 // branch cannot weaken the rules that gate its own review.
 func trustedDocumentPolicySection(sctx *pipeline.StepContext) string {
 	if sctx.Config == nil {

@@ -1,38 +1,38 @@
 ---
 title: Setup Wizard
-description: What bare `no-mistakes` does when there's no active run on the current branch.
+description: What bare `no-slop` does when there's no active run on the current branch.
 ---
 
-When you run `no-mistakes` with no arguments and there is no active run on the
-current branch, `no-mistakes` can walk you through creating a branch,
+When you run `no-slop` with no arguments and there is no active run on the
+current branch, `no-slop` can walk you through creating a branch,
 committing local changes, and pushing through the gate, then attach if the
 daemon registers the new run. This is the setup wizard.
 
-The point of the wizard is to make bare `no-mistakes` a useful starting
+The point of the wizard is to make bare `no-slop` a useful starting
 command, not just an attach command. If you have local work but no run yet, the
 wizard helps turn that state into branch -> commit -> push -> attach when the
 daemon registers the new run.
 
 The wizard kicks in when:
 
-- You're in an interactive terminal, or you passed `no-mistakes -y` / `no-mistakes --yes`.
-- The gate is initialized for the current repo (`no-mistakes init` has been run).
+- You're in an interactive terminal, or you passed `no-slop -y` / `no-slop --yes`.
+- The gate is initialized for the current repo (`no-slop init` has been run).
 - There's no active run on the current branch.
 
-In non-interactive contexts, bare `no-mistakes` without `-y` falls back to listing the last 5 runs instead.
+In non-interactive contexts, bare `no-slop` without `-y` falls back to listing the last 5 runs instead.
 
 With `-y` / `--yes`, the wizard takes the default automated path for each step: use agent suggestions for branch and commit when needed, then push to the gate. In a TTY, that path stays visible and auto-advances through the wizard. Without a TTY, it falls back to the headless path.
 
-Pass `--skip` to skip comma-separated pipeline steps for the new run created by the wizard, for example `no-mistakes --skip test,lint`.
-It only applies when the wizard starts a new pipeline run; if bare `no-mistakes` attaches to an active run or lists recent runs, `--skip` exits with an error.
+Pass `--skip` to skip comma-separated pipeline steps for the new run created by the wizard, for example `no-slop --skip test,lint`.
+It only applies when the wizard starts a new pipeline run; if bare `no-slop` attaches to an active run or lists recent runs, `--skip` exits with an error.
 
-If you want to attach to *any* active run in the repo (not just the current branch), use `no-mistakes attach` - that path skips the wizard entirely.
+If you want to attach to *any* active run in the repo (not just the current branch), use `no-slop attach` - that path skips the wizard entirely.
 
 ## Wizard flow
 
 ```mermaid
 flowchart TD
-  start["Run no-mistakes"] --> active{"Active run on current branch?"}
+  start["Run no-slop"] --> active{"Active run on current branch?"}
   active -- "yes" --> attach["Attach to run"]
   active -- "no" --> interactive{"Interactive terminal, or -y/--yes, and gate initialized?"}
   interactive -- "no" --> recent["Show recent runs"]
@@ -67,7 +67,7 @@ Shown when you have uncommitted changes. Prompts for a commit message.
 
 ### 3. Push
 
-Always shown. Asks whether to push the current branch to the `no-mistakes` gate.
+Always shown. Asks whether to push the current branch to the `no-slop` gate.
 
 - Press `y` to push.
 - Press `n` to stop.
@@ -105,11 +105,11 @@ The managed agent server (Rovo Dev or OpenCode) writes its output to `~/.no-mist
 
 The wizard requires:
 
-- The gate to be initialized (`no-mistakes init` has run).
+- The gate to be initialized (`no-slop init` has run).
 - A clean enough state to commit and push.
-- A configured native or ACP agent, only when the wizard needs to suggest a branch name or commit subject. For an ordered fallback list, at least one configured entry must be available. See the [Global Config Reference](/no-mistakes/reference/global-config/) for ACP aliases such as `agent: cursor` and target requirements.
+- A configured native or ACP agent, only when the wizard needs to suggest a branch name or commit subject. For an ordered fallback list, at least one configured entry must be available. See the [Global Config Reference](/no-slop/reference/global-config/) for ACP aliases such as `agent: cursor` and target requirements.
   If you already have a branch and clean working tree, or you enter those values yourself in the interactive flow, the wizard can continue without agent suggestions.
 
 If any of those are missing, the wizard reports the problem and exits.
-`no-mistakes doctor` is the fastest way to check whether the configured global runner can start a validation gate.
+`no-slop doctor` is the fastest way to check whether the configured global runner can start a validation gate.
 The wizard can proceed without an agent when it does not need a suggestion, but the pushed validation gate still fails before its first step unless the effective pipeline-agent configuration resolves to a runnable runner.

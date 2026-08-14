@@ -4,9 +4,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/telemetry"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/telemetry"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 // trackAxiSurface records a state-changing axi command (run, respond, abort)

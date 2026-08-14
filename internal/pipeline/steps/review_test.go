@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
-	"github.com/kunchenguid/no-mistakes/internal/config"
-	"github.com/kunchenguid/no-mistakes/internal/db"
-	"github.com/kunchenguid/no-mistakes/internal/pipeline"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/pipeline"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestReviewStep_FixMode(t *testing.T) {
@@ -109,7 +109,7 @@ func TestReviewStep_FixMode(t *testing.T) {
 	if status := gitStatusPorcelain(t, dir); status != "" {
 		t.Fatalf("expected clean worktree after fix commit, got %q", status)
 	}
-	if got := lastCommitMessage(t, dir); got != "no-mistakes(review): address review findings" {
+	if got := lastCommitMessage(t, dir); got != "no-slop(review): address review findings" {
 		t.Fatalf("last commit message = %q", got)
 	}
 	if branchSHA := gitCmd(t, dir, "rev-parse", "refs/heads/feature"); branchSHA != sctx.Run.HeadSHA {

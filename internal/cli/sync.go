@@ -8,8 +8,8 @@ import (
 
 	toON "github.com/toon-format/toon-go"
 
-	"github.com/kunchenguid/no-mistakes/internal/branchsync"
-	"github.com/kunchenguid/no-mistakes/internal/telemetry"
+	"github.com/Blakeolson21/no-slop/internal/branchsync"
+	"github.com/Blakeolson21/no-slop/internal/telemetry"
 	"github.com/spf13/cobra"
 )
 
@@ -141,7 +141,7 @@ func runHumanSync(cmd *cobra.Command, check, yes bool) error {
 	}
 	if !yes {
 		if !syncInteractive() {
-			fmt.Fprintln(cmd.OutOrStdout(), "  Non-interactive input cannot confirm this plan. Re-run with `no-mistakes sync --yes`.")
+			fmt.Fprintln(cmd.OutOrStdout(), "  Non-interactive input cannot confirm this plan. Re-run with `no-slop sync --yes`.")
 			result = "refused"
 			return &exitError{code: 1}
 		}
@@ -200,7 +200,7 @@ func runHumanRecover(cmd *cobra.Command, keepLocal, yes bool) error {
 	if !yes && state.State != branchsync.StateUserOwned {
 		printHumanSyncState(cmd, state)
 		if !syncInteractive() {
-			fmt.Fprintln(cmd.OutOrStdout(), "  Non-interactive input cannot confirm this recovery. Re-run with `no-mistakes sync --recover --yes`.")
+			fmt.Fprintln(cmd.OutOrStdout(), "  Non-interactive input cannot confirm this recovery. Re-run with `no-slop sync --recover --yes`.")
 			result = "refused"
 			return &exitError{code: 1}
 		}
@@ -278,7 +278,7 @@ func humanSyncSummary(state branchsync.State) string {
 	switch state.State {
 	case branchsync.StatePipelineOwned:
 		if state.Safety == "blocked_pipeline_owned_recoverable" {
-			return "run ended with the branch still in pipeline custody; recover custody with `no-mistakes sync --recover` (or `no-mistakes rerun` to start a fresh validation from the gate branch head)"
+			return "run ended with the branch still in pipeline custody; recover custody with `no-slop sync --recover` (or `no-slop rerun` to start a fresh validation from the gate branch head)"
 		}
 		return "pipeline fix is not pushed yet; do not make local follow-up commits"
 	case branchsync.StateCustodyReturned:
@@ -351,7 +351,7 @@ func runAxiSync(cmd *cobra.Command, check, recover, keepLocal bool) error {
 		help = append(help, "Run `"+state.NextAction.Command+"`")
 	}
 	if state.Safety == "blocked_pipeline_owned_recoverable" {
-		help = append(help, "Run `no-mistakes rerun` instead to start a fresh validation from the gate branch head")
+		help = append(help, "Run `no-slop rerun` instead to start a fresh validation from the gate branch head")
 	}
 	if len(help) > 0 {
 		fields = append(fields, toON.Field{Key: "help", Value: help})

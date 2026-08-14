@@ -8,12 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/daemon"
-	"github.com/kunchenguid/no-mistakes/internal/gatecontext"
-	"github.com/kunchenguid/no-mistakes/internal/ipc"
-	"github.com/kunchenguid/no-mistakes/internal/lifecycle"
-	"github.com/kunchenguid/no-mistakes/internal/paths"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/daemon"
+	"github.com/Blakeolson21/no-slop/internal/gatecontext"
+	"github.com/Blakeolson21/no-slop/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/lifecycle"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/types"
 	"github.com/spf13/cobra"
 )
 
@@ -28,7 +28,7 @@ var (
 func newDaemonCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "daemon",
-		Short: "Manage the no-mistakes daemon",
+		Short: "Manage the no-slop daemon",
 	}
 
 	cmd.AddCommand(newDaemonStartCmd())
@@ -159,19 +159,45 @@ func normalizeNotifyGatePath(gate string) (string, error) {
 	return filepath.Clean(abs), nil
 }
 
+const (
+	skipPushOptionPrefix       = "no-slop.skip="
+	legacySkipPushOptionPrefix = "no-mistakes.skip="
+)
+
 func parseSkipPushOptions(options []string) ([]types.StepName, error) {
-	var steps []types.StepName
+	var canonicalSteps []types.StepName
+	var legacySteps []types.StepName
+	canonicalSeen := false
+	legacySeen := false
 	for _, option := range options {
-		value, ok := strings.CutPrefix(option, "no-mistakes.skip=")
-		if !ok {
+		var value string
+		switch {
+		case strings.HasPrefix(option, skipPushOptionPrefix):
+			canonicalSeen = true
+			value = strings.TrimPrefix(option, skipPushOptionPrefix)
+			parsed, err := parseSkipSteps(value)
+			if err != nil {
+				return nil, err
+			}
+			canonicalSteps = append(canonicalSteps, parsed...)
+		case strings.HasPrefix(option, legacySkipPushOptionPrefix):
+			legacySeen = true
+			value = strings.TrimPrefix(option, legacySkipPushOptionPrefix)
+			parsed, err := parseSkipSteps(value)
+			if err != nil {
+				return nil, err
+			}
+			legacySteps = append(legacySteps, parsed...)
+		default:
 			continue
 		}
-		parsed, err := parseSkipSteps(value)
-		if err != nil {
-			return nil, err
-		}
-		steps = append(steps, parsed...)
 	}
+	canonicalSteps = dedupeSteps(canonicalSteps)
+	legacySteps = dedupeSteps(legacySteps)
+	if canonicalSeen && legacySeen && !sameStepSet(canonicalSteps, legacySteps) {
+		return nil, fmt.Errorf("conflicting %s and %s push options", strings.TrimSuffix(skipPushOptionPrefix, "="), strings.TrimSuffix(legacySkipPushOptionPrefix, "="))
+	}
+	steps := append(canonicalSteps, legacySteps...)
 	return dedupeSteps(steps), nil
 }
 
@@ -193,7 +219,10 @@ func parseSkipSteps(value string) ([]types.StepName, error) {
 // intentPushOptionPrefix carries an agent-supplied intent through a git push.
 // The value is base64-encoded so multi-line or special-character intents
 // survive the push-option transport (which is line-oriented).
-const intentPushOptionPrefix = "no-mistakes.intent="
+const (
+	intentPushOptionPrefix       = "no-slop.intent="
+	legacyIntentPushOptionPrefix = "no-mistakes.intent="
+)
 
 // formatIntentPushOption encodes intent as a single push option, or returns ""
 // when there is no intent to carry.
@@ -207,19 +236,43 @@ func formatIntentPushOption(intent string) string {
 // parseIntentPushOptions extracts and decodes the intent push option, if any.
 // The last occurrence wins.
 func parseIntentPushOptions(options []string) (string, error) {
-	intent := ""
+	canonicalIntent := ""
+	legacyIntent := ""
+	canonicalSeen := false
+	legacySeen := false
 	for _, option := range options {
-		encoded, ok := strings.CutPrefix(option, intentPushOptionPrefix)
-		if !ok {
+		var encoded string
+		switch {
+		case strings.HasPrefix(option, intentPushOptionPrefix):
+			encoded = strings.TrimPrefix(option, intentPushOptionPrefix)
+			decoded, err := base64.StdEncoding.DecodeString(encoded)
+			if err != nil {
+				return "", fmt.Errorf("decode intent push option: %w", err)
+			}
+			canonicalIntent = string(decoded)
+			canonicalSeen = true
+		case strings.HasPrefix(option, legacyIntentPushOptionPrefix):
+			encoded = strings.TrimPrefix(option, legacyIntentPushOptionPrefix)
+			decoded, err := base64.StdEncoding.DecodeString(encoded)
+			if err != nil {
+				return "", fmt.Errorf("decode intent push option: %w", err)
+			}
+			legacyIntent = string(decoded)
+			legacySeen = true
+		default:
 			continue
 		}
-		decoded, err := base64.StdEncoding.DecodeString(encoded)
-		if err != nil {
-			return "", fmt.Errorf("decode intent push option: %w", err)
-		}
-		intent = string(decoded)
 	}
-	return intent, nil
+	if canonicalSeen && legacySeen && canonicalIntent != legacyIntent {
+		return "", fmt.Errorf("conflicting %s and %s push options", strings.TrimSuffix(intentPushOptionPrefix, "="), strings.TrimSuffix(legacyIntentPushOptionPrefix, "="))
+	}
+	if canonicalSeen {
+		return canonicalIntent, nil
+	}
+	if legacySeen {
+		return legacyIntent, nil
+	}
+	return "", nil
 }
 
 func formatSkipPushOptions(steps []types.StepName) []string {
@@ -230,7 +283,7 @@ func formatSkipPushOptions(steps []types.StepName) []string {
 	for _, step := range dedupeSteps(steps) {
 		parts = append(parts, string(step))
 	}
-	return []string{"no-mistakes.skip=" + strings.Join(parts, ",")}
+	return []string{"no-slop.skip=" + strings.Join(parts, ",")}
 }
 
 func validStep(step types.StepName) bool {
@@ -253,6 +306,22 @@ func dedupeSteps(steps []types.StepName) []types.StepName {
 		out = append(out, step)
 	}
 	return out
+}
+
+func sameStepSet(a, b []types.StepName) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[types.StepName]bool, len(a))
+	for _, step := range a {
+		seen[step] = true
+	}
+	for _, step := range b {
+		if !seen[step] {
+			return false
+		}
+	}
+	return true
 }
 
 func newDaemonStartCmd() *cobra.Command {
@@ -422,7 +491,7 @@ func refuseExecutingRuns(action, scopeNote string, runs []lifecycle.ActiveRun, a
 	if len(executing) == 0 {
 		return nil
 	}
-	return fmt.Errorf("refusing %s because %d active pipeline %s executing a step right now; %sstopping the daemon cancels the step and strands the run's pipeline commits in the local gate. Wait for the step to finish or park at a gate, end the run with `no-mistakes axi abort --run <id>`, or pass --abandon-executing-runs to fail it deliberately\n%s",
+	return fmt.Errorf("refusing %s because %d active pipeline %s executing a step right now; %sstopping the daemon cancels the step and strands the run's pipeline commits in the local gate. Wait for the step to finish or park at a gate, end the run with `no-slop axi abort --run <id>`, or pass --abandon-executing-runs to fail it deliberately\n%s",
 		action, len(executing), runNoun(len(executing)), scopeNote, lifecycle.ExecutingRunList(executing))
 }
 
@@ -473,14 +542,17 @@ func newDaemonRunCmd() *cobra.Command {
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if root != "" {
+				if err := os.Setenv("NS_HOME", root); err != nil {
+					return fmt.Errorf("set NS_HOME: %w", err)
+				}
 				if err := os.Setenv("NM_HOME", root); err != nil {
-					return fmt.Errorf("set NM_HOME: %w", err)
+					return fmt.Errorf("set NM_HOME compatibility alias: %w", err)
 				}
 			}
 			return daemonRun()
 		},
 	}
 
-	cmd.Flags().StringVar(&root, "root", "", "override no-mistakes data directory")
+	cmd.Flags().StringVar(&root, "root", "", "override no-slop data directory")
 	return cmd
 }

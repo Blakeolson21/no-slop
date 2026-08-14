@@ -11,20 +11,40 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/kunchenguid/no-mistakes/internal/e2edaemon"
+	"github.com/Blakeolson21/no-slop/internal/e2edaemon"
+	"github.com/Blakeolson21/no-slop/internal/identity"
 )
 
 func main() {
-	if os.Getenv("NM_E2E_REAP_ABANDONED") == "1" {
-		for _, err := range e2edaemon.ReapAbandoned(os.Getenv("NM_E2E_DAEMON_INVENTORY_PARENT"), os.Getenv(e2edaemon.EnvInventory)) {
+	os.Exit(run())
+}
+
+func run() int {
+	inventoryDir, dirErr := e2edaemon.DirFromEnv()
+	if dirErr != nil {
+		fmt.Fprintf(os.Stderr, "e2e-reap: %v\n", dirErr)
+		return 2
+	}
+	reapAbandoned, reapErr := identity.EnvEnabled("NS_E2E_REAP_ABANDONED", "NM_E2E_REAP_ABANDONED")
+	if reapErr != nil {
+		fmt.Fprintf(os.Stderr, "e2e-reap: %v\n", reapErr)
+		return 2
+	}
+	if reapAbandoned {
+		parent, err := identity.LookupEnv("NS_E2E_DAEMON_INVENTORY_PARENT", "NM_E2E_DAEMON_INVENTORY_PARENT")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "e2e-reap: %v\n", err)
+			return 2
+		}
+		for _, err := range e2edaemon.ReapAbandoned(parent, inventoryDir) {
 			fmt.Fprintf(os.Stderr, "e2e-reap: %v\n", err)
 		}
-		return
+		return 0
 	}
-	inv, err := e2edaemon.Open()
+	inv, err := e2edaemon.OpenDir(inventoryDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "e2e-reap: open inventory: %v\n", err)
-		os.Exit(0) // best-effort; never fail the suite wrapper hard
+		return 0 // best-effort; never fail the suite wrapper hard
 	}
 	result := inv.ReapAll()
 	if len(result.Errors) > 0 {
@@ -32,8 +52,14 @@ func main() {
 			fmt.Fprintf(os.Stderr, "e2e-reap: %s\n", e)
 		}
 	}
-	if os.Getenv("NM_E2E_REAP_VERBOSE") == "1" {
+	verbose, verboseErr := identity.EnvEnabled("NS_E2E_REAP_VERBOSE", "NM_E2E_REAP_VERBOSE")
+	if verboseErr != nil {
+		fmt.Fprintf(os.Stderr, "e2e-reap: %v\n", verboseErr)
+		return 2
+	}
+	if verbose {
 		fmt.Fprintf(os.Stderr, "e2e-reap: entries=%d stopped=%d killed=%d removed=%d skipped=%d\n",
 			result.Entries, result.Stopped, result.Killed, result.Removed, result.Skipped)
 	}
+	return 0
 }

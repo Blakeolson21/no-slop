@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Blakeolson21/no-slop/internal/branchsync"
+	"github.com/Blakeolson21/no-slop/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/types"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/kunchenguid/no-mistakes/internal/branchsync"
-	"github.com/kunchenguid/no-mistakes/internal/ipc"
-	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
 func TestBranchSyncActionRefreshesBeforeConfirmationAndAppliesThroughSharedPath(t *testing.T) {
@@ -18,7 +18,7 @@ func TestBranchSyncActionRefreshesBeforeConfirmationAndAppliesThroughSharedPath(
 		Local:      branchsync.LocalState{Branch: "feature", Head: strings.Repeat("a", 40), Clean: true},
 		Pipeline:   branchsync.PipelineState{RunID: "run-1", PushedHead: strings.Repeat("b", 40)},
 		Target:     branchsync.TargetState{Kind: "fork", Remote: "fork", Ref: "refs/heads/feature"},
-		NextAction: &branchsync.NextAction{Code: "sync", Command: "no-mistakes axi sync"},
+		NextAction: &branchsync.NextAction{Code: "sync", Command: "no-slop axi sync"},
 	}
 	m.branchSync = &cached
 	refreshCalls := 0
@@ -82,7 +82,7 @@ func TestLocalBranchStatusIsCompactAndOnlyOffersEligibleAction(t *testing.T) {
 	if !strings.Contains(view, "diverged") || strings.Contains(view, "u sync branch") {
 		t.Fatalf("diverged view:\n%s", view)
 	}
-	state.NextAction = &branchsync.NextAction{Code: "sync", Command: "no-mistakes axi sync"}
+	state.NextAction = &branchsync.NextAction{Code: "sync", Command: "no-slop axi sync"}
 	view = stripANSI(renderLocalBranchStatus(&state, false, 80))
 	if !strings.Contains(view, "equivalent work") || !strings.Contains(view, "u sync branch") {
 		t.Fatalf("equivalent candidate view:\n%s", view)
@@ -101,7 +101,7 @@ func TestBranchSyncActionRefreshesEquivalentDivergedBeforeConfirmation(t *testin
 		Local:      branchsync.LocalState{Branch: "feature", Head: strings.Repeat("a", 40), Clean: true},
 		Pipeline:   branchsync.PipelineState{RunID: "run-1", PushedHead: strings.Repeat("b", 40)},
 		Target:     branchsync.TargetState{Kind: "fork", Remote: "fork", Ref: "refs/heads/feature"},
-		NextAction: &branchsync.NextAction{Code: "sync", Command: "no-mistakes axi sync"},
+		NextAction: &branchsync.NextAction{Code: "sync", Command: "no-slop axi sync"},
 	}
 	m.branchSync = &cached
 	refreshCalls := 0
@@ -250,8 +250,8 @@ func TestCustodyReturnedInPlaceNamesTheAnchorsHoldingLostWork(t *testing.T) {
 		recovered.Relation = branchsync.RelationUnknown
 		recovered.Recovered = true
 		recovered.Changed = false
-		recovered.PreservedAnchorRef = "refs/no-mistakes/recover/run-1"
-		recovered.AbandonedAnchorRef = "refs/no-mistakes/recover-abandoned/run-1"
+		recovered.PreservedAnchorRef = "refs/no-slop/recover/run-1"
+		recovered.AbandonedAnchorRef = "refs/no-slop/recover-abandoned/run-1"
 		return recovered
 	}
 
@@ -273,8 +273,8 @@ func TestCustodyReturnedInPlaceNamesTheAnchorsHoldingLostWork(t *testing.T) {
 	returned := stripANSI(renderLocalBranchStatus(m.branchSync, false, 100))
 	for _, want := range []string{
 		"Custody returned",
-		"refs/no-mistakes/recover/run-1",
-		"refs/no-mistakes/recover-abandoned/run-1",
+		"refs/no-slop/recover/run-1",
+		"refs/no-slop/recover-abandoned/run-1",
 	} {
 		if !strings.Contains(returned, want) {
 			t.Errorf("custody-returned status missing %q:\n%s", want, returned)

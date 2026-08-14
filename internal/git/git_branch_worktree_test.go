@@ -273,7 +273,7 @@ func TestPushWithOptionsForwardsPushOptions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := PushWithOptions(ctx, src, "dest", "refs/heads/main", "", false, []string{"no-mistakes.skip=test,lint"}); err != nil {
+	if err := PushWithOptions(ctx, src, "dest", "refs/heads/main", "", false, []string{"no-slop.skip=test,lint"}); err != nil {
 		t.Fatalf("PushWithOptions failed: %v", err)
 	}
 
@@ -281,7 +281,7 @@ func TestPushWithOptionsForwardsPushOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := strings.TrimSpace(string(data)), "1:no-mistakes.skip=test,lint"; got != want {
+	if got, want := strings.TrimSpace(string(data)), "1:no-slop.skip=test,lint"; got != want {
 		t.Fatalf("push options marker = %q, want %q", got, want)
 	}
 }

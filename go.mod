@@ -1,4 +1,4 @@
-module github.com/kunchenguid/no-mistakes
+module github.com/Blakeolson21/no-slop
 
 go 1.25.0
 

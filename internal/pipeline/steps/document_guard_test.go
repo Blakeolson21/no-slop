@@ -10,10 +10,10 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
-	"github.com/kunchenguid/no-mistakes/internal/config"
-	"github.com/kunchenguid/no-mistakes/internal/pipeline"
-	"github.com/kunchenguid/no-mistakes/internal/types"
+	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/pipeline"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 // reviewEstablished stands in for content a review round settled on: the
@@ -64,7 +64,7 @@ func (h *docGuardHarness) stageReviewCommit(t *testing.T, submittedSHA, path, bo
 		t.Fatal(err)
 	}
 	gitCmd(t, h.dir, "add", "-A")
-	gitCmd(t, h.dir, "commit", "-m", "no-mistakes(review): record the concurrency defect")
+	gitCmd(t, h.dir, "commit", "-m", "no-slop(review): record the concurrency defect")
 	head := strings.TrimSpace(gitCmd(t, h.dir, "rev-parse", "HEAD"))
 
 	h.sctx.Run.SubmittedHeadSHA = &submittedSHA
@@ -343,7 +343,7 @@ func TestScreenRevertedPipelineContent_CandidateOrderIsDeterministic(t *testing.
 		}
 	}
 	gitCmd(t, dir, "add", "-A")
-	gitCmd(t, dir, "commit", "-m", "no-mistakes(review): record the lease defect")
+	gitCmd(t, dir, "commit", "-m", "no-slop(review): record the lease defect")
 	preDoc := strings.TrimSpace(gitCmd(t, dir, "rev-parse", "HEAD"))
 
 	for _, name := range []string{"docs/beta.md", "docs/alpha.md"} {
@@ -352,7 +352,7 @@ func TestScreenRevertedPipelineContent_CandidateOrderIsDeterministic(t *testing.
 		}
 	}
 	gitCmd(t, dir, "add", "-A")
-	gitCmd(t, dir, "commit", "-m", "no-mistakes(document): rewrite the docs")
+	gitCmd(t, dir, "commit", "-m", "no-slop(document): rewrite the docs")
 	postDoc := strings.TrimSpace(gitCmd(t, dir, "rev-parse", "HEAD"))
 
 	first, err := screenRevertedPipelineContent(context.Background(), dir, submitted, preDoc, postDoc)

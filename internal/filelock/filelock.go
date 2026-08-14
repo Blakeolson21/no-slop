@@ -1,5 +1,5 @@
 // Package filelock provides a small advisory whole-file lock used to serialize
-// read-modify-write cycles on shared JSON state under NM_HOME across
+// read-modify-write cycles on shared JSON state under NS_HOME across
 // processes. It is the single owner of the OS locking primitive so callers do
 // not each carry their own platform split.
 //

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/db"
 )
 
 // terminalAdoptionFixture models the production topology the custody deadlock
