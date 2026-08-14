@@ -633,8 +633,10 @@ func Stop(p *paths.Paths) error {
 	instance := captureRunningDaemon(p)
 	if managed, err := stopManagedService(p); managed {
 		var detachedErr error
+		detachedAttempted := false
 		if err != nil {
 			if alive, _ := daemonHealthCheck(p); alive {
+				detachedAttempted = true
 				detachedErr = stopDetachedDaemon(p)
 			}
 		}
@@ -651,6 +653,9 @@ func Stop(p *paths.Paths) error {
 		if err != nil {
 			if detachedErr != nil {
 				return fmt.Errorf("%w; detached shutdown: %v", err, detachedErr)
+			}
+			if detachedAttempted {
+				return nil
 			}
 			return err
 		}

@@ -20,7 +20,7 @@ func (timeoutDialError) Temporary() bool { return true }
 func TestDialConnectTimeoutFailsFastAndNamesSocket(t *testing.T) {
 	const timeout = 25 * time.Millisecond
 	t.Setenv("NS_DAEMON_CONNECT_TIMEOUT", timeout.String())
-	t.Setenv("NM_DAEMON_CONNECT_TIMEOUT", "")
+	unsetTestEnv(t, "NM_DAEMON_CONNECT_TIMEOUT")
 
 	originalDial := dialNetworkWithTimeout
 	dialNetworkWithTimeout = func(network, address string, gotTimeout time.Duration) (net.Conn, error) {
@@ -62,7 +62,7 @@ func TestDialConnectTimeoutFailsFastAndNamesSocket(t *testing.T) {
 }
 
 func TestConnectTimeoutAcceptsLegacyAliasAndRejectsConflict(t *testing.T) {
-	t.Setenv("NS_DAEMON_CONNECT_TIMEOUT", "")
+	unsetTestEnv(t, "NS_DAEMON_CONNECT_TIMEOUT")
 	t.Setenv("NM_DAEMON_CONNECT_TIMEOUT", "41ms")
 	got, err := connectTimeout()
 	if err != nil {
@@ -75,4 +75,19 @@ func TestConnectTimeoutAcceptsLegacyAliasAndRejectsConflict(t *testing.T) {
 	if _, err := connectTimeout(); err == nil {
 		t.Fatal("expected conflicting timeout aliases to fail")
 	}
+}
+
+func unsetTestEnv(t *testing.T, name string) {
+	t.Helper()
+	value, existed := os.LookupEnv(name)
+	if err := os.Unsetenv(name); err != nil {
+		t.Fatalf("unset %s: %v", name, err)
+	}
+	t.Cleanup(func() {
+		if existed {
+			_ = os.Setenv(name, value)
+			return
+		}
+		_ = os.Unsetenv(name)
+	})
 }

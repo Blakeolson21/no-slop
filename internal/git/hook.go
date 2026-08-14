@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -35,11 +36,14 @@ func managedHookExecutable() string {
 }
 
 func canonicalHookExecutable(command string) string {
-	switch filepath.Base(command) {
-	case "no-mistakes":
-		return filepath.Join(filepath.Dir(command), "no-slop")
-	case "no-mistakes.exe":
-		return filepath.Join(filepath.Dir(command), "no-slop.exe")
+	separator := strings.LastIndexAny(command, `/\`)
+	prefix := command[:separator+1]
+	base := command[separator+1:]
+	switch {
+	case strings.EqualFold(base, "no-mistakes"):
+		return prefix + "no-slop"
+	case strings.EqualFold(base, "no-mistakes.exe"):
+		return prefix + "no-slop.exe"
 	default:
 		return command
 	}
@@ -154,7 +158,7 @@ func validatePreservedPreReceiveHookAliases(hooksDir string) error {
 	if legacyErr != nil {
 		return legacyErr
 	}
-	if canonicalInfo.Mode()&0o111 == 0 || legacyInfo.Mode()&0o111 == 0 {
+	if !preservedHookRunnable(canonicalInfo) || !preservedHookRunnable(legacyInfo) {
 		return nil
 	}
 	canonicalData, err := os.ReadFile(canonical)
@@ -180,7 +184,7 @@ func validatePreservedPreReceiveHookCandidate(hooksDir string, candidate []byte)
 	if err != nil {
 		return err
 	}
-	if legacyInfo.Mode()&0o111 == 0 {
+	if !preservedHookRunnable(legacyInfo) {
 		return nil
 	}
 	legacyData, err := os.ReadFile(legacy)
@@ -191,6 +195,10 @@ func validatePreservedPreReceiveHookCandidate(hooksDir string, candidate []byte)
 		return fmt.Errorf("preserved pre-receive hook aliases conflict: %s and %s differ", preservedPreReceiveHook, legacyPreservedPreReceiveHook)
 	}
 	return nil
+}
+
+func preservedHookRunnable(info os.FileInfo) bool {
+	return runtime.GOOS == "windows" || info.Mode()&0o111 != 0
 }
 
 // RefreshManagedGateHooks owns the complete receive boundary.

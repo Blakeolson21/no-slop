@@ -135,9 +135,9 @@ func TestDefaultPrefersEnvVarsOverDotEnvAndEmbeddedConfig(t *testing.T) {
 	t.Setenv(telemetryEnv, "")
 	t.Setenv(legacyTelemetryEnv, "")
 	t.Setenv(umamiHostEnv, "https://env.example")
-	t.Setenv(legacyUmamiHostEnv, "")
+	unsetTestEnv(t, legacyUmamiHostEnv)
 	t.Setenv(umamiWebsiteIDEnv, "website-from-env")
-	t.Setenv(legacyUmamiWebsiteIDEnv, "")
+	unsetTestEnv(t, legacyUmamiWebsiteIDEnv)
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".env")
@@ -260,9 +260,9 @@ func TestDefaultDisablesTelemetryWhenEnvIsOff(t *testing.T) {
 	buildinfo.TelemetryWebsiteID = "embedded-website"
 
 	t.Setenv("NS_TELEMETRY", "off")
-	t.Setenv(legacyTelemetryEnv, "")
+	unsetTestEnv(t, legacyTelemetryEnv)
 	t.Setenv(umamiWebsiteIDEnv, "website-from-env")
-	t.Setenv(legacyUmamiWebsiteIDEnv, "")
+	unsetTestEnv(t, legacyUmamiWebsiteIDEnv)
 
 	sink, err := Default()
 	if err != nil {
@@ -271,6 +271,21 @@ func TestDefaultDisablesTelemetryWhenEnvIsOff(t *testing.T) {
 	if _, ok := sink.(*Client); ok {
 		t.Fatal("Default() should disable telemetry when NS_TELEMETRY=off")
 	}
+}
+
+func unsetTestEnv(t *testing.T, name string) {
+	t.Helper()
+	value, existed := os.LookupEnv(name)
+	if err := os.Unsetenv(name); err != nil {
+		t.Fatalf("unset %s: %v", name, err)
+	}
+	t.Cleanup(func() {
+		if existed {
+			_ = os.Setenv(name, value)
+			return
+		}
+		_ = os.Unsetenv(name)
+	})
 }
 
 func TestValidateDefaultConfigRejectsConflictingTelemetryAliases(t *testing.T) {

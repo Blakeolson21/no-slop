@@ -255,7 +255,9 @@ func TestInitRollsBackWhenDaemonStartFails(t *testing.T) {
 	badNMHome := filepath.Join(t.TempDir(), strings.Repeat("a", 160))
 	env := map[string]string{
 		"NS_HOME":                            badNMHome,
+		"NS_TEST_DAEMON_START_TIMEOUT":       "200ms",
 		"NM_TEST_DAEMON_START_TIMEOUT":       "200ms",
+		"NS_TEST_DAEMON_START_POLL_INTERVAL": "10ms",
 		"NM_TEST_DAEMON_START_POLL_INTERVAL": "10ms",
 	}
 

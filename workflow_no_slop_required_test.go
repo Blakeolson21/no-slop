@@ -402,7 +402,7 @@ func executeRequiredWorkflowFixture(t *testing.T, workflow requiredWorkflow, eve
 		var output bytes.Buffer
 		cmd.Stdout = &output
 		cmd.Stderr = &output
-		err := cmd.Run()
+		err := shellenv.RunShellCommand(cmd)
 		cancel()
 		if ctx.Err() == context.DeadlineExceeded {
 			t.Fatalf("execute compliance step for run %d timed out after %s\n%s", event.RunID, requiredWorkflowStepTimeout, output.String())

@@ -188,16 +188,17 @@ func TestPowerShellInstallScriptRejectsEmptyAliasConflict(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, shell, "-NoProfile", "-NonInteractive", "-File", filepath.Join("docs", "install.ps1"))
+	cmd.WaitDelay = 2 * time.Second
 	cmd.Env = append(filteredEnv(os.Environ(), "NS_INSTALL_DIR", "NO_MISTAKES_INSTALL_DIR"), []string{
 		"NS_INSTALL_DIR=",
 		"NO_MISTAKES_INSTALL_DIR=" + filepath.Join(t.TempDir(), "legacy-bin"),
 	}...)
 	shellenv.ConfigureShellCommand(cmd)
-	output, err := cmd.CombinedOutput()
+	output, err := shellenv.CombinedOutputShellCommand(cmd)
 	if ctx.Err() == context.DeadlineExceeded {
 		t.Fatalf("install.ps1 timed out after %s\n%s", 15*time.Second, output)
 	}
-	if err == nil || !strings.Contains(string(output), "same setting with different values") {
+	if err == nil || !strings.Contains(string(output), "same setting") || !strings.Contains(string(output), "different values") {
 		t.Fatalf("install.ps1 should reject empty alias conflict: %v\n%s", err, output)
 	}
 }
@@ -253,13 +254,14 @@ function Start-Process {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, shell, "-NoProfile", "-NonInteractive", "-Command", command)
+	cmd.WaitDelay = 2 * time.Second
 	cmd.Env = append(filteredEnv(os.Environ(), "NS_INSTALL_DIR", "NO_MISTAKES_INSTALL_DIR", "NS_FAKE_RELEASE_ARCHIVE", "PROCESSOR_ARCHITECTURE"), []string{
 		"NS_INSTALL_DIR=" + installDir,
 		"NS_FAKE_RELEASE_ARCHIVE=" + archivePath,
 		"PROCESSOR_ARCHITECTURE=AMD64",
 	}...)
 	shellenv.ConfigureShellCommand(cmd)
-	output, err := cmd.CombinedOutput()
+	output, err := shellenv.CombinedOutputShellCommand(cmd)
 	if ctx.Err() == context.DeadlineExceeded {
 		t.Fatalf("install.ps1 timed out after %s\n%s", 20*time.Second, output)
 	}

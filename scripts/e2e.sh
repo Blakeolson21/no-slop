@@ -21,11 +21,11 @@ resolve_alias() {
   local legacy_value=""
   local canonical_set=0
   local legacy_set=0
-  if [[ -v "$canonical_name" ]]; then
+  if declare -p "$canonical_name" >/dev/null 2>&1; then
     canonical_set=1
     canonical_value="${!canonical_name}"
   fi
-  if [[ -v "$legacy_name" ]]; then
+  if declare -p "$legacy_name" >/dev/null 2>&1; then
     legacy_set=1
     legacy_value="${!legacy_name}"
   fi

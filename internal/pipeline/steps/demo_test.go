@@ -3,6 +3,7 @@ package steps
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -25,7 +26,7 @@ func TestIsDemoMode(t *testing.T) {
 		t.Fatal("expected demo mode to be off by default")
 	}
 	t.Setenv("NS_DEMO", "1")
-	t.Setenv("NM_DEMO", "")
+	unsetTestEnv(t, "NM_DEMO")
 	if !IsDemoMode() {
 		t.Fatal("expected demo mode to be on when NS_DEMO=1")
 	}
@@ -67,7 +68,7 @@ func TestAllStepsDemoMode(t *testing.T) {
 	withoutDemoSleep(t)
 
 	t.Setenv("NS_DEMO", "1")
-	t.Setenv("NM_DEMO", "")
+	unsetTestEnv(t, "NM_DEMO")
 	steps := AllSteps()
 	// Verify we get demo steps, not real ones, by checking the type.
 	for _, s := range steps {
@@ -78,6 +79,21 @@ func TestAllStepsDemoMode(t *testing.T) {
 			t.Fatalf("expected demo step type in demo mode, got %T", s)
 		}
 	}
+}
+
+func unsetTestEnv(t *testing.T, name string) {
+	t.Helper()
+	value, existed := os.LookupEnv(name)
+	if err := os.Unsetenv(name); err != nil {
+		t.Fatalf("unset %s: %v", name, err)
+	}
+	t.Cleanup(func() {
+		if existed {
+			_ = os.Setenv(name, value)
+			return
+		}
+		_ = os.Unsetenv(name)
+	})
 }
 
 func TestDemoStepExecute(t *testing.T) {

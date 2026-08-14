@@ -824,7 +824,7 @@ func assertInitOutput(t *testing.T, h *Harness, out string) {
 	if path, err := filepath.EvalSymlinks(h.WorkDir); err == nil {
 		resolved = path
 	}
-	for _, want := range []string{resolved, "git push no-slop", "|__| |_/", "Gate initialized"} {
+	for _, want := range []string{resolved, "git push no-slop", "_  _ ____    ____ _    ____ ___", "Gate initialized"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("init output should contain %q, got:\n%s", want, out)
 		}
