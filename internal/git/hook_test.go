@@ -148,6 +148,20 @@ func TestGateConfigCurrentRejectsMissingOrTamperedAdmissionHook(t *testing.T) {
 	}
 }
 
+func TestGateConfigStampStableAcrossExecutableAliases(t *testing.T) {
+	canonical := gateConfigStampContentForExecutable("/opt/no-slop/bin/no-slop")
+	legacy := gateConfigStampContentForExecutable("/opt/no-slop/bin/no-mistakes")
+	if canonical != legacy {
+		t.Fatalf("gate stamp differs by executable alias:\ncanonical: %slegacy: %s", canonical, legacy)
+	}
+
+	canonicalHook := preReceiveHookScript(canonicalHookExecutable("/opt/no-slop/bin/no-slop"))
+	legacyHook := preReceiveHookScript(canonicalHookExecutable("/opt/no-slop/bin/no-mistakes"))
+	if canonicalHook != legacyHook {
+		t.Fatal("managed pre-receive hook differs by executable alias")
+	}
+}
+
 func TestPostReceiveHookScript(t *testing.T) {
 	script := postReceiveHookScript("/opt/No Mistakes/no-slop")
 
@@ -215,8 +229,11 @@ func TestPostReceiveHookScript(t *testing.T) {
 	if !strings.Contains(script, "no-slop") {
 		t.Fatal("hook should mention the command name")
 	}
-	if !strings.Contains(script, "|__| |_/") {
-		t.Fatal("hook should contain ASCII art banner")
+	const banner = `_  _ ____    ____ _    ____ ___
+|\ | |  |    [__  |    |  | |__]
+| \| |__|    ___] |___ |__| |`
+	if !strings.Contains(script, banner) {
+		t.Fatal("hook should contain the canonical no-slop ASCII art banner")
 	}
 	if strings.Contains(script, "\033[") {
 		t.Fatal("hook banner should not include ANSI escapes")

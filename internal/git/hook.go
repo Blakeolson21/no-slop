@@ -23,11 +23,26 @@ const legacyPreservedPreReceiveHook = "pre-receive.no-mistakes-user"
 // ancestry, so a validation-step descendant cannot bypass CLI guards with a
 // direct push.
 func PreReceiveHookScript() string {
+	return preReceiveHookScript(managedHookExecutable())
+}
+
+func managedHookExecutable() string {
 	exe, err := os.Executable()
 	if err != nil {
-		exe = "no-slop"
+		return "no-slop"
 	}
-	return preReceiveHookScript(exe)
+	return canonicalHookExecutable(exe)
+}
+
+func canonicalHookExecutable(command string) string {
+	switch filepath.Base(command) {
+	case "no-mistakes":
+		return filepath.Join(filepath.Dir(command), "no-slop")
+	case "no-mistakes.exe":
+		return filepath.Join(filepath.Dir(command), "no-slop.exe")
+	default:
+		return command
+	}
 }
 
 func preReceiveHookScript(command string) string {
@@ -195,11 +210,7 @@ func RefreshManagedGateHooks(bareDir string) error {
 // It never blocks the push - notification failures are surfaced to stderr and
 // appended to notify-push.log inside the bare repo.
 func PostReceiveHookScript() string {
-	exe, err := os.Executable()
-	if err != nil {
-		exe = "no-slop"
-	}
-	return postReceiveHookScript(exe)
+	return postReceiveHookScript(managedHookExecutable())
 }
 
 func postReceiveHookScript(command string) string {
@@ -382,7 +393,12 @@ func MarkGateConfigCurrent(bareDir string) error {
 }
 
 func gateConfigStampContent() string {
-	sum := sha256.Sum256([]byte("gate-config-v2\x00" + PreReceiveHookScript() + "\x00" + PostReceiveHookScript()))
+	return gateConfigStampContentForExecutable(managedHookExecutable())
+}
+
+func gateConfigStampContentForExecutable(command string) string {
+	command = canonicalHookExecutable(command)
+	sum := sha256.Sum256([]byte("gate-config-v2\x00" + preReceiveHookScript(command) + "\x00" + postReceiveHookScript(command)))
 	return fmt.Sprintf("v2:%x\n", sum)
 }
 

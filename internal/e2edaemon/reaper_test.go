@@ -68,6 +68,54 @@ func findRepoRoot() (string, error) {
 	}
 }
 
+func TestReapMainRejectsConflictingVerboseAliases(t *testing.T) {
+	repoRoot, err := findRepoRoot()
+	if err != nil {
+		t.Fatalf("repo root: %v", err)
+	}
+	inventoryDir := filepath.Join(t.TempDir(), "inventory")
+	blocked := map[string]bool{
+		"NS_E2E_DAEMON_INVENTORY":        true,
+		"NM_E2E_DAEMON_INVENTORY":        true,
+		"NS_E2E_REAP_ABANDONED":          true,
+		"NM_E2E_REAP_ABANDONED":          true,
+		"NS_E2E_REAP_VERBOSE":            true,
+		"NM_E2E_REAP_VERBOSE":            true,
+		"NS_E2E_DAEMON_INVENTORY_PARENT": true,
+		"NM_E2E_DAEMON_INVENTORY_PARENT": true,
+	}
+	env := make([]string, 0, len(os.Environ())+4)
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if !blocked[key] {
+			env = append(env, entry)
+		}
+	}
+	env = append(env,
+		"NS_E2E_DAEMON_INVENTORY="+inventoryDir,
+		"NM_E2E_DAEMON_INVENTORY="+inventoryDir,
+		"NS_E2E_REAP_VERBOSE=1",
+		"NM_E2E_REAP_VERBOSE=0",
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "run", "./internal/e2edaemon/reapmain.go")
+	cmd.Dir = repoRoot
+	cmd.Env = env
+	cmd.WaitDelay = 2 * time.Second
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("reaper entrypoint timed out\n%s", output)
+	}
+	if err == nil {
+		t.Fatalf("reaper accepted conflicting verbose aliases\n%s", output)
+	}
+	if !strings.Contains(string(output), "configure the same setting with different values") {
+		t.Fatalf("reaper output = %q, want alias conflict", output)
+	}
+}
+
 func startDetachedTestDaemon(t *testing.T, bin, nmHome string) int {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Join(nmHome, "logs"), 0o755); err != nil {
