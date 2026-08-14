@@ -231,6 +231,34 @@ func TestStartLaunchAgentDoesNotRetryNonBusyBootstrapErrors(t *testing.T) {
 	}
 }
 
+func TestInstallLaunchAgentReportsLegacyInspectionFailure(t *testing.T) {
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+
+	cleanup := stubServiceRuntime(t)
+	defer cleanup()
+	runtimeGOOS = "darwin"
+	serviceUserHomeDir = func() (string, error) { return home, nil }
+	serviceCurrentUser = func() (*user.User, error) { return &user.User{Uid: "501"}, nil }
+
+	legacyPath := legacyLaunchAgentPath()
+	if err := os.MkdirAll(legacyPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	serviceCommandRunner = func(name string, args ...string) ([]byte, error) {
+		return nil, nil
+	}
+
+	err := installLaunchAgent(p, "/opt/no-slop/bin/no-slop")
+	if err == nil || !strings.Contains(err.Error(), "inspect legacy launch agent") {
+		t.Fatalf("install error = %v, want legacy inspection failure", err)
+	}
+}
+
 func TestInstallLaunchAgentDoesNotRemoveLegacyPlistForDifferentRoot(t *testing.T) {
 	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {

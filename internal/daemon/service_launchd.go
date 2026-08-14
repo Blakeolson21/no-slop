@@ -60,8 +60,12 @@ func cleanupLegacyLaunchAgent(p *paths.Paths) error {
 		{legacyScopedLaunchdServiceLabel(p), legacyScopedLaunchAgentPath(p)},
 		{legacyLaunchdServiceLabel, legacyLaunchAgentPath()},
 	} {
-		data, err := os.ReadFile(legacy.path)
-		if err != nil || !serviceDefinitionMatchesRoot(data, p) {
+		data, ok, err := readLegacyServiceDefinition(legacy.path, "launch agent")
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if !ok || !serviceDefinitionMatchesRoot(data, p) {
 			continue
 		}
 		if domain, err := launchdDomainTarget(); err != nil {
@@ -164,8 +168,12 @@ func stopLegacyLaunchAgent(p *paths.Paths) (bool, error) {
 		{legacyScopedLaunchdServiceLabel(p), legacyScopedLaunchAgentPath(p)},
 		{legacyLaunchdServiceLabel, legacyLaunchAgentPath()},
 	} {
-		data, readErr := os.ReadFile(legacy.path)
-		if readErr != nil || !serviceDefinitionMatchesRoot(data, p) {
+		data, ok, err := readLegacyServiceDefinition(legacy.path, "launch agent")
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if !ok || !serviceDefinitionMatchesRoot(data, p) {
 			continue
 		}
 		stopped = true

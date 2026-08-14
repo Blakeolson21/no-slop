@@ -155,6 +155,33 @@ func TestInstallSystemdUserServiceReportsLegacyCleanupFailure(t *testing.T) {
 	}
 }
 
+func TestInstallSystemdUserServiceReportsLegacyInspectionFailure(t *testing.T) {
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+
+	cleanup := stubServiceRuntime(t)
+	defer cleanup()
+	runtimeGOOS = "linux"
+	serviceUserHomeDir = func() (string, error) { return home, nil }
+
+	legacyPath := legacySystemdUserServicePath()
+	if err := os.MkdirAll(legacyPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	serviceCommandRunner = func(name string, args ...string) ([]byte, error) {
+		return nil, nil
+	}
+
+	err := installSystemdUserService(p, "/usr/local/bin/no-slop")
+	if err == nil || !strings.Contains(err.Error(), "inspect legacy systemd unit") {
+		t.Fatalf("install error = %v, want legacy inspection failure", err)
+	}
+}
+
 func TestInstallSystemdUserServiceKeepsLegacyUnitOnEnableFailure(t *testing.T) {
 	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {

@@ -64,6 +64,17 @@ func managedServiceCleanupFailure(err error) error {
 	return &managedServiceCleanupError{err: err}
 }
 
+func readLegacyServiceDefinition(path, kind string) ([]byte, bool, error) {
+	data, err := os.ReadFile(path)
+	if err == nil {
+		return data, true, nil
+	}
+	if os.IsNotExist(err) {
+		return nil, false, nil
+	}
+	return nil, false, fmt.Errorf("inspect legacy %s: %w", kind, err)
+}
+
 type managedServiceState int
 
 type managedServiceLaunch struct {

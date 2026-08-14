@@ -95,6 +95,29 @@ func TestInstallWindowsTaskDoesNotRemoveLegacyTaskForDifferentRoot(t *testing.T)
 	}
 }
 
+func TestInstallWindowsTaskReportsLegacyInspectionFailure(t *testing.T) {
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+
+	cleanup := stubServiceRuntime(t)
+	defer cleanup()
+	runtimeGOOS = "windows"
+
+	serviceCommandRunner = func(name string, args ...string) ([]byte, error) {
+		if name == "schtasks" && len(args) >= 4 && args[0] == "/Query" && args[2] == legacyWindowsTaskName && args[3] == "/XML" {
+			return []byte("ERROR: Access is denied."), fmt.Errorf("access denied")
+		}
+		return nil, nil
+	}
+
+	err := installWindowsTask(p, `C:\Program Files\no-slop\no-slop.exe`)
+	if err == nil || !strings.Contains(err.Error(), "inspect legacy windows task") {
+		t.Fatalf("install error = %v, want legacy inspection failure", err)
+	}
+}
+
 func TestInstallWindowsTaskKeepsLegacyTaskOnCreateFailure(t *testing.T) {
 	p := paths.WithRoot(filepath.Join(t.TempDir(), "nm home"))
 	if err := p.EnsureDirs(); err != nil {

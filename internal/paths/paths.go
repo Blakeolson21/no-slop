@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/Blakeolson21/no-slop/internal/identity"
@@ -19,7 +21,7 @@ type Paths struct {
 
 // New returns Paths rooted at NS_HOME, NM_HOME, or ~/.no-mistakes.
 func New() (*Paths, error) {
-	env, err := identity.LookupEnv(identity.HomeEnv, identity.LegacyHomeEnv)
+	env, err := lookupHomeEnv()
 	if err != nil {
 		return nil, err
 	}
@@ -38,6 +40,55 @@ func New() (*Paths, error) {
 		return nil, err
 	}
 	return &Paths{root: filepath.Join(home, identity.DefaultStateDir)}, nil
+}
+
+func lookupHomeEnv() (string, error) {
+	canonicalValue := os.Getenv(identity.HomeEnv)
+	legacyValue := os.Getenv(identity.LegacyHomeEnv)
+	if canonicalValue != "" && legacyValue != "" && canonicalHomeRoot(canonicalValue) != canonicalHomeRoot(legacyValue) {
+		return "", fmt.Errorf("%s and legacy alias %s configure the same setting with different values", identity.HomeEnv, identity.LegacyHomeEnv)
+	}
+	if canonicalValue != "" {
+		return canonicalValue, nil
+	}
+	return legacyValue, nil
+}
+
+func canonicalHomeRoot(root string) string {
+	if root == "" {
+		return ""
+	}
+	if !filepath.IsAbs(root) {
+		if abs, err := filepath.Abs(root); err == nil {
+			root = abs
+		}
+	}
+	root = filepath.Clean(root)
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	} else {
+		root = canonicalExistingPrefix(root)
+	}
+	if runtime.GOOS == "windows" {
+		root = strings.ToLower(root)
+	}
+	return root
+}
+
+func canonicalExistingPrefix(root string) string {
+	for candidate := root; ; candidate = filepath.Dir(candidate) {
+		if resolved, err := filepath.EvalSymlinks(candidate); err == nil {
+			rel, relErr := filepath.Rel(candidate, root)
+			if relErr != nil || rel == "." {
+				return resolved
+			}
+			return filepath.Join(resolved, rel)
+		}
+		parent := filepath.Dir(candidate)
+		if parent == candidate {
+			return root
+		}
+	}
 }
 
 // WithRoot returns Paths rooted at a custom directory (for testing).

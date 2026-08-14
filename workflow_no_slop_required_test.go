@@ -2,18 +2,23 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Blakeolson21/no-slop/internal/db"
 	pipelinesteps "github.com/Blakeolson21/no-slop/internal/pipeline/steps"
+	"github.com/Blakeolson21/no-slop/internal/shellenv"
 	"github.com/Blakeolson21/no-slop/internal/types"
 	"gopkg.in/yaml.v3"
 )
+
+const requiredWorkflowStepTimeout = 10 * time.Second
 
 // TestNoSlopRequiredWorkflowExemptsReleaseAutomation pins the exemption
 // logic so the release pipeline (release-please via GITHUB_TOKEN) and
@@ -385,7 +390,10 @@ func executeRequiredWorkflowFixture(t *testing.T, workflow requiredWorkflow, eve
 			continue
 		}
 
-		cmd := exec.Command("bash", "-c", step.Run)
+		ctx, cancel := context.WithTimeout(context.Background(), requiredWorkflowStepTimeout)
+		cmd := exec.CommandContext(ctx, "bash", "-c", step.Run)
+		cmd.WaitDelay = 2 * time.Second
+		shellenv.ConfigureShellCommand(cmd)
 		cmd.Env = append(os.Environ(),
 			"PR_BODY="+event.Body,
 			"PR_AUTHOR=first-time-fork-contributor",
@@ -395,6 +403,10 @@ func executeRequiredWorkflowFixture(t *testing.T, workflow requiredWorkflow, eve
 		cmd.Stdout = &output
 		cmd.Stderr = &output
 		err := cmd.Run()
+		cancel()
+		if ctx.Err() == context.DeadlineExceeded {
+			t.Fatalf("execute compliance step for run %d timed out after %s\n%s", event.RunID, requiredWorkflowStepTimeout, output.String())
+		}
 		result.Executed = true
 		if err == nil {
 			result.Conclusion = "success"

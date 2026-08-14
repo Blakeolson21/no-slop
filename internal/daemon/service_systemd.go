@@ -47,8 +47,12 @@ func cleanupLegacySystemdUnit(p *paths.Paths) error {
 		{legacyScopedSystemdServiceName(p), legacyScopedSystemdUserServicePath(p)},
 		{legacySystemdServiceName, legacySystemdUserServicePath()},
 	} {
-		data, err := os.ReadFile(legacy.path)
-		if err != nil || !serviceDefinitionMatchesRoot(data, p) {
+		data, ok, err := readLegacyServiceDefinition(legacy.path, "systemd unit")
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if !ok || !serviceDefinitionMatchesRoot(data, p) {
 			continue
 		}
 		if _, err := serviceCommandRunner("systemctl", "--user", "stop", legacy.name); err != nil {
@@ -98,8 +102,12 @@ func stopLegacySystemdUserService(p *paths.Paths) (bool, error) {
 		{legacyScopedSystemdServiceName(p), legacyScopedSystemdUserServicePath(p)},
 		{legacySystemdServiceName, legacySystemdUserServicePath()},
 	} {
-		data, readErr := os.ReadFile(legacy.path)
-		if readErr != nil || !serviceDefinitionMatchesRoot(data, p) {
+		data, ok, err := readLegacyServiceDefinition(legacy.path, "systemd unit")
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if !ok || !serviceDefinitionMatchesRoot(data, p) {
 			continue
 		}
 		stopped = true

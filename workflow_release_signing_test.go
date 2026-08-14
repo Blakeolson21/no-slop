@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -8,7 +9,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Blakeolson21/no-slop/internal/shellenv"
 	"gopkg.in/yaml.v3"
 )
 
@@ -34,6 +37,8 @@ const (
 	cscKeyPassSecret = "CSC_KEY_PASSWORD"
 	signingEnv       = "release-signing"
 )
+
+const releaseWorkflowStepTimeout = 10 * time.Second
 
 // signingDarwinArches is the set of macOS architectures every official release
 // must ship as a signed thin binary.
@@ -653,7 +658,11 @@ func workflowStepByName(t *testing.T, job *wfJob, name string) wfStep {
 func runReleaseWorkflowStep(t *testing.T, step wfStep, dir, fakeBin string, env map[string]string) {
 	t.Helper()
 	githubEnv := filepath.Join(dir, "github.env")
-	cmd := exec.Command("bash", "-c", step.Run)
+	ctx, cancel := context.WithTimeout(context.Background(), releaseWorkflowStepTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bash", "-c", step.Run)
+	cmd.WaitDelay = 2 * time.Second
+	shellenv.ConfigureShellCommand(cmd)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
@@ -666,6 +675,9 @@ func runReleaseWorkflowStep(t *testing.T, step wfStep, dir, fakeBin string, env 
 		cmd.Env = append(cmd.Env, key+"="+value)
 	}
 	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("run workflow step %q timed out after %s\n%s", step.Name, releaseWorkflowStepTimeout, output)
+	}
 	if err != nil {
 		t.Fatalf("run workflow step %q: %v\n%s", step.Name, err, output)
 	}

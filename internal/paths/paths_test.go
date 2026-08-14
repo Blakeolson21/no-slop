@@ -119,6 +119,38 @@ func TestNewTreatsRootEnvAliasesAsOneSetting(t *testing.T) {
 	}
 }
 
+func TestNewTreatsEquivalentRootEnvAliasesAsOneSetting(t *testing.T) {
+	base := t.TempDir()
+	realRoot := filepath.Join(base, "real-root")
+	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	aliasRoot := filepath.Join(base, "alias-root")
+	if err := os.Symlink(realRoot, aliasRoot); err != nil {
+		t.Skipf("symlink setup unavailable: %v", err)
+	}
+
+	t.Setenv("NS_HOME", realRoot)
+	t.Setenv("NM_HOME", aliasRoot)
+	p, err := New()
+	if err != nil {
+		t.Fatalf("New() with canonical real root and legacy alias root: %v", err)
+	}
+	if p.Root() != realRoot {
+		t.Fatalf("Root() = %q, want canonical env value %q", p.Root(), realRoot)
+	}
+
+	t.Setenv("NS_HOME", aliasRoot)
+	t.Setenv("NM_HOME", realRoot)
+	p, err = New()
+	if err != nil {
+		t.Fatalf("New() with canonical alias root and legacy real root: %v", err)
+	}
+	if p.Root() != aliasRoot {
+		t.Fatalf("Root() = %q, want canonical env value %q", p.Root(), aliasRoot)
+	}
+}
+
 func TestNewRejectsDefaultRootInTests(t *testing.T) {
 	t.Setenv("NS_HOME", "")
 	t.Setenv("NM_HOME", "")

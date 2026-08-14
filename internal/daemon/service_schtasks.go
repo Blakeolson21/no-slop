@@ -37,8 +37,12 @@ func installWindowsTask(p *paths.Paths, exe string) error {
 func cleanupLegacyWindowsTask(p *paths.Paths) error {
 	var errs []error
 	for _, name := range []string{legacyScopedWindowsTaskName(p), legacyWindowsTaskName} {
-		data, err := serviceCommandRunner("schtasks", "/Query", "/TN", name, "/XML")
-		if err != nil || !serviceDefinitionMatchesRoot(data, p) {
+		data, ok, err := queryLegacyWindowsTask(name)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if !ok || !serviceDefinitionMatchesRoot(data, p) {
 			continue
 		}
 		if _, err := serviceCommandRunner("schtasks", "/End", "/TN", name); err != nil {
@@ -71,8 +75,12 @@ func stopLegacyWindowsTask(p *paths.Paths) (bool, error) {
 	stopped := false
 	var errs []error
 	for _, name := range []string{legacyScopedWindowsTaskName(p), legacyWindowsTaskName} {
-		data, queryErr := serviceCommandRunner("schtasks", "/Query", "/TN", name, "/XML")
-		if queryErr != nil || !serviceDefinitionMatchesRoot(data, p) {
+		data, ok, err := queryLegacyWindowsTask(name)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if !ok || !serviceDefinitionMatchesRoot(data, p) {
 			continue
 		}
 		stopped = true
@@ -81,6 +89,25 @@ func stopLegacyWindowsTask(p *paths.Paths) (bool, error) {
 		}
 	}
 	return stopped, errors.Join(errs...)
+}
+
+func queryLegacyWindowsTask(name string) ([]byte, bool, error) {
+	data, err := serviceCommandRunner("schtasks", "/Query", "/TN", name, "/XML")
+	if err == nil {
+		return data, true, nil
+	}
+	if windowsTaskQueryNotFound(data, err) {
+		return nil, false, nil
+	}
+	return nil, false, fmt.Errorf("inspect legacy windows task %s: %w", name, err)
+}
+
+func windowsTaskQueryNotFound(output []byte, err error) bool {
+	text := strings.ToLower(string(output) + " " + err.Error())
+	return strings.Contains(text, "not found") ||
+		strings.Contains(text, "cannot find") ||
+		strings.Contains(text, "does not exist") ||
+		strings.Contains(text, "not exist")
 }
 
 type windowsManagedDaemonObservation struct {
