@@ -230,6 +230,34 @@ func TestBlocklistFlagAddsNamesRatherThanReplacingThem(t *testing.T) {
 	}
 }
 
+// TestBlocklistFlagStateLineClaimsOnlyWhatTheFlagEstablished keeps the override
+// from asserting a base-ref fact it never looked up. The flag is read from the
+// worktree by design and never asks the base ref, so reusing the wording for a
+// worktree copy that WAS compared against the base said "not tracked at the
+// base ref" about a file that is tracked there.
+func TestBlocklistFlagStateLineClaimsOnlyWhatTheFlagEstablished(t *testing.T) {
+	t.Parallel()
+
+	repo := newBoundaryRepo(t, map[string]string{
+		".no-slop.yaml":     "slop:\n  leak_scan:\n    blocklist_file: .configured-names\n  risk:\n    single_review_threshold: 90\n    full_adversarial_threshold: 99\n",
+		".configured-names": "acme-internal\n",
+		".extra-names":      "zeta-private\n",
+		"notes.txt":         "nothing\n",
+	})
+	repo.commit(t, map[string]string{"notes.txt": "the zeta-private cluster is here\n"})
+
+	code, output := repo.gate(t, "--blocklist", ".extra-names")
+	if code != 1 || !strings.Contains(output, "leak-identity-scan") {
+		t.Fatalf("the --blocklist names were not honored: exit = %d\n%s", code, output)
+	}
+	if !strings.Contains(output, "--blocklist added 1 private names") {
+		t.Fatalf("the run does not say what the flag added:\n%s", output)
+	}
+	if strings.Contains(output, ".extra-names in the head worktree, which is not tracked at the base ref") {
+		t.Fatalf("the override claimed a base-ref lookup it never performed, about a file that is tracked there:\n%s", output)
+	}
+}
+
 // TestConfiguredPatternThatMatchesNothingIsReported closes the silent half of
 // the glob problem: an operator who configures a protection and gets silence
 // cannot tell a pattern that covers nothing from one that covers everything.

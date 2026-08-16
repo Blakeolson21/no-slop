@@ -271,12 +271,16 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 		// weaken the base ref's list and does not join the drift comparison. It
 		// is still named on its own line: adding names from a file the change
 		// under test can write is a fact a reviewer should see.
-		extraEntries, extraState, _, extraErr := loadBlocklist(ctx, workDir, baseRef, override, true, false)
+		//
+		// The line is written here rather than reused from loadBlocklist because
+		// this call never asks the base ref, and the state line that call
+		// returns for a worktree copy is worded for one that did.
+		extraEntries, _, _, extraErr := loadBlocklist(ctx, workDir, baseRef, override, true, false)
 		if extraErr != nil {
 			return extraErr
 		}
 		blocklistEntries = append(blocklistEntries, extraEntries...)
-		fmt.Fprintln(stdout, extraState)
+		fmt.Fprintf(stdout, "leak scan: --blocklist added %d private names read from %s in the head worktree; the flag only ever adds names and is never read from the base ref\n", len(extraEntries), override)
 	}
 	tierOverride := risk.Tier(*tier)
 	if tierOverride == "auto" {
@@ -943,6 +947,13 @@ func loadBlocklist(ctx context.Context, workDir, baseRef, configured string, exp
 	if !insideTree {
 		return entries, fmt.Sprintf("leak scan: loaded %s private-name blocklist from %s, which resolves outside the repository worktree and so cannot be edited by the change under test (%d entries)", state, configured, len(entries)), nil, nil
 	}
+	// "Not tracked at the base ref" is a fact about the base ref, so only a call
+	// that actually asked the base ref may state it. A run whose base could not
+	// be verified never asks, and neither does the --blocklist override, so both
+	// say what they did instead of asserting a lookup they did not perform.
+	if !baseReadable {
+		return entries, fmt.Sprintf("leak scan: loaded %s private-name blocklist from %s in the head worktree, which this run did not compare against any base ref, so its content is outside the base-ref boundary (%d entries)", state, configured, len(entries)), nil, nil
+	}
 	return entries, fmt.Sprintf("leak scan: loaded %s private-name blocklist from %s in the head worktree, which is not tracked at the base ref, so its content is outside the base-ref boundary (%d entries)", state, configured, len(entries)), nil, nil
 }
 
@@ -1335,11 +1346,18 @@ func remoteURL(ctx context.Context, workDir, remote string) (string, error) {
 // answer for a branch, which is the same shadowing this whole path exists to
 // remove, one hop further out. Anything other than exactly one refs/heads/
 // answer is refused rather than picked from.
+// Every message here names the REDACTED url, for the same reason the run
+// header does: a remote URL routinely carries userinfo, and each of these
+// reasons is printed on the base line and stored in the append-only provenance
+// record, where nothing can evict it. The success path was already redacted and
+// git.Run redacts its own error text, so an ordinary ls-remote failure against
+// a credentialled origin was the one route that put a live token on stdout.
 func remoteBranchCommit(ctx context.Context, workDir, url, branch string) (string, error) {
 	refName := "refs/heads/" + branch
+	safeURL := safeurl.Redact(url)
 	output, err := git.Run(ctx, workDir, "ls-remote", "--heads", "--exit-code", url, refName)
 	if err != nil {
-		return "", fmt.Errorf("remote %s does not answer for %s: %v", url, refName, err)
+		return "", fmt.Errorf("remote %s does not answer for %s: %v", safeURL, refName, err)
 	}
 	var commit string
 	for _, line := range strings.Split(output, "\n") {
@@ -1348,12 +1366,12 @@ func remoteBranchCommit(ctx context.Context, workDir, url, branch string) (strin
 			continue
 		}
 		if commit != "" {
-			return "", fmt.Errorf("remote %s answered for %s more than once", url, refName)
+			return "", fmt.Errorf("remote %s answered for %s more than once", safeURL, refName)
 		}
 		commit = fields[0]
 	}
 	if !isObjectID(commit) {
-		return "", fmt.Errorf("remote %s returned no usable commit for %s", url, refName)
+		return "", fmt.Errorf("remote %s returned no usable commit for %s", safeURL, refName)
 	}
 	return commit, nil
 }
@@ -1395,7 +1413,11 @@ func unverifiedBase(ctx context.Context, workDir, headRef string, reason error) 
 			CanonicalRef: candidate,
 			Base:         base,
 			Config:       &config.RepoConfig{},
-			Unverified:   reason.Error(),
+			// Redacted at the sink as well as at each site that builds a reason,
+			// because this string is the one that reaches both stdout and the
+			// provenance record, and a reason added later has no way of knowing
+			// that.
+			Unverified: safeurl.RedactText(reason.Error()),
 		}, nil
 	}
 	return ResolvedBase{}, fmt.Errorf("%w, and no local main or master names a commit to diff against either", reason)
