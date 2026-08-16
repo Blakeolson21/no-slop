@@ -813,6 +813,15 @@ func defaultReviewerFactory(ctx context.Context, cfg *config.Config, stderr io.W
 // worktree and SAYS SO on its own state line, which is the honest report: that
 // half of the identity scan sits outside the base-ref boundary and its only
 // defence is the printed entry count.
+//
+// A configured path that resolves OUTSIDE the worktree is not in that case at
+// all. It is a file the change under test cannot edit, so it is operator-owned
+// already and there is no base-ref copy of it to prefer; asking git for one made
+// a working `../shared/.noslop-blocklist` abort the whole run at exit 2 with an
+// error naming git plumbing rather than the config key. The split is by where
+// the path resolves rather than by whether it is spelled absolutely, because an
+// absolute path can still land inside the worktree, and that copy is one the
+// change can edit.
 func loadBlocklist(ctx context.Context, workDir, baseRef, configured string, explicitlyConfigured, baseReadable bool) ([]string, string, *engine.ConfigDrift, error) {
 	if configured == "" {
 		return nil, "leak scan: no private-name blocklist configured", nil, nil
@@ -821,12 +830,11 @@ func loadBlocklist(ctx context.Context, workDir, baseRef, configured string, exp
 	if explicitlyConfigured {
 		state = "configured"
 	}
-	// An absolute path is never a path in the repository's tree, so there is no
-	// base-ref copy of it to prefer.
+	relative, insideTree := repoRelativePath(workDir, configured)
 	trackedAtBase := false
 	var baseContent []byte
-	if baseReadable && !filepath.IsAbs(configured) {
-		data, present, err := readBaseFile(ctx, workDir, baseRef, filepath.ToSlash(configured))
+	if baseReadable && insideTree {
+		data, present, err := readBaseFile(ctx, workDir, baseRef, relative)
 		if err != nil {
 			return nil, "", nil, err
 		}
@@ -862,14 +870,62 @@ func loadBlocklist(ctx context.Context, workDir, baseRef, configured string, exp
 		if errors.Is(headErr, os.ErrNotExist) && !explicitlyConfigured {
 			return nil, fmt.Sprintf("leak scan: no private-name blocklist (default path %s not present)", configured), nil, nil
 		}
+		if insideTree && baseReadable {
+			return nil, "", nil, fmt.Errorf("read private-name blocklist (%s path %s): %w; a blocklist inside the repository must be tracked at the base ref %s or readable in the worktree", state, configured, headErr, baseRef)
+		}
 		return nil, "", nil, fmt.Errorf("read private-name blocklist (%s path %s): %w", state, configured, headErr)
 	}
 	// The entry count is printed because a readable file with no entries scans
 	// exactly like a missing one, and an operator reading only "loaded" cannot
 	// tell a working identity policy from an empty one. It is the only defence
-	// this branch has, which is why the line says where the content came from.
+	// these branches have, which is why each line says where the content came
+	// from and how much of the boundary it sits inside.
 	entries := leakscan.ParseBlocklist(string(headContent))
+	if !insideTree {
+		return entries, fmt.Sprintf("leak scan: loaded %s private-name blocklist from %s, which resolves outside the repository worktree and so cannot be edited by the change under test (%d entries)", state, configured, len(entries)), nil, nil
+	}
 	return entries, fmt.Sprintf("leak scan: loaded %s private-name blocklist from %s in the head worktree, which is not tracked at the base ref, so its content is outside the base-ref boundary (%d entries)", state, configured, len(entries)), nil, nil
+}
+
+// repoRelativePath answers whether a configured path resolves inside the
+// worktree, and if so gives it in the slash-separated form a git pathspec needs.
+//
+// Outside is the honest answer for a path git would reject anyway: `git ls-tree
+// -- ../shared/list` fails with "outside repository" and exit 128, and turning
+// that into a gate abort punished a config that worked before the boundary was
+// drawn. The symlink retry is the macOS case where the worktree is reached
+// through /var and the config names /private/var, or the reverse: resolving the
+// alias keeps such a path inside the tree, which is the fail-closed direction.
+func repoRelativePath(workDir, configured string) (string, bool) {
+	if relative, ok := relativeInside(workDir, configured); ok {
+		return relative, true
+	}
+	resolvedDir, dirErr := filepath.EvalSymlinks(workDir)
+	target := configured
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(workDir, target)
+	}
+	resolvedTarget, targetErr := filepath.EvalSymlinks(filepath.Dir(target))
+	if dirErr != nil || targetErr != nil {
+		return "", false
+	}
+	return relativeInside(resolvedDir, filepath.Join(resolvedTarget, filepath.Base(target)))
+}
+
+func relativeInside(workDir, configured string) (string, bool) {
+	target := configured
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(workDir, target)
+	}
+	relative, err := filepath.Rel(workDir, target)
+	if err != nil {
+		return "", false
+	}
+	relative = filepath.ToSlash(relative)
+	if relative == "." || relative == ".." || strings.HasPrefix(relative, "../") {
+		return "", false
+	}
+	return relative, true
 }
 
 // advisoryBanner is the sentence a run prints in place of the certification it

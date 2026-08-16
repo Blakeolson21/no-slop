@@ -116,6 +116,15 @@ func HasVerdictHistory(records []Record) bool {
 // default for the finding sources that are not review lenses at all
 // (leak-identity-scan, gate-config-drift, and the rest): a leak can be in any
 // file, so any reviewed clean pass is evidence about it.
+//
+// Every catalog lens is named here, including the ones whose answer is the same
+// as the default. The drift test used to read ContentThatExercises and check
+// that the result was non-empty, which the default made true for every string
+// ever passed to it, so a new lens that should have been tests-only would have
+// shipped clearable by a docs-only pass with the check that exists to stop that
+// reporting nothing. Membership is the thing the test can actually see, so the
+// two lenses any content exercises say so in the table rather than by being
+// absent from it.
 var contentThatExercises = map[string][]string{
 	// Both of these are questions about a change's tests. A change with no
 	// tests in it answers neither, however carefully it was reviewed.
@@ -131,20 +140,33 @@ var contentThatExercises = map[string][]string{
 	"fail-open-default":                     {ContentSource},
 	"rule-applied-in-one-place-not-sibling": {ContentSource},
 
-	// scope-expansion and asserted-followup-without-artifact are deliberately
-	// absent: a documentation change can exceed its stated scope and can claim
-	// a follow-up that does not exist, so any content is evidence about them.
+	// These two are exercised by any content, and that is a decision rather
+	// than a lookup miss: a documentation change can exceed its stated scope
+	// and can claim a follow-up that does not exist.
+	"scope-expansion":                    {ContentSource, ContentTests, ContentDocs},
+	"asserted-followup-without-artifact": {ContentSource, ContentTests, ContentDocs},
 }
 
 // ContentThatExercises returns the content kinds a clean reviewed pass must
 // have covered before it counts as evidence about this lens. An empty result
-// would mean an escalation with no route out, which is why the catalog drift
-// test refuses one.
+// would mean an escalation with no route out, which is why no entry is empty
+// and why the default names every kind.
 func ContentThatExercises(lens string) []string {
+	required, _ := ClearingRule(lens)
+	return required
+}
+
+// ClearingRule is ContentThatExercises plus the fact the drift test needs: does
+// the table name this lens, or is this the any-content default? The default is
+// correct for a finding source that is not a review lens, and is a silent bug
+// for a lens whose escalation should only be cleared by a change that could
+// have contained the defect, so the two answers cannot be told apart from the
+// content kinds alone.
+func ClearingRule(lens string) ([]string, bool) {
 	if required, ok := contentThatExercises[lens]; ok {
-		return append([]string(nil), required...)
+		return append([]string(nil), required...), true
 	}
-	return []string{ContentSource, ContentTests, ContentDocs}
+	return []string{ContentSource, ContentTests, ContentDocs}, false
 }
 
 // Reader is the history seam consumed by the risk classifier.

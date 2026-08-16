@@ -722,6 +722,19 @@ func Serve(enabled bool) bool {
 			WantNotStdout: []string{"verdict: pass"},
 		},
 		{
+			Name:     "U4-an-invisible-character-outside-the-added-lines-is-still-scanned",
+			Class:    ClassMandatoryCheckIntegrity,
+			Summary:  "the widened claim was asked of the head blob and answered by scanning the added lines, so a file whose invisible characters all sit outside the diff printed \"read more than one way\" over content read exactly one way",
+			Base:     map[string]string{"docs/notes.txt": "\ufeffrelease notes\naws key = AKIA\u200bIOSFODNN7EXAMPLE\n"},
+			Head:     map[string]string{"docs/notes.txt": "\ufeffrelease notes\naws key = AKIA\u200bIOSFODNN7EXAMPLE\nshipping on friday\n"},
+			WantExit: 1,
+			WantStdout: []string{
+				"leak-identity-scan",
+				"read more than one way",
+			},
+			WantNotStdout: []string{"verdict: pass"},
+		},
+		{
 			Name:    "U4-control-a-byte-order-mark-does-not-degrade-an-ordinary-file",
 			Class:   ClassControl,
 			Summary: "reading a file two ways must not read as reduced coverage, or the qualifier stops meaning anything on the files that need it",

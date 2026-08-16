@@ -575,14 +575,22 @@ func runLeakScan(files []Change, blocklist []string, refuseExemptions bool) ([]F
 			unscanned = append(unscanned, fmt.Sprintf("%s is a submodule pointer whose content is outside this repository", file.Path))
 			continue
 		}
-		// The invisible-character reading is reported over the head blob for a
-		// binary path and over the added lines for a text one, matching what the
-		// scanner is actually handed in each case.
-		if leakscan.HasInvisibleRunes(file.CurrentContent) {
-			widened = append(widened, fmt.Sprintf("%s carries Unicode format or control characters, so it was read both as written and with them removed", file.Path))
-		}
+		// The invisible-character question is asked of the head blob, and the
+		// answer decides what the scanner is handed, so the claim on the
+		// mandatory-check line is always about the bytes that were scanned. It
+		// used to be asked of the head blob and answered over the added lines: a
+		// path carrying a byte order mark at line 1, or a zero-width space in a
+		// line the change never touched, printed "read more than one way" while
+		// the scanner saw only added lines that had no invisible character in
+		// them and therefore exactly one rendering. A check line asserting
+		// coverage the run did not have is the same defect as a passing verdict
+		// over a base the run could not verify.
+		invisible := leakscan.HasInvisibleRunes(file.CurrentContent)
 		if leakscan.IsBinaryContent(file.CurrentContent) {
 			degraded = append(degraded, fmt.Sprintf("%s is binary at head and was read through the binary-safe renderings", file.Path))
+			if invisible {
+				widened = append(widened, fmt.Sprintf("%s carries Unicode format or control characters, so its head blob was read both as written and with them removed", file.Path))
+			}
 			input = append(input, leakscan.File{Path: file.Path, Content: file.CurrentContent, Binary: true})
 			continue
 		}
@@ -595,7 +603,12 @@ func runLeakScan(files []Change, blocklist []string, refuseExemptions bool) ([]F
 		if file.ScanState == ScanWholeBlobFallback {
 			degraded = append(degraded, fmt.Sprintf("%s produced no diff hunks, so the whole head blob was scanned instead of the added lines", file.Path))
 		}
-		input = append(input, leakscan.File{Path: file.Path, Content: file.AddedContent})
+		content := file.AddedContent
+		if invisible {
+			widened = append(widened, fmt.Sprintf("%s carries Unicode format or control characters, so its whole head blob was read both as written and with them removed", file.Path))
+			content = file.CurrentContent
+		}
+		input = append(input, leakscan.File{Path: file.Path, Content: content})
 	}
 	scan := leakscan.Scan(input, leakscan.Options{Blocklist: blocklist, RefuseExemptions: refuseExemptions})
 	for _, finding := range scan.Findings {

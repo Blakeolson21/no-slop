@@ -1,6 +1,8 @@
 package cli_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -164,5 +166,85 @@ func TestAnUntrackedBlocklistIsReadFromTheWorktreeAndSaysSo(t *testing.T) {
 	}
 	if !strings.Contains(output, "outside the base-ref boundary") {
 		t.Fatalf("the run does not say the blocklist content sits outside the boundary:\n%s", output)
+	}
+}
+
+// TestABlocklistOutsideTheWorktreeIsReadFromDisk is the other side of the
+// boundary ruling. A path that resolves outside the worktree names a file the
+// change under test cannot edit, so it is operator-owned already and there is
+// no base-ref copy of it to prefer. Routing it through git turned a shape that
+// worked - one list shared by sibling clones - into a hard gate abort naming
+// `ls-tree` rather than the config key.
+func TestABlocklistOutsideTheWorktreeIsReadFromDisk(t *testing.T) {
+	t.Parallel()
+
+	parent := t.TempDir()
+	shared := filepath.Join(parent, "shared")
+	if err := os.MkdirAll(shared, 0o755); err != nil {
+		t.Fatalf("create shared dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(shared, ".noslop-blocklist"), []byte(blockedName+"\n"), 0o644); err != nil {
+		t.Fatalf("write shared blocklist: %v", err)
+	}
+	dir := filepath.Join(parent, "repo")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create repo dir: %v", err)
+	}
+
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	writeFile(t, dir, "README.md", "# Project\n")
+	writeFile(t, dir, ".no-slop.yaml", strings.Replace(blocklistGateConfig, "blocklist_file: .noslop-blocklist", "blocklist_file: ../shared/.noslop-blocklist", 1))
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-m", "initial")
+	attachRemote(t, dir)
+	runGit(t, dir, "switch", "-c", "docs/notes")
+	writeFile(t, dir, "docs/notes.txt", "the "+blockedName+" rollout is next week\n")
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-m", "notes")
+
+	code, output := runGateIn(t, dir)
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1: a blocklist outside the worktree still scans\n%s", code, output)
+	}
+	if !strings.Contains(output, "private name matches the configured identity blocklist") {
+		t.Fatalf("the shared blocklist was not honored:\n%s", output)
+	}
+	if !strings.Contains(output, "resolves outside the repository worktree") {
+		t.Fatalf("the run does not say where the blocklist content came from:\n%s", output)
+	}
+	if strings.Contains(output, "read listing for") {
+		t.Fatalf("the run asked git for a base-ref copy of a path outside the tree:\n%s", output)
+	}
+}
+
+// TestAMissingInTreeBlocklistNamesTheBaseRef keeps the failure legible. An
+// operator who configured a blocklist inside the repository and has it nowhere
+// gets an error that names the requirement the boundary added, not one that
+// names git plumbing.
+func TestAMissingInTreeBlocklistNamesTheBaseRef(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	writeFile(t, dir, "README.md", "# Project\n")
+	writeFile(t, dir, ".no-slop.yaml", blocklistGateConfig)
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-m", "initial")
+	attachRemote(t, dir)
+	runGit(t, dir, "switch", "-c", "docs/notes")
+	writeFile(t, dir, "docs/notes.txt", "notes\n")
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-m", "notes")
+
+	code, output := runGateIn(t, dir)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2: a configured blocklist that exists nowhere fails closed\n%s", code, output)
+	}
+	if !strings.Contains(output, "must be tracked at the base ref") {
+		t.Fatalf("the error does not tell the operator where an in-tree blocklist has to live:\n%s", output)
 	}
 }

@@ -133,14 +133,44 @@ func TestALegacyReviewedPassClearsNothing(t *testing.T) {
 // drifting apart silently. A lens nobody classified still has to have a route
 // out, and the route it gets has to be a decision somebody made rather than a
 // map lookup that missed.
+//
+// The membership answer is what makes that check real. Asking only whether the
+// returned content set was non-empty could not fail: the any-content default
+// answers three kinds for every string, including one nobody ever classified,
+// so a future tests-only lens added to the catalog and forgotten here would
+// have shipped clearable by a docs-only pass with this test green.
 func TestEveryCatalogLensHasAClearingRule(t *testing.T) {
 	t.Parallel()
 
 	for _, lens := range lenses.Catalog() {
-		content := provenance.ContentThatExercises(lens.Name)
+		content, explicit := provenance.ClearingRule(lens.Name)
+		if !explicit {
+			t.Errorf("lens %q is not named in the clearing table, so it silently takes the any-content default; classify it", lens.Name)
+			continue
+		}
 		if len(content) == 0 {
 			t.Errorf("lens %q has no content kind that can clear it, so its escalation would be permanent", lens.Name)
 		}
+	}
+}
+
+// TestAnUnclassifiedLensIsReportedAsDefaulted is the negative case that proves
+// the check above can fail. A name the table does not hold is exactly what a
+// newly added and unclassified catalog lens looks like, and it has to be
+// distinguishable from a classified one by something other than the content
+// kinds, which are identical.
+func TestAnUnclassifiedLensIsReportedAsDefaulted(t *testing.T) {
+	t.Parallel()
+
+	content, explicit := provenance.ClearingRule("flaky-test-tolerance")
+	if explicit {
+		t.Fatalf("an unclassified lens reported as explicitly classified")
+	}
+	if len(content) == 0 {
+		t.Fatalf("the default clearing rule is empty, which would be a permanent escalation")
+	}
+	if _, explicit := provenance.ClearingRule("test-capitulation"); !explicit {
+		t.Fatalf("a classified lens reported as defaulted, so the two answers are not distinguishable")
 	}
 }
 
