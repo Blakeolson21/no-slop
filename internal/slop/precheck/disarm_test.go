@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/slop/precheck"
+	"github.com/Blakeolson21/no-slop/internal/slop/precheck"
 )
 
 // TestCommentCannotDisarmTheFailOpenDetector replaces an acquittal case that

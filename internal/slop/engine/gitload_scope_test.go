@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/slop/engine"
+	"github.com/Blakeolson21/no-slop/internal/slop/engine"
 )
 
 func newRepo(t *testing.T) string {

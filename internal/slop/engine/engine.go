@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/Blakeolson21/no-slop/internal/identity"
 	"github.com/Blakeolson21/no-slop/internal/slop/leakscan"
 	"github.com/Blakeolson21/no-slop/internal/slop/lenses"
 	"github.com/Blakeolson21/no-slop/internal/slop/precheck"
@@ -202,7 +203,7 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 		driftFindings = append(driftFindings, Finding{
 			Lens:        "gate-config-drift",
 			Severity:    "error",
-			Path:        ".no-mistakes.yaml",
+			Path:        identity.RepoConfigName,
 			Description: drift,
 		})
 	}

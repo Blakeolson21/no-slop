@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/config"
-	slopcli "github.com/kunchenguid/no-mistakes/internal/slop/cli"
-	"github.com/kunchenguid/no-mistakes/internal/slop/engine"
+	"github.com/Blakeolson21/no-slop/internal/config"
+	slopcli "github.com/Blakeolson21/no-slop/internal/slop/cli"
+	"github.com/Blakeolson21/no-slop/internal/slop/engine"
 )
 
 // The tests in this file defend one boundary: no file the change under test can
@@ -107,8 +107,8 @@ func TestUncommittedConfigCannotDisableAMandatoryCheck(t *testing.T) {
 		t.Fatalf("control run exit = %d, want the floor to fire\n%s", code, output)
 	}
 
-	writeFile(t, repo.dir, ".no-mistakes.yaml", "slop:\n  test_count_floor: false\n")
-	if status := runGit(t, repo.dir, "status", "--porcelain", ".no-mistakes.yaml"); !strings.Contains(status, "??") {
+	writeFile(t, repo.dir, ".no-slop.yaml", "slop:\n  test_count_floor: false\n")
+	if status := runGit(t, repo.dir, "status", "--porcelain", ".no-slop.yaml"); !strings.Contains(status, "??") {
 		t.Fatalf("the probe file must stay uncommitted, got %q", status)
 	}
 	code, output = repo.gate(t, "--tier", "leak-scan-only")
@@ -129,8 +129,8 @@ func TestCommittedConfigWeakeningIsItselfFlagged(t *testing.T) {
 
 	repo := newBoundaryRepo(t, map[string]string{"calc_test.go": twoTests})
 	repo.commit(t, map[string]string{
-		"calc_test.go":      oneTest,
-		".no-mistakes.yaml": "slop:\n  test_count_floor: false\n  risk:\n    single_review_threshold: 99\n    full_adversarial_threshold: 100\n",
+		"calc_test.go":  oneTest,
+		".no-slop.yaml": "slop:\n  test_count_floor: false\n  risk:\n    single_review_threshold: 99\n    full_adversarial_threshold: 100\n",
 	})
 
 	code, output := repo.gate(t, "--tier", "leak-scan-only")
@@ -156,7 +156,7 @@ func TestBaseConfigStillTightensTheGate(t *testing.T) {
 	t.Parallel()
 
 	repo := newBoundaryRepo(t, map[string]string{
-		".no-mistakes.yaml":  "slop:\n  risk:\n    high_risk_paths:\n      - \"**/policy.md\"\n",
+		".no-slop.yaml":      "slop:\n  risk:\n    high_risk_paths:\n      - \"**/policy.md\"\n",
 		"services/policy.md": "# Policy\n\nRequests need an approval.\n",
 	})
 	repo.commit(t, map[string]string{"services/policy.md": "# Policy\n\nApproval is optional.\n"})
@@ -179,12 +179,12 @@ func TestUnparsableBaseConfigFailsClosed(t *testing.T) {
 	// thing that refuses. That is the point: the base ref is the authority, so
 	// an unreadable base config is an unreadable gate strength.
 	repo := newBoundaryRepo(t, map[string]string{
-		".no-mistakes.yaml": "slop:\n  risk:\n    single_review_threshold: [not, a, number]\n",
-		"README.md":         "# Project\n",
+		".no-slop.yaml": "slop:\n  risk:\n    single_review_threshold: [not, a, number]\n",
+		"README.md":     "# Project\n",
 	})
 	repo.commit(t, map[string]string{
-		".no-mistakes.yaml": "slop:\n  risk:\n    single_review_threshold: 3\n",
-		"README.md":         "# Project\n\nPlain update.\n",
+		".no-slop.yaml": "slop:\n  risk:\n    single_review_threshold: 3\n",
+		"README.md":     "# Project\n\nPlain update.\n",
 	})
 
 	code, output := repo.gate(t)
@@ -203,7 +203,7 @@ func TestBlocklistFlagAddsNamesRatherThanReplacingThem(t *testing.T) {
 	t.Parallel()
 
 	repo := newBoundaryRepo(t, map[string]string{
-		".no-mistakes.yaml": "slop:\n  leak_scan:\n    blocklist_file: .configured-names\n",
+		".no-slop.yaml":     "slop:\n  leak_scan:\n    blocklist_file: .configured-names\n",
 		".configured-names": "acme-internal\n",
 		"notes.txt":         "nothing\n",
 	})
@@ -223,8 +223,8 @@ func TestConfiguredPatternThatMatchesNothingIsReported(t *testing.T) {
 	t.Parallel()
 
 	repo := newBoundaryRepo(t, map[string]string{
-		".no-mistakes.yaml": "slop:\n  risk:\n    high_risk_paths:\n      - internal/nowhere/**\n",
-		"README.md":         "# Project\n",
+		".no-slop.yaml": "slop:\n  risk:\n    high_risk_paths:\n      - internal/nowhere/**\n",
+		"README.md":     "# Project\n",
 	})
 	repo.commit(t, map[string]string{"README.md": "# Project\n\nPlain update.\n"})
 

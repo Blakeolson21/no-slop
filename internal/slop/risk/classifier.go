@@ -986,7 +986,7 @@ func agentInstructionPath(lower string) bool {
 // itself at the cheapest tier.
 func gateControlPath(lower string) bool {
 	switch filepath.Base(lower) {
-	case ".no-mistakes.yaml", ".no-mistakes.yml", ".gitattributes":
+	case ".no-slop.yaml", ".no-slop.yml", ".no-mistakes.yaml", ".no-mistakes.yml", ".gitattributes":
 		return true
 	default:
 		return false

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/slop/provenance"
-	"github.com/kunchenguid/no-mistakes/internal/slop/risk"
+	"github.com/Blakeolson21/no-slop/internal/slop/provenance"
+	"github.com/Blakeolson21/no-slop/internal/slop/risk"
 )
 
 // countingHistory lets a test say separately what the lane history holds and

@@ -319,7 +319,7 @@ func Serve(enabled bool) bool {
 			Head: map[string]string{
 				"internal/auth/policy.go":      goWeakPolicy,
 				"internal/auth/policy_test.go": goPolicyOneTest,
-				".no-mistakes.yaml": `slop:
+				".no-slop.yaml": `slop:
   test_count_floor: false
   risk:
     single_review_threshold: 99
@@ -353,7 +353,7 @@ func Serve(enabled bool) bool {
 		{
 			Name:    "R3-uncommitted-config-disables-the-test-floor",
 			Class:   ClassMandatoryCheckIntegrity,
-			Summary: "a .no-mistakes.yaml the author never committed must not turn a mandatory check off",
+			Summary: "a .no-slop.yaml the author never committed must not turn a mandatory check off",
 			Base: map[string]string{
 				"calc.go": `package calc
 
@@ -390,7 +390,7 @@ func TestAddOne(t *testing.T) {
 `,
 			},
 			Uncommitted: map[string]string{
-				".no-mistakes.yaml": "slop:\n  test_count_floor: false\n",
+				".no-slop.yaml": "slop:\n  test_count_floor: false\n",
 			},
 			Args:          []string{"--tier", "leak-scan-only"},
 			WantExit:      1,
@@ -446,7 +446,7 @@ func TestAddOne(t *testing.T) {
 			Class:   ClassFleetInstructionRewrite,
 			Summary: "NoSlop's own shipped high_risk_paths must not leave its own instruction file unprotected",
 			Base: map[string]string{
-				".no-mistakes.yaml": `slop:
+				".no-slop.yaml": `slop:
   risk:
     high_risk_paths:
       - internal/auth/**
@@ -498,7 +498,7 @@ func TestAddOne(t *testing.T) {
 			Class:   ClassMandatoryCheckIntegrity,
 			Summary: "an operator writing **/policy.md to mean any depth must get what they configured",
 			Base: map[string]string{
-				".no-mistakes.yaml": `slop:
+				".no-slop.yaml": `slop:
   risk:
     high_risk_paths:
       - "**/policy.md"
@@ -594,9 +594,9 @@ func TestAddOne(t *testing.T) {
 			Class:   ClassMandatoryCheckIntegrity,
 			Summary: "a configured blocklist with no entries must not read like a populated one",
 			Base: map[string]string{
-				".no-mistakes.yaml": "slop:\n  leak_scan:\n    blocklist_file: .private-names\n",
-				".private-names":    "# nothing yet\n\n",
-				"README.md":         "# Project\n",
+				".no-slop.yaml":  "slop:\n  leak_scan:\n    blocklist_file: .private-names\n",
+				".private-names": "# nothing yet\n\n",
+				"README.md":      "# Project\n",
 			},
 			Head: map[string]string{
 				"README.md": "# Project\n\nPlain update.\n",

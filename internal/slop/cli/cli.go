@@ -12,16 +12,17 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/kunchenguid/no-mistakes/internal/agent"
-	"github.com/kunchenguid/no-mistakes/internal/config"
-	"github.com/kunchenguid/no-mistakes/internal/git"
-	"github.com/kunchenguid/no-mistakes/internal/slop/corpus"
-	"github.com/kunchenguid/no-mistakes/internal/slop/engine"
-	"github.com/kunchenguid/no-mistakes/internal/slop/leakscan"
-	"github.com/kunchenguid/no-mistakes/internal/slop/pathmatch"
-	"github.com/kunchenguid/no-mistakes/internal/slop/prose"
-	"github.com/kunchenguid/no-mistakes/internal/slop/provenance"
-	"github.com/kunchenguid/no-mistakes/internal/slop/risk"
+	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/identity"
+	"github.com/Blakeolson21/no-slop/internal/slop/corpus"
+	"github.com/Blakeolson21/no-slop/internal/slop/engine"
+	"github.com/Blakeolson21/no-slop/internal/slop/leakscan"
+	"github.com/Blakeolson21/no-slop/internal/slop/pathmatch"
+	"github.com/Blakeolson21/no-slop/internal/slop/prose"
+	"github.com/Blakeolson21/no-slop/internal/slop/provenance"
+	"github.com/Blakeolson21/no-slop/internal/slop/risk"
 )
 
 // Options supplies test seams without widening the command interface.
@@ -373,10 +374,6 @@ func provenanceRecord(input provenanceInput, decision risk.Decision, result engi
 	}
 }
 
-// repoConfigFileName is the committed file every gate-strength value is read
-// from.
-const repoConfigFileName = ".no-mistakes.yaml"
-
 // loadBaseRepoConfig reads the repository config from the base ref rather than
 // from the worktree.
 //
@@ -399,23 +396,41 @@ const repoConfigFileName = ".no-mistakes.yaml"
 // Absent at base is valid and means built-in defaults. Present but unreadable
 // or unparsable aborts the run: an undeterminable gate strength must never
 // resolve to the permissive default.
+// It reads both the canonical and legacy config names and resolves them
+// through the same alias rules LoadRepo applies to the worktree, so the base
+// ref is read exactly the way the head would have been.
 func loadBaseRepoConfig(ctx context.Context, workDir, baseRef string) (*config.RepoConfig, error) {
-	listing, err := git.Output(ctx, workDir, "ls-tree", "--name-only", "-z", baseRef, "--", repoConfigFileName)
+	canonicalData, canonicalExists, err := readBaseRepoConfigFile(ctx, workDir, baseRef, identity.RepoConfigName)
 	if err != nil {
-		return nil, fmt.Errorf("read base repo config listing at %s: %w", baseRef, err)
+		return nil, err
 	}
-	if strings.TrimSpace(strings.ReplaceAll(listing, "\x00", "")) == "" {
-		return &config.RepoConfig{}, nil
-	}
-	content, err := git.Output(ctx, workDir, "show", baseRef+":"+repoConfigFileName)
+	legacyData, legacyExists, err := readBaseRepoConfigFile(ctx, workDir, baseRef, identity.LegacyRepoConfigName)
 	if err != nil {
-		return nil, fmt.Errorf("read base repo config at %s: %w", baseRef, err)
+		return nil, err
 	}
-	parsed, err := config.LoadRepoFromBytes([]byte(content))
+	loaded, present, err := config.LoadRepoFromAliasBytes(canonicalData, canonicalExists, legacyData, legacyExists)
 	if err != nil {
 		return nil, fmt.Errorf("parse base repo config at %s: %w", baseRef, err)
 	}
-	return parsed, nil
+	if !present {
+		return &config.RepoConfig{}, nil
+	}
+	return loaded, nil
+}
+
+func readBaseRepoConfigFile(ctx context.Context, workDir, baseRef, name string) ([]byte, bool, error) {
+	listing, err := git.Output(ctx, workDir, "ls-tree", "--name-only", "-z", baseRef, "--", name)
+	if err != nil {
+		return nil, false, fmt.Errorf("read base repo config listing at %s: %w", baseRef, err)
+	}
+	if strings.TrimSpace(strings.ReplaceAll(listing, "\x00", "")) == "" {
+		return nil, false, nil
+	}
+	content, err := git.Output(ctx, workDir, "show", baseRef+":"+name)
+	if err != nil {
+		return nil, false, fmt.Errorf("read base repo config at %s: %w", baseRef, err)
+	}
+	return []byte(content), true, nil
 }
 
 // slopConfigDrift names every gate-strength field the head worktree sets

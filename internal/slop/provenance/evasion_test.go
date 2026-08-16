@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/slop/provenance"
+	"github.com/Blakeolson21/no-slop/internal/slop/provenance"
 )
 
 func findingRecord(laneID, model, changeID string, at time.Time, accepted, rejected int) provenance.Record {

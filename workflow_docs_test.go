@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/slop/lenses"
+	"github.com/Blakeolson21/no-slop/internal/slop/lenses"
 )
 
 func TestDocsWorkflowUsesScopedConcurrencyGroup(t *testing.T) {

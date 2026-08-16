@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/slop/risk"
+	"github.com/Blakeolson21/no-slop/internal/slop/risk"
 )
 
 // These tests cover the mechanical-equivalence guard at its boundary, which is
@@ -203,7 +203,7 @@ func TestAgentInstructionFilesAreHighRiskWithoutConfiguration(t *testing.T) {
 		".claude/settings.json",
 		".cursorrules",
 		".github/copilot-instructions.md",
-		".no-mistakes.yaml",
+		".no-slop.yaml",
 		".gitattributes",
 	} {
 		decision := classify(t, risk.FileChange{

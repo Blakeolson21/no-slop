@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kunchenguid/no-mistakes/internal/slop/precheck"
+	"github.com/Blakeolson21/no-slop/internal/slop/precheck"
 )
 
 // TestScanStaysLinearInFileSize is a ceiling, not a benchmark.

@@ -12,10 +12,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kunchenguid/no-mistakes/internal/config"
-	"github.com/kunchenguid/no-mistakes/internal/slop/adversarial"
-	slopcli "github.com/kunchenguid/no-mistakes/internal/slop/cli"
-	"github.com/kunchenguid/no-mistakes/internal/slop/engine"
+	"github.com/Blakeolson21/no-slop/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/slop/adversarial"
+	slopcli "github.com/Blakeolson21/no-slop/internal/slop/cli"
+	"github.com/Blakeolson21/no-slop/internal/slop/engine"
 )
 
 // unavailableReviewer mirrors the reviewer's sandbox, where no AI agent
