@@ -274,13 +274,21 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 		//
 		// The line is written here rather than reused from loadBlocklist because
 		// this call never asks the base ref, and the state line that call
-		// returns for a worktree copy is worded for one that did.
+		// returns for a worktree copy is worded for one that did. Where the file
+		// was read from is still the one claim on this line a reviewer sizes the
+		// override by, so it comes from repoRelativePath rather than being
+		// asserted: `--blocklist ../shared/names` is a file the change under
+		// test cannot edit, and calling it a worktree copy understated it.
 		extraEntries, _, _, extraErr := loadBlocklist(ctx, workDir, baseRef, override, true, false)
 		if extraErr != nil {
 			return extraErr
 		}
 		blocklistEntries = append(blocklistEntries, extraEntries...)
-		fmt.Fprintf(stdout, "leak scan: --blocklist added %d private names read from %s in the head worktree; the flag only ever adds names and is never read from the base ref\n", len(extraEntries), override)
+		overrideLocation := "in the head worktree"
+		if _, inside := repoRelativePath(workDir, override); !inside {
+			overrideLocation = "outside the repository worktree"
+		}
+		fmt.Fprintf(stdout, "leak scan: --blocklist added %d private names read from %s %s; the flag only ever adds names and is never read from the base ref\n", len(extraEntries), override, overrideLocation)
 	}
 	tierOverride := risk.Tier(*tier)
 	if tierOverride == "auto" {
@@ -922,8 +930,8 @@ func loadBlocklist(ctx context.Context, workDir, baseRef, configured string, exp
 			drift = &engine.ConfigDrift{
 				Path: configured,
 				Detail: fmt.Sprintf(
-					"the private-name blocklist could not be read at head (%v) and has %d entries at the base ref; the base ref's copy is the one in force, so the run scanned at full strength, but a head copy this run cannot read is not evidence that it matches",
-					headErr, len(entries)),
+					"the private-name blocklist could not be read at head (%s) and has %d entries at the base ref; the base ref's copy is the one in force, so the run scanned at full strength, but a head copy this run cannot read is not evidence that it matches",
+					readFailureClass(headErr), len(entries)),
 			}
 		}
 		return entries, fmt.Sprintf("leak scan: loaded %s private-name blocklist from %s at the base ref (%d entries)", state, configured, len(entries)), drift, nil
@@ -934,9 +942,9 @@ func loadBlocklist(ctx context.Context, workDir, baseRef, configured string, exp
 			return nil, fmt.Sprintf("leak scan: no private-name blocklist (default path %s not present)", configured), nil, nil
 		}
 		if insideTree && baseReadable {
-			return nil, "", nil, fmt.Errorf("read private-name blocklist (%s path %s): %w; a blocklist inside the repository must be tracked at the base ref %s or readable in the worktree", state, configured, headErr, baseRef)
+			return nil, "", nil, fmt.Errorf("read private-name blocklist (%s path %s): %s; a blocklist inside the repository must be tracked at the base ref %s or readable in the worktree", state, configured, readFailureClass(headErr), baseRef)
 		}
-		return nil, "", nil, fmt.Errorf("read private-name blocklist (%s path %s): %w", state, configured, headErr)
+		return nil, "", nil, fmt.Errorf("read private-name blocklist (%s path %s): %s", state, configured, readFailureClass(headErr))
 	}
 	// The entry count is printed because a readable file with no entries scans
 	// exactly like a missing one, and an operator reading only "loaded" cannot
@@ -955,6 +963,31 @@ func loadBlocklist(ctx context.Context, workDir, baseRef, configured string, exp
 		return entries, fmt.Sprintf("leak scan: loaded %s private-name blocklist from %s in the head worktree, which this run did not compare against any base ref, so its content is outside the base-ref boundary (%d entries)", state, configured, len(entries)), nil, nil
 	}
 	return entries, fmt.Sprintf("leak scan: loaded %s private-name blocklist from %s in the head worktree, which is not tracked at the base ref, so its content is outside the base-ref boundary (%d entries)", state, configured, len(entries)), nil, nil
+}
+
+// readFailureClass reduces a filesystem error to the fact an operator needs
+// without the absolute path the error carries.
+//
+// An *fs.PathError names the path it was opening, and every path this file
+// opens has been joined onto the worktree root, so the raw error reads as
+// "open /Users/<name>/code/repo/.noslop-blocklist: permission denied". That
+// string reaches the run header and, through a gate-config-drift finding, the
+// append-only provenance record, where nothing evicts it. NoSlop's own identity
+// scan calls a personal home path a leak, so the product would be writing the
+// shape it blocks changes for into its own permanent history. The caller
+// already names the CONFIGURED path, which is the repo-relative one, so the
+// only thing missing from it is why the read failed.
+func readFailureClass(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, os.ErrNotExist):
+		return "no such file"
+	case errors.Is(err, os.ErrPermission):
+		return "permission denied"
+	default:
+		return "unreadable"
+	}
 }
 
 // repoRelativePath answers whether a configured path resolves inside the

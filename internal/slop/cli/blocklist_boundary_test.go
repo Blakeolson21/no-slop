@@ -1,10 +1,15 @@
 package cli_test
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	slopcli "github.com/Blakeolson21/no-slop/internal/slop/cli"
 )
 
 // The private-name blocklist was the one gate-strength input still read from the
@@ -285,6 +290,105 @@ func TestASubdirectoryInvocationReadsTheSameBaseConfig(t *testing.T) {
 	}
 	if !strings.Contains(output, "at the base ref") {
 		t.Fatalf("the blocklist content did not come from the base ref:\n%s", output)
+	}
+}
+
+// TestTheBlocklistFlagLineSaysWhereItActuallyRead is the override's half of the
+// boundary ruling. A path that resolves outside the worktree is one the change
+// under test cannot edit, and where the added names came from is the claim a
+// reviewer uses to size how much of the identity list the change could have
+// written, so the line reports it rather than asserting the worktree.
+func TestTheBlocklistFlagLineSaysWhereItActuallyRead(t *testing.T) {
+	t.Parallel()
+
+	parent := t.TempDir()
+	shared := filepath.Join(parent, "shared")
+	if err := os.MkdirAll(shared, 0o755); err != nil {
+		t.Fatalf("create shared dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(shared, "extra-names"), []byte(blockedName+"\n"), 0o644); err != nil {
+		t.Fatalf("write shared names: %v", err)
+	}
+	dir := filepath.Join(parent, "repo")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create repo dir: %v", err)
+	}
+
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	writeFile(t, dir, "README.md", "# Project\n")
+	writeFile(t, dir, ".no-slop.yaml", "slop:\n  risk:\n    single_review_threshold: 90\n    full_adversarial_threshold: 99\n")
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-m", "initial")
+	attachRemote(t, dir)
+	runGit(t, dir, "switch", "-c", "docs/notes")
+	writeFile(t, dir, "docs/notes.txt", "the "+blockedName+" rollout is next week\n")
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-m", "notes")
+
+	code, output := runGateIn(t, dir, "--blocklist", "../shared/extra-names")
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1: the override names are honored from outside the worktree\n%s", code, output)
+	}
+	if !strings.Contains(output, "private name matches the configured identity blocklist") {
+		t.Fatalf("the override names were not honored:\n%s", output)
+	}
+	if !strings.Contains(output, "--blocklist added 1 private names read from ../shared/extra-names outside the repository worktree") {
+		t.Fatalf("the override line does not say where it read the names from:\n%s", output)
+	}
+	if strings.Contains(output, "../shared/extra-names in the head worktree") {
+		t.Fatalf("the override called a file outside the worktree a worktree copy:\n%s", output)
+	}
+}
+
+// TestAnUnreadableBlocklistDriftDoesNotRecordAnAbsolutePath keeps the run from
+// writing the shape its own identity scan blocks. The head copy is unreadable,
+// which is drift, and the drift becomes a finding that stdout prints and the
+// append-only provenance record keeps forever. The filesystem error names the
+// absolute path it was opening, which on any ordinary machine is a personal
+// home path, and `leakscan` calls that a leak.
+func TestAnUnreadableBlocklistDriftDoesNotRecordAnAbsolutePath(t *testing.T) {
+	t.Parallel()
+
+	dir := trackedBlocklistRepo(t)
+	// A directory in the file's place is unreadable for every user, including
+	// root, so the probe does not depend on who runs the suite.
+	if err := os.Remove(filepath.Join(dir, ".noslop-blocklist")); err != nil {
+		t.Fatalf("remove blocklist: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, ".noslop-blocklist"), 0o755); err != nil {
+		t.Fatalf("replace blocklist with a directory: %v", err)
+	}
+
+	store := &recordingStore{}
+	var stdout, stderr bytes.Buffer
+	code := slopcli.Run(context.Background(), []string{"gate", "--repo", dir}, &stdout, &stderr, slopcli.Options{
+		ReviewerFactory: noReviewer,
+		ProvenanceStore: store,
+	})
+	output := stdout.String() + stderr.String()
+	if code == 0 {
+		t.Fatalf("exit = 0: an unreadable head copy of a gate-strength input is drift\n%s", output)
+	}
+	if !strings.Contains(output, "gate-config-drift") {
+		t.Fatalf("an unreadable head copy was not reported as drift:\n%s", output)
+	}
+	if !strings.Contains(output, ".noslop-blocklist") {
+		t.Fatalf("the drift finding does not name the configured path:\n%s", output)
+	}
+	if strings.Contains(output, dir) {
+		t.Fatalf("the run printed the absolute path of the repository:\n%s", output)
+	}
+	recorded, err := json.Marshal(store.records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.records) == 0 {
+		t.Fatalf("the run recorded nothing, so this test cannot see what provenance would hold:\n%s", output)
+	}
+	if strings.Contains(string(recorded), dir) {
+		t.Fatalf("the absolute path reached the append-only provenance record: %s", recorded)
 	}
 }
 
