@@ -181,3 +181,46 @@ func TestUnreadableEntryIsQuarantinedRatherThanFatal(t *testing.T) {
 		t.Fatalf("the unreadable entry carries no reason: %+v", quarantined)
 	}
 }
+
+// TestAddingABinaryFileIsReportedNotBlocked pins the proportion of the R2 fix.
+// A blinded scan must not look like a clean one, but every commit that adds an
+// image must not fail either, because a mandatory check that blocks ordinary
+// work is a mandatory check somebody turns off. The path is named on the
+// leak-scan line instead.
+func TestAddingABinaryFileIsReportedNotBlocked(t *testing.T) {
+	t.Parallel()
+
+	dir := newRepo(t)
+	writeIn(t, dir, "README.md", "# Project\n")
+	gitIn(t, dir, "add", "-A")
+	gitIn(t, dir, "commit", "-q", "-m", "base")
+	base := strings.TrimSpace(gitIn(t, dir, "rev-parse", "HEAD"))
+	if err := os.WriteFile(filepath.Join(dir, "logo.png"), []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, dir, "add", "-A")
+	gitIn(t, dir, "commit", "-q", "-m", "head")
+
+	changes, err := engine.LoadGitChanges(context.Background(), dir, base, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state := changeFor(t, changes, "logo.png").ScanState; state != engine.ScanBinaryNotScanned {
+		t.Fatalf("scan state = %q, want the binary path named as unscanned", state)
+	}
+
+	result, err := engine.Run(context.Background(), engine.Input{
+		WorkDir: dir, Branch: "probe", DefaultBranch: "main", Files: changes,
+		Config: engine.Config{TierOverride: "leak-scan-only"},
+	}, engine.Dependencies{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Passed {
+		t.Fatalf("adding an image failed the gate: %+v", result.Findings)
+	}
+	check := mandatoryCheck(t, result, "leak scan")
+	if len(check.Unarmed) != 1 || !strings.Contains(check.Unarmed[0], "logo.png") {
+		t.Fatalf("leak scan check = %+v, want the unscanned path named", check)
+	}
+}

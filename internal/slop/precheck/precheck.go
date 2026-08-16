@@ -62,8 +62,12 @@ var (
 	// on each side of the diff is what lets a DELETED guard be seen at all:
 	// every other detector reads added lines only, so the defect delivered by
 	// removing a check produced no finding whatsoever.
-	guardClause  = regexp.MustCompile(`(?i)^\s*(?:if|unless|elif|else if|assert|require|guard)\b|^\s*(?:raise|throw)\b|\brequire\s*\(|\bassert\w*\s*\(`)
-	guardSubject = regexp.MustCompile(`(?i)\berr(?:or)?s?\b|\bok\b|\bnot\b|!|\bpermission|\bauthoriz|\bauthentic|\badmin\b|\brole\b|\btoken\b|\bverif|\bvalid|\ballowed\b|\bdenied\b|\bexpired\b|\bnil\b|\bnull\b|\bnone\b`)
+	guardClause = regexp.MustCompile(`(?i)^\s*(?:if|unless|elif|else if|assert|require|guard)\b|^\s*(?:raise|throw)\b|\brequire\s*\(|\bassert\w*\s*\(`)
+	// guardSubject deliberately omits a bare `!` and a bare `not`. Including
+	// them made `if len(x) != 0` count as a guard, so an ordinary refactor that
+	// consolidated two length checks reported a removed guard. A false finding
+	// here fails a run, so the subject has to be specific.
+	guardSubject = regexp.MustCompile(`(?i)\berr(?:or)?s?\b|\bok\b|\bpermission|\bauthoriz|\bauthentic|\badmin\b|\brole\b|\btoken\b|\bverif|\bvalid|\ballowed\b|\bdenied\b|\bexpired\b|\bnil\b|\bnull\b|\bnone\b`)
 )
 
 type lexedSourceLine struct {
@@ -138,6 +142,11 @@ func Scan(files []File, intent string) Result {
 // finding, so consolidating two checks into one still reports, which is the
 // conservative direction, and a pure refactor that keeps the count does not.
 func detectRemovedGuard(file File) []Finding {
+	// Runtime source only. Prose that happens to contain "if ... error" is not
+	// a guard, and a documentation edit must not be read as removing one.
+	if !isRuntimePath(file.Path) {
+		return nil
+	}
 	if strings.TrimSpace(file.BaselineContent) == "" || strings.TrimSpace(file.CurrentContent) == "" {
 		return nil
 	}

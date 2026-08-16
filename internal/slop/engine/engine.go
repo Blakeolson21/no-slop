@@ -222,13 +222,18 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 		Unarmed:  unarmed,
 	})
 
-	leakFindings, exemptions := runLeakScan(input.Files, input.Config.Blocklist, input.Config.RefuseLeakExemptions)
+	leakFindings, exemptions, unscanned := runLeakScan(input.Files, input.Config.Blocklist, input.Config.RefuseLeakExemptions)
 	result.Findings = append(result.Findings, leakFindings...)
 	result.LeakExemptions = exemptions
 	if deps.OnLeakExemptions != nil {
 		deps.OnLeakExemptions(exemptions)
 	}
-	result.MandatoryChecks = append(result.MandatoryChecks, MandatoryCheck{Name: "leak scan", Enabled: true, Findings: len(leakFindings)})
+	result.MandatoryChecks = append(result.MandatoryChecks, MandatoryCheck{
+		Name:     "leak scan",
+		Enabled:  true,
+		Findings: len(leakFindings),
+		Unarmed:  unscanned,
+	})
 	testFloorEnabled := input.Config.TestCountFloor || containsProbe(decision.DeterministicProbes, "test-count-floor")
 	testFloorFindings := []Finding(nil)
 	if testFloorEnabled {
@@ -390,20 +395,25 @@ func appendUniqueFindings(existing []Finding, additions ...Finding) []Finding {
 	return existing
 }
 
-func runLeakScan(files []Change, blocklist []string, refuseExemptions bool) ([]Finding, []leakscan.Exemption) {
+// runLeakScan returns findings, honored exemptions, and the paths the text
+// patterns could not be run against.
+//
+// A binary blob is reported as unscanned rather than as a finding. Every commit
+// that adds an image would otherwise fail, which is the kind of
+// disproportionate block that gets a mandatory check switched off. What the
+// original defect required is that a scan which did not happen cannot look like
+// a scan that found nothing, and naming the path on the check's own line does
+// that without failing the run.
+func runLeakScan(files []Change, blocklist []string, refuseExemptions bool) ([]Finding, []leakscan.Exemption, []string) {
 	input := make([]leakscan.File, 0, len(files))
 	var result []Finding
+	var unscanned []string
 	for _, file := range files {
 		if file.Unreadable != "" {
 			continue
 		}
 		if file.ScanState == ScanBinaryNotScanned {
-			result = append(result, Finding{
-				Lens:        "leak-scan-undetermined",
-				Severity:    "error",
-				Path:        file.Path,
-				Description: "content is binary at head, so the leak scan could not read it",
-			})
+			unscanned = append(unscanned, fmt.Sprintf("%s is binary at head and was not scanned", file.Path))
 			continue
 		}
 		input = append(input, leakscan.File{Path: file.Path, Content: file.AddedContent})
@@ -418,7 +428,7 @@ func runLeakScan(files []Change, blocklist []string, refuseExemptions bool) ([]F
 			Description: finding.Description,
 		})
 	}
-	return result, scan.Exemptions
+	return result, scan.Exemptions, unscanned
 }
 
 // runContentIntegrity turns every path this run could not read into its own
