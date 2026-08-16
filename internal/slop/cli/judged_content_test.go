@@ -99,31 +99,47 @@ func lensScoreAfterRun(t *testing.T, dir string) (int, []provenance.Record) {
 }
 
 // TestAReviewedPassOnTestDirectoryProseDoesNotClearATestLens is the probe. The
-// pass is genuine and the file lives under tests/; it is still documentation,
-// and documentation is no evidence about how this lane writes tests.
+// pass is genuine and the file lives under tests/; it is still prose, and prose
+// is no evidence about how this lane writes tests. Markdown was the first
+// spelling of this and it is not the only one: every file kind the classifier
+// already knows carries no executable behavior reaches the same clearing route
+// through the same directory arm, so the location alone can never decide it.
 func TestAReviewedPassOnTestDirectoryProseDoesNotClearATestLens(t *testing.T) {
 	t.Parallel()
 
-	dir := judgedContentRepo(t, "tests/README.md", "# Test suite\n\nHow to run the suite locally.\n")
-	seedLensEscalation(t, dir)
+	for _, probe := range []struct {
+		path    string
+		content string
+	}{
+		{"tests/README.md", "# Test suite\n\nHow to run the suite locally.\n"},
+		{"tests/notes.txt", "run the suite before pushing\nkeep fixtures small\n"},
+		{"tests/schema.yaml", "fixtures:\n  - name: minimal\n    rows: 3\n"},
+	} {
+		t.Run(probe.path, func(t *testing.T) {
+			t.Parallel()
 
-	code, output := runReviewedPass(t, dir)
-	if code != 0 {
-		t.Fatalf("exit = %d, want a clean reviewed pass\n%s", code, output)
-	}
-	score, window := lensScoreAfterRun(t, dir)
-	if score == 0 {
-		t.Fatalf("a markdown file under tests/ cleared the %s escalation:\n%+v", judgedContentSeedLens, window)
-	}
-	for _, record := range window {
-		if record.Outcome != "pass" {
-			continue
-		}
-		for _, kind := range record.JudgedContent {
-			if kind == provenance.ContentTests {
-				t.Fatalf("the run recorded prose under tests/ as test content: %+v", record.JudgedContent)
+			dir := judgedContentRepo(t, probe.path, probe.content)
+			seedLensEscalation(t, dir)
+
+			code, output := runReviewedPass(t, dir)
+			if code != 0 {
+				t.Fatalf("exit = %d, want a clean reviewed pass\n%s", code, output)
 			}
-		}
+			score, window := lensScoreAfterRun(t, dir)
+			if score == 0 {
+				t.Fatalf("prose at %s cleared the %s escalation:\n%+v", probe.path, judgedContentSeedLens, window)
+			}
+			for _, record := range window {
+				if record.Outcome != "pass" {
+					continue
+				}
+				for _, kind := range record.JudgedContent {
+					if kind == provenance.ContentTests {
+						t.Fatalf("the run recorded %s as test content: %+v", probe.path, record.JudgedContent)
+					}
+				}
+			}
+		})
 	}
 }
 

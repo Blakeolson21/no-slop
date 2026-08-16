@@ -112,6 +112,52 @@ func TestEmptyingATrackedBlocklistAtHeadCannotDisarmTheIdentityScan(t *testing.T
 	}
 }
 
+// TestDeletingATrackedBlocklistAtHeadIsStillDrift closes the direction the
+// comparison could not see. Emptying the file to zero bytes was drift and
+// deleting it outright was silence, which are the same edit with the same
+// effect on nothing: the base ref's copy stays in force either way, so the
+// difference was only in whether the run said what the change did.
+func TestDeletingATrackedBlocklistAtHeadIsStillDrift(t *testing.T) {
+	t.Parallel()
+
+	for _, probe := range []struct {
+		name      string
+		committed bool
+	}{
+		{"removed from the worktree only", false},
+		{"removed and committed", true},
+	} {
+		t.Run(probe.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := trackedBlocklistRepo(t)
+			if probe.committed {
+				runGit(t, dir, "rm", "-q", ".noslop-blocklist")
+				runGit(t, dir, "commit", "-m", "delete the blocklist")
+			} else if err := os.Remove(filepath.Join(dir, ".noslop-blocklist")); err != nil {
+				t.Fatalf("remove blocklist: %v", err)
+			}
+
+			code, output := runGateIn(t, dir)
+			if code == 0 {
+				t.Fatalf("deleting the blocklist passed a blocklisted identity:\n%s", output)
+			}
+			if !strings.Contains(output, "private name matches the configured identity blocklist") {
+				t.Fatalf("deleting the head copy disarmed the identity scan:\n%s", output)
+			}
+			if !strings.Contains(output, "gate-config-drift") {
+				t.Fatalf("deleting the blocklist at head was not reported as drift:\n%s", output)
+			}
+			if !strings.Contains(output, ".noslop-blocklist") {
+				t.Fatalf("the drift finding does not name the file that drifted:\n%s", output)
+			}
+			if strings.Contains(output, blockedName) {
+				t.Fatalf("the run printed the private name it was told to protect:\n%s", output)
+			}
+		})
+	}
+}
+
 // TestAddingToTheBlocklistAtHeadIsStillDrift pins the direction rule the
 // repo config already follows. A tightening cannot certify itself either: the
 // run that would bless the addition is the run it reconfigures.

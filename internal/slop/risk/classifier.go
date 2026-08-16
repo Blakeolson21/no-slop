@@ -428,7 +428,7 @@ func substantialSourceAddition(files []FileChange) bool {
 	added := 0
 	declarations := 0
 	for _, file := range files {
-		if file.Status == Deleted || !sourcePath(file.Path) || isTestOrDocsPath(file.Path) {
+		if file.Status == Deleted || !SourcePath(file.Path) || isTestOrDocsPath(file.Path) {
 			continue
 		}
 		added += file.Added
@@ -448,11 +448,11 @@ func netNewDeclarationCount(file FileChange) int {
 
 func classifyNovelty(files []FileChange, highRiskPaths []string) Axis {
 	for _, file := range files {
-		if file.Status == Added && (file.Added >= 50 || sourcePath(file.Path)) {
+		if file.Status == Added && (file.Added >= 50 || SourcePath(file.Path)) {
 			return Axis{Score: 3, Reason: "change introduces a new source artifact or substantial new logic"}
 		}
 	}
-	if allPaths(files, func(name string) bool { return !sourcePath(name) }) {
+	if allPaths(files, func(name string) bool { return !SourcePath(name) }) {
 		return Axis{Score: 1, Reason: "change adjusts non-runtime artifacts"}
 	}
 	if allChanges(files, func(file FileChange) bool {
@@ -563,7 +563,7 @@ func newRenameScope(files []FileChange) renameScope {
 		localRenames: make(map[string]map[renamePair]struct{}),
 	}
 	for _, file := range files {
-		if !fileMatchesPath(file, sourcePath) {
+		if !fileMatchesPath(file, SourcePath) {
 			continue
 		}
 		lang := sourceLanguage(file.Path)
@@ -721,7 +721,7 @@ func mechanicallyEquivalent(file FileChange, scope renameScope) bool {
 // substitution into a name already in baseline scope, a call target, a member
 // of a declaration this file does not own, or a map that is not one-to-one.
 func tokenSubstitutions(file FileChange) (map[string]string, bool, bool) {
-	if file.Status != Modified || !relocationPreservesCategory(file) || !fileMatchesPath(file, sourcePath) || file.BaselineContent == "" || file.CurrentContent == "" || !sameBuildConstraints(file) {
+	if file.Status != Modified || !relocationPreservesCategory(file) || !fileMatchesPath(file, SourcePath) || file.BaselineContent == "" || file.CurrentContent == "" || !sameBuildConstraints(file) {
 		return nil, false, false
 	}
 	if file.BaselineContextTruncated {
@@ -781,7 +781,7 @@ func relocationPreservesCategory(file FileChange) bool {
 	if pathCategory(file.Path) != pathCategory(file.BaselinePath) || filepath.Ext(file.Path) != filepath.Ext(file.BaselinePath) {
 		return false
 	}
-	if !sourcePath(file.Path) {
+	if !SourcePath(file.Path) {
 		return true
 	}
 	return false
@@ -819,7 +819,7 @@ func pathCategory(path string) int {
 	switch {
 	case isTestOrDocsPath(path):
 		return 1
-	case sourcePath(path):
+	case SourcePath(path):
 		return 2
 	default:
 		return 0
@@ -1288,7 +1288,13 @@ var nonSourceBaseNames = map[string]struct{}{
 	"codeowners": {}, "readme": {}, "changelog": {}, "owners": {}, "version": {},
 }
 
-func sourcePath(name string) bool {
+// SourcePath reports whether a path carries executable behavior, over the
+// inverse list above. It is exported because it is this repository's single
+// answer to that question: the provenance derivation needs the same answer when
+// it decides whether a file under a test directory is test content or prose,
+// and a second list would drift from this one the first time an extension was
+// added to either.
+func SourcePath(name string) bool {
 	lower := strings.ToLower(filepath.ToSlash(name))
 	ext := filepath.Ext(lower)
 	if ext == "" {

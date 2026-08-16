@@ -737,17 +737,19 @@ func resolveDataDir(workDir, configured string) string {
 //
 // Content type is decided before the directory, because a directory name is a
 // filing decision and the lens asks about the content. Consulting the directory
-// first made every markdown file under tests/ count as test content, so a
-// documentation-only reviewed pass over tests/README.md cleared an accumulated
+// first made every file under tests/ count as test content, so a prose-only
+// reviewed pass over tests/README.md or tests/notes.txt cleared an accumulated
 // test-capitulation escalation while containing no tests at all, which is the
-// defect the derived JudgedContent exists to close.
+// defect the derived JudgedContent exists to close. Test content therefore
+// requires BOTH a test location and a file that carries executable behavior,
+// and the second question is asked of risk.SourcePath so that this and the
+// classifier cannot disagree about what code is.
 func judgedContent(changes []engine.Change) []string {
 	var source, tests, docs bool
 	for _, change := range changes {
 		path := strings.ToLower(filepath.ToSlash(change.Path))
-		extension := filepath.Ext(path)
 		switch {
-		case extension == ".md" || extension == ".mdx" || strings.HasPrefix(path, "docs/"):
+		case !risk.SourcePath(path) || strings.HasPrefix(path, "docs/"):
 			docs = true
 		case strings.HasSuffix(path, "_test.go") ||
 			strings.Contains(path, ".test.") ||
@@ -886,17 +888,38 @@ func loadBlocklist(ctx context.Context, workDir, baseRef, configured string, exp
 	if trackedAtBase {
 		entries := leakscan.ParseBlocklist(string(baseContent))
 		var drift *engine.ConfigDrift
-		if headErr == nil && string(headContent) != string(baseContent) {
+		// The entry counts are named and the entries never are. This file is a
+		// list of private identities, so printing what changed would put them on
+		// stdout and into the provenance record, which is the failure the whole
+		// check exists to stop.
+		//
+		// Every way the head copy stops matching the base copy is named,
+		// including the two that produce no head content to compare. Reporting
+		// only a readable, differing copy meant emptying the file was drift and
+		// deleting it was silence, which are the same edit with the same effect
+		// on nothing and the same intent behind them.
+		switch {
+		case headErr == nil && string(headContent) != string(baseContent):
 			headEntries := leakscan.ParseBlocklist(string(headContent))
 			drift = &engine.ConfigDrift{
 				Path: configured,
-				// The entry counts are named and the entries never are. This
-				// file is a list of private identities, so printing what
-				// changed would put them on stdout and into the provenance
-				// record, which is the failure the whole check exists to stop.
 				Detail: fmt.Sprintf(
 					"the private-name blocklist has %d entries at head and %d at the base ref; the base ref's copy is the one in force, and a head edit to it cannot change how strictly this run scans. Land the blocklist change on the base branch first",
 					len(headEntries), len(entries)),
+			}
+		case errors.Is(headErr, os.ErrNotExist):
+			drift = &engine.ConfigDrift{
+				Path: configured,
+				Detail: fmt.Sprintf(
+					"the private-name blocklist is gone at head and has %d entries at the base ref; the base ref's copy is the one in force, and deleting it at head cannot change how strictly this run scans. Land the blocklist change on the base branch first",
+					len(entries)),
+			}
+		case headErr != nil:
+			drift = &engine.ConfigDrift{
+				Path: configured,
+				Detail: fmt.Sprintf(
+					"the private-name blocklist could not be read at head (%v) and has %d entries at the base ref; the base ref's copy is the one in force, so the run scanned at full strength, but a head copy this run cannot read is not evidence that it matches",
+					headErr, len(entries)),
 			}
 		}
 		return entries, fmt.Sprintf("leak scan: loaded %s private-name blocklist from %s at the base ref (%d entries)", state, configured, len(entries)), drift, nil
