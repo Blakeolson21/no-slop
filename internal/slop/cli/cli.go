@@ -403,11 +403,20 @@ func provenanceRecord(input provenanceInput, decision risk.Decision, result engi
 	byLens := make(map[string]provenance.LensFindings)
 	for _, finding := range result.Findings {
 		current := byLens[finding.Lens]
-		current.Accepted = append(current.Accepted, provenance.Finding{
+		recorded := provenance.Finding{
 			Path:        finding.Path,
 			Line:        finding.Line,
 			Description: finding.Description,
-		})
+		}
+		// A non-blocking finding is recorded but never scored. Filing it as
+		// accepted made the one severity that deliberately does not fail the run
+		// pin its record past retention and drive the lens escalation, which only
+		// a reviewed clean pass clears.
+		if finding.Blocks() {
+			current.Accepted = append(current.Accepted, recorded)
+		} else {
+			current.Noticed = append(current.Noticed, recorded)
+		}
 		if current.Rejected == nil {
 			current.Rejected = []provenance.Finding{}
 		}

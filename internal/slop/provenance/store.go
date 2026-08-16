@@ -30,9 +30,19 @@ type Finding struct {
 }
 
 // LensFindings records which findings were accepted and rejected for a lens.
+//
+// Noticed is a third bucket that deliberately scores nothing. A notice is the
+// one severity the gate reports without failing on, and recording it as accepted
+// made it ratchet twice over: incriminating() pinned the record forever, and
+// LensScores counted it toward the three-finding escalation, which only a
+// reviewed clean pass can clear. A repository that keeps bumping a submodule
+// never produces that pass, so the notice severity reproduced one tier at a time
+// exactly the permanent penalty it was introduced to remove. Notices stay on the
+// record for visibility; only warning and error ratchet.
 type LensFindings struct {
 	Accepted []Finding `json:"accepted"`
 	Rejected []Finding `json:"rejected"`
+	Noticed  []Finding `json:"noticed,omitempty"`
 }
 
 // Record is the versioned provenance and outcome schema for one gated change.
@@ -384,6 +394,9 @@ func foldWorst(held, later Record) Record {
 		}
 		if !ok || len(findings.Rejected) > len(existing.Rejected) {
 			existing.Rejected = findings.Rejected
+		}
+		if !ok || len(findings.Noticed) > len(existing.Noticed) {
+			existing.Noticed = findings.Noticed
 		}
 		merged.FindingsByLens[lens] = existing
 	}

@@ -120,6 +120,74 @@ func TestAnAgedRecordWithNoFindingsIsRetiredAndAnIncriminatingOneIsNot(t *testin
 	}
 }
 
+// noticeRecord is a run whose only finding is the one severity the gate reports
+// without failing on, which is what a submodule pointer bump produces.
+func noticeRecord(changeID string, at time.Time) provenance.Record {
+	return provenance.Record{
+		SchemaVersion: provenance.CurrentSchemaVersion,
+		RecordedAt:    at,
+		ChangeID:      changeID,
+		Model:         "model-x",
+		AgentLaneID:   "lane-a",
+		SelectedTier:  "single-review",
+		Outcome:       "pass",
+		FindingsByLens: map[string]provenance.LensFindings{
+			"submodule-pointer-unscanned": {
+				Noticed: []provenance.Finding{{Path: "vendor/dep", Line: 1, Description: "submodule pointer moved"}},
+			},
+		},
+	}
+}
+
+// TestSubmoduleNoticesNeitherPinRetentionNorEscalate pins the point of having a
+// non-blocking severity at all. Filing notices as accepted findings made them
+// ratchet twice: the record was retained past its window forever, and three of
+// them promoted the lens and escalated every later run, clearable only by a
+// reviewed clean pass that a repository which keeps bumping that submodule never
+// produces. That reproduced the permanent penalty the notice was introduced to
+// remove, one tier at a time.
+func TestSubmoduleNoticesNeitherPinRetentionNorEscalate(t *testing.T) {
+	t.Parallel()
+
+	store := provenance.NewFileStore(t.TempDir())
+	old := time.Now().UTC().Add(-2 * provenance.RetentionWindow)
+	for _, changeID := range []string{"base..bump1", "base..bump2", "base..bump3"} {
+		if err := store.Append(noticeRecord(changeID, old)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	history, err := store.Window("lane-a", "model-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 0 {
+		t.Errorf("notice-only records were pinned past retention: %+v", history)
+	}
+	if score := provenance.LensScores(history)["submodule-pointer-unscanned"]; score != 0 {
+		t.Errorf("notices scored toward the lens escalation: score = %d", score)
+	}
+
+	// The same three records inside the window must be readable and still score
+	// nothing, so visibility is kept without conditioning later runs.
+	fresh := provenance.NewFileStore(t.TempDir())
+	for _, changeID := range []string{"base..bump1", "base..bump2", "base..bump3"} {
+		if err := fresh.Append(noticeRecord(changeID, time.Now().UTC())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recent, err := fresh.Window("lane-a", "model-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recent) != 3 {
+		t.Fatalf("history = %+v, want the three notice records retained for visibility", recent)
+	}
+	if score := provenance.LensScores(recent)["submodule-pointer-unscanned"]; score != 0 {
+		t.Errorf("in-window notices scored toward the lens escalation: score = %d", score)
+	}
+}
+
 // TestOnlyAReviewedPassClearsALensScore is the other half of T4: an escalation
 // has to be clearable by something, and the only thing that clears it is the
 // escalated protocol actually running and coming back clean.
