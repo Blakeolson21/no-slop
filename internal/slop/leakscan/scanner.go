@@ -113,13 +113,22 @@ func ParseBlocklist(content string) []string {
 // that quoted the marker exempted its own line, which is a bypass anybody could
 // trip over by writing documentation about the feature.
 //
-// The alternatives are comment introducers plus start-of-line, and nothing
-// else. A bare whitespace alternative was there too, which reopened the exact
-// case the rest of the pattern closes: a marker is always preceded by
-// whitespace in a sentence, so `write noslop:allow-leak beside the key` matched
-// and suppressed the credential on its own line. Every legitimate placement is
-// still covered, because `\s*` after an introducer absorbs the space in
+// The alternatives are comment introducers plus start-of-line. A bare
+// whitespace alternative was there too, which reopened the exact case the rest
+// of the pattern closes: a marker is always preceded by whitespace in a
+// sentence, so `write noslop:allow-leak beside the key` matched and suppressed
+// the credential on its own line. Every legitimate placement is still covered,
+// because `\s*` after an introducer absorbs the space in
 // `key = "..." # noslop:allow-leak` and after `^` it absorbs indentation.
+//
+// The guarantee is bounded to that: a marker inside a sentence does not exempt.
+// It is not that no prose can ever match. Two introducers double as ordinary
+// punctuation, so `the key is ignored -- noslop:allow-leak marks it` and the
+// same sentence with a semicolon both fire, as does any line whose first
+// non-space token is the marker. Tightening further would cost real markers in
+// languages that use those introducers, and the residue is bounded because
+// exemptions are off by default, a match exempts only its own line, and every
+// honored marker is reported with the count it suppressed.
 var exemptionMarker = regexp.MustCompile(`(?i)(?:^|//|#|/\*|<!--|--|;)\s*` + regexp.QuoteMeta(InlineExemption) + `\b`)
 
 // IsBinaryContent reports whether these bytes have to be read through the

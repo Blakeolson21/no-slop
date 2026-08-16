@@ -142,16 +142,59 @@ func Scan(files []File, intent string) Result {
 		result.Findings = append(result.Findings, detectWidenedTolerance(file)...)
 		result.Findings = append(result.Findings, detectSelfConsistentOracle(file)...)
 		result.Findings = append(result.Findings, detectUnsupportedFollowup(file)...)
-		result.Findings = append(result.Findings, detectRemovedGuard(file)...)
 		if len(sibling) == 0 && len(workaround) == 0 {
 			result.Findings = append(result.Findings, detectFailOpenDefault(file)...)
 		}
 	}
+	result.Findings = append(result.Findings, detectRemovedGuards(files)...)
 	result.Findings = uniqueSorted(result.Findings)
 	return result
 }
 
-// detectRemovedGuard reports a change that ends with fewer refusing checks than
+// detectRemovedGuards decides the removed-guard question over the whole change
+// set rather than one file at a time.
+//
+// A per-file count is blind to the commonest legitimate shape there is: moving
+// validation out of handler.go into a new validate.go drops handler.go's count
+// while the change set holds the same number of refusing checks it started
+// with. The per-file detector called that a removal and blocked at every tier,
+// with no exemption path, because --tier can only raise and allow_exemptions
+// covers the leak scan alone.
+//
+// So a file's decrease is reported only when the change set as a whole ends
+// with fewer refusing checks than it began with. A move nets to zero and says
+// nothing; a genuine deletion still nets negative and still blocks, and the
+// file that lost the guards is still the one named. The change set is the
+// widest scope a single gate run can see, so this is not a vouching oracle
+// scoped to neighbouring files: nothing outside the diff can supply the
+// compensating count.
+func detectRemovedGuards(files []File) []Finding {
+	var findings []Finding
+	for _, file := range files {
+		findings = append(findings, detectRemovedGuard(file)...)
+	}
+	if len(findings) == 0 || changeSetGuardDelta(files) >= 0 {
+		return nil
+	}
+	return findings
+}
+
+// changeSetGuardDelta is how many refusing checks the change set gained, summed
+// over every runtime file it touches. A file added by this change contributes
+// its whole current count against an empty baseline, which is exactly what
+// makes an extraction net to zero.
+func changeSetGuardDelta(files []File) int {
+	delta := 0
+	for _, file := range files {
+		if !isRuntimePath(file.Path) {
+			continue
+		}
+		delta += countGuardClauses(file.CurrentContent) - countGuardClauses(file.BaselineContent)
+	}
+	return delta
+}
+
+// detectRemovedGuard reports that ONE file ends with fewer refusing checks than
 // it started with.
 //
 // Every other detector here reads added lines only, so a defect delivered by
@@ -161,6 +204,10 @@ func Scan(files []File, intent string) Result {
 // variable inside a guard leaves the count unchanged. Only a net decrease is a
 // finding, so consolidating two checks into one still reports, which is the
 // conservative direction, and a pure refactor that keeps the count does not.
+//
+// Whether this file's loss is a removal or a move into another file of the same
+// change is not decided here. detectRemovedGuards is the only caller and owns
+// that question.
 func detectRemovedGuard(file File) []Finding {
 	// Runtime source only. Prose that happens to contain "if ... error" is not
 	// a guard, and a documentation edit must not be read as removing one.

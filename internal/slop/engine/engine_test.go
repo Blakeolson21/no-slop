@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/Blakeolson21/no-slop/internal/slop/engine"
@@ -49,6 +50,72 @@ func (h staticHistory) Window(string, string) ([]provenance.Record, error) {
 
 func (h staticHistory) HasIdentifiedHistory() (bool, error) {
 	return len(h) > 0, nil
+}
+
+// TestUnverifiedBaseInvokesNoReviewer pins the cost side of the unverified-base
+// route. The blocking base-ref-unverified finding fixes the verdict before any
+// review starts, and the run is pinned to the most expensive tier there is, so
+// the two LLM rounds and the test command were billed to an outcome nothing
+// they could report would change. Since the production caller never supplies a
+// pipeline base, that was every offline run. The pin, the reported tier, and
+// the failure all have to survive: this removes cost, not strictness.
+func TestUnverifiedBaseInvokesNoReviewer(t *testing.T) {
+	t.Parallel()
+
+	reviewer := &countingReviewer{}
+	tests := &countingTests{}
+	result, err := engine.Run(context.Background(), engine.Input{
+		WorkDir:       t.TempDir(),
+		Branch:        "feature/x",
+		DefaultBranch: "main",
+		Files: []engine.Change{{
+			Path:           "internal/svc/handler.go",
+			Status:         risk.Modified,
+			Added:          4,
+			Deleted:        1,
+			AddedContent:   "func Handle() error { return nil }\n",
+			CurrentContent: "package svc\n\nfunc Handle() error { return nil }\n",
+		}},
+		Config: engine.Config{
+			BaseUnverified: "no remote answered for refs/heads/main",
+			TestCommand:    "go test ./...",
+		},
+	}, engine.Dependencies{Reviewer: reviewer, Tests: tests})
+	if !errors.Is(err, engine.ErrBaseUnverified) {
+		t.Fatalf("err = %v, want the run refused with ErrBaseUnverified", err)
+	}
+	if reviewer.calls != 0 {
+		t.Errorf("reviewer calls = %d, want none for a predetermined refusal", reviewer.calls)
+	}
+	if tests.calls != 0 {
+		t.Errorf("test calls = %d, want none for a predetermined refusal", tests.calls)
+	}
+	if result.Decision.Tier != risk.TierFullAdversarial {
+		t.Errorf("tier = %q, want the pin to %q to survive", result.Decision.Tier, risk.TierFullAdversarial)
+	}
+	if result.Passed {
+		t.Error("an unverified base passed")
+	}
+	if !hasLens(result.Findings, "base-ref-unverified") {
+		t.Errorf("findings = %+v, want base-ref-unverified reported", result.Findings)
+	}
+	// Built-in defaults carry no test command, so the old path also blamed a
+	// missing slop.test_command for a base it could not verify.
+	if hasLens(result.Findings, "tests-not-configured") {
+		t.Errorf("findings = %+v, want no misdirecting test-configuration finding", result.Findings)
+	}
+	if len(result.MandatoryChecks) == 0 {
+		t.Error("the mandatory checks did not run before the short circuit")
+	}
+}
+
+func hasLens(findings []engine.Finding, lens string) bool {
+	for _, finding := range findings {
+		if finding.Lens == lens {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRunRoutesMarkdownToMandatoryChecksWithoutReviewerOrTests(t *testing.T) {

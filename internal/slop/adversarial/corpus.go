@@ -1351,6 +1351,50 @@ export const helper = newHelperName
 			},
 		},
 		{
+			Name:    "R1-control-extracting-guards-into-a-new-file-is-a-move-not-a-removal",
+			Class:   ClassControl,
+			Summary: "the removed-guard detector counted per file, so relocating validation into a new file in the same commit read as deleting it and blocked at every tier",
+			Base: map[string]string{
+				"README.md":     "# Project\n",
+				".no-slop.yaml": cheapestTierConfig,
+				"internal/svc/handler.go": "package svc\n\nfunc Handle(user string, token string) error {\n" +
+					"\tif user == \"\" {\n\t\treturn errBadUser\n\t}\n" +
+					"\tif token == \"\" {\n\t\treturn errBadToken\n\t}\n" +
+					"\treturn nil\n}\n",
+			},
+			Head: map[string]string{
+				"internal/svc/handler.go": "package svc\n\nfunc Handle(user string, token string) error {\n" +
+					"\tif err := validate(user, token); err != nil {\n\t\treturn err\n\t}\n" +
+					"\treturn nil\n}\n",
+				"internal/svc/validate.go": "package svc\n\nfunc validate(user string, token string) error {\n" +
+					"\tif user == \"\" {\n\t\treturn errBadUser\n\t}\n" +
+					"\tif token == \"\" {\n\t\treturn errBadToken\n\t}\n" +
+					"\treturn nil\n}\n",
+			},
+			WantExit:      0,
+			WantStdout:    []string{"verdict: pass"},
+			WantNotStdout: []string{"refusing checks dropped"},
+		},
+		{
+			Name:    "R1-deleting-guards-outright-still-blocks",
+			Class:   ClassMandatoryCheckIntegrity,
+			Summary: "counting across the change set must not become a licence to delete a guard, so the same shape with no replacement file still fails",
+			Base: map[string]string{
+				"README.md":     "# Project\n",
+				".no-slop.yaml": cheapestTierConfig,
+				"internal/svc/handler.go": "package svc\n\nfunc Handle(user string, token string) error {\n" +
+					"\tif user == \"\" {\n\t\treturn errBadUser\n\t}\n" +
+					"\tif token == \"\" {\n\t\treturn errBadToken\n\t}\n" +
+					"\treturn nil\n}\n",
+			},
+			Head: map[string]string{
+				"internal/svc/handler.go": "package svc\n\nfunc Handle(user string, token string) error {\n\treturn nil\n}\n",
+			},
+			WantExit:      1,
+			WantStdout:    []string{"refusing checks dropped"},
+			WantNotStdout: []string{"verdict: pass"},
+		},
+		{
 			Name:    "control-plain-markdown-still-costs-nothing",
 			Class:   ClassControl,
 			Summary: "an ordinary README edit must not be dragged up a tier by the instruction-file markers",

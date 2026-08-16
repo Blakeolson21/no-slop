@@ -54,6 +54,66 @@ func TestDeletingAnInputGuardThatReturnsANamedErrorIsSeen(t *testing.T) {
 	}
 }
 
+// TestExtractingGuardsIntoANewFileIsAMoveNotARemoval pins the change-set scope.
+// The detector counted guard clauses per file, so extracting validation out of
+// handler.go into a new validate.go in the same commit dropped handler.go's
+// count and reported a removed guard, blocking at every tier with no exemption
+// path, while the change set held exactly the guards it started with.
+func TestExtractingGuardsIntoANewFileIsAMoveNotARemoval(t *testing.T) {
+	t.Parallel()
+
+	const guards = "\tif user == \"\" {\n\t\treturn errBadUser\n\t}\n\tif token == \"\" {\n\t\treturn errBadToken\n\t}\n"
+	result := precheck.Scan([]precheck.File{
+		{
+			Path:            "internal/svc/handler.go",
+			BaselineContent: "package svc\n\nfunc Handle(user, token string) error {\n" + guards + "\treturn nil\n}\n",
+			CurrentContent:  "package svc\n\nfunc Handle(user, token string) error {\n\treturn validate(user, token)\n}\n",
+		},
+		{
+			Path:            "internal/svc/validate.go",
+			BaselineContent: "",
+			AddedContent:    "package svc\n\nfunc validate(user, token string) error {\n" + guards + "\treturn nil\n}\n",
+			CurrentContent:  "package svc\n\nfunc validate(user, token string) error {\n" + guards + "\treturn nil\n}\n",
+		},
+	}, "")
+	for _, finding := range result.Findings {
+		if strings.Contains(finding.Description, "refusing checks dropped") {
+			t.Fatalf("relocating guards into a new file reported a removal: %+v", finding)
+		}
+	}
+}
+
+// TestExtractingGuardsAndDroppingOneStillReports is the control for the test
+// above. Counting across the change set must not become a licence to delete a
+// guard while moving its neighbours, so a change set that nets negative still
+// blocks and still names the file that lost them.
+func TestExtractingGuardsAndDroppingOneStillReports(t *testing.T) {
+	t.Parallel()
+
+	result := precheck.Scan([]precheck.File{
+		{
+			Path:            "internal/svc/handler.go",
+			BaselineContent: "package svc\n\nfunc Handle(user, token string) error {\n\tif user == \"\" {\n\t\treturn errBadUser\n\t}\n\tif token == \"\" {\n\t\treturn errBadToken\n\t}\n\treturn nil\n}\n",
+			CurrentContent:  "package svc\n\nfunc Handle(user, token string) error {\n\treturn validate(user, token)\n}\n",
+		},
+		{
+			Path:            "internal/svc/validate.go",
+			BaselineContent: "",
+			AddedContent:    "package svc\n\nfunc validate(user, token string) error {\n\tif user == \"\" {\n\t\treturn errBadUser\n\t}\n\treturn nil\n}\n",
+			CurrentContent:  "package svc\n\nfunc validate(user, token string) error {\n\tif user == \"\" {\n\t\treturn errBadUser\n\t}\n\treturn nil\n}\n",
+		},
+	}, "")
+	found := false
+	for _, finding := range result.Findings {
+		if strings.Contains(finding.Description, "refusing checks dropped") && finding.Path == "internal/svc/handler.go" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("a change set that net-deleted a guard reported nothing: %+v", result.Findings)
+	}
+}
+
 // TestConsolidatingLengthChecksStillReportsNothing is the false-positive
 // control the widened subject must not break. An earlier widening of this same
 // regex had to be stood back down for exactly this shape.

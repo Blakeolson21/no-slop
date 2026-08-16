@@ -3,6 +3,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/Blakeolson21/no-slop/internal/identity"
@@ -118,6 +119,13 @@ const (
 	// it. What is removed is only the automatic failure, not the visibility.
 	SeverityNotice = "notice"
 )
+
+// ErrBaseUnverified is the refusal a run makes when the canonical base could
+// not be established. It is a refusal rather than a failing verdict because a
+// gate that cannot say which commit it is judging against cannot certify
+// anything, so it declines to render a verdict instead of rendering one it did
+// not earn.
+var ErrBaseUnverified = errors.New("the canonical base could not be verified, so this run certifies nothing")
 
 // Finding is one named gate result. Severity decides whether it blocks.
 type Finding struct {
@@ -265,7 +273,7 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 			Lens:        "gate-config-drift",
 			Severity:    "error",
 			Path:        identity.RepoConfigName,
-			Description: drift,
+			Description: drift + "; land the slop.* change on the base branch first, because a config change cannot certify itself",
 		})
 	}
 	result.Findings = append(result.Findings, driftFindings...)
@@ -325,6 +333,30 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 		Enabled:  input.Config.ThreadURL != "",
 		Findings: threadFindings,
 	})
+
+	// An unverified base has already decided this run. The blocking
+	// base-ref-unverified finding above is unconditional, so nothing the
+	// reviewer or the test command could report can change the outcome, and the
+	// tier it was pinned to is the most expensive one there is: two LLM
+	// invocations and the configured suite, spent on a result fixed before the
+	// first round starts. Since the only production caller never supplies a
+	// pipeline base, that bill was charged to every offline run, every run
+	// against a remote that will not answer, and every run whose object store
+	// lacks the commit ls-remote named.
+	//
+	// This returns ErrBaseUnverified rather than a failing verdict on purpose.
+	// A gate that could not establish which commit it is judging against has no
+	// authority to render a verdict at all, so the honest answer is the same
+	// refusal it already gave when it could not reach a reviewer: the mandatory
+	// checks and every finding still print, and the caller still exits 2. The
+	// pin, the reported tier, and the refusal are unchanged; what is removed is
+	// the cost, plus a finding that actively misled, because the unverified
+	// route reads built-in defaults and built-in defaults carry no test command,
+	// so the run used to blame a missing slop.test_command for a base it could
+	// not verify.
+	if input.Config.BaseUnverified != "" {
+		return result, fmt.Errorf("%w: %s", ErrBaseUnverified, input.Config.BaseUnverified)
+	}
 
 	if decision.Tier == risk.TierSingleReview || decision.Tier == risk.TierFullAdversarial {
 		reviewer := deps.Reviewer
