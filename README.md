@@ -88,13 +88,15 @@ Supply the requested scope when the gate should mechanically compare new files a
 ./bin/noslop gate --base origin/main --intent "Add the no-store response header only."
 ```
 
-Override validation depth:
+Raise validation depth:
 
 ```sh
 ./bin/noslop gate --base origin/main --tier full-adversarial
 ```
 
-If provenance raises the tier, a lower `--tier` is refused unless `--force-tier` is also present. The output prints both the provenance signal and the forced override.
+`--tier` is escalate-only. It may raise the computed tier and never lower it, because the caller of this command and the author of the change it is gating are routinely the same agent. Any request to lower it, including with `--force-tier`, exits 2 and names the tier the classifier computed. Raise `slop.risk` thresholds in the repository config if a cheaper route is genuinely correct; that config is read from the base ref, which the change under test cannot reach.
+
+`--base` is checked the same way. The base is the merge-base of the head with a canonical ref, and an explicit `--base` is accepted only when it is an ancestor of the head that the canonical ref already carries. Every run prints which commit supplied the gate's strength and how it was chosen.
 
 Check outbound text against a live GitHub thread:
 
