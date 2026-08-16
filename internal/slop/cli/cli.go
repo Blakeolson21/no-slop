@@ -194,6 +194,10 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 	if err != nil {
 		return fmt.Errorf("resolve repository: %w", err)
 	}
+	workDir, err = worktreeRoot(ctx, workDir)
+	if err != nil {
+		return err
+	}
 	headRepoCfg, err := config.LoadRepo(workDir)
 	if err != nil {
 		return err
@@ -509,6 +513,31 @@ func readBaseRepoConfigFile(ctx context.Context, workDir, baseRef, name string) 
 	return data, present, nil
 }
 
+// worktreeRoot resolves the directory the gate runs against to the root of its
+// worktree, and fails the run when it cannot.
+//
+// Every base-ref read is a git pathspec relative to this directory, and a
+// pathspec that names a file above the cwd matches nothing while exiting 0. So
+// pointing the gate at any subdirectory silently read no `.no-slop.yaml` at the
+// base ref, fell back to built-in defaults, and reported neither a missing
+// config nor drift, which quietly discarded the operator's thresholds,
+// high_risk_paths and test floor. The blocklist boundary went the same way: the
+// base copy looked absent and the head worktree copy took over.
+//
+// Refusing is the alternative and it is worse for no gain: an operator running
+// from a package directory is not attacking anything, and the run they want is
+// exactly the one this produces.
+func worktreeRoot(ctx context.Context, dir string) (string, error) {
+	root, err := git.Run(ctx, dir, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", fmt.Errorf("resolve worktree root for %s: %w", dir, err)
+	}
+	if strings.TrimSpace(root) == "" {
+		return "", fmt.Errorf("resolve worktree root for %s: git named no worktree root", dir)
+	}
+	return filepath.FromSlash(strings.TrimSpace(root)), nil
+}
+
 // readBaseFile reads one tracked path out of the base revision, reporting
 // separately whether the path exists there at all. Absent is a valid answer and
 // unreadable is not: an input the gate reads its strength from must never
@@ -705,12 +734,21 @@ func resolveDataDir(workDir, configured string) string {
 // A path is counted once per kind it belongs to, and a test file counts as
 // tests rather than as source: the question a lens asks about tests is asked of
 // test files.
+//
+// Content type is decided before the directory, because a directory name is a
+// filing decision and the lens asks about the content. Consulting the directory
+// first made every markdown file under tests/ count as test content, so a
+// documentation-only reviewed pass over tests/README.md cleared an accumulated
+// test-capitulation escalation while containing no tests at all, which is the
+// defect the derived JudgedContent exists to close.
 func judgedContent(changes []engine.Change) []string {
 	var source, tests, docs bool
 	for _, change := range changes {
 		path := strings.ToLower(filepath.ToSlash(change.Path))
 		extension := filepath.Ext(path)
 		switch {
+		case extension == ".md" || extension == ".mdx" || strings.HasPrefix(path, "docs/"):
+			docs = true
 		case strings.HasSuffix(path, "_test.go") ||
 			strings.Contains(path, ".test.") ||
 			strings.Contains(path, ".spec.") ||
@@ -720,8 +758,6 @@ func judgedContent(changes []engine.Change) []string {
 			strings.HasPrefix(path, "test/") ||
 			strings.HasPrefix(path, "tests/"):
 			tests = true
-		case extension == ".md" || extension == ".mdx" || strings.HasPrefix(path, "docs/"):
-			docs = true
 		default:
 			source = true
 		}

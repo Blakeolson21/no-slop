@@ -219,6 +219,29 @@ func TestABlocklistOutsideTheWorktreeIsReadFromDisk(t *testing.T) {
 	}
 }
 
+// TestASubdirectoryInvocationReadsTheSameBaseConfig is the entry-point half of
+// the boundary. Every base-ref read is a git pathspec relative to the directory
+// the gate was pointed at, and a pathspec above the cwd matches nothing while
+// exiting 0, so running from a subdirectory read no base config at all: the
+// operator's blocklist configuration vanished, the run fell to built-in
+// defaults, and nothing said so.
+func TestASubdirectoryInvocationReadsTheSameBaseConfig(t *testing.T) {
+	t.Parallel()
+
+	dir := trackedBlocklistRepo(t)
+
+	code, output := runGateIn(t, filepath.Join(dir, "docs"))
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1: a subdirectory invocation gates exactly as the root does\n%s", code, output)
+	}
+	if !strings.Contains(output, "private name matches the configured identity blocklist") {
+		t.Fatalf("the base-ref blocklist was lost from a subdirectory:\n%s", output)
+	}
+	if !strings.Contains(output, "at the base ref") {
+		t.Fatalf("the blocklist content did not come from the base ref:\n%s", output)
+	}
+}
+
 // TestAMissingInTreeBlocklistNamesTheBaseRef keeps the failure legible. An
 // operator who configured a blocklist inside the repository and has it nowhere
 // gets an error that names the requirement the boundary added, not one that

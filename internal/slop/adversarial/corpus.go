@@ -722,17 +722,35 @@ func Serve(enabled bool) bool {
 			WantNotStdout: []string{"verdict: pass"},
 		},
 		{
-			Name:     "U4-an-invisible-character-outside-the-added-lines-is-still-scanned",
+			Name:     "U4-a-byte-order-mark-inside-an-added-credential-does-not-blind-the-leak-scan",
 			Class:    ClassMandatoryCheckIntegrity,
-			Summary:  "the widened claim was asked of the head blob and answered by scanning the added lines, so a file whose invisible characters all sit outside the diff printed \"read more than one way\" over content read exactly one way",
-			Base:     map[string]string{"docs/notes.txt": "\ufeffrelease notes\naws key = AKIA\u200bIOSFODNN7EXAMPLE\n"},
-			Head:     map[string]string{"docs/notes.txt": "\ufeffrelease notes\naws key = AKIA\u200bIOSFODNN7EXAMPLE\nshipping on friday\n"},
+			Summary:  "U+FEFF is the invisible character an editor writes by accident, so it is the one a change can carry into a credential without looking deliberate",
+			Base:     map[string]string{"docs/notes.txt": "release notes\n"},
+			Head:     map[string]string{"docs/notes.txt": "release notes\naws key = AKIA\ufeffIOSFODNN7EXAMPLE\n"},
 			WantExit: 1,
 			WantStdout: []string{
 				"leak-identity-scan",
 				"read more than one way",
 			},
 			WantNotStdout: []string{"verdict: pass"},
+		},
+		{
+			Name:    "U4-control-an-invisible-character-outside-the-added-lines-is-a-base-condition",
+			Class:   ClassControl,
+			Summary: "widening the window to the whole head blob for every byte order mark made a credential the change never touched block it, and left the identical content in a file without one unscanned",
+			Base: map[string]string{
+				"docs/notes.txt": "\ufeffrelease notes\naws key = AKIA\u200bIOSFODNN7EXAMPLE\n",
+				".no-slop.yaml":  cheapestTierConfig,
+			},
+			Head:     map[string]string{"docs/notes.txt": "\ufeffrelease notes\naws key = AKIA\u200bIOSFODNN7EXAMPLE\nshipping on friday\n"},
+			WantExit: 0,
+			WantStdout: []string{
+				"verdict: pass",
+			},
+			WantNotStdout: []string{
+				"leak-identity-scan",
+				"read more than one way",
+			},
 		},
 		{
 			Name:    "U4-control-a-byte-order-mark-does-not-degrade-an-ordinary-file",
