@@ -167,16 +167,21 @@ func Allow(user User) (bool, error) {
 		t.Fatalf("deleting a guard produced no finding: %+v", result.Findings)
 	}
 
+	// Renaming a variable inside a guard now REPORTS, and that is the accepted
+	// price of deciding this check by identity instead of by count. The count
+	// rule was insensitive to rewording, and that same insensitivity is what let
+	// three deleted authorization guards be cancelled by three added
+	// `if err != nil` helpers. No token stream can tell a renamed guard from a
+	// guard swapped for an unrelated one, so the detector reports both rather
+	// than excusing both.
 	renamed := strings.ReplaceAll(baseline, "user", "caller")
-	unchangedCount := precheck.Scan([]precheck.File{{
+	reworded := precheck.Scan([]precheck.File{{
 		Path:            "auth/policy.go",
 		BaselineContent: baseline,
 		CurrentContent:  renamed,
 	}}, "")
-	for _, finding := range unchangedCount.Findings {
-		if strings.Contains(finding.Description, "refusing checks dropped") {
-			t.Fatalf("renaming inside a guard was reported as removing one: %+v", finding)
-		}
+	if !hasLens(reworded.Findings, "fail-open-default") {
+		t.Fatalf("an in-place guard reword produced no finding, so identity matching is not deciding this check: %+v", reworded.Findings)
 	}
 }
 

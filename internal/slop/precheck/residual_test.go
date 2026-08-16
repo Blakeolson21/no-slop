@@ -123,6 +123,58 @@ func TestUnrelatedGuardPaddingDoesNotExcuseARemoval(t *testing.T) {
 	}
 }
 
+// TestSameFileGuardPaddingDoesNotExcuseARemoval closes the hole the identity
+// pool left open by sitting behind a per-file count. Folding the padding into
+// the file that lost the guards kept its guard total level, so the count
+// trigger returned early and identity matching was never reached: three deleted
+// authorization guards and three added `if err != nil` helpers produced no
+// finding at all.
+func TestSameFileGuardPaddingDoesNotExcuseARemoval(t *testing.T) {
+	t.Parallel()
+
+	result := precheck.Scan([]precheck.File{{
+		Path: "internal/auth/policy.go",
+		BaselineContent: "package auth\n\nfunc Authorize(role, token, scope string) error {\n" +
+			"\tif role != \"admin\" {\n\t\treturn errForbidden\n\t}\n" +
+			"\tif token == \"\" {\n\t\treturn errNoToken\n\t}\n" +
+			"\tif scope != \"write\" {\n\t\treturn errNoScope\n\t}\n" +
+			"\treturn nil\n}\n",
+		CurrentContent: "package auth\n\nfunc Authorize(role, token, scope string) error {\n\treturn nil\n}\n\n" +
+			"func A(err error) error {\n\tif err != nil {\n\t\treturn err\n\t}\n\treturn nil\n}\n\n" +
+			"func B(err error) error {\n\tif err != nil {\n\t\treturn err\n\t}\n\treturn nil\n}\n\n" +
+			"func C(err error) error {\n\tif err != nil {\n\t\treturn err\n\t}\n\treturn nil\n}\n",
+	}}, "")
+	found := false
+	for _, finding := range result.Findings {
+		if strings.Contains(finding.Description, "refusing checks dropped") && finding.Path == "internal/auth/policy.go" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("padding inside the shrinking file excused an authorization deletion: %+v", result.Findings)
+	}
+}
+
+// TestRelocatingAGuardWithinOneFileStaysSilent is the false-positive control for
+// the test above. Moving a guard into a helper in the same file keeps the clause
+// in the change set, so identity matching cancels it and nothing reports.
+func TestRelocatingAGuardWithinOneFileStaysSilent(t *testing.T) {
+	t.Parallel()
+
+	result := precheck.Scan([]precheck.File{{
+		Path: "internal/svc/handler.go",
+		BaselineContent: "package svc\n\nfunc Handle(user string) error {\n" +
+			"\tif user == \"\" {\n\t\treturn errBadUser\n\t}\n\treturn nil\n}\n",
+		CurrentContent: "package svc\n\nfunc Handle(user string) error {\n\treturn check(user)\n}\n\n" +
+			"func check(user string) error {\n\tif user == \"\" {\n\t\treturn errBadUser\n\t}\n\treturn nil\n}\n",
+	}}, "")
+	for _, finding := range result.Findings {
+		if strings.Contains(finding.Description, "refusing checks dropped") {
+			t.Fatalf("relocating a guard inside one file reported a removal: %+v", finding)
+		}
+	}
+}
+
 // TestExtractingGuardsAndDroppingOneStillReports is the control for the test
 // above. Counting across the change set must not become a licence to delete a
 // guard while moving its neighbours, so a change set that nets negative still

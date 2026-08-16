@@ -170,19 +170,44 @@ func Scan(files []File, intent string) Result {
 // inside the diff, which is exactly the author-writable input the design rule
 // forbids deciding on.
 //
-// So a lost clause is excused only when the SAME clause is added somewhere else
-// in the change set. Matching is on the normalized clause text plus its refusing
-// action, and every removal a file suffered must be matched before that file is
-// excused; one relocated clause is spent once, so it cannot excuse two files.
-// Anything unmatched blocks exactly as it did before aggregation existed.
+// So a lost clause is excused only when the SAME clause is added somewhere in
+// the change set. Matching is on the normalized clause text plus its refusing
+// action, each relocated clause is spent once so it cannot excuse two removals,
+// and every clause left unmatched is reported.
+//
+// There is NO count anywhere in this decision, including as a precondition.
+// Keeping one as the per-file trigger left the whole identity rule unreachable
+// by the shape it was written to stop: with the padding folded into the
+// shrinking file instead of a new one, three deleted authorization guards and
+// three added `if err != nil { return err }` helpers left the file's guard
+// total unchanged, the count trigger returned early, and identity matching was
+// never consulted at all. A count is the audited change's own arithmetic; it
+// decides nothing here, before, after, or instead of the identity check.
 //
 // Matching deliberately does NOT alpha-rename identifiers. Collapsing names is
 // what makes distinct guards look alike: under a consistent renaming
 // `if user == "" { return errForbidden }` and `if cache == "" { return errMissing }`
 // have the same shape, so allowing it would reopen the padding bypass for the
-// price of choosing better padding. The cost of exactness is that a relocation
-// that also renames a variable still reports, which is the same conservative
-// direction the detector had before any aggregation was added.
+// price of choosing better padding. The cost of exactness is that an in-place
+// edit that rewords a condition or renames a variable inside a guard now
+// reports, where the count rule was silent.
+//
+// Two residuals, both inherent to matching a token stream:
+//
+// The relocation target is not checked for reachability. Copying the identical
+// clause and its refusing action into a helper nobody calls, or into a file that
+// imports nothing the guard protected, excuses the deletion. Separating a real
+// relocation from a byte-faithful dead copy needs reference resolution, which no
+// token stream can do in one language let alone all of them. The supply is still
+// strictly narrower than the count rule it replaced, because the author has to
+// reproduce the exact clause rather than any three guard-shaped lines.
+//
+// A file deleted outright is not read as removing its guards. Its clauses leave
+// the change set with nothing matching them, so the identity rule alone would
+// report every commit that drops a dead file carrying an `if err != nil`, and
+// this finding blocks at every tier with no exemption path. The carve-out is
+// deliberate and it is a hole: deleting a file and adding a replacement without
+// its guards is not caught here.
 func detectRemovedGuards(files []File) []Finding {
 	relocated := make(map[string]int)
 	for _, file := range files {
@@ -195,35 +220,61 @@ func detectRemovedGuards(files []File) []Finding {
 	}
 	var findings []Finding
 	for _, file := range files {
-		reported := detectRemovedGuard(file)
-		if len(reported) == 0 {
+		if !isRuntimePath(file.Path) {
 			continue
 		}
-		if spendRelocatedGuards(relocated, removedGuardSignatures(file)) {
+		// A file with no head content was deleted rather than weakened. See the
+		// second residual above.
+		if strings.TrimSpace(file.CurrentContent) == "" {
 			continue
 		}
-		findings = append(findings, reported...)
+		for _, signature := range unmatchedRemovedGuards(relocated, file) {
+			findings = append(findings, Finding{
+				Lens: "fail-open-default",
+				Path: file.Path,
+				Line: removedGuardLine(file, signature),
+				Description: fmt.Sprintf(
+					"refusing checks dropped: %q was removed and no equivalent clause is added anywhere in this change",
+					signature),
+			})
+		}
 	}
 	return findings
 }
 
-// spendRelocatedGuards consumes one pooled addition per clause this file lost
-// and reports whether every one of them was covered. Spending rather than
-// peeking is what stops a single relocated clause from excusing the same
-// deletion in two different files.
-func spendRelocatedGuards(pool, removed map[string]int) bool {
-	if len(removed) == 0 {
-		return false
+// unmatchedRemovedGuards spends one pooled addition per clause this file lost
+// and returns the clauses nothing covered. Spending rather than peeking is what
+// stops a single relocated clause from excusing the same deletion twice.
+func unmatchedRemovedGuards(pool map[string]int, file File) []string {
+	removed := removedGuardSignatures(file)
+	signatures := make([]string, 0, len(removed))
+	for signature := range removed {
+		signatures = append(signatures, signature)
 	}
-	for signature, count := range removed {
-		if pool[signature] < count {
-			return false
+	sort.Strings(signatures)
+	var unmatched []string
+	for _, signature := range signatures {
+		count := removed[signature]
+		matched := pool[signature]
+		if matched > count {
+			matched = count
+		}
+		pool[signature] -= matched
+		for index := matched; index < count; index++ {
+			unmatched = append(unmatched, signature)
 		}
 	}
-	for signature, count := range removed {
-		pool[signature] -= count
+	return unmatched
+}
+
+// removedGuardLine points at the baseline line that carried this clause.
+func removedGuardLine(file File, signature string) int {
+	for _, occurrence := range guardOccurrences(splitLines(file.BaselineContent)) {
+		if occurrence.signature == signature {
+			return occurrence.line + 1
+		}
 	}
-	return true
+	return 1
 }
 
 // removedGuardSignatures is the multiset of guard clauses this file stopped
@@ -255,46 +306,6 @@ func countSignatures(content string) map[string]int {
 		counts[occurrence.signature]++
 	}
 	return counts
-}
-
-// detectRemovedGuard reports that ONE file ends with fewer refusing checks than
-// it started with.
-//
-// Every other detector here reads added lines only, so a defect delivered by
-// DELETING a guard produced no finding at all: removing `if err != nil { return
-// err }` adds nothing to look at. Counting guard clauses on both sides catches
-// the deletion while staying insensitive to rewording, because renaming a
-// variable inside a guard leaves the count unchanged. Only a net decrease is a
-// finding, so consolidating two checks into one still reports, which is the
-// conservative direction, and a pure refactor that keeps the count does not.
-//
-// Whether this file's loss is a removal or a move into another file of the same
-// change is not decided here. detectRemovedGuards is the only caller and owns
-// that question.
-func detectRemovedGuard(file File) []Finding {
-	// Runtime source only. Prose that happens to contain "if ... error" is not
-	// a guard, and a documentation edit must not be read as removing one.
-	if !isRuntimePath(file.Path) {
-		return nil
-	}
-	if strings.TrimSpace(file.BaselineContent) == "" || strings.TrimSpace(file.CurrentContent) == "" {
-		return nil
-	}
-	baseline := countGuardClauses(file.BaselineContent)
-	current := countGuardClauses(file.CurrentContent)
-	if baseline <= current {
-		return nil
-	}
-	return []Finding{{
-		Lens:        "fail-open-default",
-		Path:        file.Path,
-		Line:        firstRemovedGuardLine(file),
-		Description: fmt.Sprintf("refusing checks dropped from %d to %d without a replacement", baseline, current),
-	}}
-}
-
-func countGuardClauses(content string) int {
-	return len(guardClauseLines(splitLines(content)))
 }
 
 // guardClauseBodyLookahead is how far past a guard's opening line the subject
@@ -348,32 +359,6 @@ func guardOccurrences(lines []string) []guardOccurrence {
 		}
 	}
 	return found
-}
-
-// guardClauseLines is the index-only view, for the callers that only count.
-func guardClauseLines(lines []string) []int {
-	occurrences := guardOccurrences(lines)
-	found := make([]int, 0, len(occurrences))
-	for _, occurrence := range occurrences {
-		found = append(found, occurrence.line)
-	}
-	return found
-}
-
-// firstRemovedGuardLine points at the head line where a baseline guard stopped
-// appearing, so the finding names a place a reader can look.
-func firstRemovedGuardLine(file File) int {
-	current := make(map[string]bool)
-	for _, line := range splitLines(file.CurrentContent) {
-		current[normalizeExpression(line)] = true
-	}
-	baseline := splitLines(file.BaselineContent)
-	for _, number := range guardClauseLines(baseline) {
-		if !current[normalizeExpression(baseline[number])] {
-			return number + 1
-		}
-	}
-	return 1
 }
 
 func detectRedundantComment(file File) []Finding {
