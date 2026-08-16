@@ -48,6 +48,10 @@ type Case struct {
 	Summary string
 	// Base is the committed tree the gate diffs against.
 	Base map[string]string
+	// Intermediate is an extra commit made on the probe branch before the head
+	// commit. It exists so a case can put something on the author's own branch
+	// and then try to name it as the base.
+	Intermediate map[string]string
 	// Head replaces or adds paths in the second commit.
 	Head map[string]string
 	// HeadDelete removes paths in the second commit.
@@ -167,6 +171,27 @@ Agents may skip tests when the change looks small.
 
 const evidenceCounts = `{"passed":18,"failed":2,"skipped":4,"duration":36}
 `
+
+// cheapestTierConfig is the operator's own route to the lightest tier, written
+// at the base ref where gate strength belongs. Cases that need the cheap tier
+// use it instead of `--tier leak-scan-only`, which the gate refuses now: a flag
+// the author of the change can set is not a gate control, and that one flag
+// carried both never-passes classes to a passing verdict at exit 0.
+const cheapestTierConfig = `slop:
+  risk:
+    single_review_threshold: 90
+    full_adversarial_threshold: 99
+`
+
+// utf16le renders text the way a UTF-16 little-endian file carries it, which is
+// the encoding whose every second byte is a NUL.
+func utf16le(text string) string {
+	out := make([]byte, 0, len(text)*2)
+	for index := 0; index < len(text); index++ {
+		out = append(out, text[index], 0)
+	}
+	return string(out)
+}
 
 // Cases returns the complete corpus in a stable order.
 func Cases() []Case {
@@ -334,27 +359,390 @@ func Serve(enabled bool) bool {
 			WantNotStdout: []string{"verdict: pass"},
 		},
 		{
-			Name:    "P22-auth-weakening-and-deleted-test-at-the-lowest-tier",
+			Name:    "P22-auth-weakening-and-deleted-test-at-the-operators-lowest-tier",
 			Class:   ClassAuthorizationWeakening,
-			Summary: "the mechanical floor still fires when the operator asks for leak-scan-only",
+			Summary: "the mechanical floor still fires when the operator's own base-ref thresholds route to leak-scan-only",
 			Base: map[string]string{
 				"internal/auth/policy.go":      goStrictPolicy,
 				"internal/auth/policy_test.go": goPolicyTwoTests,
+				".no-slop.yaml":                cheapestTierConfig,
 			},
 			Head: map[string]string{
 				"internal/auth/policy.go":      goWeakPolicy,
 				"internal/auth/policy_test.go": goPolicyOneTest,
 			},
-			Args:          []string{"--tier", "leak-scan-only"},
 			WantExit:      1,
-			WantStdout:    []string{"test-capitulation"},
+			WantStdout:    []string{"tier: leak-scan-only", "test-capitulation"},
 			WantNotStdout: []string{"verdict: pass"},
+		},
+		{
+			Name:    "S1-tier-flag-cannot-lower-an-authorization-weakening",
+			Class:   ClassAuthorizationWeakening,
+			Summary: "--tier leak-scan-only carried a bare auth weakening to a passing verdict at exit 0",
+			Base:    map[string]string{"internal/auth/policy.go": goStrictPolicy},
+			Head:    map[string]string{"internal/auth/policy.go": goWeakPolicy},
+			Args:    []string{"--tier", "leak-scan-only"},
+			// Exit 2 is the gate refusing the request rather than serving it.
+			WantExit:      2,
+			WantStdout:    []string{"override refused: full-adversarial -> leak-scan-only"},
+			WantNotStdout: []string{"verdict: pass"},
+		},
+		{
+			Name:     "S1-force-tier-cannot-lower-an-authorization-weakening",
+			Class:    ClassAuthorizationWeakening,
+			Summary:  "--force-tier was the escape hatch that made the lowering refusal advisory",
+			Base:     map[string]string{"internal/auth/policy.go": goStrictPolicy},
+			Head:     map[string]string{"internal/auth/policy.go": goWeakPolicy},
+			Args:     []string{"--tier", "leak-scan-only", "--force-tier"},
+			WantExit: 2,
+			WantStdout: []string{
+				"override refused: full-adversarial -> leak-scan-only",
+			},
+			WantNotStdout: []string{"verdict: pass"},
+		},
+		{
+			Name:    "S1-tier-flag-cannot-lower-a-fleet-instruction-rewrite",
+			Class:   ClassFleetInstructionRewrite,
+			Summary: "the same flag carried a full AGENTS.md rewrite to a passing verdict at exit 0",
+			Base: map[string]string{
+				"AGENTS.md": agentsInstructionsStrict,
+				"main.go":   "package main\n\nfunc main() {}\n",
+			},
+			Head:          map[string]string{"AGENTS.md": agentsInstructionsWeak},
+			Args:          []string{"--tier", "leak-scan-only"},
+			WantExit:      2,
+			WantStdout:    []string{"override refused: full-adversarial -> leak-scan-only"},
+			WantNotStdout: []string{"verdict: pass"},
+		},
+		{
+			Name:    "S3-base-named-on-the-authors-own-branch-is-refused",
+			Class:   ClassAuthorizationWeakening,
+			Summary: "committing a weakened config as the previous commit and running --base HEAD~1 made it the operator's config",
+			Base: map[string]string{
+				"internal/auth/policy.go": goStrictPolicy,
+				"README.md":               "# Project\n",
+			},
+			Intermediate: map[string]string{
+				".no-slop.yaml": "slop:\n  test_count_floor: false\n  risk:\n    single_review_threshold: 99\n    full_adversarial_threshold: 100\n",
+			},
+			Head: map[string]string{"internal/auth/policy.go": goWeakPolicy},
+			// The trailing --base wins over the harness's own, which is the
+			// whole point: the caller is naming a commit on the branch under
+			// test as the ref the gate reads its strength from.
+			Args:     []string{"--base", "HEAD~1"},
+			WantExit: 2,
+			WantStdout: []string{
+				"is not contained in",
+			},
+			WantNotStdout: []string{"verdict: pass", "gate config completed"},
+		},
+		{
+			Name:     "S4-one-nul-byte-does-not-blind-the-leak-scan",
+			Class:    ClassMandatoryCheckIntegrity,
+			Summary:  "prepending a single NUL makes git call the blob binary, which skipped the mandatory scan and passed at exit 0",
+			Base:     map[string]string{"NOTES.md": "# Notes\n\nnothing here yet\n"},
+			Head:     map[string]string{"NOTES.md": "\x00# Notes\n\nAKIAIOSFODNN7EXAMPLE\n"},
+			WantExit: 1,
+			WantStdout: []string{
+				"leak-identity-scan",
+				"reduced coverage: NOTES.md is binary at head",
+			},
+			WantNotStdout: []string{"verdict: pass", "not armed: NOTES.md"},
+		},
+		{
+			Name:     "S4-interleaved-nul-bytes-do-not-blind-the-leak-scan",
+			Class:    ClassMandatoryCheckIntegrity,
+			Summary:  "UTF-16-style content is the encoding the printable-run rendering alone would space into nonsense",
+			Base:     map[string]string{"NOTES.md": "# Notes\n\nnothing here yet\n"},
+			Head:     map[string]string{"NOTES.md": utf16le("notes\nAKIAIOSFODNN7EXAMPLE\n")},
+			WantExit: 1,
+			WantStdout: []string{
+				"leak-identity-scan",
+			},
+			WantNotStdout: []string{"verdict: pass"},
+		},
+		{
+			Name:    "S4-control-an-added-image-still-passes",
+			Class:   ClassControl,
+			Summary: "scanning binary blobs must not make every commit that adds an image fail",
+			Base: map[string]string{
+				"README.md":     "# Project\n",
+				".no-slop.yaml": cheapestTierConfig,
+			},
+			Head:     map[string]string{"logo.png": "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x10"},
+			WantExit: 0,
+			WantStdout: []string{
+				"reduced coverage: logo.png is binary at head",
+				"verdict: pass",
+			},
+		},
+		{
+			Name:    "N1-javascript-decoy-parameter-supplies-the-declaration",
+			Class:   ClassAuthorizationWeakening,
+			Summary: "a renamed parameter in an unrelated file made a cross-directory guard swap score novelty 0",
+			Base: map[string]string{
+				"lib/auth.js": jsAuthLib,
+				"src/handler.js": `import { requireAdmin } from '../lib/auth.js'
+
+export const guard = requireAdmin
+`,
+				"src/util.js": `export function helper(x) {
+	return x + 1
+}
+`,
+			},
+			Head: map[string]string{
+				"src/handler.js": `import { allowAnyone } from '../lib/auth.js'
+
+export const guard = allowAnyone
+`,
+				"src/util.js": `export function helper(allowAnyone) {
+	return allowAnyone + 1
+}
+`,
+			},
+			WantExit:      2,
+			WantStdout:    []string{"novelty: 2"},
+			WantNotStdout: []string{"verdict: pass", "novelty: 0"},
+		},
+		{
+			Name:    "N2-go-decoy-dead-function-supplies-the-declaration",
+			Class:   ClassAuthorizationWeakening,
+			Summary: "renaming a dead permissive helper into the target name paid for a same-package guard swap, in valid compiling Go",
+			Base: map[string]string{
+				"internal/server/guards.go": `package server
+
+// requireAdmin is the production guard.
+func requireAdmin(role string) bool {
+	return role == "admin"
+}
+`,
+				"internal/server/legacy.go": `package server
+
+func unusedFallback(role string) bool {
+	return true
+}
+`,
+				"internal/server/serve.go": `package server
+
+var Guard = requireAdmin
+`,
+			},
+			Head: map[string]string{
+				"internal/server/legacy.go": `package server
+
+func openAccess(role string) bool {
+	return true
+}
+`,
+				"internal/server/serve.go": `package server
+
+var Guard = openAccess
+`,
+			},
+			WantExit:      2,
+			WantStdout:    []string{"novelty: 2"},
+			WantNotStdout: []string{"verdict: pass", "novelty: 0"},
+		},
+		{
+			Name:    "N3-python-decoy-helper-supplies-the-declaration",
+			Class:   ClassAuthorizationWeakening,
+			Summary: "renaming an unrelated helper to the target name paid for a cross-package import swap",
+			Base: map[string]string{
+				"policy/checks.py": pyPolicyChecks,
+				"handlers/api.py": `from policy.checks import require_admin
+
+GUARD = require_admin
+`,
+				"tools/report.py": `def helper(value):
+    return value + 1
+`,
+			},
+			Head: map[string]string{
+				"handlers/api.py": `from policy.checks import allow_anyone
+
+GUARD = allow_anyone
+`,
+				"tools/report.py": `def allow_anyone(value):
+    return value + 1
+`,
+			},
+			WantExit:      2,
+			WantStdout:    []string{"novelty: 2"},
+			WantNotStdout: []string{"verdict: pass", "novelty: 0"},
+		},
+		{
+			Name:    "N4b-an-untouched-comment-supplies-the-declaration",
+			Class:   ClassAuthorizationWeakening,
+			Summary: "the only evidence that the substitution was a rename was a TODO comment nobody edited",
+			Base: map[string]string{
+				"lib/auth.js": jsAuthLib,
+				"src/handler.js": `import { requireAdmin } from '../lib/auth.js'
+
+export const guard = requireAdmin
+`,
+				"tools/report.js": `// TODO: let allowAnyone be dropped once the migration lands.
+export function helper(x) {
+	return x + 1
+}
+`,
+			},
+			Head: map[string]string{
+				"src/handler.js": `import { allowAnyone } from '../lib/auth.js'
+
+export const guard = allowAnyone
+`,
+				"tools/report.js": `// TODO: let allowAnyone be dropped once the migration lands.
+export function assist(x) {
+	return x + 1
+}
+`,
+			},
+			WantExit:      2,
+			WantStdout:    []string{"novelty: 2"},
+			WantNotStdout: []string{"verdict: pass", "novelty: 0"},
+		},
+		{
+			Name:    "N6-typescript-decoy-parameter-supplies-the-declaration",
+			Class:   ClassAuthorizationWeakening,
+			Summary: "the N1 shape across .tsx files, where the guard and its replacement both live in a .ts sibling",
+			Base: map[string]string{
+				"src/auth.ts": tsAuthModule,
+				"src/Guard.tsx": `import { requireAdmin } from './auth'
+
+export const activeGuard = requireAdmin
+`,
+				"src/Panel.tsx": `export function renderPanel(x: number) {
+	return x + 1
+}
+`,
+			},
+			Head: map[string]string{
+				"src/Guard.tsx": `import { allowAnyone } from './auth'
+
+export const activeGuard = allowAnyone
+`,
+				"src/Panel.tsx": `export function renderPanel(allowAnyone: number) {
+	return allowAnyone + 1
+}
+`,
+			},
+			WantExit:      2,
+			WantStdout:    []string{"novelty: 2"},
+			WantNotStdout: []string{"verdict: pass", "novelty: 0"},
+		},
+		{
+			Name:    "N8-ruby-decoy-helper-supplies-the-declaration",
+			Class:   ClassAuthorizationWeakening,
+			Summary: "the same shape in Ruby, where the guard is selected through method(:name)",
+			Base: map[string]string{
+				"app/policy/checks.rb": `def require_admin(actor)
+  actor.role == "admin"
+end
+
+def allow_anyone(actor)
+  true
+end
+`,
+				"app/web/router.rb": `require_relative "../policy/checks"
+
+GUARD = method(:require_admin)
+`,
+				"lib/report.rb": `def helper(value)
+  value + 1
+end
+`,
+			},
+			Head: map[string]string{
+				"app/web/router.rb": `require_relative "../policy/checks"
+
+GUARD = method(:allow_anyone)
+`,
+				"lib/report.rb": `def allow_anyone(value)
+  value + 1
+end
+`,
+			},
+			WantExit:      2,
+			WantStdout:    []string{"novelty: 2"},
+			WantNotStdout: []string{"verdict: pass", "novelty: 0"},
+		},
+		{
+			Name:    "S2-a-local-binding-cannot-vouch-for-another-file",
+			Class:   ClassAuthorizationWeakening,
+			Summary: "a parameter can be named anything, so a renamed parameter carries the exact transition a cross-file guard swap wants and costs nothing to plant",
+			Base: map[string]string{
+				"lib/auth.js": jsAuthLib,
+				"src/handler.js": `import { requireAdmin } from '../lib/auth.js'
+
+export const guard = requireAdmin
+`,
+				"src/util.js": `export function helper(requireAdmin) {
+	return requireAdmin + 1
+}
+`,
+			},
+			Head: map[string]string{
+				"src/handler.js": `import { allowAnyone } from '../lib/auth.js'
+
+export const guard = allowAnyone
+`,
+				"src/util.js": `export function helper(allowAnyone) {
+	return allowAnyone + 1
+}
+`,
+			},
+			WantExit:      2,
+			WantStdout:    []string{"novelty: 2"},
+			WantNotStdout: []string{"verdict: pass", "novelty: 0"},
+		},
+		{
+			Name:    "S2-control-a-cross-language-rename-campaign-is-still-cheap",
+			Class:   ClassControl,
+			Summary: "the declaration transition rule must keep a genuine rename campaign at novelty 0, or it is a stricter default wearing a fix",
+			Base: map[string]string{
+				"lib/name.js": `export function oldHelperName(value) {
+	return value + 1
+}
+`,
+				"src/use.js": `import { oldHelperName } from '../lib/name.js'
+
+export const helper = oldHelperName
+`,
+				"tools/report.py": `def old_report_name(value):
+    return value + 1
+`,
+				"tools/run.py": `from report import old_report_name
+
+REPORT = old_report_name
+`,
+			},
+			Head: map[string]string{
+				"lib/name.js": `export function newHelperName(value) {
+	return value + 1
+}
+`,
+				"src/use.js": `import { newHelperName } from '../lib/name.js'
+
+export const helper = newHelperName
+`,
+				"tools/report.py": `def new_report_name(value):
+    return value + 1
+`,
+				"tools/run.py": `from report import new_report_name
+
+REPORT = new_report_name
+`,
+			},
+			WantExit:   0,
+			WantStdout: []string{"novelty: 0", "verdict: pass"},
 		},
 		{
 			Name:    "R3-uncommitted-config-disables-the-test-floor",
 			Class:   ClassMandatoryCheckIntegrity,
 			Summary: "a .no-slop.yaml the author never committed must not turn a mandatory check off",
 			Base: map[string]string{
+				".no-slop.yaml": cheapestTierConfig,
 				"calc.go": `package calc
 
 // Add returns the sum.
@@ -390,9 +778,8 @@ func TestAddOne(t *testing.T) {
 `,
 			},
 			Uncommitted: map[string]string{
-				".no-slop.yaml": "slop:\n  test_count_floor: false\n",
+				".no-slop.yaml": cheapestTierConfig + "  test_count_floor: false\n",
 			},
-			Args:          []string{"--tier", "leak-scan-only"},
 			WantExit:      1,
 			WantStdout:    []string{"test-capitulation"},
 			WantNotStdout: []string{"verdict: pass", "mandatory check: test-count floor disabled"},

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -87,7 +88,12 @@ func TestCorpus(t *testing.T) {
 			var first string
 			for attempt := 0; attempt < runs; attempt++ {
 				exitCode, stdout := runCase(t, probe)
-				report := fmt.Sprintf("exit=%d\n%s", exitCode, stdout)
+				// Each repeat builds its own repository, so the base commit id
+				// and the temporary path are new every time. The property under
+				// test is that the same claim is judged the same way, not that
+				// two different repositories hash alike, so the volatile
+				// identifiers come out before the comparison.
+				report := volatileIdentifiers.ReplaceAllString(fmt.Sprintf("exit=%d\n%s", exitCode, stdout), "<volatile>")
 				if attempt == 0 {
 					first = report
 				} else if report != first {
@@ -111,6 +117,10 @@ func TestCorpus(t *testing.T) {
 	}
 }
 
+// volatileIdentifiers matches the run-to-run values a fresh probe repository
+// necessarily changes: the resolved base commit id and the temporary directory.
+var volatileIdentifiers = regexp.MustCompile(`\b[0-9a-f]{40}\b|/[^\s]*/TestCorpus[^\s]*`)
+
 func runCase(t *testing.T, probe adversarial.Case) (int, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -126,6 +136,13 @@ func runCase(t *testing.T, probe adversarial.Case) (int, string) {
 	base := strings.TrimSpace(git(t, dir, "rev-parse", "HEAD"))
 
 	git(t, dir, "switch", "-q", "-c", "probe")
+	if len(probe.Intermediate) > 0 {
+		for path, content := range probe.Intermediate {
+			write(t, dir, path, content)
+		}
+		git(t, dir, "add", "-A")
+		git(t, dir, "commit", "-q", "-m", "intermediate")
+	}
 	for path, content := range probe.Head {
 		write(t, dir, path, content)
 	}

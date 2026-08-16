@@ -1,8 +1,4 @@
----
-title: Identity Rename Runbook
-description: Inventory and rollout stages for the no-mistakes to no-slop rename.
----
-
+# Identity Rename Runbook
 
 This document records stages 1 through 3 of the `no-mistakes` to `no-slop`
 identity change. The compatibility release makes the new identity canonical

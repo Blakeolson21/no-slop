@@ -172,11 +172,29 @@ type RepoConfig struct {
 // SlopRaw is the YAML representation of NoSlop front-stage settings.
 type SlopRaw struct {
 	DataDir        string          `yaml:"data_dir"`
+	BaseRef        SlopBaseRefRaw  `yaml:"base_ref"`
 	Risk           SlopRiskRaw     `yaml:"risk"`
 	LeakScan       SlopLeakScanRaw `yaml:"leak_scan"`
 	Prose          SlopProseRaw    `yaml:"prose"`
 	TestCountFloor *bool           `yaml:"test_count_floor"`
 	TestCommand    string          `yaml:"test_command"`
+	// ProvenanceRequired refuses a run whose provenance store is absent on a
+	// workdir that has recorded history before. Deleting the file is the
+	// cheapest way to clear an escalation, so an operator who relies on
+	// provenance can say that an empty store is not an acceptable answer.
+	ProvenanceRequired *bool `yaml:"provenance_required"`
+}
+
+// SlopBaseRefRaw pins the ref the gate resolves its base from.
+//
+// The base ref is where every gate-strength value is read, so which ref it is
+// cannot be the caller's choice: naming a commit on the author's own branch as
+// the base made the author's own weakened config the operator's config. These
+// two fields live in the repository config at the base ref, which is the one
+// place already outside the blast radius of the change under test.
+type SlopBaseRefRaw struct {
+	Remote string `yaml:"remote"`
+	Branch string `yaml:"branch"`
 }
 
 // SlopRiskRaw controls the risk classifier's numeric cutoffs and path hints.
@@ -465,13 +483,27 @@ type Config struct {
 }
 
 // Slop is the resolved NoSlop front-stage configuration.
+//
+// Every exported field here mirrors one in SlopRaw, by name and by shape. That
+// mirroring is load-bearing: the gate derives its drift report by reflecting
+// over the pair, so a field added to one and forgotten in the other is a
+// compile-visible or test-visible mistake rather than a silently uncompared
+// gate control. See slopConfigDrift in internal/slop/cli.
 type Slop struct {
-	DataDir        string
-	Risk           SlopRisk
-	LeakScan       SlopLeakScan
-	Prose          SlopProse
-	TestCountFloor bool
-	TestCommand    string
+	DataDir            string
+	BaseRef            SlopBaseRef
+	Risk               SlopRisk
+	LeakScan           SlopLeakScan
+	Prose              SlopProse
+	TestCountFloor     bool
+	TestCommand        string
+	ProvenanceRequired bool
+}
+
+// SlopBaseRef is the resolved pinned base ref.
+type SlopBaseRef struct {
+	Remote string
+	Branch string
 }
 
 type SlopRisk struct {
@@ -1939,6 +1971,13 @@ func resolveSlop(raw SlopRaw) Slop {
 	}
 	if value := strings.TrimSpace(raw.DataDir); value != "" {
 		resolved.DataDir = value
+	}
+	resolved.BaseRef = SlopBaseRef{
+		Remote: strings.TrimSpace(raw.BaseRef.Remote),
+		Branch: strings.TrimSpace(raw.BaseRef.Branch),
+	}
+	if raw.ProvenanceRequired != nil {
+		resolved.ProvenanceRequired = *raw.ProvenanceRequired
 	}
 	if raw.Risk.SingleReviewThreshold > 0 {
 		resolved.Risk.SingleReviewThreshold = raw.Risk.SingleReviewThreshold

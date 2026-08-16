@@ -20,6 +20,13 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/slop/provenance"
 )
 
+// cheapestTierConfig is the operator's own route to the cheapest tier, written
+// at the BASE ref where gate strength belongs. It replaces the
+// `--tier leak-scan-only` these tests used as a seam: the tier flag may only
+// raise a computed tier now, because on this command line the caller and the
+// audited party are the same agent.
+const cheapestTierConfig = "slop:\n  risk:\n    single_review_threshold: 90\n    full_adversarial_threshold: 99\n"
+
 type emptyReviewer struct{ calls int }
 
 func (r *emptyReviewer) Review(context.Context, engine.ReviewRequest) ([]engine.Finding, error) {
@@ -147,16 +154,21 @@ func TestRunGateArmsScopeExpansionWhenIntentIsStated(t *testing.T) {
 	}
 }
 
-func TestRunGatePrintsOverrideAndStillBlocksLeak(t *testing.T) {
+// TestRunGateAtTheOperatorsCheapestTierStillBlocksLeak keeps the mandatory scan
+// tier-independent. The route to the cheapest tier is the operator's threshold
+// config at the base ref, because the flag that used to get there could be set
+// by the change under test.
+func TestRunGateAtTheOperatorsCheapestTierStillBlocksLeak(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
 	runGit(t, dir, "init", "-b", "main")
 	runGit(t, dir, "config", "user.email", "test@example.com")
 	runGit(t, dir, "config", "user.name", "Test")
+	writeFile(t, dir, ".no-slop.yaml", cheapestTierConfig)
 	writeFile(t, dir, ".noslop-blocklist", "# intentionally empty\n")
 	writeFile(t, dir, "policy.go", "package policy\n")
-	runGit(t, dir, "add", ".noslop-blocklist", "policy.go")
+	runGit(t, dir, "add", ".no-slop.yaml", ".noslop-blocklist", "policy.go")
 	runGit(t, dir, "commit", "-m", "initial")
 	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
 	runGit(t, dir, "switch", "-c", "feature/policy")
@@ -165,19 +177,80 @@ func TestRunGatePrintsOverrideAndStillBlocksLeak(t *testing.T) {
 	runGit(t, dir, "commit", "-m", "change")
 
 	var stdout, stderr bytes.Buffer
-	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base, "--tier", "leak-scan-only"}, &stdout, &stderr, slopcli.Options{})
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base}, &stdout, &stderr, slopcli.Options{})
 	if exitCode != 1 {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
 	}
 	for _, want := range []string{
 		"tier: leak-scan-only",
-		"override: single-review -> leak-scan-only",
 		"finding: [leak-identity-scan] policy.go:3",
 		"verdict: fail",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("output missing %q:\n%s", want, stdout.String())
 		}
+	}
+}
+
+// TestRunGateRaisesButNeverLowersTheComputedTier is the command-line half of
+// the escalate-only ruling. The round-3 review carried an authorization
+// weakening and a fleet-instruction rewrite to "verdict: pass" at exit 0 with
+// nothing but `--tier leak-scan-only`, and `--force-tier` did the same over a
+// live provenance escalation.
+func TestRunGateRaisesButNeverLowersTheComputedTier(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	writeFile(t, dir, "internal/auth/policy.go", "package auth\n\nfunc Allow(role string, mfa bool) bool {\n\treturn role == \"admin\" && mfa\n}\n")
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-m", "initial")
+	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	runGit(t, dir, "switch", "-c", "feature/weaken")
+	writeFile(t, dir, "internal/auth/policy.go", "package auth\n\nfunc Allow(role string, mfa bool) bool {\n\treturn role == \"admin\" || mfa\n}\n")
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-m", "weaken")
+
+	for _, probe := range []struct {
+		name string
+		args []string
+	}{
+		{name: "plain lowering", args: []string{"--tier", "leak-scan-only"}},
+		{name: "forced lowering", args: []string{"--tier", "leak-scan-only", "--force-tier"}},
+		{name: "one step down", args: []string{"--tier", "single-review"}},
+	} {
+		t.Run(probe.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			args := append([]string{"gate", "--repo", dir, "--base", base}, probe.args...)
+			exitCode := slopcli.Run(context.Background(), args, &stdout, &stderr, slopcli.Options{})
+			if exitCode != 2 {
+				t.Fatalf("exit = %d, want the lowering refused\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
+			}
+			if strings.Contains(stdout.String(), "verdict: pass") {
+				t.Fatalf("a lowered tier reached a passing verdict:\n%s", stdout.String())
+			}
+			if !strings.Contains(stdout.String(), "override refused: full-adversarial") {
+				t.Fatalf("the refusal is not printed with the computed tier:\n%s", stdout.String())
+			}
+			if !strings.Contains(stderr.String(), "would lower the computed tier full-adversarial") {
+				t.Fatalf("the error does not name the computed tier:\n%s", stderr.String())
+			}
+		})
+	}
+
+	var stdout, stderr bytes.Buffer
+	raise := []string{"gate", "--repo", dir, "--base", base, "--tier", "full-adversarial"}
+	if code := slopcli.Run(context.Background(), raise, &stdout, &stderr, slopcli.Options{
+		ReviewerFactory: func(context.Context, *config.Config, io.Writer) (engine.Reviewer, io.Closer, error) {
+			return nil, nil, errors.New("no runnable agent found")
+		},
+	}); code == 0 {
+		t.Fatalf("an auth weakening passed at the full tier:\n%s", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "override refused") {
+		t.Fatalf("a request for the tier already computed was reported as refused:\n%s", stdout.String())
 	}
 }
 
@@ -214,8 +287,9 @@ func TestRunGateReportsEveryHonoredLeakExemption(t *testing.T) {
 	runGit(t, dir, "init", "-b", "main")
 	runGit(t, dir, "config", "user.email", "test@example.com")
 	runGit(t, dir, "config", "user.name", "Test")
+	writeFile(t, dir, ".no-slop.yaml", cheapestTierConfig)
 	writeFile(t, dir, "README.md", "# Project\n")
-	runGit(t, dir, "add", "README.md")
+	runGit(t, dir, "add", ".no-slop.yaml", "README.md")
 	runGit(t, dir, "commit", "-m", "initial")
 	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
 	runGit(t, dir, "switch", "-c", "test/leak-fixtures")
@@ -224,7 +298,7 @@ func TestRunGateReportsEveryHonoredLeakExemption(t *testing.T) {
 	runGit(t, dir, "commit", "-m", "add fixtures")
 
 	var stdout, stderr bytes.Buffer
-	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base, "--tier", "leak-scan-only"}, &stdout, &stderr, slopcli.Options{})
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base}, &stdout, &stderr, slopcli.Options{})
 	if exitCode != 0 {
 		t.Fatalf("exit = %d, want exemptions honored\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
 	}
@@ -277,7 +351,7 @@ func TestRunGateCanRefuseInlineLeakExemptions(t *testing.T) {
 	runGit(t, dir, "init", "-b", "main")
 	runGit(t, dir, "config", "user.email", "test@example.com")
 	runGit(t, dir, "config", "user.name", "Test")
-	writeFile(t, dir, ".no-slop.yaml", "slop:\n  leak_scan:\n    allow_exemptions: false\n")
+	writeFile(t, dir, ".no-slop.yaml", "slop:\n  leak_scan:\n    allow_exemptions: false\n  risk:\n    single_review_threshold: 90\n    full_adversarial_threshold: 99\n")
 	writeFile(t, dir, "README.md", "# Project\n")
 	runGit(t, dir, "add", ".no-slop.yaml", "README.md")
 	runGit(t, dir, "commit", "-m", "initial")
@@ -288,7 +362,7 @@ func TestRunGateCanRefuseInlineLeakExemptions(t *testing.T) {
 	runGit(t, dir, "commit", "-m", "add fixture")
 
 	var stdout, stderr bytes.Buffer
-	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base, "--tier", "leak-scan-only"}, &stdout, &stderr, slopcli.Options{})
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base}, &stdout, &stderr, slopcli.Options{})
 	if exitCode != 1 {
 		t.Fatalf("exit = %d, want refused exemption to fail the gate\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
 	}
@@ -449,7 +523,7 @@ func TestRunGateAppendsProvenanceForBlockingFinding(t *testing.T) {
 	runGit(t, dir, "init", "-b", "main")
 	runGit(t, dir, "config", "user.email", "test@example.com")
 	runGit(t, dir, "config", "user.name", "Test")
-	writeFile(t, dir, ".no-slop.yaml", "slop:\n  data_dir: .review-history\n  leak_scan:\n    blocklist_file: .noslop-blocklist\n  test_count_floor: true\n")
+	writeFile(t, dir, ".no-slop.yaml", "slop:\n  data_dir: .review-history\n  leak_scan:\n    blocklist_file: .noslop-blocklist\n  test_count_floor: true\n  risk:\n    single_review_threshold: 90\n    full_adversarial_threshold: 99\n")
 	writeFile(t, dir, ".noslop-blocklist", "# intentionally empty\n")
 	writeFile(t, dir, "calc_test.go", "package calc\nfunc TestPositive(t *testing.T) {}\nfunc TestNegative(t *testing.T) {}\n")
 	runGit(t, dir, "add", ".no-slop.yaml", ".noslop-blocklist", "calc_test.go")
@@ -462,7 +536,7 @@ func TestRunGateAppendsProvenanceForBlockingFinding(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	exitCode := slopcli.Run(context.Background(), []string{
-		"gate", "--repo", dir, "--base", base, "--tier", "leak-scan-only",
+		"gate", "--repo", dir, "--base", base,
 		"--provider", "provider-a", "--model", "model-a", "--reasoning-effort", "high",
 		"--lane-id", "lane-a", "--change-class", "tests",
 	}, &stdout, &stderr, slopcli.Options{})
@@ -555,7 +629,12 @@ func TestRunGateConditionsDecisionOnConfiguredProvenanceStore(t *testing.T) {
 	}
 }
 
-func TestRunGateRefusesTierOverrideThatContradictsProvenanceUnlessForced(t *testing.T) {
+// TestRunGateRefusesToLowerAProvenanceEscalatedTier replaces an earlier test
+// that pinned --force-tier as an accepted way to take the lower tier anyway.
+// That escape hatch is gone: the flag is escalate-only now, so the property
+// being proven changed and its old proof had to go with it. What is left is the
+// half that was always right, plus the half --force-tier used to undo.
+func TestRunGateRefusesToLowerAProvenanceEscalatedTier(t *testing.T) {
 	dir := t.TempDir()
 	runGit(t, dir, "init", "-b", "main")
 	runGit(t, dir, "config", "user.email", "test@example.com")
@@ -606,24 +685,29 @@ func TestRunGateRefusesTierOverrideThatContradictsProvenanceUnlessForced(t *test
 			t.Errorf("refusal output missing %q:\n%s", want, refusedOut.String())
 		}
 	}
-	if !strings.Contains(refusedErr.String(), "use --force-tier to accept the lower tier") {
-		t.Fatalf("refusal error does not explain force flag:\n%s", refusedErr.String())
+	if !strings.Contains(refusedErr.String(), "this tier came from provenance escalation") {
+		t.Fatalf("refusal error does not name the escalation:\n%s", refusedErr.String())
 	}
 
 	var forcedOut, forcedErr bytes.Buffer
 	forcedArgs := append(append([]string(nil), baseArgs...), "--force-tier")
 	exitCode = slopcli.Run(context.Background(), forcedArgs, &forcedOut, &forcedErr, slopcli.Options{ProvenanceStore: store})
-	if exitCode != 0 {
-		t.Fatalf("forced exit = %d, want explicit lower tier accepted\nstdout:\n%s\nstderr:\n%s", exitCode, forcedOut.String(), forcedErr.String())
+	if exitCode != 2 {
+		t.Fatalf("forced exit = %d, want --force-tier refused as well\nstdout:\n%s\nstderr:\n%s", exitCode, forcedOut.String(), forcedErr.String())
+	}
+	if strings.Contains(forcedOut.String(), "verdict: pass") {
+		t.Fatalf("--force-tier cleared a live escalation and passed:\n%s", forcedOut.String())
 	}
 	for _, want := range []string{
-		"tier: leak-scan-only",
-		"provenance: lane lane-a: 3 test-capitulation findings",
-		"override forced: single-review -> leak-scan-only",
+		"tier: single-review",
+		"override refused: single-review -> leak-scan-only",
 	} {
 		if !strings.Contains(forcedOut.String(), want) {
 			t.Errorf("forced output missing %q:\n%s", want, forcedOut.String())
 		}
+	}
+	if !strings.Contains(forcedErr.String(), "--force-tier no longer lowers a computed tier") {
+		t.Fatalf("forced refusal does not say what the flag now does:\n%s", forcedErr.String())
 	}
 }
 
@@ -676,8 +760,9 @@ func TestRunGateWithholdsTheVerdictWhenProvenanceCannotBeRecorded(t *testing.T) 
 	runGit(t, dir, "init", "-b", "main")
 	runGit(t, dir, "config", "user.email", "test@example.com")
 	runGit(t, dir, "config", "user.name", "Test")
+	writeFile(t, dir, ".no-slop.yaml", cheapestTierConfig)
 	writeFile(t, dir, "calc_test.go", "package calc\nfunc TestPositive(t *testing.T) {}\nfunc TestNegative(t *testing.T) {}\n")
-	runGit(t, dir, "add", "calc_test.go")
+	runGit(t, dir, "add", ".no-slop.yaml", "calc_test.go")
 	runGit(t, dir, "commit", "-m", "initial")
 	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
 	runGit(t, dir, "switch", "-c", "test/remove-case")
@@ -686,7 +771,7 @@ func TestRunGateWithholdsTheVerdictWhenProvenanceCannotBeRecorded(t *testing.T) 
 	runGit(t, dir, "commit", "-m", "remove test")
 
 	var stdout, stderr bytes.Buffer
-	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base, "--tier", "leak-scan-only"}, &stdout, &stderr, slopcli.Options{ProvenanceStore: failingProvenanceStore{}})
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base}, &stdout, &stderr, slopcli.Options{ProvenanceStore: failingProvenanceStore{}})
 	if exitCode != 2 {
 		t.Fatalf("exit = %d, want bookkeeping failure\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
 	}

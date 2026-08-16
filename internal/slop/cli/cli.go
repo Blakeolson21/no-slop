@@ -10,7 +10,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"unicode"
 
 	"github.com/Blakeolson21/no-slop/internal/agent"
 	"github.com/Blakeolson21/no-slop/internal/config"
@@ -122,10 +124,10 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 	flags := flag.NewFlagSet("gate", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	repo := flags.String("repo", ".", "repository worktree")
-	base := flags.String("base", "", "base revision, default is merge-base with the default branch")
+	base := flags.String("base", "", "base revision, which must be an ancestor of HEAD on the canonical ref")
 	head := flags.String("head", "HEAD", "head revision")
-	tier := flags.String("tier", "auto", "validation tier: auto, leak-scan-only, single-review, full-adversarial")
-	forceTier := flags.Bool("force-tier", false, "allow --tier to lower a provenance-escalated tier")
+	tier := flags.String("tier", "auto", "validation tier: auto, leak-scan-only, single-review, full-adversarial (may only raise the computed tier)")
+	forceTier := flags.Bool("force-tier", false, "accepted for compatibility; it can no longer lower a computed tier")
 	thread := flags.String("thread", "", "GitHub issue or pull request URL for outbound text")
 	blocklist := flags.String("blocklist", "", "private-name blocklist file override")
 	provider := flags.String("provider", "", "generating agent provider")
@@ -164,26 +166,21 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 	if err != nil {
 		return fmt.Errorf("resolve branch: %w", err)
 	}
-	defaultBranch := detectDefaultBranch(ctx, workDir)
-	baseRef := strings.TrimSpace(*base)
-	if baseRef == "" {
-		baseRef, err = defaultBaseRef(ctx, workDir, defaultBranch, *head)
-		if err != nil {
-			return err
-		}
-	}
 	headRef, err := git.Run(ctx, workDir, "rev-parse", *head)
 	if err != nil {
 		return fmt.Errorf("resolve head revision: %w", err)
 	}
-	baseRef, err = git.Run(ctx, workDir, "rev-parse", baseRef)
-	if err != nil {
-		return fmt.Errorf("resolve base revision: %w", err)
-	}
-	baseRepoCfg, err := loadBaseRepoConfig(ctx, workDir, baseRef)
+	resolvedBase, err := resolveBase(ctx, workDir, headRef, strings.TrimSpace(*base))
 	if err != nil {
 		return err
 	}
+	// Which ref supplied the gate's strength is printed on every run. The
+	// round-3 review passed an authorization weakening by naming a commit on
+	// its own branch as the base, and nothing in the output said so.
+	fmt.Fprintln(stdout, resolvedBase.String())
+	baseRef := resolvedBase.Base
+	defaultBranch := resolvedBase.CanonicalBranch
+	baseRepoCfg := resolvedBase.Config
 	// Every gate-strength value is resolved from the base ref, never from the
 	// worktree. See the loadBaseRepoConfig comment for why.
 	cfg := config.Merge(globalCfg, baseRepoCfg)
@@ -223,8 +220,20 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 	if tierOverride == "auto" {
 		tierOverride = ""
 	}
+	dataDir := resolveDataDir(workDir, cfg.Slop.DataDir)
 	if opts.ProvenanceStore == nil {
-		opts.ProvenanceStore = provenance.NewFileStore(resolveDataDir(workDir, cfg.Slop.DataDir))
+		opts.ProvenanceStore = provenance.NewFileStore(dataDir)
+	}
+	// The lane and model are strings the caller asserts about itself; nothing
+	// authenticates them. That is a residual the product accepts, but a reviewer
+	// reading the output has to be able to see the assertion for what it is,
+	// which they could not when it printed only as part of a rationale sentence.
+	// The configured path, not the resolved absolute one: NoSlop's own identity
+	// scan treats a personal home path as a leak, so printing one in its own run
+	// header would be the product contradicting itself on every run.
+	fmt.Fprintln(stdout, provenanceIdentityLine(*laneID, *model, cfg.Slop.DataDir))
+	if err := requireProvenanceStore(cfg.Slop.ProvenanceRequired, dataDir); err != nil {
+		return err
 	}
 	input := engine.Input{
 		WorkDir:       workDir,
@@ -437,26 +446,87 @@ func readBaseRepoConfigFile(ctx context.Context, workDir, baseRef, name string) 
 // differently from the base ref. The values are not honored, so the run has to
 // say so: a contributor who tightened the gate deserves to know their change
 // takes effect next run, and one who loosened it deserves to be named for it.
+//
+// The field list was written out by hand, which is the shape that forgets the
+// next field somebody adds. loadBaseRepoConfig's own comment says "picking a
+// subset is how the next field gets forgotten", and this was the subset. It is
+// now derived from config.Slop by reflection, with the yaml names taken from
+// config.SlopRaw's tags, so a gate-strength field is compared from the moment
+// it exists. TestSlopConfigDriftComparesEveryConfiguredField is the check that
+// fails when the two structs stop mirroring one another.
 func slopConfigDrift(head, base config.Slop) []string {
+	return compareConfigFields("slop", reflect.ValueOf(head), reflect.ValueOf(base), reflect.TypeOf(config.SlopRaw{}))
+}
+
+func compareConfigFields(prefix string, head, base reflect.Value, rawType reflect.Type) []string {
 	var drift []string
-	compare := func(name string, headValue, baseValue any) {
-		headText := fmt.Sprint(headValue)
-		baseText := fmt.Sprint(baseValue)
+	for index := 0; index < head.NumField(); index++ {
+		field := head.Type().Field(index)
+		if !field.IsExported() {
+			continue
+		}
+		name, rawField := configFieldName(rawType, field.Name)
+		path := prefix + "." + name
+		headValue := head.Field(index)
+		baseValue := base.Field(index)
+		if headValue.Kind() == reflect.Struct {
+			nested := reflect.TypeOf(struct{}{})
+			if rawField != nil {
+				nested = derefType(rawField.Type)
+			}
+			drift = append(drift, compareConfigFields(path, headValue, baseValue, nested)...)
+			continue
+		}
+		headText := fmt.Sprint(headValue.Interface())
+		baseText := fmt.Sprint(baseValue.Interface())
 		if headText != baseText {
-			drift = append(drift, fmt.Sprintf("slop.%s is %s at head and %s at the base ref; the base value is the one in force", name, headText, baseText))
+			drift = append(drift, fmt.Sprintf("%s is %s at head and %s at the base ref; the base value is the one in force", path, headText, baseText))
 		}
 	}
-	compare("data_dir", head.DataDir, base.DataDir)
-	compare("risk.single_review_threshold", head.Risk.SingleReviewThreshold, base.Risk.SingleReviewThreshold)
-	compare("risk.full_adversarial_threshold", head.Risk.FullAdversarialThreshold, base.Risk.FullAdversarialThreshold)
-	compare("risk.high_risk_paths", head.Risk.HighRiskPaths, base.Risk.HighRiskPaths)
-	compare("leak_scan.blocklist_file", head.LeakScan.BlocklistFile, base.LeakScan.BlocklistFile)
-	compare("leak_scan.allow_exemptions", head.LeakScan.AllowExemptions, base.LeakScan.AllowExemptions)
-	compare("prose.outbound_paths", head.Prose.OutboundPaths, base.Prose.OutboundPaths)
-	compare("prose.ai_tell_words", head.Prose.AITellWords, base.Prose.AITellWords)
-	compare("test_count_floor", head.TestCountFloor, base.TestCountFloor)
-	compare("test_command", head.TestCommand, base.TestCommand)
 	return drift
+}
+
+// configFieldName finds the yaml name the raw config uses for a resolved field.
+// A resolved field with no raw counterpart still gets compared, under a name
+// derived from its Go name: a broken mirror must never mean a silently
+// uncompared gate control.
+func configFieldName(rawType reflect.Type, goName string) (string, *reflect.StructField) {
+	if rawType != nil && rawType.Kind() == reflect.Struct {
+		if field, ok := rawType.FieldByName(goName); ok {
+			if tag := strings.Split(field.Tag.Get("yaml"), ",")[0]; tag != "" && tag != "-" {
+				return tag, &field
+			}
+			return snakeCase(goName), &field
+		}
+	}
+	return snakeCase(goName), nil
+}
+
+func derefType(value reflect.Type) reflect.Type {
+	for value.Kind() == reflect.Ptr {
+		value = value.Elem()
+	}
+	return value
+}
+
+func snakeCase(name string) string {
+	var out strings.Builder
+	runes := []rune(name)
+	for index, current := range runes {
+		upper := unicode.IsUpper(current)
+		if upper && index > 0 {
+			previous := runes[index-1]
+			next := rune(0)
+			if index+1 < len(runes) {
+				next = runes[index+1]
+			}
+			if !unicode.IsUpper(previous) || (next != 0 && unicode.IsLower(next)) {
+				out.WriteByte('_')
+			}
+		}
+		out.WriteRune(unicode.ToLower(current))
+	}
+	return out.String()
 }
 
 // unmatchedPatternWarnings reports a configured glob that matches no path in
@@ -493,6 +563,37 @@ func unmatchedPatternWarnings(ctx context.Context, workDir, headRef string, slop
 		}
 	}
 	return warnings
+}
+
+// provenanceIdentityLine states, in the run header, exactly what the gate knows
+// about who generated the change and where it looked for their history. Every
+// part of it is self-asserted except the store path, which comes from the base
+// ref, and the line says so.
+func provenanceIdentityLine(laneID, model, dataDir string) string {
+	lane := strings.TrimSpace(laneID)
+	generator := strings.TrimSpace(model)
+	if lane == "" {
+		lane = "(none supplied)"
+	}
+	if generator == "" {
+		generator = "(none supplied)"
+	}
+	return fmt.Sprintf("provenance identity: lane %s, model %s, self-asserted by the caller and not authenticated; history at %s", lane, generator, dataDir)
+}
+
+// requireProvenanceStore honors slop.provenance_required from the base ref. A
+// repository that depends on escalation history can say that an absent store is
+// not an acceptable answer, which is the operator-side half of the high-water
+// mark the store itself keeps.
+func requireProvenanceStore(required bool, dataDir string) error {
+	if !required {
+		return nil
+	}
+	path := filepath.Join(dataDir, provenance.FileName)
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("slop.provenance_required is set at the base ref but the provenance history at %s cannot be read: %w", path, err)
+	}
+	return nil
 }
 
 func resolveDataDir(workDir, configured string) string {
@@ -586,29 +687,173 @@ func loadBlocklist(workDir, configured string, explicitlyConfigured bool) ([]str
 	return entries, fmt.Sprintf("leak scan: loaded %s private-name blocklist from %s (%d entries)", state, configured, len(entries)), nil
 }
 
-func detectDefaultBranch(ctx context.Context, workDir string) string {
-	if remoteHead, err := git.Run(ctx, workDir, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"); err == nil {
-		return strings.TrimPrefix(remoteHead, "origin/")
-	}
-	for _, candidate := range []string{"main", "master"} {
-		if _, err := git.Run(ctx, workDir, "rev-parse", "--verify", candidate); err == nil {
-			return candidate
-		}
-	}
-	return "main"
+// ResolvedBase records which ref the gate took its strength from and how.
+type ResolvedBase struct {
+	// CanonicalRef is the ref the base must sit on, such as "origin/main".
+	CanonicalRef string
+	// CanonicalBranch is that ref's branch name, used for reversibility scoring.
+	CanonicalBranch string
+	// Base is the resolved base commit.
+	Base string
+	// Config is the repository config read at Base.
+	Config *config.RepoConfig
+	// Explicit says the caller supplied --base and it was verified.
+	Explicit bool
+	// Pinned says the canonical ref came from slop.base_ref at the base config
+	// rather than from detection.
+	Pinned bool
 }
 
-func defaultBaseRef(ctx context.Context, workDir, defaultBranch, head string) (string, error) {
-	for _, candidate := range []string{"origin/" + defaultBranch, defaultBranch} {
-		if _, err := git.Run(ctx, workDir, "rev-parse", "--verify", candidate); err != nil {
-			continue
+func (r ResolvedBase) String() string {
+	origin := "merge-base with " + r.CanonicalRef
+	if r.Explicit {
+		origin = "--base, verified as an ancestor of HEAD on " + r.CanonicalRef
+	}
+	pinned := ""
+	if r.Pinned {
+		pinned = " (canonical ref pinned by slop.base_ref)"
+	}
+	return fmt.Sprintf("base: %s from %s%s", r.Base, origin, pinned)
+}
+
+// resolveBase decides which commit supplies the gate's strength.
+//
+// It used to be whatever `--base` said, which put the last control back inside
+// the author's reach: committing a weakened .no-slop.yaml as the previous
+// commit on the author's own branch and running `--base HEAD~1` made that file
+// the operator's config, reported zero drift, and passed an authorization
+// weakening at exit 0. The base ref being outside the blast radius of the
+// change is the whole reason gate strength was moved there, and a caller-named
+// commit is not outside it.
+//
+// So the base is the merge-base of HEAD with a CANONICAL ref: the remote and
+// branch pinned by slop.base_ref in the repository config, or the detected
+// default branch when nothing is pinned. An explicit --base is still accepted,
+// because a pipeline legitimately knows the exact commit it branched from, but
+// only when it is both an ancestor of HEAD and contained in the canonical ref,
+// which is the pair of properties that makes it a commit the operator's history
+// already approved. Anything else exits 2 rather than being quietly honored.
+//
+// The pin is read from the config at the provisionally resolved base, so an
+// operator can move the canonical ref without the move being self-certifying:
+// the ref that authorizes the change of ref is the previous canonical one.
+func resolveBase(ctx context.Context, workDir, headRef, requested string) (ResolvedBase, error) {
+	canonicalRef, canonicalBranch, err := detectCanonicalRef(ctx, workDir, config.SlopBaseRef{})
+	if err != nil {
+		return ResolvedBase{}, err
+	}
+	provisional, err := mergeBase(ctx, workDir, canonicalRef, headRef)
+	if err != nil {
+		return ResolvedBase{}, err
+	}
+	provisionalCfg, err := loadBaseRepoConfig(ctx, workDir, provisional)
+	if err != nil {
+		return ResolvedBase{}, err
+	}
+	pinned := false
+	if pin := config.Merge(config.DefaultGlobalConfig(), provisionalCfg).Slop.BaseRef; pin.Remote != "" || pin.Branch != "" {
+		pinnedRef, pinnedBranch, pinErr := detectCanonicalRef(ctx, workDir, pin)
+		if pinErr != nil {
+			return ResolvedBase{}, pinErr
 		}
-		base, err := git.Run(ctx, workDir, "merge-base", candidate, head)
-		if err == nil {
-			return base, nil
+		if pinnedRef != canonicalRef {
+			canonicalRef, canonicalBranch, pinned = pinnedRef, pinnedBranch, true
+			provisional, err = mergeBase(ctx, workDir, canonicalRef, headRef)
+			if err != nil {
+				return ResolvedBase{}, err
+			}
+			provisionalCfg, err = loadBaseRepoConfig(ctx, workDir, provisional)
+			if err != nil {
+				return ResolvedBase{}, err
+			}
 		}
 	}
-	return "", fmt.Errorf("resolve base revision: use --base to name it explicitly")
+
+	resolved := ResolvedBase{
+		CanonicalRef:    canonicalRef,
+		CanonicalBranch: canonicalBranch,
+		Base:            provisional,
+		Config:          provisionalCfg,
+		Pinned:          pinned,
+	}
+	if requested == "" {
+		return resolved, nil
+	}
+
+	explicit, err := git.Run(ctx, workDir, "rev-parse", requested+"^{commit}")
+	if err != nil {
+		return ResolvedBase{}, fmt.Errorf("resolve base revision %q: %w", requested, err)
+	}
+	if !isAncestor(ctx, workDir, explicit, headRef) {
+		return ResolvedBase{}, fmt.Errorf("--base %s is not an ancestor of the head revision; the gate's strength is read from the base ref, so it may only be a commit the head already contains", requested)
+	}
+	if !isAncestor(ctx, workDir, explicit, canonicalRef) {
+		return ResolvedBase{}, fmt.Errorf("--base %s is not contained in %s; the gate's strength is read from the base ref, so it may only be a commit the canonical ref already carries, not one on the branch under test", requested, canonicalRef)
+	}
+	explicitCfg, err := loadBaseRepoConfig(ctx, workDir, explicit)
+	if err != nil {
+		return ResolvedBase{}, err
+	}
+	resolved.Base = explicit
+	resolved.Config = explicitCfg
+	resolved.Explicit = true
+	return resolved, nil
+}
+
+// detectCanonicalRef names the ref the base has to sit on. A pinned remote or
+// branch wins; otherwise origin's published HEAD, then the conventional default
+// branch names, remote copy first. Failing to find one aborts the run: a gate
+// that cannot tell which history is the operator's cannot tell whose config it
+// is reading.
+func detectCanonicalRef(ctx context.Context, workDir string, pin config.SlopBaseRef) (string, string, error) {
+	remote := strings.TrimSpace(pin.Remote)
+	branch := strings.TrimSpace(pin.Branch)
+	if branch != "" {
+		candidates := []string{branch}
+		if remote != "" {
+			candidates = []string{remote + "/" + branch, branch}
+		}
+		for _, candidate := range candidates {
+			if _, err := git.Run(ctx, workDir, "rev-parse", "--verify", candidate+"^{commit}"); err == nil {
+				return candidate, branch, nil
+			}
+		}
+		return "", "", fmt.Errorf("resolve canonical base ref: slop.base_ref names %q, which this repository does not have", strings.Join(candidates, " or "))
+	}
+
+	detected := ""
+	if remoteHead, err := git.Run(ctx, workDir, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"); err == nil {
+		detected = strings.TrimPrefix(strings.TrimSpace(remoteHead), "origin/")
+	}
+	names := []string{"main", "master"}
+	if detected != "" {
+		names = append([]string{detected}, names...)
+	}
+	prefix := "origin"
+	if remote != "" {
+		prefix = remote
+	}
+	for _, name := range names {
+		for _, candidate := range []string{prefix + "/" + name, name} {
+			if _, err := git.Run(ctx, workDir, "rev-parse", "--verify", candidate+"^{commit}"); err == nil {
+				return candidate, name, nil
+			}
+		}
+	}
+	return "", "", fmt.Errorf("resolve canonical base ref: no %s/main, %s/master, main, or master in this repository; set slop.base_ref in the repository config to name the ref the gate should read its strength from", prefix, prefix)
+}
+
+func mergeBase(ctx context.Context, workDir, canonicalRef, headRef string) (string, error) {
+	base, err := git.Run(ctx, workDir, "merge-base", canonicalRef, headRef)
+	if err != nil {
+		return "", fmt.Errorf("resolve base revision: %s and the head revision share no history: %w", canonicalRef, err)
+	}
+	return strings.TrimSpace(base), nil
+}
+
+func isAncestor(ctx context.Context, workDir, candidate, descendant string) bool {
+	_, err := git.Run(ctx, workDir, "merge-base", "--is-ancestor", candidate, descendant)
+	return err == nil
 }
 
 // printChecks prints every mandatory-check line and every finding gathered so
@@ -624,17 +869,24 @@ func printChecks(stdout io.Writer, result engine.Result) {
 	}
 }
 
-// formatMandatoryCheck names the detectors a check could not arm alongside its
-// finding count, so "completed (0 findings)" never overstates the coverage the
-// pass actually had.
+// formatMandatoryCheck names the detectors a check could not arm and the ones
+// that ran on reduced coverage, alongside its finding count, so "completed
+// (0 findings)" never overstates the coverage the pass actually had.
 func formatMandatoryCheck(check engine.MandatoryCheck) string {
 	if !check.Enabled {
 		return fmt.Sprintf("mandatory check: %s disabled", check.Name)
 	}
-	if len(check.Unarmed) == 0 {
+	qualifiers := make([]string, 0, 2)
+	if len(check.Unarmed) > 0 {
+		qualifiers = append(qualifiers, "not armed: "+strings.Join(check.Unarmed, "; "))
+	}
+	if len(check.Degraded) > 0 {
+		qualifiers = append(qualifiers, "reduced coverage: "+strings.Join(check.Degraded, "; "))
+	}
+	if len(qualifiers) == 0 {
 		return fmt.Sprintf("mandatory check: %s completed (%d findings)", check.Name, check.Findings)
 	}
-	return fmt.Sprintf("mandatory check: %s completed (%d findings, not armed: %s)", check.Name, check.Findings, strings.Join(check.Unarmed, "; "))
+	return fmt.Sprintf("mandatory check: %s completed (%d findings, %s)", check.Name, check.Findings, strings.Join(qualifiers, ", "))
 }
 
 func formatFinding(finding engine.Finding) string {

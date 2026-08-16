@@ -83,7 +83,6 @@ type Decision struct {
 	Reversibility       Axis
 	Overridden          bool
 	OverrideRefused     bool
-	OverrideForced      bool
 	OriginalTier        Tier
 	RequestedTier       Tier
 	Rationale           string
@@ -240,6 +239,22 @@ func raiseTier(tier Tier) Tier {
 	}
 }
 
+// applyOverride applies a requested tier. The flag may only ever RAISE one.
+//
+// The gate's promise has to hold when the author of the change is the party
+// invoking it, and on this command line the caller and the audited party are
+// the same agent. `--tier leak-scan-only` lowered any tier that provenance had
+// not already raised, so one flag carried both structural invariant classes,
+// an authorization weakening and a fleet-instruction rewrite, to "verdict:
+// pass" at exit 0; `--force-tier` did the same over a live escalation. Printing
+// the override was honest and changed nothing about the outcome.
+//
+// So neither flag can lower a computed tier, for any reason, and the refusal
+// names the tier the classifier actually computed so the caller cannot claim
+// not to have been told. An operator who genuinely needs a cheaper route
+// configures `slop.risk.*` thresholds in the repository config, which is read
+// from the BASE ref and is therefore already outside the blast radius of the
+// change under test. There is deliberately no command-line equivalent.
 func applyOverride(decision Decision, override Tier, force bool) (Decision, error) {
 	if override == "" || override == "auto" {
 		return decision, nil
@@ -249,21 +264,35 @@ func applyOverride(decision Decision, override Tier, force bool) (Decision, erro
 		if override == decision.Tier {
 			return decision, nil
 		}
-		if decision.ProvenanceEscalated && tierRank(override) < tierRank(decision.Tier) && !force {
+		if tierRank(override) < tierRank(decision.Tier) {
 			decision.OverrideRefused = true
 			decision.OriginalTier = decision.Tier
 			decision.RequestedTier = override
-			return decision, fmt.Errorf("classify change: --tier %s contradicts provenance-driven escalation to %s; use --force-tier to accept the lower tier", override, decision.Tier)
+			return decision, fmt.Errorf(
+				"classify change: --tier %s would lower the computed tier %s; the tier flag may only raise it%s. Configure slop.risk thresholds at the base ref if a cheaper route is genuinely correct for this repository",
+				override, decision.Tier, lowerRefusalDetail(decision, force))
 		}
 		decision.OriginalTier = decision.Tier
 		decision.RequestedTier = override
 		decision.Tier = override
 		decision.Overridden = true
-		decision.OverrideForced = force && decision.ProvenanceEscalated && tierRank(override) < tierRank(decision.OriginalTier)
 		return decision, nil
 	default:
 		return Decision{}, fmt.Errorf("classify change: invalid tier override %q", override)
 	}
+}
+
+// lowerRefusalDetail names the two things a caller reaching this refusal is
+// most likely to be about to try next.
+func lowerRefusalDetail(decision Decision, force bool) string {
+	detail := ""
+	if decision.ProvenanceEscalated {
+		detail += ", and this tier came from provenance escalation"
+	}
+	if force {
+		detail += ", and --force-tier no longer lowers a computed tier"
+	}
+	return detail
 }
 
 func tierRank(tier Tier) int {
@@ -333,7 +362,8 @@ func substantialSourceAddition(files []FileChange) bool {
 }
 
 func netNewDeclarationCount(file FileChange) int {
-	net := len(declaredIdentifiers(file.CurrentContent)) - len(declaredIdentifiers(file.BaselineContent))
+	lang := sourceLanguage(file.Path)
+	net := len(declaredNames(file.CurrentContent, lang)) - len(declaredNames(file.BaselineContent, lang))
 	if net < 0 {
 		return 0
 	}
@@ -361,23 +391,136 @@ func classifyNovelty(files []FileChange) Axis {
 	return Axis{Score: 2, Reason: "existing source logic changed"}
 }
 
-// renameScope holds the declarations the change set itself makes at head. It is
-// the evidence that separates a rename from a substitution.
+// renamePair is one declaration transition a single changed file performs: the
+// name it stopped declaring, and the name it started declaring in that name's
+// place. A rename campaign leaves exactly these; a decoy leaves something else.
+type renamePair struct {
+	previous string
+	current  string
+}
+
+// familyScope is the rename evidence available to one language family.
+type familyScope struct {
+	// renames holds the declaration transitions another file may follow. Only
+	// referenceable declarations qualify: a parameter or a short variable is
+	// scoped to one function body, so it can never be what a reference in a
+	// different file resolves to, and letting one vouch for a cross-file
+	// substitution is the cheapest decoy left once names alone stopped
+	// counting. Renaming `function helper(x)` to `function helper(requireAdmin)`
+	// costs nothing to plant and would otherwise pay for swapping a guard.
+	renames map[renamePair]struct{}
+	// localRenames holds every transition each file performs, keyed by path,
+	// including the local ones. A file may follow its own local rename, because
+	// within one file a renamed parameter really is the same binding.
+	localRenames map[string]map[renamePair]struct{}
+	// headUses holds every identifier that still appears at head anywhere in
+	// this family's changed files, commentary included. A name a rename was
+	// supposed to retire but which survives somewhere is not evidence of a
+	// rename, so the mechanical route is refused rather than guessed at.
+	headUses map[string]struct{}
+}
+
+// renameScope is the evidence that separates a rename from a substitution.
+//
+// The previous version was a flat set of every name the change set declared at
+// head, and that is free to manufacture: any second file renaming anything at
+// all to the target name supplied it, in any language, and so did a comment
+// shaped like a declaration. Six probes in five languages reached "verdict:
+// pass" at exit 0 on an authorization weakening that way.
+//
+// What a rename actually leaves is a transition. Some changed file must have
+// declared the old name at base, must not declare it at head, and must declare
+// the new name at head without having declared it at base, and the file that
+// performs the transition must itself be a consistent identifier substitution.
+// A use site is then allowed to follow that exact pair, in the same language
+// family, and only while the old name has genuinely stopped appearing.
 type renameScope struct {
-	headDeclarations map[string]struct{}
+	families map[string]*familyScope
 }
 
 func newRenameScope(files []FileChange) renameScope {
-	scope := renameScope{headDeclarations: make(map[string]struct{})}
+	scope := renameScope{families: make(map[string]*familyScope)}
 	for _, file := range files {
-		if file.Status == Deleted {
+		if !fileMatchesPath(file, sourcePath) {
 			continue
 		}
-		for name := range declaredIdentifiers(file.CurrentContent) {
-			scope.headDeclarations[name] = struct{}{}
+		lang := sourceLanguage(file.Path)
+		family := scope.family(lang.family)
+		if file.Status != Deleted {
+			for _, token := range sourceTokens(file.CurrentContent) {
+				if token.kind == 'i' {
+					family.headUses[token.text] = struct{}{}
+				}
+			}
+		}
+		substitutions, _, ok := tokenSubstitutions(file)
+		if !ok {
+			continue
+		}
+		baseline, baselineReferenceable := declaredIdentifiers(file.BaselineContent, lang)
+		current, currentReferenceable := declaredIdentifiers(file.CurrentContent, lang)
+		for previous, replacement := range substitutions {
+			_, declaredAtBase := baseline[previous]
+			_, survivesAtHead := current[previous]
+			_, declaredAtHead := current[replacement]
+			_, existedAtBase := baseline[replacement]
+			if !declaredAtBase || survivesAtHead || !declaredAtHead || existedAtBase {
+				continue
+			}
+			pair := renamePair{previous: previous, current: replacement}
+			if family.localRenames[file.Path] == nil {
+				family.localRenames[file.Path] = make(map[renamePair]struct{})
+			}
+			family.localRenames[file.Path][pair] = struct{}{}
+			_, previousReferenceable := baselineReferenceable[previous]
+			_, replacementReferenceable := currentReferenceable[replacement]
+			if previousReferenceable && replacementReferenceable {
+				family.renames[pair] = struct{}{}
+			}
 		}
 	}
 	return scope
+}
+
+func (s renameScope) family(name string) *familyScope {
+	if existing, ok := s.families[name]; ok {
+		return existing
+	}
+	created := &familyScope{
+		renames:      make(map[renamePair]struct{}),
+		localRenames: make(map[string]map[renamePair]struct{}),
+		headUses:     make(map[string]struct{}),
+	}
+	s.families[name] = created
+	return created
+}
+
+// declaresRename reports whether the change set carried the exact declaration
+// transition the substitution claims to be following: either in the file being
+// judged, where a local binding counts, or in another file of the same language
+// family through a declaration that file could actually expose.
+func (s renameScope) declaresRename(family, path, previous, current string) bool {
+	scope, ok := s.families[family]
+	if !ok {
+		return false
+	}
+	pair := renamePair{previous: previous, current: current}
+	if _, local := scope.localRenames[path][pair]; local {
+		return true
+	}
+	_, declared := scope.renames[pair]
+	return declared
+}
+
+// oldNameSurvives reports whether the retired name still appears at head
+// anywhere in this family's changed files.
+func (s renameScope) oldNameSurvives(family, previous string) bool {
+	scope, ok := s.families[family]
+	if !ok {
+		return false
+	}
+	_, survives := scope.headUses[previous]
+	return survives
 }
 
 type sourceToken struct {
@@ -409,20 +552,54 @@ type sourceToken struct {
 // outside the diff scores as changed logic, which buys a review round. The
 // cost of the previous direction was a missed authorization weakening at
 // exit 0. Undecidable resolves toward changed logic.
+//
+// A NAME is not that evidence, and the round-3 review proved it: a flat set of
+// names the change set declared at head was satisfiable by any second file
+// renaming anything to the target name, and by a comment shaped like a
+// declaration. So the evidence is now a declaration TRANSITION carried by a
+// real file in the same language family, and the retired name has to have
+// genuinely stopped appearing. See renameScope.
 func mechanicallyEquivalent(file FileChange, scope renameScope) bool {
 	if file.Status == Renamed {
 		return relocationPreservesCategory(file)
 	}
-	if file.Status != Modified || !relocationPreservesCategory(file) || !fileMatchesPath(file, sourcePath) || file.BaselineContent == "" || file.CurrentContent == "" || !sameBuildConstraints(file) {
+	substitutions, changed, ok := tokenSubstitutions(file)
+	if !ok {
 		return false
 	}
+	family := sourceLanguage(file.Path).family
+	for previous, replacement := range substitutions {
+		if !scope.declaresRename(family, file.Path, previous, replacement) {
+			return false
+		}
+		if scope.oldNameSurvives(family, previous) {
+			return false
+		}
+	}
+	return changed || file.BaselineContent != file.CurrentContent
+}
+
+// tokenSubstitutions reports the identifier substitutions that turn a file's
+// baseline token stream into its head one, and whether the change is a pure
+// substitution at all. It answers from the file alone, with no reference to the
+// rest of the change set, so the same routine can both build the rename
+// evidence and be judged against it without either step defining the other.
+//
+// ok is false whenever anything about the change is not a consistent identifier
+// substitution: a differing token count, a keyword or literal moving, a
+// substitution into a name already in baseline scope, a call target, a member
+// of a declaration this file does not own, or a map that is not one-to-one.
+func tokenSubstitutions(file FileChange) (map[string]string, bool, bool) {
+	if file.Status != Modified || !relocationPreservesCategory(file) || !fileMatchesPath(file, sourcePath) || file.BaselineContent == "" || file.CurrentContent == "" || !sameBuildConstraints(file) {
+		return nil, false, false
+	}
 	if file.BaselineContextTruncated {
-		return false
+		return nil, false, false
 	}
 	baseline := sourceTokens(file.BaselineContent)
 	current := sourceTokens(file.CurrentContent)
 	if len(baseline) != len(current) {
-		return false
+		return nil, false, false
 	}
 	baselineIdentifiers := make(map[string]struct{})
 	for _, token := range sourceTokens(file.BaselineContent + "\n" + file.BaselineContext) {
@@ -442,34 +619,28 @@ func mechanicallyEquivalent(file FileChange, scope renameScope) bool {
 		}
 		changed = true
 		if left.kind != 'i' || right.kind != 'i' || sourceKeyword(left.text) || sourceKeyword(right.text) {
-			return false
+			return nil, false, false
 		}
 		if _, collision := baselineIdentifiers[right.text]; collision {
-			return false
+			return nil, false, false
 		}
 		if identifierControlsCallTarget(baseline, current, index) {
-			return false
+			return nil, false, false
 		}
 		if identifierNamesMemberOfAnotherDeclaration(baseline, baselineEnclosing, index) ||
 			identifierNamesMemberOfAnotherDeclaration(current, currentEnclosing, index) {
-			return false
-		}
-		if _, declared := scope.headDeclarations[right.text]; !declared {
-			return false
-		}
-		if _, survives := scope.headDeclarations[left.text]; survives {
-			return false
+			return nil, false, false
 		}
 		if mapped, ok := forward[left.text]; ok && mapped != right.text {
-			return false
+			return nil, false, false
 		}
 		if mapped, ok := reverse[right.text]; ok && mapped != left.text {
-			return false
+			return nil, false, false
 		}
 		forward[left.text] = right.text
 		reverse[right.text] = left.text
 	}
-	return changed || file.BaselineContent != file.CurrentContent
+	return forward, changed, true
 }
 
 func relocationPreservesCategory(file FileChange) bool {
@@ -613,22 +784,29 @@ var declaringKeywords = map[string]struct{}{
 
 // declaredIdentifiers returns the names a source file declares itself.
 //
-// It reads the token stream rather than parsing, so it stays language-agnostic
-// and cheap, and it is deliberately incomplete: struct fields, plain
-// assignments, and imported bindings are not declarations here. Missing a real
-// declaration costs a review round; inventing one would hand back the
+// It reads the language's CODE token stream rather than parsing, so it stays
+// cheap and multi-language, and it is deliberately incomplete: struct fields,
+// plain assignments, and imported bindings are not declarations here. Missing a
+// real declaration costs a review round; inventing one would hand back the
 // mechanical-rename route, so every ambiguous position is left out.
-func declaredIdentifiers(content string) map[string]struct{} {
+//
+// Commentary is removed before tokenizing and string literals are already
+// single literal tokens, so nothing a human wrote as prose can be mistaken for
+// a declaration. That is not a nicety: `// TODO: let allowAnyone be dropped`,
+// sitting untouched in an unrelated file, was by itself enough evidence to make
+// a cross-package authorization substitution score as a rename.
+func declaredIdentifiers(content string, lang language) (map[string]struct{}, map[string]struct{}) {
 	declared := make(map[string]struct{})
+	referenceable := make(map[string]struct{})
 	if content == "" {
-		return declared
+		return declared, referenceable
 	}
-	tokens := sourceTokens(content)
+	tokens := codeTokens(content, lang)
 	for index := 0; index < len(tokens); index++ {
 		token := tokens[index]
 		if token.kind == 'i' {
 			if _, ok := declaringKeywords[strings.ToLower(token.text)]; ok {
-				index = collectKeywordDeclaration(tokens, index, declared)
+				index = collectKeywordDeclaration(tokens, index, declared, referenceable)
 			}
 			continue
 		}
@@ -636,13 +814,21 @@ func declaredIdentifiers(content string) map[string]struct{} {
 			collectShortVariableDeclaration(tokens, index, declared)
 		}
 	}
-	return declared
+	return declared, referenceable
+}
+
+// declaredNames is the whole-set half of declaredIdentifiers, for callers that
+// only need to know how many names a file introduces.
+func declaredNames(content string, lang language) map[string]struct{} {
+	all, _ := declaredIdentifiers(content, lang)
+	return all
 }
 
 // collectKeywordDeclaration records the name a declaring keyword introduces,
 // plus the parameter names of a function-shaped declaration, and returns the
-// index the caller should continue from.
-func collectKeywordDeclaration(tokens []sourceToken, keyword int, declared map[string]struct{}) int {
+// index the caller should continue from. Only the keyword's own name is added
+// to the referenceable set.
+func collectKeywordDeclaration(tokens []sourceToken, keyword int, declared, referenceable map[string]struct{}) int {
 	cursor := keyword + 1
 	// A Go method receiver sits between `func` and the name.
 	if cursor < len(tokens) && tokens[cursor].text == "(" {
@@ -652,6 +838,11 @@ func collectKeywordDeclaration(tokens []sourceToken, keyword int, declared map[s
 		return keyword
 	}
 	declared[tokens[cursor].text] = struct{}{}
+	// The keyword's own name is the only part of this another file could
+	// reference. The parameter names collected below are scoped to this
+	// declaration's body, and a short variable declaration is scoped tighter
+	// still, so neither can be what a reference elsewhere resolves to.
+	referenceable[tokens[cursor].text] = struct{}{}
 	name := cursor
 	cursor++
 	if cursor < len(tokens) && tokens[cursor].text == "(" {
@@ -761,9 +952,26 @@ func enclosingBrackets(tokens []sourceToken) []int {
 	return enclosing
 }
 
+// sourceTokens reads every byte of the file, commentary included. It is the
+// stream the baseline-to-head comparison runs over, because a comment edit is a
+// content edit and has to stay visible to it.
 func sourceTokens(content string) []sourceToken {
+	return tokenize(content, commentSyntax{})
+}
+
+// codeTokens drops commentary before tokenizing. It is the stream declarations
+// are collected from, because a comment is not a declaration.
+func codeTokens(content string, lang language) []sourceToken {
+	return tokenize(content, lang.comment)
+}
+
+func tokenize(content string, comments commentSyntax) []sourceToken {
 	var tokens []sourceToken
 	for index := 0; index < len(content); {
+		if skipped := commentEnd(content, index, comments); skipped > index {
+			index = skipped
+			continue
+		}
 		current := content[index]
 		switch {
 		case isSpace(current):
@@ -1033,10 +1241,8 @@ func (d Decision) String() string {
 	)
 	if d.OverrideRefused {
 		printed += fmt.Sprintf("\noverride refused: %s -> %s", d.OriginalTier, d.RequestedTier)
-	} else if d.OverrideForced {
-		printed += fmt.Sprintf("\noverride forced: %s -> %s", d.OriginalTier, d.Tier)
 	} else if d.Overridden {
-		printed += fmt.Sprintf("\noverride: %s -> %s", d.OriginalTier, d.Tier)
+		printed += fmt.Sprintf("\noverride raised: %s -> %s", d.OriginalTier, d.Tier)
 	}
 	printed += "\nprovenance: " + d.Rationale
 	if len(d.PriorityLenses) > 0 {

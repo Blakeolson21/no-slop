@@ -20,6 +20,12 @@ const (
 type File struct {
 	Path    string
 	Content string
+	// Binary says git treats this blob as binary, so Content is raw bytes
+	// rather than a diff. It is scanned through the binary-safe renderings
+	// below rather than skipped: prepending one NUL byte to a plain text file
+	// was enough to turn the mandatory leak scan into a check that printed
+	// "completed (0 findings)" over a live AWS key and passed at exit 0.
+	Binary bool
 }
 
 // Options configures private-name matching.
@@ -106,39 +112,109 @@ func ParseBlocklist(content string) []string {
 // bypass anybody could trip over by writing documentation about the feature.
 var exemptionMarker = regexp.MustCompile(`(?i)(?:^|//|#|/\*|<!--|--|;|\s)\s*` + regexp.QuoteMeta(InlineExemption) + `\b`)
 
+// binaryRenderings turns a blob git calls binary into text the line scanner can
+// read. Two renderings are needed and both are cheap.
+//
+// The first replaces control bytes with spaces, which preserves every line
+// boundary and recovers a plain text file carrying one stray NUL, the exact
+// shape that bought a pass. The second removes NUL bytes outright, which
+// recovers UTF-16-style content whose every second byte is a NUL and which the
+// first rendering would have spaced into nonsense.
+//
+// This is best effort by construction, and the limit is stated rather than
+// papered over: a credential a change deliberately encodes, in binary or in
+// text, can still be shaped so no pattern here matches it. What the renderings
+// remove is the cheap version, where the bytes are already in the clear and one
+// control character was doing all the hiding.
+func binaryRenderings(content string) []string {
+	spaced := make([]byte, 0, len(content))
+	stripped := make([]byte, 0, len(content))
+	for index := 0; index < len(content); index++ {
+		current := content[index]
+		switch {
+		case current == '\n' || current == '\t' || current == '\r':
+			spaced = append(spaced, current)
+			stripped = append(stripped, current)
+		case current == 0:
+			spaced = append(spaced, ' ')
+		case current < 0x20 || current == 0x7f:
+			spaced = append(spaced, ' ')
+			stripped = append(stripped, ' ')
+		default:
+			spaced = append(spaced, current)
+			stripped = append(stripped, current)
+		}
+	}
+	renderings := []string{string(spaced)}
+	if text := string(stripped); text != renderings[0] {
+		renderings = append(renderings, text)
+	}
+	return renderings
+}
+
 // Scan checks text for secret shapes and private identity markers.
 func Scan(files []File, opts Options) Result {
 	var result Result
 	blocklist := append(DefaultBlocklist(), opts.Blocklist...)
 	for _, file := range files {
-		for index, line := range strings.Split(file.Content, "\n") {
-			exempt := false
-			if exemptionMarker.MatchString(line) {
-				if opts.RefuseExemptions {
-					result.Findings = append(result.Findings, Finding{
-						Kind:        Secret,
-						Path:        file.Path,
-						Line:        index + 1,
-						Description: fmt.Sprintf("inline leak exemption %s is disabled by configuration", InlineExemption),
-					})
-				} else {
-					exempt = true
+		renderings := []string{file.Content}
+		if file.Binary {
+			renderings = binaryRenderings(file.Content)
+		}
+		// One blob can be read more than one way, so the same credential can
+		// surface twice. Findings and exemptions are keyed on what a reader
+		// would act on, which is the line and the reason, not the rendering.
+		reportedFinding := make(map[string]bool)
+		reportedExemption := make(map[int]bool)
+		for _, rendering := range renderings {
+			for index, line := range strings.Split(rendering, "\n") {
+				number := index + 1
+				exempt := false
+				if exemptionMarker.MatchString(line) {
+					if opts.RefuseExemptions {
+						disabled := Finding{
+							Kind:        Secret,
+							Path:        file.Path,
+							Line:        number,
+							Description: fmt.Sprintf("inline leak exemption %s is disabled by configuration", InlineExemption),
+						}
+						if key := findingKey(disabled); !reportedFinding[key] {
+							reportedFinding[key] = true
+							result.Findings = append(result.Findings, disabled)
+						}
+					} else {
+						exempt = true
+					}
+				}
+				lineFindings := scanLine(file.Path, number, line, blocklist)
+				if exempt {
+					if !reportedExemption[number] {
+						reportedExemption[number] = true
+						result.Exemptions = append(result.Exemptions, Exemption{
+							Path:       file.Path,
+							Line:       number,
+							Marker:     InlineExemption,
+							Suppressed: len(lineFindings),
+						})
+					}
+					continue
+				}
+				for _, finding := range lineFindings {
+					key := findingKey(finding)
+					if reportedFinding[key] {
+						continue
+					}
+					reportedFinding[key] = true
+					result.Findings = append(result.Findings, finding)
 				}
 			}
-			lineFindings := scanLine(file.Path, index+1, line, blocklist)
-			if exempt {
-				result.Exemptions = append(result.Exemptions, Exemption{
-					Path:       file.Path,
-					Line:       index + 1,
-					Marker:     InlineExemption,
-					Suppressed: len(lineFindings),
-				})
-				continue
-			}
-			result.Findings = append(result.Findings, lineFindings...)
 		}
 	}
 	return result
+}
+
+func findingKey(finding Finding) string {
+	return fmt.Sprintf("%d\x00%s", finding.Line, finding.Description)
 }
 
 func scanLine(path string, lineNumber int, line string, blocklist []string) []Finding {

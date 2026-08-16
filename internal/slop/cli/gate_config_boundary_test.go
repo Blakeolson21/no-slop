@@ -65,6 +65,13 @@ func (r boundaryRepo) gate(t *testing.T, args ...string) (int, string) {
 	return code, stdout.String() + stderr.String()
 }
 
+// cheapTier routes every probe below to the lightest tier the way an operator
+// legitimately can: thresholds on the BASE ref. The `--tier leak-scan-only`
+// these tests used instead is refused now, because a flag the author of the
+// change can set is exactly the control this file exists to keep out of their
+// reach.
+const cheapTier = "slop:\n  risk:\n    single_review_threshold: 90\n    full_adversarial_threshold: 99\n"
+
 const twoTests = `package calc
 
 import "testing"
@@ -99,19 +106,19 @@ func TestAddOne(t *testing.T) {
 func TestUncommittedConfigCannotDisableAMandatoryCheck(t *testing.T) {
 	t.Parallel()
 
-	repo := newBoundaryRepo(t, map[string]string{"calc_test.go": twoTests})
+	repo := newBoundaryRepo(t, map[string]string{"calc_test.go": twoTests, ".no-slop.yaml": cheapTier})
 	repo.commit(t, map[string]string{"calc_test.go": oneTest})
 
-	code, output := repo.gate(t, "--tier", "leak-scan-only")
+	code, output := repo.gate(t)
 	if code != 1 || !strings.Contains(output, "test-capitulation") {
 		t.Fatalf("control run exit = %d, want the floor to fire\n%s", code, output)
 	}
 
-	writeFile(t, repo.dir, ".no-slop.yaml", "slop:\n  test_count_floor: false\n")
-	if status := runGit(t, repo.dir, "status", "--porcelain", ".no-slop.yaml"); !strings.Contains(status, "??") {
-		t.Fatalf("the probe file must stay uncommitted, got %q", status)
+	writeFile(t, repo.dir, ".no-slop.yaml", cheapTier+"  test_count_floor: false\n")
+	if status := runGit(t, repo.dir, "status", "--porcelain", ".no-slop.yaml"); !strings.Contains(status, " M") {
+		t.Fatalf("the probe edit must stay uncommitted, got %q", status)
 	}
-	code, output = repo.gate(t, "--tier", "leak-scan-only")
+	code, output = repo.gate(t)
 	if code != 1 {
 		t.Fatalf("an uncommitted config disabled a mandatory check: exit = %d\n%s", code, output)
 	}
@@ -127,13 +134,13 @@ func TestUncommittedConfigCannotDisableAMandatoryCheck(t *testing.T) {
 func TestCommittedConfigWeakeningIsItselfFlagged(t *testing.T) {
 	t.Parallel()
 
-	repo := newBoundaryRepo(t, map[string]string{"calc_test.go": twoTests})
+	repo := newBoundaryRepo(t, map[string]string{"calc_test.go": twoTests, ".no-slop.yaml": cheapTier})
 	repo.commit(t, map[string]string{
 		"calc_test.go":  oneTest,
-		".no-slop.yaml": "slop:\n  test_count_floor: false\n  risk:\n    single_review_threshold: 99\n    full_adversarial_threshold: 100\n",
+		".no-slop.yaml": "slop:\n  test_count_floor: false\n  risk:\n    single_review_threshold: 91\n    full_adversarial_threshold: 100\n",
 	})
 
-	code, output := repo.gate(t, "--tier", "leak-scan-only")
+	code, output := repo.gate(t)
 	if code == 0 {
 		t.Fatalf("a committed config weakening passed:\n%s", output)
 	}
@@ -203,14 +210,14 @@ func TestBlocklistFlagAddsNamesRatherThanReplacingThem(t *testing.T) {
 	t.Parallel()
 
 	repo := newBoundaryRepo(t, map[string]string{
-		".no-slop.yaml":     "slop:\n  leak_scan:\n    blocklist_file: .configured-names\n",
+		".no-slop.yaml":     "slop:\n  leak_scan:\n    blocklist_file: .configured-names\n  risk:\n    single_review_threshold: 90\n    full_adversarial_threshold: 99\n",
 		".configured-names": "acme-internal\n",
 		"notes.txt":         "nothing\n",
 	})
 	repo.commit(t, map[string]string{"notes.txt": "the acme-internal host is here\n"})
 	writeFile(t, repo.dir, ".empty-names", "# nothing\n")
 
-	code, output := repo.gate(t, "--tier", "leak-scan-only", "--blocklist", ".empty-names")
+	code, output := repo.gate(t, "--blocklist", ".empty-names")
 	if code != 1 || !strings.Contains(output, "leak-identity-scan") {
 		t.Fatalf("an empty --blocklist replaced the configured one: exit = %d\n%s", code, output)
 	}
@@ -253,12 +260,12 @@ func TestThreadFlagWithNoURLIsRefused(t *testing.T) {
 func TestExemptionAccountingReportsSuppressedFindings(t *testing.T) {
 	t.Parallel()
 
-	repo := newBoundaryRepo(t, map[string]string{"README.md": "# Project\n"})
+	repo := newBoundaryRepo(t, map[string]string{"README.md": "# Project\n", ".no-slop.yaml": cheapTier})
 	repo.commit(t, map[string]string{
 		"fixtures/notes.txt": "AKIAIOSFODNN7EXAMPLE # noslop:allow-leak\nplain line # noslop:allow-leak\n",
 	})
 
-	code, output := repo.gate(t, "--tier", "leak-scan-only")
+	code, output := repo.gate(t)
 	if code != 0 {
 		t.Fatalf("exit = %d, want the exemptions honored\n%s", code, output)
 	}
@@ -278,12 +285,12 @@ func TestExemptionAccountingReportsSuppressedFindings(t *testing.T) {
 func TestProseQuotingTheMarkerDoesNotExemptItsOwnLine(t *testing.T) {
 	t.Parallel()
 
-	repo := newBoundaryRepo(t, map[string]string{"README.md": "# Project\n"})
+	repo := newBoundaryRepo(t, map[string]string{"README.md": "# Project\n", ".no-slop.yaml": cheapTier})
 	repo.commit(t, map[string]string{
 		"fixtures/notes.txt": "the marker noslop:allow-leakage is not the marker, key AKIAIOSFODNN7EXAMPLE\n", // noslop:allow-leak
 	})
 
-	code, output := repo.gate(t, "--tier", "leak-scan-only")
+	code, output := repo.gate(t)
 	if code != 1 || !strings.Contains(output, "leak-identity-scan") {
 		t.Fatalf("a near-miss of the marker exempted a live credential: exit = %d\n%s", code, output)
 	}

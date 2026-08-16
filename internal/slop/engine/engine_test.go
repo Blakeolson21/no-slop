@@ -161,7 +161,7 @@ func TestRunLensPrecheckStillRunsUnderLightOverride(t *testing.T) {
 			BaselineContent: "if observed != expected {}\n",
 			CurrentContent:  "if observed != observed {}\n",
 		}},
-		Config: engine.Config{TierOverride: risk.TierLeakScanOnly},
+		Config: engine.Config{Risk: cheapestTierThresholds()},
 	}, engine.Dependencies{})
 	if err != nil {
 		t.Fatal(err)
@@ -172,6 +172,16 @@ func TestRunLensPrecheckStillRunsUnderLightOverride(t *testing.T) {
 	if check := mandatoryCheck(t, result, "lens pre-check"); !check.Enabled || check.Findings != 1 {
 		t.Fatalf("lens pre-check = %+v, want enabled with 1 finding", check)
 	}
+}
+
+// cheapestTierThresholds routes a probe to the lightest tier the way an
+// operator legitimately can, through thresholds read from the base ref. These
+// tests used `TierOverride: leak-scan-only` for the same purpose, and a tier
+// override may only raise now: the flag was a gate-strength control the author
+// of the change could set, which is what carried both invariant classes to a
+// passing verdict at exit 0.
+func cheapestTierThresholds() risk.Config {
+	return risk.Config{SingleReviewThreshold: 90, FullReviewThreshold: 99}
 }
 
 func mandatoryCheck(t *testing.T, result engine.Result, name string) engine.MandatoryCheck {
@@ -206,7 +216,7 @@ func TestRunRedundantCommentCheckUsesOnlyAddedCommentsAtLightestTier(t *testing.
 				CurrentContent: "// return value\nreturn value\n",
 			},
 		},
-		Config: engine.Config{TierOverride: risk.TierLeakScanOnly},
+		Config: engine.Config{Risk: cheapestTierThresholds()},
 	}, engine.Dependencies{})
 	if err != nil {
 		t.Fatal(err)
@@ -255,12 +265,12 @@ func TestRunMandatoryLeakScanStillRunsUnderLightOverride(t *testing.T) {
 			AddedContent:   "token=ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ\n", // noslop:allow-leak
 			CurrentContent: "package auth\n",
 		}},
-		Config: engine.Config{TierOverride: risk.TierLeakScanOnly},
+		Config: engine.Config{Risk: cheapestTierThresholds()},
 	}, engine.Dependencies{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Decision.Tier != risk.TierLeakScanOnly || !result.Decision.Overridden {
+	if result.Decision.Tier != risk.TierLeakScanOnly {
 		t.Fatalf("decision = %+v", result.Decision)
 	}
 	if result.Passed || len(result.Findings) != 1 || result.Findings[0].Lens != "leak-identity-scan" {
@@ -283,7 +293,7 @@ func TestRunTestCountFloorStillRunsUnderLightOverride(t *testing.T) {
 			BaselineContent: "package calc\nfunc TestPositive(t *testing.T) {}\nfunc TestNegative(t *testing.T) {}\n",
 			CurrentContent:  "package calc\nfunc TestPositive(t *testing.T) {}\n",
 		}},
-		Config: engine.Config{TestCountFloor: true, TierOverride: risk.TierLeakScanOnly},
+		Config: engine.Config{TestCountFloor: true, Risk: cheapestTierThresholds()},
 	}, engine.Dependencies{})
 	if err != nil {
 		t.Fatal(err)
@@ -309,7 +319,7 @@ func TestRunTestCountFloorUsesBaselinePathForModifiedRename(t *testing.T) {
 			BaselineContent: "package widget\nfunc TestWidget(t *testing.T) {}\n",
 			CurrentContent:  "widget fixture\n",
 		}},
-		Config: engine.Config{TestCountFloor: true, TierOverride: risk.TierLeakScanOnly},
+		Config: engine.Config{TestCountFloor: true, Risk: cheapestTierThresholds()},
 	}, engine.Dependencies{})
 	if err != nil {
 		t.Fatal(err)
@@ -337,7 +347,7 @@ func TestRunScopeExpansionDetectsDestinationEnteringRuntime(t *testing.T) {
 			BaselineContent: "package example\n",
 			CurrentContent:  "package internal\n",
 		}},
-		Config: engine.Config{TierOverride: risk.TierLeakScanOnly},
+		Config: engine.Config{Risk: cheapestTierThresholds()},
 	}, engine.Dependencies{})
 	if err != nil {
 		t.Fatal(err)

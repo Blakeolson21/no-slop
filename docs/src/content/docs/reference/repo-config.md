@@ -89,6 +89,10 @@ test:
 # NoSlop front-stage settings.
 slop:
   data_dir: ".noslop-data"
+  provenance_required: false
+  base_ref:
+    remote: "origin"
+    branch: "main"
   risk:
     single_review_threshold: 3
     full_adversarial_threshold: 6
@@ -110,15 +114,22 @@ slop:
 
 ### slop
 
-Configure the `noslop gate` front stage. The classifier always prints its tier and reasons before continuing. Command-line `--tier` overrides the configured classifier result and prints the original and final tiers. A provenance-driven escalation refuses a lower override unless `--force-tier` is present, and either outcome prints both signals. The full-adversarial tier runs a lens review, a second adversarial challenge round, and the configured tests. Pass `--intent` when the deterministic scope pre-check and reviewer should compare the change with a stated request; without it, the scope pre-check reports itself as not armed on the mandatory-check line rather than contributing a silent zero.
+Configure the `noslop gate` front stage. The classifier always prints its tier and reasons before continuing. The full-adversarial tier runs a lens review, a second adversarial challenge round, and the configured tests. Pass `--intent` when the deterministic scope pre-check and reviewer should compare the change with a stated request; without an intent, or with one that states no scope limit the detector can act on, the scope pre-check reports itself as not armed on the mandatory-check line rather than contributing a silent zero.
+
+**`--tier` is escalate-only.** It may raise the computed tier and prints `override raised: <computed> -> <requested>`. Any request to lower it, including with `--force-tier`, is refused with exit 2 and prints `override refused: <computed> -> <requested>`; the error names the computed tier. `--force-tier` is still accepted so existing invocations do not become argument errors, and it can no longer buy a cheaper tier. The reason is that the caller of this command and the author of the change under test are routinely the same agent, and a single flag that lowered the tier carried both an authorization weakening and a fleet-instruction rewrite to a passing verdict at exit 0. If a repository genuinely needs a cheaper route, raise `slop.risk.single_review_threshold` and `slop.risk.full_adversarial_threshold` in the repository config, which is read from the base ref and is therefore outside the reach of the change being gated.
 
 **Every `slop.*` value is read from the base ref, not from the working tree.** A gate whose strictness is configured by the artifact being gated is not a gate, so the whole block is resolved from the repo config as it exists at the base revision, reading `.no-slop.yaml` and the `.no-mistakes.yaml` compatibility name through the same alias rules the worktree load applies, exactly as the daemon already treats these fields for a pushed branch. A value absent at the base ref means the built-in default; a base copy that is present but unparsable stops the run rather than falling back to a default. When the head worktree sets any of these fields differently, the base value is the one in force and the difference is reported as a `gate-config-drift` finding, so a change that edits the gate's own controls is itself flagged. An uncommitted repo config therefore changes nothing.
+
+**Which commit is the base ref is not the caller's choice either.** The base is the merge-base of the head revision with a canonical ref: `slop.base_ref.remote` and `slop.base_ref.branch` when set, otherwise origin's published HEAD and then the conventional default branch names, remote copy first. An explicit `--base` is accepted only when it is both an ancestor of the head revision and a commit the canonical ref already carries; anything else exits 2. Every run prints the base commit and how it was chosen. The pin itself is read from the config at the provisionally resolved base, so moving the canonical ref is authorized by the previous canonical ref rather than by the change proposing the move. When no canonical ref can be found at all the run aborts: a gate that cannot tell which history is the operator's cannot tell whose configuration it is reading.
 
 `--blocklist` adds names to the configured private-name list rather than replacing it, so the command line cannot point the identity scan at an empty file.
 
 | Field | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `slop.data_dir` | `string` | `.noslop-data` | Repository-relative or absolute directory for append-only provenance history |
+| `slop.base_ref.remote` | `string` | Empty | Remote whose copy of the canonical branch the base is resolved against |
+| `slop.base_ref.branch` | `string` | Empty | Canonical branch the base must sit on; empty means detect the default branch |
+| `slop.provenance_required` | `bool` | `false` | Refuse the run when the provenance history file is absent |
 | `slop.risk.single_review_threshold` | `int` | `3` | Minimum sum of the three risk axes for `single-review` |
 | `slop.risk.full_adversarial_threshold` | `int` | `6` | Minimum sum for `full-adversarial`; must be greater than the single-review threshold |
 | `slop.risk.high_risk_paths` | `string[]` | Empty | Extra glob patterns treated as high-reach paths, on top of the built-in markers |
@@ -130,6 +141,8 @@ Configure the `noslop gate` front stage. The classifier always prints its tier a
 | `slop.test_command` | `string` | Empty | Test command required by the `full-adversarial` tier |
 
 `slop.test_command` is deliberately separate from `commands.test`. The inherited pipeline uses `commands.test` for focused local validation. NoSlop's full tier uses `slop.test_command` as the explicit adversarial test gate.
+
+The provenance history is append-only in both directions. A record is never rewritten, and the read side keeps the WORST record any run of a change produced rather than the latest one, so re-running the same command cannot replace an incriminating record with a clean one. Alongside the history the store keeps a monotonic high-water count: a history shorter than the number of records already accepted there, or absent when records were accepted, reads as an unreadable history and escalates the run to `full-adversarial` rather than resetting to a first-time lane. Deleting both files together still resets the store, which is a stated residual rather than a closed one; `slop.provenance_required` is the operator-side answer for a repository that depends on the history. The `--lane-id` and `--model` values are self-asserted by the caller and nothing authenticates them, so every run states that in its header.
 
 Each completed `noslop gate` appends a schema-versioned JSON Lines record under `slop.data_dir`. The record includes provider, model, reasoning effort, agent lane identifier, change class, selected tier, accepted and rejected findings by lens, review rounds, fix growth, and outcome. Use `--provider`, `--model`, `--reasoning-effort`, `--lane-id`, and `--change-class` to identify the generating lane. Missing values are recorded as `unknown` and do not select lane/model history.
 
@@ -162,6 +175,17 @@ The default thresholds let high-risk changes reach `full-adversarial` on a featu
 The following paths are high risk with no configuration at all, because rewriting one of them changes what the next agent is permitted to do: `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `SKILL.md`, `.cursorrules`, `copilot-instructions.md` and their siblings at any depth, the `.claude/`, `.codex/`, `.cursor/`, `skills/`, and `prompts/` trees, and the repo config and `.gitattributes` files that decide how strictly this gate runs and how git renders the diff every mechanical check reads.
 
 Glob patterns accept `**` as a multi-segment wildcard at any position, so `**/AGENTS.md` matches the file at any depth; `*` never crosses a path separator. A configured pattern that matches no path at head prints a warning, because a protection that silently covers nothing is indistinguishable from one that works.
+
+#### Running the gate from a pipeline
+
+A CI job or an agent harness invokes the gate the same way a person does, and the base-ref rules above are what make that safe when the job runs on the author's own branch.
+
+- Fetch the canonical branch before the run, so the merge-base is against the current trunk and not a stale local copy. A shallow checkout with no trunk history has nothing to resolve against and the run aborts rather than guessing.
+- Prefer running with no `--base` at all. The merge-base with the canonical ref is the answer a pipeline wants in almost every case, and it is the one nobody can steer.
+- Pass `--base <sha>` only when the job genuinely knows the commit the branch left the trunk at, such as a forge-supplied merge-base. The gate re-derives both properties itself: the commit must be an ancestor of the head under test and must already be carried by the canonical ref. It never takes the caller's word for it.
+- Set `slop.base_ref.remote` and `slop.base_ref.branch` when the canonical branch is not the detected default, for example a long-lived release branch. Set them in the repository config, not on the command line; there is deliberately no flag.
+- Pass `--lane-id` and `--model` so provenance history accumulates per generating lane. Both are self-asserted, and the run header says so. Point `slop.data_dir` at a path the job persists between runs, or the history is a fresh store every time.
+- Read the exit code, not the log: 0 is a pass, 1 is a verdict failure, and 2 is the gate refusing to validate at all, which includes a refused tier request, an unusable base, and an unavailable reviewer.
 
 The complete lens definitions are in the [NoSlop taxonomy](./slop-taxonomy/).
 

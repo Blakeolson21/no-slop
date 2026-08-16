@@ -143,7 +143,7 @@ func TestClassifyPrintsExplicitTierOverride(t *testing.T) {
 	if decision.Tier != risk.TierFullAdversarial || !decision.Overridden {
 		t.Fatalf("decision = %+v, want explicit full override", decision)
 	}
-	if !strings.Contains(decision.String(), "override: leak-scan-only -> full-adversarial") {
+	if !strings.Contains(decision.String(), "override raised: leak-scan-only -> full-adversarial") {
 		t.Fatalf("printed decision does not disclose override:\n%s", decision.String())
 	}
 }

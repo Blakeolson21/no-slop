@@ -26,6 +26,10 @@ func LoadGitChanges(ctx context.Context, workDir, baseRef, headRef string) ([]Ch
 	if err != nil {
 		return nil, fmt.Errorf("load changed paths: %w", err)
 	}
+	gitlinks, err := loadGitlinkPointers(ctx, workDir, baseRef, headRef)
+	if err != nil {
+		return nil, err
+	}
 	entries := splitNUL(statusOutput)
 	changes := make([]Change, 0, len(entries)/2)
 	for index := 0; index < len(entries); {
@@ -52,6 +56,19 @@ func LoadGitChanges(ctx context.Context, workDir, baseRef, headRef string) ([]Ch
 		change := Change{Path: path, Status: status}
 		if isRename {
 			change.BaselinePath = baselinePath
+		}
+		if pointer, gitlink := gitlinks[path]; gitlink {
+			// A submodule entry is a gitlink, not a blob, so `git show ref:path`
+			// fails on it however healthy the submodule is. Reading it as a blob
+			// turned every submodule pointer bump into a content-unreadable
+			// finding naming a git internal error, which made the gate unusable
+			// in any repository that has one. The pointer is recorded for what
+			// it is: content this run could not see, named with the SHAs it
+			// moved between, and every other path still scanned.
+			change.ScanState = ScanSubmodulePointer
+			change.SubmodulePointer = pointer
+			changes = append(changes, change)
+			continue
 		}
 		if status != risk.Added {
 			change.BaselineContent, err = showGitFile(ctx, workDir, baseRef, baselinePath)
@@ -84,6 +101,63 @@ func LoadGitChanges(ctx context.Context, workDir, baseRef, headRef string) ([]Ch
 	return changes, nil
 }
 
+// gitlinkMode is git's file mode for a submodule entry.
+const gitlinkMode = "160000"
+
+// loadGitlinkPointers maps each submodule path in the diff to the pointer move
+// it carries. `git diff --raw` is the one output that names the entry's mode,
+// which is the only reliable way to tell a gitlink from a blob before trying to
+// read it.
+func loadGitlinkPointers(ctx context.Context, workDir, baseRef, headRef string) (map[string]SubmodulePointer, error) {
+	raw, err := git.Output(ctx, workDir, "diff", "--raw", "-z", "--abbrev=40", renameDetection, baseRef, headRef, "--")
+	if err != nil {
+		return nil, fmt.Errorf("load changed entry modes: %w", err)
+	}
+	pointers := make(map[string]SubmodulePointer)
+	fields := splitNUL(raw)
+	for index := 0; index < len(fields); {
+		header := fields[index]
+		index++
+		if !strings.HasPrefix(header, ":") {
+			continue
+		}
+		parts := strings.Fields(strings.TrimPrefix(header, ":"))
+		if len(parts) < 5 || index >= len(fields) {
+			continue
+		}
+		baselineMode, headMode := parts[0], parts[1]
+		baselineSHA, headSHA := parts[2], parts[3]
+		status := parts[4]
+		path := fields[index]
+		index++
+		if strings.HasPrefix(status, "R") || strings.HasPrefix(status, "C") {
+			if index >= len(fields) {
+				continue
+			}
+			path = fields[index]
+			index++
+		}
+		if baselineMode != gitlinkMode && headMode != gitlinkMode {
+			continue
+		}
+		pointers[path] = SubmodulePointer{
+			BaselineCommit: namedCommit(baselineSHA),
+			HeadCommit:     namedCommit(headSHA),
+		}
+	}
+	return pointers, nil
+}
+
+// namedCommit renders a raw-diff object id. Git writes all zeroes for a side
+// that does not exist, and a commit id genuinely may begin with zeroes, so the
+// absent case is recognised by being entirely zeroes rather than by trimming.
+func namedCommit(sha string) string {
+	if strings.Trim(sha, "0") == "" {
+		return "(absent)"
+	}
+	return sha
+}
+
 // quarantine records a path whose content this run could not read, without
 // aborting the whole gate. One unreadable entry (a submodule gitlink whose
 // object is absent from the local store is the realistic case) must not stop
@@ -111,15 +185,16 @@ func quarantine(change Change, reason string) Change {
 //
 // So a text blob whose diff could not be derived is scanned whole. That
 // over-reports on that one path, which is the correct direction, and the run
-// says it happened. A genuinely binary blob is not scanned and is named as
-// such, because feeding binary to text patterns produces noise rather than
-// safety.
+// says it happened. A blob git calls binary is scanned too, through leakscan's
+// binary-safe renderings: skipping it was the cheaper bypass, because one NUL
+// byte prepended to a plain text file reaches this branch and moved a live
+// credential out of a mandatory check's reach at exit 0.
 func applyScanFallback(change *Change, sawHunk bool) {
 	if change.Status == risk.Deleted || sawHunk || change.BaselineContent == change.CurrentContent {
 		return
 	}
 	if isBinaryContent(change.CurrentContent) {
-		change.ScanState = ScanBinaryNotScanned
+		change.ScanState = ScanBinarySafe
 		return
 	}
 	change.ScanState = ScanWholeBlobFallback

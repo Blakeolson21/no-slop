@@ -71,7 +71,14 @@ var (
 	// them made `if len(x) != 0` count as a guard, so an ordinary refactor that
 	// consolidated two length checks reported a removed guard. A false finding
 	// here fails a run, so the subject has to be specific.
-	guardSubject = regexp.MustCompile(`(?i)\berr(?:or)?s?\b|\bok\b|\bpermission|\bauthoriz|\bauthentic|\badmin\b|\brole\b|\btoken\b|\bverif|\bvalid|\ballowed\b|\bdenied\b|\bexpired\b|\bnil\b|\bnull\b|\bnone\b`)
+	//
+	// The last alternative closes the round-3 residual on R9. A guard whose
+	// refusal is spelled `return errBad` matched nothing: the bare `err` word
+	// needs a boundary, and `errBad` has none, so deleting an input guard that
+	// returned a named error value was invisible. Requiring the name to sit in
+	// a return position keeps it specific: an identifier merely CONTAINING err
+	// anywhere on the line is still not a subject.
+	guardSubject = regexp.MustCompile(`(?i)\berr(?:or)?s?\b|\bok\b|\bpermission|\bauthoriz|\bauthentic|\badmin\b|\brole\b|\btoken\b|\bverif|\bvalid|\ballowed\b|\bdenied\b|\bexpired\b|\bnil\b|\bnull\b|\bnone\b|\breturn\s+[A-Za-z_.]*[Ee]rr[A-Za-z0-9_]*`)
 )
 
 type lexedSourceLine struct {
@@ -112,8 +119,17 @@ type Result struct {
 // Scan runs every conservative lens pre-check.
 func Scan(files []File, intent string) Result {
 	var result Result
-	if strings.TrimSpace(intent) == "" {
+	// The scope-expansion detector can only fire on an intent that states a
+	// scope limit it recognises, so an intent of "stuff" armed the check on the
+	// mandatory-check line while leaving it structurally unable to report
+	// anything. Since the intent is author-supplied, that gap was a disarm
+	// wearing an armed label: the cheapest way past this detector was to say
+	// something rather than nothing.
+	switch {
+	case strings.TrimSpace(intent) == "":
 		result.Unarmed = append(result.Unarmed, "scope-expansion needs a stated intent")
+	case !intentStatesAScopeLimit(intent):
+		result.Unarmed = append(result.Unarmed, "scope-expansion needs an intent that states a scope limit, such as \"only\", \"without adding runtime behavior\", or \"without changing the database schema\"")
 	}
 	result.Findings = append(result.Findings, detectScopeExpansion(files, intent)...)
 	for _, file := range files {
@@ -168,16 +184,49 @@ func detectRemovedGuard(file File) []Finding {
 }
 
 func countGuardClauses(content string) int {
-	total := 0
-	for _, line := range splitLines(content) {
-		if isComment(line) {
+	return len(guardClauseLines(splitLines(content)))
+}
+
+// guardClauseBodyLookahead is how far past a guard's opening line the subject
+// may sit. A guard written across lines puts its refusal in the body, so
+// `if user == "" {` and `return errBad` are two lines of one guard, and reading
+// only the first meant deleting that guard produced no finding at all. The
+// window is small on purpose: past a couple of statements a block is doing work
+// rather than refusing, and counting it would make ordinary refactors report.
+const guardClauseBodyLookahead = 2
+
+// guardClauseLines returns the zero-based index of every line that opens a
+// refusing check. A line carrying both the clause and its subject is one; a
+// clause whose subject sits in its short body is also one, counted at the
+// clause.
+func guardClauseLines(lines []string) []int {
+	var found []int
+	for number, line := range lines {
+		if isComment(line) || !guardClause.MatchString(line) {
 			continue
 		}
-		if guardClause.MatchString(line) && guardSubject.MatchString(line) {
-			total++
+		if guardSubject.MatchString(line) {
+			found = append(found, number)
+			continue
+		}
+		if !strings.HasSuffix(strings.TrimSpace(line), "{") && !strings.HasSuffix(strings.TrimSpace(line), ":") {
+			continue
+		}
+		for offset := 1; offset <= guardClauseBodyLookahead && number+offset < len(lines); offset++ {
+			body := strings.TrimSpace(lines[number+offset])
+			if body == "" || isComment(body) {
+				continue
+			}
+			if body == "}" || body == "end" {
+				break
+			}
+			if guardSubject.MatchString(body) {
+				found = append(found, number)
+				break
+			}
 		}
 	}
-	return total
+	return found
 }
 
 // firstRemovedGuardLine points at the head line where a baseline guard stopped
@@ -187,11 +236,9 @@ func firstRemovedGuardLine(file File) int {
 	for _, line := range splitLines(file.CurrentContent) {
 		current[normalizeExpression(line)] = true
 	}
-	for number, line := range splitLines(file.BaselineContent) {
-		if isComment(line) || !guardClause.MatchString(line) || !guardSubject.MatchString(line) {
-			continue
-		}
-		if !current[normalizeExpression(line)] {
+	baseline := splitLines(file.BaselineContent)
+	for _, number := range guardClauseLines(baseline) {
+		if !current[normalizeExpression(baseline[number])] {
 			return number + 1
 		}
 	}
@@ -788,6 +835,16 @@ func detectSelfConsistentOracle(file File) []Finding {
 	return nil
 }
 
+// detectCommentDefendedWorkaround reports a justification comment sitting next
+// to a permissive return or a security bypass.
+//
+// The nearby risky action is required, and that boundary is deliberate rather
+// than an oversight: a comment reading "Workaround for the broken upstream
+// parser" above ordinary code is a note about the world, not a defect, and a
+// detector that fired on it would report on a large share of honest code and
+// get switched off. What the lens is for is the pairing, where prose is doing
+// the work of justifying a bypass the code performs. Round 3 recorded the
+// narrowness; this comment records that it is the intended shape.
 func detectCommentDefendedWorkaround(file File) []Finding {
 	added := addedLines(file)
 	current := splitLines(file.CurrentContent)
@@ -819,6 +876,17 @@ func detectCommentDefendedWorkaround(file File) []Finding {
 		}}
 	}
 	return nil
+}
+
+// intentStatesAScopeLimit reports whether an intent carries one of the scope
+// constraints detectScopeExpansion can act on. It is the single owner of that
+// list, so the mandatory-check line and the detector cannot drift apart and
+// claim different coverage.
+func intentStatesAScopeLimit(intent string) bool {
+	lower := strings.ToLower(strings.TrimSpace(intent))
+	return strings.Contains(lower, "without adding runtime behavior") ||
+		strings.Contains(lower, "without changing the database schema") ||
+		strings.Contains(lower, " only")
 }
 
 func detectScopeExpansion(files []File, intent string) []Finding {

@@ -51,8 +51,6 @@ export default defineConfig({
             { label: "Pipeline Steps", slug: "reference/pipeline-steps" },
             { label: "NoSlop Taxonomy", slug: "reference/slop-taxonomy" },
             { label: "NoSlop Evaluation Corpus", slug: "reference/evaluation-corpus" },
-            { label: "NoSlop Evaluation Campaign", slug: "reference/evaluation-campaign" },
-            { label: "Identity Rename Runbook", slug: "reference/identity-rename" },
             { label: "Global Config", slug: "reference/global-config" },
             { label: "Repo Config", slug: "reference/repo-config" },
             { label: "Environment Variables", slug: "reference/environment" },

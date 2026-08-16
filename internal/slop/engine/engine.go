@@ -23,9 +23,14 @@ const (
 	// ScanWholeBlobFallback means git produced no hunks for a text file whose
 	// content changed, so the whole head blob was scanned instead.
 	ScanWholeBlobFallback ScanState = "whole-blob-fallback"
-	// ScanBinaryNotScanned means the head blob is binary and text patterns
-	// were not run against it.
-	ScanBinaryNotScanned ScanState = "binary-not-scanned"
+	// ScanBinarySafe means the head blob is binary, so the leak scan read it
+	// through the binary-safe renderings rather than as diff text. The blob is
+	// still scanned: naming it as skipped was honest and still let one NUL byte
+	// carry a live credential past a mandatory check at exit 0.
+	ScanBinarySafe ScanState = "binary-safe"
+	// ScanSubmodulePointer means the entry is a gitlink. Its content lives in
+	// another repository and this run never saw it.
+	ScanSubmodulePointer ScanState = "submodule-pointer"
 )
 
 // Change contains the revision content each mechanical check needs.
@@ -44,9 +49,18 @@ type Change struct {
 	BaselineContextTruncated bool
 	// ScanState says how the mandatory scans saw this path.
 	ScanState ScanState
+	// SubmodulePointer carries the commits a gitlink entry moved between. It
+	// is set only when ScanState is ScanSubmodulePointer.
+	SubmodulePointer SubmodulePointer
 	// Unreadable is set when this path's content could not be loaded at all.
 	// The entry is quarantined rather than aborting the run.
 	Unreadable string
+}
+
+// SubmodulePointer names the commits a submodule entry moved between.
+type SubmodulePointer struct {
+	BaselineCommit string
+	HeadCommit     string
 }
 
 // Config controls classification and mandatory artifact checks.
@@ -133,6 +147,11 @@ type MandatoryCheck struct {
 	// reports zero findings without saying which of its detectors never fired
 	// claims more coverage than it had.
 	Unarmed []string
+	// Degraded names the parts of this check that ran with reduced coverage.
+	// It is deliberately separate from Unarmed: "did not look" and "looked
+	// through a narrower window" are different claims, and reporting the second
+	// as the first is what made a scanned binary blob read as a skipped one.
+	Degraded []string
 }
 
 // TestRunner executes the configured full-tier test command.
@@ -223,7 +242,7 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 		Unarmed:  unarmed,
 	})
 
-	leakFindings, exemptions, unscanned := runLeakScan(input.Files, input.Config.Blocklist, input.Config.RefuseLeakExemptions)
+	leakFindings, exemptions, unscanned, degraded := runLeakScan(input.Files, input.Config.Blocklist, input.Config.RefuseLeakExemptions)
 	result.Findings = append(result.Findings, leakFindings...)
 	result.LeakExemptions = exemptions
 	if deps.OnLeakExemptions != nil {
@@ -234,6 +253,7 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 		Enabled:  true,
 		Findings: len(leakFindings),
 		Unarmed:  unscanned,
+		Degraded: degraded,
 	})
 	testFloorEnabled := input.Config.TestCountFloor || containsProbe(decision.DeterministicProbes, "test-count-floor")
 	testFloorFindings := []Finding(nil)
@@ -396,25 +416,32 @@ func appendUniqueFindings(existing []Finding, additions ...Finding) []Finding {
 	return existing
 }
 
-// runLeakScan returns findings, honored exemptions, and the paths the text
-// patterns could not be run against.
+// runLeakScan returns findings, honored exemptions, the paths the scan could
+// not be run against at all, and the paths it read through a narrower window.
 //
-// A binary blob is reported as unscanned rather than as a finding. Every commit
-// that adds an image would otherwise fail, which is the kind of
-// disproportionate block that gets a mandatory check switched off. What the
-// original defect required is that a scan which did not happen cannot look like
-// a scan that found nothing, and naming the path on the check's own line does
-// that without failing the run.
-func runLeakScan(files []Change, blocklist []string, refuseExemptions bool) ([]Finding, []leakscan.Exemption, []string) {
+// A binary blob used to be named as unscanned and skipped. That was honest and
+// it was still a bypass: the whole diff of a plain text file becomes "binary"
+// the moment one NUL byte is prepended, so a single control character moved a
+// live credential out of the mandatory check's reach and the run passed at
+// exit 0. The bytes are scanned now, through leakscan's binary-safe renderings,
+// and the path is reported as degraded rather than as skipped. Adding an image
+// still passes, because a real image carries no credential shapes.
+func runLeakScan(files []Change, blocklist []string, refuseExemptions bool) ([]Finding, []leakscan.Exemption, []string, []string) {
 	input := make([]leakscan.File, 0, len(files))
 	var result []Finding
 	var unscanned []string
+	var degraded []string
 	for _, file := range files {
 		if file.Unreadable != "" {
 			continue
 		}
-		if file.ScanState == ScanBinaryNotScanned {
-			unscanned = append(unscanned, fmt.Sprintf("%s is binary at head and was not scanned", file.Path))
+		switch file.ScanState {
+		case ScanSubmodulePointer:
+			unscanned = append(unscanned, fmt.Sprintf("%s is a submodule pointer whose content is outside this repository", file.Path))
+			continue
+		case ScanBinarySafe:
+			degraded = append(degraded, fmt.Sprintf("%s is binary at head and was read through the binary-safe renderings", file.Path))
+			input = append(input, leakscan.File{Path: file.Path, Content: file.CurrentContent, Binary: true})
 			continue
 		}
 		input = append(input, leakscan.File{Path: file.Path, Content: file.AddedContent})
@@ -429,22 +456,40 @@ func runLeakScan(files []Change, blocklist []string, refuseExemptions bool) ([]F
 			Description: finding.Description,
 		})
 	}
-	return result, scan.Exemptions, unscanned
+	return result, scan.Exemptions, unscanned, degraded
 }
 
-// runContentIntegrity turns every path this run could not read into its own
-// finding. Quarantining the entry keeps one absent submodule object, or one
-// unreadable blob, from aborting a gate that could still have scanned every
-// other path in the change.
+// runContentIntegrity turns every path whose content this run could not see
+// into its own finding. Quarantining the entry keeps one unreadable blob, or
+// one submodule, from aborting a gate that could still have scanned every other
+// path in the change.
+//
+// A submodule pointer bump gets its own lens rather than the generic unreadable
+// one. It is not a broken repository: the content genuinely lives elsewhere and
+// this gate never saw it, so the run names the submodule and the two commits and
+// fails, which is the same fail-closed answer every other unscannable path
+// already gets. Reading a gitlink as a blob instead produced a git internal
+// error on every healthy submodule bump, which is a broken gate rather than a
+// judgement about the change.
 func runContentIntegrity(files []Change) []Finding {
 	var findings []Finding
 	for _, file := range files {
-		if file.Unreadable != "" {
+		switch {
+		case file.Unreadable != "":
 			findings = append(findings, Finding{
 				Lens:        "content-unreadable",
 				Severity:    "error",
 				Path:        file.Path,
 				Description: file.Unreadable,
+			})
+		case file.ScanState == ScanSubmodulePointer:
+			findings = append(findings, Finding{
+				Lens:     "submodule-pointer-unscanned",
+				Severity: "error",
+				Path:     file.Path,
+				Description: fmt.Sprintf(
+					"submodule %q moved from %s to %s; its content is in another repository and was not scanned by this run",
+					file.Path, file.SubmodulePointer.BaselineCommit, file.SubmodulePointer.HeadCommit),
 			})
 		}
 	}

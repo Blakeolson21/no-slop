@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Blakeolson21/no-slop/internal/slop/engine"
+	"github.com/Blakeolson21/no-slop/internal/slop/risk"
 )
 
 func newRepo(t *testing.T) string {
@@ -153,9 +154,9 @@ func TestLeakScanContentSurvivesADiffSuppressingGitattribute(t *testing.T) {
 	}
 }
 
-// TestUnreadableEntryIsQuarantinedRatherThanFatal covers a submodule gitlink
-// whose target object is absent from the local store. One unreadable entry must
-// not stop every other path in the change from being scanned.
+// TestUnreadableEntryIsQuarantinedRatherThanFatal covers a blob whose object is
+// absent from the local store. One unreadable entry must not stop every other
+// path in the change from being scanned.
 func TestUnreadableEntryIsQuarantinedRatherThanFatal(t *testing.T) {
 	t.Parallel()
 
@@ -165,10 +166,15 @@ func TestUnreadableEntryIsQuarantinedRatherThanFatal(t *testing.T) {
 	gitIn(t, dir, "commit", "-q", "-m", "base")
 	base := strings.TrimSpace(gitIn(t, dir, "rev-parse", "HEAD"))
 	writeIn(t, dir, "README.md", "# Project\n\nPlain update.\n")
+	writeIn(t, dir, "vendor/dep.txt", "vendored payload\n")
 	gitIn(t, dir, "add", "-A")
-	// A gitlink whose commit object this repository does not have.
-	gitIn(t, dir, "update-index", "--add", "--cacheinfo", "160000,0000000000000000000000000000000000000001,vendor/dep")
 	gitIn(t, dir, "commit", "-q", "-m", "head")
+	// Remove the blob from the object store, which is the shape an absent
+	// object takes: the tree still names it and nothing can read it.
+	blob := strings.TrimSpace(gitIn(t, dir, "rev-parse", "HEAD:vendor/dep.txt"))
+	if err := os.Remove(filepath.Join(dir, ".git", "objects", blob[:2], blob[2:])); err != nil {
+		t.Fatal(err)
+	}
 
 	changes, err := engine.LoadGitChanges(context.Background(), dir, base, "HEAD")
 	if err != nil {
@@ -177,17 +183,98 @@ func TestUnreadableEntryIsQuarantinedRatherThanFatal(t *testing.T) {
 	if readme := changeFor(t, changes, "README.md"); !strings.Contains(readme.CurrentContent, "Plain update.") {
 		t.Fatalf("the readable path was not loaded: %+v", readme)
 	}
-	if quarantined := changeFor(t, changes, "vendor/dep"); quarantined.Unreadable == "" {
+	if quarantined := changeFor(t, changes, "vendor/dep.txt"); quarantined.Unreadable == "" {
 		t.Fatalf("the unreadable entry carries no reason: %+v", quarantined)
 	}
 }
 
-// TestAddingABinaryFileIsReportedNotBlocked pins the proportion of the R2 fix.
-// A blinded scan must not look like a clean one, but every commit that adds an
-// image must not fail either, because a mandatory check that blocks ordinary
-// work is a mandatory check somebody turns off. The path is named on the
-// leak-scan line instead.
-func TestAddingABinaryFileIsReportedNotBlocked(t *testing.T) {
+// TestSubmodulePointerBumpIsNamedNotMisreadAsABrokenBlob is the round-3 S7
+// probe. `git show <ref>:<path>` fails on a gitlink however healthy the
+// submodule is, so reading it as a blob turned every submodule bump, in every
+// repository that has one, into a content-unreadable finding quoting a git
+// internal error. The pointer is recorded for what it is instead, and the run
+// still scans everything else.
+func TestSubmodulePointerBumpIsNamedNotMisreadAsABrokenBlob(t *testing.T) {
+	t.Parallel()
+
+	upstream := newRepo(t)
+	writeIn(t, upstream, "lib.txt", "one\n")
+	gitIn(t, upstream, "add", "-A")
+	gitIn(t, upstream, "commit", "-q", "-m", "one")
+	first := strings.TrimSpace(gitIn(t, upstream, "rev-parse", "HEAD"))
+	writeIn(t, upstream, "lib.txt", "two\n")
+	gitIn(t, upstream, "add", "-A")
+	gitIn(t, upstream, "commit", "-q", "-m", "two")
+	second := strings.TrimSpace(gitIn(t, upstream, "rev-parse", "HEAD"))
+
+	dir := newRepo(t)
+	writeIn(t, dir, "README.md", "# Project\n")
+	gitIn(t, dir, "add", "-A")
+	gitIn(t, dir, "-c", "protocol.file.allow=always", "submodule", "add", "-q", upstream, "sub")
+	gitIn(t, dir, "-C", "sub", "checkout", "-q", first)
+	gitIn(t, dir, "add", "-A")
+	gitIn(t, dir, "commit", "-q", "-m", "base")
+	base := strings.TrimSpace(gitIn(t, dir, "rev-parse", "HEAD"))
+
+	gitIn(t, dir, "-C", "sub", "checkout", "-q", second)
+	writeIn(t, dir, "README.md", "# Project\n\nPlain update.\n")
+	gitIn(t, dir, "add", "-A")
+	gitIn(t, dir, "commit", "-q", "-m", "bump")
+
+	changes, err := engine.LoadGitChanges(context.Background(), dir, base, "HEAD")
+	if err != nil {
+		t.Fatalf("a healthy submodule bump aborted the load: %v", err)
+	}
+	pointer := changeFor(t, changes, "sub")
+	if pointer.Unreadable != "" {
+		t.Fatalf("the gitlink was read as a blob: %q", pointer.Unreadable)
+	}
+	if pointer.ScanState != engine.ScanSubmodulePointer {
+		t.Fatalf("scan state = %q, want the gitlink named as a submodule pointer", pointer.ScanState)
+	}
+	if pointer.SubmodulePointer.BaselineCommit != first || pointer.SubmodulePointer.HeadCommit != second {
+		t.Fatalf("pointer = %+v, want %s -> %s", pointer.SubmodulePointer, first, second)
+	}
+	if readme := changeFor(t, changes, "README.md"); !strings.Contains(readme.CurrentContent, "Plain update.") {
+		t.Fatalf("the rest of the change was not scanned: %+v", readme)
+	}
+
+	result, err := engine.Run(context.Background(), engine.Input{
+		WorkDir: dir, Branch: "probe", DefaultBranch: "main", Files: changes,
+		Config: engine.Config{Risk: risk.Config{SingleReviewThreshold: 90, FullReviewThreshold: 99}},
+	}, engine.Dependencies{})
+	if err != nil {
+		t.Fatalf("a submodule bump aborted the run: %v", err)
+	}
+	named := false
+	for _, finding := range result.Findings {
+		if finding.Lens == "submodule-pointer-unscanned" && finding.Path == "sub" {
+			named = true
+			if !strings.Contains(finding.Description, first) || !strings.Contains(finding.Description, second) {
+				t.Fatalf("the finding does not carry both commits: %q", finding.Description)
+			}
+		}
+		if finding.Lens == "content-unreadable" {
+			t.Fatalf("the gitlink still reports as unreadable content: %q", finding.Description)
+		}
+	}
+	if !named {
+		t.Fatalf("findings = %+v, want the submodule named as unscanned content", result.Findings)
+	}
+	check := mandatoryCheck(t, result, "leak scan")
+	if len(check.Unarmed) != 1 || !strings.Contains(check.Unarmed[0], "sub") {
+		t.Fatalf("leak scan check = %+v, want the submodule named on the check line", check)
+	}
+}
+
+// TestAddingABinaryFileIsScannedNotBlocked pins the proportion of the R2 fix
+// as the round-3 review reshaped it. Every commit that adds an image must not
+// fail, because a mandatory check that blocks ordinary work is a mandatory
+// check somebody turns off. But the blob is READ, not skipped: naming it as
+// unscanned was honest and still let one NUL byte carry a live credential past
+// the scan at exit 0. So the image passes, and the leak-scan line reports the
+// reduced coverage rather than a check that never looked.
+func TestAddingABinaryFileIsScannedNotBlocked(t *testing.T) {
 	t.Parallel()
 
 	dir := newRepo(t)
@@ -205,13 +292,13 @@ func TestAddingABinaryFileIsReportedNotBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state := changeFor(t, changes, "logo.png").ScanState; state != engine.ScanBinaryNotScanned {
-		t.Fatalf("scan state = %q, want the binary path named as unscanned", state)
+	if state := changeFor(t, changes, "logo.png").ScanState; state != engine.ScanBinarySafe {
+		t.Fatalf("scan state = %q, want the binary path read through the binary-safe path", state)
 	}
 
 	result, err := engine.Run(context.Background(), engine.Input{
 		WorkDir: dir, Branch: "probe", DefaultBranch: "main", Files: changes,
-		Config: engine.Config{TierOverride: "leak-scan-only"},
+		Config: engine.Config{Risk: risk.Config{SingleReviewThreshold: 90, FullReviewThreshold: 99}},
 	}, engine.Dependencies{})
 	if err != nil {
 		t.Fatal(err)
@@ -220,7 +307,74 @@ func TestAddingABinaryFileIsReportedNotBlocked(t *testing.T) {
 		t.Fatalf("adding an image failed the gate: %+v", result.Findings)
 	}
 	check := mandatoryCheck(t, result, "leak scan")
-	if len(check.Unarmed) != 1 || !strings.Contains(check.Unarmed[0], "logo.png") {
-		t.Fatalf("leak scan check = %+v, want the unscanned path named", check)
+	if len(check.Unarmed) != 0 {
+		t.Fatalf("leak scan check = %+v, want no path reported as unscanned", check)
 	}
+	if len(check.Degraded) != 1 || !strings.Contains(check.Degraded[0], "logo.png") {
+		t.Fatalf("leak scan check = %+v, want the binary path named as reduced coverage", check)
+	}
+}
+
+// TestOneNulByteDoesNotBuyAPass is the round-3 S4 probe. Prepending a single
+// NUL to a plain text file makes git call the blob binary, which used to skip
+// the mandatory leak scan entirely and pass the run at exit 0 over a live AWS
+// key with only a note on the check line.
+func TestOneNulByteDoesNotBuyAPass(t *testing.T) {
+	t.Parallel()
+
+	for _, probe := range []struct {
+		name    string
+		content []byte
+	}{
+		{name: "one leading NUL", content: append([]byte{0}, []byte("notes\nAKIAIOSFODNN7EXAMPLE\n")...)},
+		{name: "NUL between the lines", content: []byte("notes\n\x00AKIAIOSFODNN7EXAMPLE\n")},
+		{name: "utf-16 style interleaved NULs", content: utf16ish("notes\nAKIAIOSFODNN7EXAMPLE\n")},
+	} {
+		t.Run(probe.name, func(t *testing.T) {
+			t.Parallel()
+			dir := newRepo(t)
+			writeIn(t, dir, "NOTES.md", "notes\n")
+			gitIn(t, dir, "add", "-A")
+			gitIn(t, dir, "commit", "-q", "-m", "base")
+			base := strings.TrimSpace(gitIn(t, dir, "rev-parse", "HEAD"))
+			if err := os.WriteFile(filepath.Join(dir, "NOTES.md"), probe.content, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			gitIn(t, dir, "add", "-A")
+			gitIn(t, dir, "commit", "-q", "-m", "head")
+
+			changes, err := engine.LoadGitChanges(context.Background(), dir, base, "HEAD")
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := engine.Run(context.Background(), engine.Input{
+				WorkDir: dir, Branch: "probe", DefaultBranch: "main", Files: changes,
+			}, engine.Dependencies{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Passed {
+				t.Fatalf("a NUL byte carried a credential past the mandatory scan: %+v", result.MandatoryChecks)
+			}
+			found := false
+			for _, finding := range result.Findings {
+				if finding.Lens == "leak-identity-scan" && finding.Path == "NOTES.md" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("findings = %+v, want the credential named", result.Findings)
+			}
+		})
+	}
+}
+
+// utf16ish interleaves NUL bytes the way UTF-16LE text does, which the
+// control-bytes-to-spaces rendering alone would space into nonsense.
+func utf16ish(text string) []byte {
+	out := make([]byte, 0, len(text)*2)
+	for index := 0; index < len(text); index++ {
+		out = append(out, text[index], 0)
+	}
+	return out
 }
