@@ -1,4 +1,8 @@
-# NoSlop corpus evaluation
+---
+title: NoSlop Corpus Evaluation
+description: Measured results from the NoSlop replay campaigns.
+---
+
 
 Evaluation dates: 2026-08-12 baseline, round 4, and round 5
 

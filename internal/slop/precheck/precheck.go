@@ -48,6 +48,22 @@ var (
 	errorContextPattern = regexp.MustCompile(`(?i)\berr(?:or)?s?\b|deadlineexceeded|timeout|unreadable|notexist`)
 	declarationPattern  = regexp.MustCompile(`^(?:func\s+(?:\([^)]*\)\s*)?|type\s+|(?:var|const)\s+)([A-Za-z_][A-Za-z0-9_]*)\b`)
 	declarationBlock    = regexp.MustCompile(`^(?:type|var|const)\s*\($`)
+	// dispatchComparison recognises a branch that selects behavior by transport,
+	// provider, or format. Matching the literal strings "transport ==",
+	// "provider ==" and three more meant a fifth dispatch axis, or a `===`, was
+	// invisible.
+	dispatchComparison = regexp.MustCompile(`(?i)\b(?:transport|provider|platform|protocol|format|scheme|backend|driver|vendor|channel|adapter|kind|mode)\s*(?:==|===|!=|\.equals\()`)
+	explicitBranch     = regexp.MustCompile(`(?i)\bif\b[^\n]*\bexplicit`)
+	literalToken       = regexp.MustCompile(`["'0-9]`)
+	computedExpression = regexp.MustCompile(`[A-Za-z_]`)
+	upperCaseStart     = regexp.MustCompile(`^[A-Z]`)
+	numericToken       = regexp.MustCompile(`[0-9]+(?:\.[0-9]+)?`)
+	// guardClause recognises a control-flow check that refuses. Counting them
+	// on each side of the diff is what lets a DELETED guard be seen at all:
+	// every other detector reads added lines only, so the defect delivered by
+	// removing a check produced no finding whatsoever.
+	guardClause  = regexp.MustCompile(`(?i)^\s*(?:if|unless|elif|else if|assert|require|guard)\b|^\s*(?:raise|throw)\b|\brequire\s*\(|\bassert\w*\s*\(`)
+	guardSubject = regexp.MustCompile(`(?i)\berr(?:or)?s?\b|\bok\b|\bnot\b|!|\bpermission|\bauthoriz|\bauthentic|\badmin\b|\brole\b|\btoken\b|\bverif|\bvalid|\ballowed\b|\bdenied\b|\bexpired\b|\bnil\b|\bnull\b|\bnone\b`)
 )
 
 type lexedSourceLine struct {
@@ -75,26 +91,98 @@ var docFillerWords = map[string]bool{
 	"verifies": true, "when": true, "whether": true, "with": true,
 }
 
-// Scan runs every conservative lens pre-check. Intent is optional; only the
-// scope-expansion check uses it, and it emits nothing when intent is absent.
-func Scan(files []File, intent string) []Finding {
-	var findings []Finding
-	findings = append(findings, detectScopeExpansion(files, intent)...)
+// Result is what one pre-check pass learned, including what it could not check.
+type Result struct {
+	Findings []Finding
+	// Unarmed names each detector that could not run and why. A detector that
+	// silently contributes zero findings is indistinguishable from one that
+	// looked and found nothing, and the mandatory-check line then carries more
+	// authority than the pass earned.
+	Unarmed []string
+}
+
+// Scan runs every conservative lens pre-check.
+func Scan(files []File, intent string) Result {
+	var result Result
+	if strings.TrimSpace(intent) == "" {
+		result.Unarmed = append(result.Unarmed, "scope-expansion needs a stated intent")
+	}
+	result.Findings = append(result.Findings, detectScopeExpansion(files, intent)...)
 	for _, file := range files {
-		findings = append(findings, detectRedundantComment(file)...)
+		result.Findings = append(result.Findings, detectRedundantComment(file)...)
 		sibling := detectSiblingRule(file)
 		workaround := detectCommentDefendedWorkaround(file)
-		findings = append(findings, sibling...)
-		findings = append(findings, workaround...)
-		findings = append(findings, detectVacuousCheck(file)...)
-		findings = append(findings, detectWidenedTolerance(file)...)
-		findings = append(findings, detectSelfConsistentOracle(file)...)
-		findings = append(findings, detectUnsupportedFollowup(file)...)
+		result.Findings = append(result.Findings, sibling...)
+		result.Findings = append(result.Findings, workaround...)
+		result.Findings = append(result.Findings, detectVacuousCheck(file)...)
+		result.Findings = append(result.Findings, detectWidenedTolerance(file)...)
+		result.Findings = append(result.Findings, detectSelfConsistentOracle(file)...)
+		result.Findings = append(result.Findings, detectUnsupportedFollowup(file)...)
+		result.Findings = append(result.Findings, detectRemovedGuard(file)...)
 		if len(sibling) == 0 && len(workaround) == 0 {
-			findings = append(findings, detectFailOpenDefault(file)...)
+			result.Findings = append(result.Findings, detectFailOpenDefault(file)...)
 		}
 	}
-	return uniqueSorted(findings)
+	result.Findings = uniqueSorted(result.Findings)
+	return result
+}
+
+// detectRemovedGuard reports a change that ends with fewer refusing checks than
+// it started with.
+//
+// Every other detector here reads added lines only, so a defect delivered by
+// DELETING a guard produced no finding at all: removing `if err != nil { return
+// err }` adds nothing to look at. Counting guard clauses on both sides catches
+// the deletion while staying insensitive to rewording, because renaming a
+// variable inside a guard leaves the count unchanged. Only a net decrease is a
+// finding, so consolidating two checks into one still reports, which is the
+// conservative direction, and a pure refactor that keeps the count does not.
+func detectRemovedGuard(file File) []Finding {
+	if strings.TrimSpace(file.BaselineContent) == "" || strings.TrimSpace(file.CurrentContent) == "" {
+		return nil
+	}
+	baseline := countGuardClauses(file.BaselineContent)
+	current := countGuardClauses(file.CurrentContent)
+	if baseline <= current {
+		return nil
+	}
+	return []Finding{{
+		Lens:        "fail-open-default",
+		Path:        file.Path,
+		Line:        firstRemovedGuardLine(file),
+		Description: fmt.Sprintf("refusing checks dropped from %d to %d without a replacement", baseline, current),
+	}}
+}
+
+func countGuardClauses(content string) int {
+	total := 0
+	for _, line := range splitLines(content) {
+		if isComment(line) {
+			continue
+		}
+		if guardClause.MatchString(line) && guardSubject.MatchString(line) {
+			total++
+		}
+	}
+	return total
+}
+
+// firstRemovedGuardLine points at the head line where a baseline guard stopped
+// appearing, so the finding names a place a reader can look.
+func firstRemovedGuardLine(file File) int {
+	current := make(map[string]bool)
+	for _, line := range splitLines(file.CurrentContent) {
+		current[normalizeExpression(line)] = true
+	}
+	for number, line := range splitLines(file.BaselineContent) {
+		if isComment(line) || !guardClause.MatchString(line) || !guardSubject.MatchString(line) {
+			continue
+		}
+		if !current[normalizeExpression(line)] {
+			return number + 1
+		}
+	}
+	return 1
 }
 
 func detectRedundantComment(file File) []Finding {
@@ -610,12 +698,13 @@ func detectWidenedTolerance(file File) []Finding {
 		return nil
 	}
 	baseline := splitLines(file.BaselineContent)
+	baselineSkeletons := newSkeletonIndex(baseline)
 	for _, line := range addedLines(file) {
 		currentMatch := tolerancePattern.FindStringSubmatch(line.text)
 		if currentMatch == nil || currentMatch[1] != ">" {
 			continue
 		}
-		previous := correspondingBaselineLine(baseline, line.number, line.text)
+		previous := correspondingBaselineLine(baselineSkeletons, baseline, line.number, line.text)
 		baselineMatch := tolerancePattern.FindStringSubmatch(previous)
 		if baselineMatch == nil || baselineMatch[1] != currentMatch[1] {
 			continue
@@ -641,30 +730,38 @@ func detectSelfConsistentOracle(file File) []Finding {
 	}
 	baseline := splitLines(file.BaselineContent)
 	current := splitLines(file.CurrentContent)
-	for _, line := range addedLines(file) {
+	added := addedLines(file)
+	// The observed-value assignments are indexed once. Re-scanning the file
+	// from line 1 for every added line made this detector quadratic in file
+	// size: 4000 added lines took 40 seconds, which is long enough that a large
+	// diff starts to look like a hung gate.
+	observed := observedAssignmentLines(current)
+	baselineAssignments := newAssignmentIndex(baseline)
+	addedByNumber := make(map[int]sourceLine, len(added))
+	for _, candidate := range added {
+		addedByNumber[candidate.number] = candidate
+	}
+	for _, line := range added {
 		match := expectedPattern.FindStringSubmatch(line.text)
 		if match == nil {
 			continue
 		}
 		name := match[1]
 		currentExpression := cleanExpression(match[2])
-		previousLine := findAssignment(baseline, name, line.number)
+		previousLine := findAssignment(baselineAssignments, baseline, name, line.number)
 		previousMatch := expectedPattern.FindStringSubmatch(previousLine)
 		if previousMatch == nil || !containsLiteral(previousMatch[2]) {
 			continue
 		}
-		if !computedOracle(current, line.number, currentExpression) {
+		if !computedOracle(observed, line.number, currentExpression) {
 			continue
 		}
 		findingLine := line.number
-		for _, candidate := range addedLines(file) {
-			if candidate.number == line.number-1 && assignmentPattern.MatchString(candidate.text) {
-				findingLine = candidate.number
-				break
-			}
+		if candidate, ok := addedByNumber[line.number-1]; ok && assignmentPattern.MatchString(candidate.text) {
+			findingLine = candidate.number
 		}
-		if regexp.MustCompile(`^[A-Z]`).MatchString(currentExpression) {
-			if actualLine := matchingActualAssignmentLine(current, line.number, currentExpression); actualLine > 0 {
+		if upperCaseStart.MatchString(currentExpression) {
+			if actualLine := observed[currentExpression]; actualLine > 0 && actualLine < line.number {
 				findingLine = actualLine
 			}
 		}
@@ -681,10 +778,9 @@ func detectSelfConsistentOracle(file File) []Finding {
 func detectCommentDefendedWorkaround(file File) []Finding {
 	added := addedLines(file)
 	current := splitLines(file.CurrentContent)
+	lowerCurrentContent := strings.ToLower(file.CurrentContent)
 	for _, comment := range added {
-		lower := strings.ToLower(comment.text)
-		if !isComment(comment.text) || !containsAny(lower,
-			"work around", "availability matters", "freshness", "bypass verification", "time-sensitive", "occasionally noisy") {
+		if !isComment(comment.text) || !defendsAWorkaround(comment.text) {
 			continue
 		}
 		actionLine, action := riskyActionNear(current, comment.number, 4)
@@ -694,7 +790,7 @@ func detectCommentDefendedWorkaround(file File) []Finding {
 		findingLine := comment.number
 		if strings.Contains(strings.ToLower(action), "insecureskipverify") {
 			findingLine = actionLine
-		} else if strings.Contains(strings.ToLower(file.CurrentContent), "availability matters") {
+		} else if strings.Contains(lowerCurrentContent, "availability matters") {
 			for _, candidate := range added {
 				if strings.Contains(strings.ToLower(candidate.text), "freshness") {
 					findingLine = candidate.number
@@ -754,8 +850,7 @@ func detectUnsupportedFollowup(file File) []Finding {
 	}
 	current := splitLines(file.CurrentContent)
 	for _, line := range addedLines(file) {
-		lower := strings.ToLower(line.text)
-		if !isComment(line.text) || !containsAny(lower, "filed", "tracked", "assigned", "approved", "scheduled") {
+		if !isComment(line.text) || !assertsAFollowup(line.text) {
 			continue
 		}
 		if durableReference.MatchString(line.text) {
@@ -775,11 +870,22 @@ func detectUnsupportedFollowup(file File) []Finding {
 	return nil
 }
 
+// detectFailOpenDefault reports an error, timeout, or unreadable state turning
+// into a permissive result.
+//
+// It deliberately has no comment-based suppression. An earlier version stood
+// down when a nearby comment claimed the permissive branch was intentional,
+// which meant `if err != nil { return true }` was caught and the identical code
+// with "// by policy" above it was not. Writing that comment is free and was
+// verified against nothing, so the check could always be disarmed by the party
+// it was checking. That is a vacuous-check by this project's own taxonomy. A
+// permissive error path that really is the documented contract is a finding
+// worth answering out loud, not one worth hiding with a comment.
 func detectFailOpenDefault(file File) []Finding {
 	current := splitLines(file.CurrentContent)
 	for _, line := range addedLines(file) {
 		lower := strings.ToLower(strings.TrimSpace(line.text))
-		if !isPermissiveReturn(lower) || !errorContextNear(current, line.number, 4) || explicitPermissivePolicyNear(current, line.number, 4) {
+		if !isPermissiveReturn(lower) || !errorContextNear(current, line.number, 4) {
 			continue
 		}
 		findingLine := line.number
@@ -803,7 +909,7 @@ func detectSiblingRule(file File) []Finding {
 	added := addedLines(file)
 	lowerCurrent := strings.ToLower(file.CurrentContent)
 
-	if strings.Contains(lowerCurrent, "if explicit") {
+	if explicitBranch.MatchString(lowerCurrent) {
 		for _, line := range added {
 			if strings.Contains(strings.ToLower(line.text), "errors.is") {
 				if actionLine, action := riskyActionNear(current, line.number, 3); actionLine > 0 && strings.TrimSpace(strings.ToLower(action)) == "return nil, nil" {
@@ -819,8 +925,7 @@ func detectSiblingRule(file File) []Finding {
 	}
 
 	for _, line := range added {
-		lower := strings.ToLower(line.text)
-		if !containsAny(lower, "transport ==", "provider ==", "platform ==", "protocol ==", "format ==") {
+		if !dispatchComparison.MatchString(line.text) {
 			continue
 		}
 		if !restrictiveReturnNear(current, line.number, 3) {
@@ -914,43 +1019,66 @@ func comparedAfter(lines []string, lineNumber int, source, snapshot string) bool
 	return false
 }
 
-func correspondingBaselineLine(baseline []string, lineNumber int, current string) string {
+func correspondingBaselineLine(index skeletonIndex, baseline []string, lineNumber int, current string) string {
+	target := numericSkeleton(current)
 	if lineNumber > 0 && lineNumber <= len(baseline) {
 		candidate := baseline[lineNumber-1]
-		if numericSkeleton(candidate) == numericSkeleton(current) {
-			return candidate
-		}
-	}
-	target := numericSkeleton(current)
-	for _, candidate := range baseline {
 		if numericSkeleton(candidate) == target {
 			return candidate
 		}
 	}
-	return ""
+	return index[target]
+}
+
+// skeletonIndex maps a line's numeric skeleton to the first baseline line with
+// that shape. Recomputing every baseline skeleton for every added line made
+// tolerance detection quadratic in file size.
+type skeletonIndex map[string]string
+
+func newSkeletonIndex(lines []string) skeletonIndex {
+	index := make(skeletonIndex)
+	for _, line := range lines {
+		skeleton := numericSkeleton(line)
+		if _, seen := index[skeleton]; !seen {
+			index[skeleton] = line
+		}
+	}
+	return index
 }
 
 func numericSkeleton(value string) string {
-	numbers := regexp.MustCompile(`[0-9]+(?:\.[0-9]+)?`)
-	return strings.Join(strings.Fields(numbers.ReplaceAllString(value, "#")), "")
+	return strings.Join(strings.Fields(numericToken.ReplaceAllString(value, "#")), "")
 }
 
-func findAssignment(lines []string, name string, preferredLine int) string {
+func findAssignment(index assignmentIndex, lines []string, name string, preferredLine int) string {
 	if preferredLine > 0 && preferredLine <= len(lines) {
 		if match := assignmentPattern.FindStringSubmatch(lines[preferredLine-1]); match != nil && match[1] == name {
 			return lines[preferredLine-1]
 		}
 	}
+	return index[name]
+}
+
+// assignmentIndex maps an assigned name to the first line that assigns it, so
+// the lookup does not rescan the baseline once per added line.
+type assignmentIndex map[string]string
+
+func newAssignmentIndex(lines []string) assignmentIndex {
+	index := make(assignmentIndex)
 	for _, line := range lines {
-		if match := assignmentPattern.FindStringSubmatch(line); match != nil && match[1] == name {
-			return line
+		match := assignmentPattern.FindStringSubmatch(line)
+		if match == nil {
+			continue
+		}
+		if _, seen := index[match[1]]; !seen {
+			index[match[1]] = line
 		}
 	}
-	return ""
+	return index
 }
 
 func containsLiteral(value string) bool {
-	return regexp.MustCompile(`["'0-9]`).MatchString(value)
+	return literalToken.MatchString(value)
 }
 
 func cleanExpression(value string) string {
@@ -959,37 +1087,33 @@ func cleanExpression(value string) string {
 	return strings.TrimSpace(value)
 }
 
-func computedOracle(current []string, lineNumber int, expression string) bool {
+// observedAssignmentLines indexes every `got`/`actual` assignment by the
+// expression it holds, mapped to the first line that assigns it.
+func observedAssignmentLines(lines []string) map[string]int {
+	observed := make(map[string]int)
+	for number, line := range lines {
+		match := assignmentPattern.FindStringSubmatch(line)
+		if match == nil || !containsAny(strings.ToLower(match[1]), "got", "actual") {
+			continue
+		}
+		expression := cleanExpression(match[2])
+		if _, seen := observed[expression]; !seen {
+			observed[expression] = number + 1
+		}
+	}
+	return observed
+}
+
+func computedOracle(observed map[string]int, lineNumber int, expression string) bool {
 	lower := strings.ToLower(expression)
-	if containsAny(expression, "+", "*", "/") && regexp.MustCompile(`[A-Za-z_]`).MatchString(expression) {
+	if containsAny(expression, "+", "*", "/") && computedExpression.MatchString(expression) {
 		return true
 	}
 	if !strings.Contains(expression, "(") || containsAny(lower, "decodehex", "mustdecode", "parsefixture") {
 		return false
 	}
-	for number := 1; number < lineNumber && number <= len(current); number++ {
-		match := assignmentPattern.FindStringSubmatch(current[number-1])
-		if match == nil || !containsAny(strings.ToLower(match[1]), "got", "actual") {
-			continue
-		}
-		if cleanExpression(match[2]) == expression {
-			return true
-		}
-	}
-	return false
-}
-
-func matchingActualAssignmentLine(lines []string, before int, expression string) int {
-	for number := 1; number < before && number <= len(lines); number++ {
-		match := assignmentPattern.FindStringSubmatch(lines[number-1])
-		if match == nil || !containsAny(strings.ToLower(match[1]), "got", "actual") {
-			continue
-		}
-		if cleanExpression(match[2]) == expression {
-			return number
-		}
-	}
-	return 0
+	line, ok := observed[expression]
+	return ok && line < lineNumber
 }
 
 func isComment(value string) bool {
@@ -1011,11 +1135,69 @@ func riskyActionNear(lines []string, lineNumber, distance int) (int, string) {
 	return 0, ""
 }
 
+// isPermissiveReturn reads the returned values rather than matching whole
+// statements. The exact-string list it replaces recognised `return true` and
+// missed `return true, nil`, which is how the same permission is granted from a
+// function that also returns an error, and missed every language that ends the
+// statement with a semicolon.
 func isPermissiveReturn(lower string) bool {
-	return lower == "return true" || lower == "return nil, nil" ||
-		strings.HasPrefix(lower, "return allpermissions(") ||
-		strings.HasPrefix(lower, "return allow") ||
-		(strings.HasPrefix(lower, "return ") && strings.Contains(lower, "cached[") && strings.HasSuffix(lower, ", nil"))
+	trimmed := strings.TrimSuffix(strings.TrimSpace(lower), ";")
+	rest, ok := strings.CutPrefix(trimmed, "return")
+	if !ok {
+		return false
+	}
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return false
+	}
+	if strings.HasPrefix(rest, "allow") || strings.HasPrefix(rest, "allpermissions(") || strings.HasPrefix(rest, "permit") {
+		return true
+	}
+	if strings.Contains(rest, "cached[") && strings.HasSuffix(rest, ", nil") {
+		return true
+	}
+	values := splitReturnValues(rest)
+	if len(values) == 0 {
+		return false
+	}
+	grants := false
+	for _, value := range values {
+		switch value {
+		case "true":
+			grants = true
+		case "nil", "null", "none":
+		default:
+			return false
+		}
+	}
+	// All-nil is the permissive shape for a function whose only signal is the
+	// error it did not return.
+	return grants || len(values) > 1
+}
+
+// splitReturnValues splits a return expression on top-level commas so a call
+// with its own arguments is not mistaken for several returned values.
+func splitReturnValues(rest string) []string {
+	var values []string
+	depth := 0
+	current := strings.Builder{}
+	for _, letter := range rest {
+		switch letter {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			depth--
+		case ',':
+			if depth == 0 {
+				values = append(values, strings.TrimSpace(current.String()))
+				current.Reset()
+				continue
+			}
+		}
+		current.WriteRune(letter)
+	}
+	values = append(values, strings.TrimSpace(current.String()))
+	return values
 }
 
 func errorContextNear(lines []string, lineNumber, distance int) bool {
@@ -1026,20 +1208,6 @@ func errorContextNear(lines []string, lineNumber, distance int) bool {
 	for number := start; number <= lineNumber && number <= len(lines); number++ {
 		lower := strings.ToLower(lines[number-1])
 		if errorContextPattern.MatchString(lower) {
-			return true
-		}
-	}
-	return false
-}
-
-func explicitPermissivePolicyNear(lines []string, lineNumber, distance int) bool {
-	start := lineNumber - distance
-	if start < 1 {
-		start = 1
-	}
-	for number := start; number <= lineNumber && number <= len(lines); number++ {
-		line := strings.ToLower(lines[number-1])
-		if isComment(line) && containsAny(line, "by policy", "documented default", "intentional fail-open") {
 			return true
 		}
 	}
@@ -1065,12 +1233,23 @@ func restrictiveReturnNear(lines []string, lineNumber, distance int) bool {
 		end = len(lines)
 	}
 	for number := lineNumber; number <= end; number++ {
-		lower := strings.ToLower(strings.TrimSpace(lines[number-1]))
-		if containsAny(lower, "return deny", "return false", "return nil, fmt.error", "return badrequest") {
+		if isRestrictiveReturn(strings.ToLower(strings.TrimSpace(lines[number-1]))) {
 			return true
 		}
 	}
 	return false
+}
+
+func isRestrictiveReturn(lower string) bool {
+	rest, ok := strings.CutPrefix(strings.TrimSuffix(lower, ";"), "return")
+	if !ok {
+		return false
+	}
+	rest = strings.TrimSpace(rest)
+	return strings.HasPrefix(rest, "deny") || strings.HasPrefix(rest, "false") ||
+		strings.HasPrefix(rest, "reject") || strings.HasPrefix(rest, "forbid") ||
+		strings.HasPrefix(rest, "badrequest") || strings.HasPrefix(rest, "unauthorized") ||
+		strings.Contains(rest, "fmt.error") || strings.Contains(rest, "errors.new")
 }
 
 func permissiveReturnAfter(lines []string, start, distance int) int {
@@ -1079,8 +1258,7 @@ func permissiveReturnAfter(lines []string, start, distance int) int {
 		end = len(lines)
 	}
 	for number := start; number <= end; number++ {
-		lower := strings.ToLower(strings.TrimSpace(lines[number-1]))
-		if strings.HasPrefix(lower, "return allow") || lower == "return true" || lower == "return nil, nil" {
+		if isPermissiveReturn(strings.ToLower(strings.TrimSpace(lines[number-1]))) {
 			return number
 		}
 	}
@@ -1178,6 +1356,57 @@ func isTestPath(path string) bool {
 	return strings.Contains(path, "/test/") || strings.Contains(path, "/tests/") ||
 		strings.HasSuffix(base, "_test.go") || strings.HasPrefix(base, "test_") ||
 		strings.Contains(base, ".test.") || strings.Contains(base, ".spec.")
+}
+
+// letterSkeleton reduces prose to its letters, so a stem match no longer
+// depends on the word order and punctuation of the corpus seed it came from.
+// The detectors used to compare against the literal English of their own
+// seeds, which is why "We work around the broken parser" fired and "Workaround
+// for the broken parser" did not: the same claim, invisible because it was
+// phrased differently.
+func letterSkeleton(value string) string {
+	var skeleton strings.Builder
+	skeleton.Grow(len(value))
+	for _, letter := range strings.ToLower(value) {
+		if letter >= 'a' && letter <= 'z' {
+			skeleton.WriteRune(letter)
+		}
+	}
+	return skeleton.String()
+}
+
+func containsStem(value string, stems ...string) bool {
+	skeleton := letterSkeleton(value)
+	for _, stem := range stems {
+		if strings.Contains(skeleton, stem) {
+			return true
+		}
+	}
+	return false
+}
+
+// workaroundStems name a comment that defends code rather than explaining it.
+var workaroundStems = []string{
+	"workaround", "worksaround", "workingaround", "workedaround", "hackaround",
+	"temporar", "fornow", "quickfix",
+	"bypass", "skipverif", "disableverif", "knownissue", "flaky", "noisy",
+	"availabilitymatters", "freshness", "timesensitive", "unfortunately",
+	"tolerateuntil", "revisitlater", "notideal", "goodenoughfor",
+}
+
+func defendsAWorkaround(comment string) bool {
+	return containsStem(comment, workaroundStems...)
+}
+
+// followupStems name a comment asserting that somebody else will handle it.
+var followupStems = []string{
+	"filed", "filea", "tracked", "trackedin", "tracking", "assigned", "approved",
+	"scheduled", "ticketed", "logged", "raised", "signedoff", "agreedwith",
+	"willbedone", "followup", "followsup",
+}
+
+func assertsAFollowup(comment string) bool {
+	return containsStem(comment, followupStems...)
 }
 
 func containsAny(value string, needles ...string) bool {

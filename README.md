@@ -28,7 +28,7 @@ The selected tier and all three reasons print before validation continues. Use `
 | `single-review` | Mandatory checks and one reviewer pass through every slop lens |
 | `full-adversarial` | Mandatory checks, a lens review, an adversarial challenge round, the test-count floor, and the configured test command |
 
-A Markdown-only diff routes to `leak-scan-only` unless it matches a configured high-risk path or the operator overrides it. Substantial new source additions also reach the full tier even on a feature branch.
+A Markdown-only diff routes to `leak-scan-only` unless it is an agent instruction file, matches a configured high-risk path, or the operator overrides it. Rewriting `AGENTS.md`, `CLAUDE.md`, a `SKILL.md`, or the repository's own `.no-mistakes.yaml` is high risk with no configuration at all, because in an agent repository those files are the runtime. Substantial source additions also reach the full tier even on a feature branch, counted across the whole change rather than only in newly created files.
 
 ### AI-slop lenses
 
@@ -148,7 +148,7 @@ Replay captured policy findings against the seed corpus:
 
 The [corpus format](docs/src/content/docs/reference/evaluation-corpus.md) records diffs and independent expected findings. The runner labels the seed corpus and result files as replayed inputs, then reports found, missed, and false-positive counts without inventing reviewer output.
 
-The first [measured 32-case campaign](docs/evaluation.md) found 10 expectations, missed 22, and emitted no unmatched findings under both policies. All model-backed reviewer invocations timed out, so the result does not support a superiority claim. Raw captures and latency records are checked in for replay and inspection.
+The first [measured 32-case campaign](docs/src/content/docs/reference/evaluation-campaign.md) found 10 expectations, missed 22, and emitted no unmatched findings under both policies. All model-backed reviewer invocations timed out, so the result does not support a superiority claim. Raw captures and latency records are checked in for replay and inspection.
 
 ## Development
 

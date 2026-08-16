@@ -13,6 +13,20 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/slop/testfloor"
 )
 
+// ScanState records how much of a path the mandatory scans could actually see.
+type ScanState string
+
+const (
+	// ScanFromDiff is the ordinary case: added content came from diff hunks.
+	ScanFromDiff ScanState = ""
+	// ScanWholeBlobFallback means git produced no hunks for a text file whose
+	// content changed, so the whole head blob was scanned instead.
+	ScanWholeBlobFallback ScanState = "whole-blob-fallback"
+	// ScanBinaryNotScanned means the head blob is binary and text patterns
+	// were not run against it.
+	ScanBinaryNotScanned ScanState = "binary-not-scanned"
+)
+
 // Change contains the revision content each mechanical check needs.
 type Change struct {
 	Path            string
@@ -24,6 +38,14 @@ type Change struct {
 	CurrentContent  string
 	BaselineContent string
 	BaselineContext string
+	// BaselineContextTruncated says the sibling scope stopped short of the
+	// full set, so no collision answer derived from it is sound.
+	BaselineContextTruncated bool
+	// ScanState says how the mandatory scans saw this path.
+	ScanState ScanState
+	// Unreadable is set when this path's content could not be loaded at all.
+	// The entry is quarantined rather than aborting the run.
+	Unreadable string
 }
 
 // Config controls classification and mandatory artifact checks.
@@ -39,6 +61,11 @@ type Config struct {
 	ForceTier            bool
 	ThreadURL            string
 	EvidenceRoot         string
+	// GateConfigDrift names each gate-strength field the head worktree sets
+	// differently from the base ref. The base value is the one in force; the
+	// drift becomes a finding so that a change editing the gate's own controls
+	// is itself flagged rather than silently ignored.
+	GateConfigDrift []string
 }
 
 // Input is the complete gate request.
@@ -101,6 +128,10 @@ type MandatoryCheck struct {
 	Name     string
 	Enabled  bool
 	Findings int
+	// Unarmed names the parts of this check that could not run. A check that
+	// reports zero findings without saying which of its detectors never fired
+	// claims more coverage than it had.
+	Unarmed []string
 }
 
 // TestRunner executes the configured full-tier test command.
@@ -136,14 +167,15 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 	riskFiles := make([]risk.FileChange, 0, len(input.Files))
 	for _, file := range input.Files {
 		riskFiles = append(riskFiles, risk.FileChange{
-			Path:            file.Path,
-			BaselinePath:    file.BaselinePath,
-			Status:          file.Status,
-			Added:           file.Added,
-			Deleted:         file.Deleted,
-			BaselineContent: file.BaselineContent,
-			BaselineContext: file.BaselineContext,
-			CurrentContent:  file.CurrentContent,
+			Path:                     file.Path,
+			BaselinePath:             file.BaselinePath,
+			Status:                   file.Status,
+			Added:                    file.Added,
+			Deleted:                  file.Deleted,
+			BaselineContent:          file.BaselineContent,
+			BaselineContext:          file.BaselineContext,
+			BaselineContextTruncated: file.BaselineContextTruncated,
+			CurrentContent:           file.CurrentContent,
 		})
 	}
 	riskConfig := input.Config.Risk
@@ -165,9 +197,30 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 	}
 	result := Result{Decision: decision}
 
-	lensFindings := runLensPrecheck(input.Files, input.Intent)
+	driftFindings := make([]Finding, 0, len(input.Config.GateConfigDrift))
+	for _, drift := range input.Config.GateConfigDrift {
+		driftFindings = append(driftFindings, Finding{
+			Lens:        "gate-config-drift",
+			Severity:    "error",
+			Path:        ".no-mistakes.yaml",
+			Description: drift,
+		})
+	}
+	result.Findings = append(result.Findings, driftFindings...)
+	result.MandatoryChecks = append(result.MandatoryChecks, MandatoryCheck{Name: "gate config", Enabled: true, Findings: len(driftFindings)})
+
+	integrityFindings := runContentIntegrity(input.Files)
+	result.Findings = append(result.Findings, integrityFindings...)
+	result.MandatoryChecks = append(result.MandatoryChecks, MandatoryCheck{Name: "content integrity", Enabled: true, Findings: len(integrityFindings)})
+
+	lensFindings, unarmed := runLensPrecheck(input.Files, input.Intent)
 	result.Findings = append(result.Findings, lensFindings...)
-	result.MandatoryChecks = append(result.MandatoryChecks, MandatoryCheck{Name: "lens pre-check", Enabled: true, Findings: len(lensFindings)})
+	result.MandatoryChecks = append(result.MandatoryChecks, MandatoryCheck{
+		Name:     "lens pre-check",
+		Enabled:  true,
+		Findings: len(lensFindings),
+		Unarmed:  unarmed,
+	})
 
 	leakFindings, exemptions := runLeakScan(input.Files, input.Config.Blocklist, input.Config.RefuseLeakExemptions)
 	result.Findings = append(result.Findings, leakFindings...)
@@ -185,17 +238,37 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 	result.MandatoryChecks = append(result.MandatoryChecks, MandatoryCheck{Name: "test-count floor", Enabled: testFloorEnabled, Findings: len(testFloorFindings)})
 	proseFindings, err := runProseOracle(ctx, input, deps.ThreadReader)
 	if err != nil {
-		return Result{}, err
+		return result, err
 	}
 	result.Findings = append(result.Findings, proseFindings...)
 	result.MandatoryChecks = append(result.MandatoryChecks, MandatoryCheck{Name: "prose oracle", Enabled: true, Findings: len(proseFindings)})
+	// The live-thread check gets its own line whether or not it ran. A verified
+	// open thread previously produced output byte-identical to never having
+	// looked, so an operator could not tell "the thread is fine" from "no check
+	// happened".
+	threadFindings := 0
+	for _, finding := range proseFindings {
+		if finding.Lens == string(prose.ThreadClosed) || finding.Lens == string(prose.DuplicateClaim) {
+			threadFindings++
+		}
+	}
+	result.MandatoryChecks = append(result.MandatoryChecks, MandatoryCheck{
+		Name:     "live thread check",
+		Enabled:  input.Config.ThreadURL != "",
+		Findings: threadFindings,
+	})
 
 	if decision.Tier == risk.TierSingleReview || decision.Tier == risk.TierFullAdversarial {
 		reviewer := deps.Reviewer
 		if reviewer == nil && deps.ReviewerFactory != nil {
 			reviewer, err = deps.ReviewerFactory(ctx)
 			if err != nil {
-				return Result{}, fmt.Errorf("create slop reviewer: %w", err)
+				// The mandatory checks already ran. Returning them with the
+				// error keeps a run that could not reach a reviewer from
+				// throwing away the findings it had already earned, which is
+				// what made a refused run indistinguishable from a run that
+				// found nothing.
+				return result, fmt.Errorf("create slop reviewer: %w", err)
 			}
 		}
 		if reviewer == nil {
@@ -223,7 +296,7 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 					Prompt:        lenses.ReviewerPromptWithPriority(decision.PriorityLenses),
 				})
 				if reviewErr != nil {
-					return Result{}, fmt.Errorf("run slop reviewer round %q: %w", round, reviewErr)
+					return result, fmt.Errorf("run slop reviewer round %q: %w", round, reviewErr)
 				}
 				result.ReviewRan = true
 				result.ReviewRounds++
@@ -250,7 +323,7 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 		default:
 			testResult, testErr := deps.Tests.Run(ctx, input.WorkDir, input.Config.TestCommand)
 			if testErr != nil {
-				return Result{}, fmt.Errorf("run full-tier tests: %w", testErr)
+				return result, fmt.Errorf("run full-tier tests: %w", testErr)
 			}
 			result.Tests = append(result.Tests, testResult)
 			if testResult.ExitCode != 0 {
@@ -267,7 +340,7 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 	return result, nil
 }
 
-func runLensPrecheck(files []Change, intent string) []Finding {
+func runLensPrecheck(files []Change, intent string) ([]Finding, []string) {
 	input := make([]precheck.File, 0, len(files))
 	for _, file := range files {
 		input = append(input, precheck.File{
@@ -278,9 +351,9 @@ func runLensPrecheck(files []Change, intent string) []Finding {
 			CurrentContent:  file.CurrentContent,
 		})
 	}
-	findings := precheck.Scan(input, intent)
-	result := make([]Finding, 0, len(findings))
-	for _, finding := range findings {
+	scan := precheck.Scan(input, intent)
+	result := make([]Finding, 0, len(scan.Findings))
+	for _, finding := range scan.Findings {
 		result = append(result, Finding{
 			Lens:        finding.Lens,
 			Severity:    "error",
@@ -289,7 +362,7 @@ func runLensPrecheck(files []Change, intent string) []Finding {
 			Description: finding.Description,
 		})
 	}
-	return result
+	return result, scan.Unarmed
 }
 
 func containsProbe(probes []string, target string) bool {
@@ -319,11 +392,23 @@ func appendUniqueFindings(existing []Finding, additions ...Finding) []Finding {
 
 func runLeakScan(files []Change, blocklist []string, refuseExemptions bool) ([]Finding, []leakscan.Exemption) {
 	input := make([]leakscan.File, 0, len(files))
+	var result []Finding
 	for _, file := range files {
+		if file.Unreadable != "" {
+			continue
+		}
+		if file.ScanState == ScanBinaryNotScanned {
+			result = append(result, Finding{
+				Lens:        "leak-scan-undetermined",
+				Severity:    "error",
+				Path:        file.Path,
+				Description: "content is binary at head, so the leak scan could not read it",
+			})
+			continue
+		}
 		input = append(input, leakscan.File{Path: file.Path, Content: file.AddedContent})
 	}
 	scan := leakscan.Scan(input, leakscan.Options{Blocklist: blocklist, RefuseExemptions: refuseExemptions})
-	result := make([]Finding, 0, len(scan.Findings))
 	for _, finding := range scan.Findings {
 		result = append(result, Finding{
 			Lens:        "leak-identity-scan",
@@ -334,6 +419,25 @@ func runLeakScan(files []Change, blocklist []string, refuseExemptions bool) ([]F
 		})
 	}
 	return result, scan.Exemptions
+}
+
+// runContentIntegrity turns every path this run could not read into its own
+// finding. Quarantining the entry keeps one absent submodule object, or one
+// unreadable blob, from aborting a gate that could still have scanned every
+// other path in the change.
+func runContentIntegrity(files []Change) []Finding {
+	var findings []Finding
+	for _, file := range files {
+		if file.Unreadable != "" {
+			findings = append(findings, Finding{
+				Lens:        "content-unreadable",
+				Severity:    "error",
+				Path:        file.Path,
+				Description: file.Unreadable,
+			})
+		}
+	}
+	return findings
 }
 
 func runTestFloor(files []Change) []Finding {

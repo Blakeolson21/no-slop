@@ -104,8 +104,13 @@ Task:
 	if err != nil {
 		return nil, err
 	}
+	// Findings is a pointer so that an absent key is distinguishable from an
+	// empty array. Decoding into a plain slice made a reviewer that returned a
+	// schema-violating object read exactly like a reviewer that found nothing,
+	// which is the wrong default for a protocol whose entire output is that
+	// object.
 	var payload struct {
-		Findings []struct {
+		Findings *[]struct {
 			Lens        string `json:"lens"`
 			Severity    string `json:"severity"`
 			File        string `json:"file"`
@@ -116,8 +121,14 @@ Task:
 	if err := json.Unmarshal(result.Output, &payload); err != nil {
 		return nil, fmt.Errorf("parse reviewer findings: %w", err)
 	}
-	findings := make([]Finding, 0, len(payload.Findings))
-	for _, finding := range payload.Findings {
+	if payload.Findings == nil {
+		return nil, fmt.Errorf("parse reviewer findings: response has no %q key, so the review produced no usable verdict", "findings")
+	}
+	findings := make([]Finding, 0, len(*payload.Findings))
+	for index, finding := range *payload.Findings {
+		if strings.TrimSpace(finding.Lens) == "" || strings.TrimSpace(finding.Description) == "" {
+			return nil, fmt.Errorf("parse reviewer findings: finding %d names no lens or carries no description", index)
+		}
 		findings = append(findings, Finding{
 			Lens:        finding.Lens,
 			Severity:    finding.Severity,

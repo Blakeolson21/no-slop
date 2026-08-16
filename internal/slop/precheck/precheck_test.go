@@ -99,14 +99,6 @@ func TestScanAcquitsSimilarButSafePatterns(t *testing.T) {
 			},
 		},
 		{
-			name: "explicit permissive policy",
-			file: precheck.File{
-				Path:           "optional.go",
-				AddedContent:   "\n// Optional configuration is fail-open by policy.\nreturn nil, nil\n",
-				CurrentContent: "if errors.Is(err, os.ErrNotExist) {\n// Optional configuration is fail-open by policy.\nreturn nil, nil\n}\n",
-			},
-		},
-		{
 			name: "independent expected constructor",
 			file: precheck.File{
 				Path:            "parser_test.go",
@@ -136,7 +128,7 @@ func TestScanAcquitsSimilarButSafePatterns(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			if findings := precheck.Scan([]precheck.File{testCase.file}, testCase.intent); len(findings) != 0 {
+			if findings := precheck.Scan([]precheck.File{testCase.file}, testCase.intent).Findings; len(findings) != 0 {
 				t.Fatalf("safe pattern produced findings: %+v", findings)
 			}
 		})
@@ -165,7 +157,7 @@ func TestScanUsesTheMoreSpecificLensForOverlappingPermissivePatterns(t *testing.
 		},
 	}
 
-	findings := precheck.Scan(files, "")
+	findings := precheck.Scan(files, "").Findings
 	if len(findings) != 2 {
 		t.Fatalf("findings = %+v, want one per file", findings)
 	}
@@ -415,7 +407,7 @@ func TestScanRedundantCommentAcquitsConventionalDocumentation(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			if findings := precheck.Scan([]precheck.File{testCase.file}, ""); len(findings) != 0 {
+			if findings := precheck.Scan([]precheck.File{testCase.file}, "").Findings; len(findings) != 0 {
 				t.Fatalf("conventional comment produced findings: %+v", findings)
 			}
 		})
@@ -644,7 +636,7 @@ func TestScanFlagsRedundantCommentShapes(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			findings := precheck.Scan([]precheck.File{testCase.file}, "")
+			findings := precheck.Scan([]precheck.File{testCase.file}, "").Findings
 			if len(findings) != 1 {
 				t.Fatalf("findings = %+v, want exactly one", findings)
 			}

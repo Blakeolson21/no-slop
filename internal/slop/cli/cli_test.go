@@ -33,6 +33,10 @@ func (failingProvenanceStore) Recent(string, string, int) ([]provenance.Record, 
 	return nil, nil
 }
 
+func (failingProvenanceStore) HasIdentifiedHistory() (bool, error) {
+	return false, nil
+}
+
 func (failingProvenanceStore) Append(provenance.Record) error {
 	return errors.New("write denied")
 }
@@ -96,14 +100,50 @@ func TestRunGatePrintsMandatoryCheckStatus(t *testing.T) {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
 	}
 	for _, want := range []string{
-		"mandatory check: lens pre-check completed (0 findings)",
+		"mandatory check: gate config completed (0 findings)",
+		"mandatory check: content integrity completed (0 findings)",
+		// The pre-check names the detector it could not arm. Without a stated
+		// intent the scope-expansion detector cannot run, and a bare
+		// "0 findings" claimed coverage the pass did not have.
+		"mandatory check: lens pre-check completed (0 findings, not armed: scope-expansion needs a stated intent)",
 		"mandatory check: leak scan completed (0 findings)",
 		"mandatory check: test-count floor completed (0 findings)",
 		"mandatory check: prose oracle completed (0 findings)",
+		// A run that never looked at a thread says so, instead of producing
+		// output byte-identical to a run that looked and was satisfied.
+		"mandatory check: live thread check disabled",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("output missing %q:\n%s", want, stdout.String())
 		}
+	}
+}
+
+// TestRunGateArmsScopeExpansionWhenIntentIsStated is the other half: with an
+// intent supplied the detector runs and the line no longer carries a caveat.
+func TestRunGateArmsScopeExpansionWhenIntentIsStated(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	writeFile(t, dir, "README.md", "# Project\n")
+	runGit(t, dir, "add", "README.md")
+	runGit(t, dir, "commit", "-m", "initial")
+	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	runGit(t, dir, "switch", "-c", "docs/readme")
+	writeFile(t, dir, "README.md", "# Project\n\nPlain update.\n")
+	runGit(t, dir, "add", "README.md")
+	runGit(t, dir, "commit", "-m", "docs")
+
+	var stdout, stderr bytes.Buffer
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base, "--intent", "Refresh the README only."}, &stdout, &stderr, slopcli.Options{})
+	if exitCode != 0 {
+		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
+	}
+	if want := "mandatory check: lens pre-check completed (0 findings)\n"; !strings.Contains(stdout.String(), want) {
+		t.Fatalf("output missing %q:\n%s", want, stdout.String())
 	}
 }
 
@@ -624,7 +664,12 @@ func TestRunGateTreatsSiblingSymbolSubstitutionAsChangedLogic(t *testing.T) {
 	}
 }
 
-func TestRunGatePrintsVerdictBeforeReportingProvenanceAppendFailure(t *testing.T) {
+// TestRunGateWithholdsTheVerdictWhenProvenanceCannotBeRecorded replaces an
+// earlier test that pinned the opposite order. Printing "verdict: fail" and
+// then exiting 2 because the record could not be written left stdout and the
+// exit code describing different runs. The checks that did complete still
+// print, because withholding the verdict must not also withhold the evidence.
+func TestRunGateWithholdsTheVerdictWhenProvenanceCannotBeRecorded(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -645,10 +690,13 @@ func TestRunGatePrintsVerdictBeforeReportingProvenanceAppendFailure(t *testing.T
 	if exitCode != 2 {
 		t.Fatalf("exit = %d, want bookkeeping failure\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
 	}
-	for _, want := range []string{"finding: [test-capitulation]", "verdict: fail"} {
+	for _, want := range []string{"mandatory check: test-count floor completed (1 findings)", "finding: [test-capitulation]"} {
 		if !strings.Contains(stdout.String(), want) {
-			t.Errorf("stdout missing completed result %q:\n%s", want, stdout.String())
+			t.Errorf("stdout missing completed check %q:\n%s", want, stdout.String())
 		}
+	}
+	if strings.Contains(stdout.String(), "verdict:") {
+		t.Errorf("stdout printed a verdict the run could not record:\n%s", stdout.String())
 	}
 	if !strings.Contains(stderr.String(), "record provenance: write denied") {
 		t.Fatalf("stderr does not report append failure:\n%s", stderr.String())

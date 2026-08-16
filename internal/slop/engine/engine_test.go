@@ -47,6 +47,10 @@ func (h staticHistory) Recent(string, string, int) ([]provenance.Record, error) 
 	return h, nil
 }
 
+func (h staticHistory) HasIdentifiedHistory() (bool, error) {
+	return len(h) > 0, nil
+}
+
 func TestRunRoutesMarkdownToMandatoryChecksWithoutReviewerOrTests(t *testing.T) {
 	t.Parallel()
 
@@ -165,9 +169,20 @@ func TestRunLensPrecheckStillRunsUnderLightOverride(t *testing.T) {
 	if result.Passed || len(result.Findings) != 1 || result.Findings[0].Lens != "vacuous-check" {
 		t.Fatalf("result = %+v, want mandatory vacuous-check finding", result)
 	}
-	if len(result.MandatoryChecks) == 0 || result.MandatoryChecks[0].Name != "lens pre-check" || result.MandatoryChecks[0].Findings != 1 {
-		t.Fatalf("mandatory checks = %+v", result.MandatoryChecks)
+	if check := mandatoryCheck(t, result, "lens pre-check"); !check.Enabled || check.Findings != 1 {
+		t.Fatalf("lens pre-check = %+v, want enabled with 1 finding", check)
 	}
+}
+
+func mandatoryCheck(t *testing.T, result engine.Result, name string) engine.MandatoryCheck {
+	t.Helper()
+	for _, check := range result.MandatoryChecks {
+		if check.Name == name {
+			return check
+		}
+	}
+	t.Fatalf("mandatory check %q missing from %+v", name, result.MandatoryChecks)
+	return engine.MandatoryCheck{}
 }
 
 func TestRunRedundantCommentCheckUsesOnlyAddedCommentsAtLightestTier(t *testing.T) {

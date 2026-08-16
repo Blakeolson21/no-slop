@@ -18,6 +18,10 @@ func (r historyReader) Recent(string, string, int) ([]provenance.Record, error) 
 	return r.records, r.err
 }
 
+func (r historyReader) HasIdentifiedHistory() (bool, error) {
+	return len(r.records) > 0, r.err
+}
+
 func TestClassifyMarkdownOnlyChangeUsesLeakScanOnlyTier(t *testing.T) {
 	t.Parallel()
 

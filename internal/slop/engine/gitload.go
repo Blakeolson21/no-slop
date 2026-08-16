@@ -56,11 +56,12 @@ func LoadGitChanges(ctx context.Context, workDir, baseRef, headRef string) ([]Ch
 		if status != risk.Added {
 			change.BaselineContent, err = showGitFile(ctx, workDir, baseRef, baselinePath)
 			if err != nil {
-				return nil, fmt.Errorf("load baseline %q: %w", path, err)
+				changes = append(changes, quarantine(change, fmt.Sprintf("baseline blob for %q could not be read: %v", baselinePath, err)))
+				continue
 			}
 		}
 		if status == risk.Modified {
-			change.BaselineContext, err = loadBaselineSiblingContent(ctx, workDir, baseRef, baselinePath)
+			change.BaselineContext, change.BaselineContextTruncated, err = loadBaselineSiblingContent(ctx, workDir, baseRef, baselinePath)
 			if err != nil {
 				return nil, fmt.Errorf("load baseline sibling context for %q: %w", path, err)
 			}
@@ -68,23 +69,92 @@ func LoadGitChanges(ctx context.Context, workDir, baseRef, headRef string) ([]Ch
 		if status != risk.Deleted {
 			change.CurrentContent, err = showGitFile(ctx, workDir, headRef, path)
 			if err != nil {
-				return nil, fmt.Errorf("load current %q: %w", path, err)
+				changes = append(changes, quarantine(change, fmt.Sprintf("head blob for %q could not be read: %v", path, err)))
+				continue
 			}
 		}
-		change.AddedContent, change.Added, change.Deleted, err = loadAddedContent(ctx, workDir, baseRef, headRef, baselinePath, path, isRename, renameDetection)
+		content, err := loadAddedContent(ctx, workDir, baseRef, headRef, baselinePath, path, isRename, renameDetection)
 		if err != nil {
 			return nil, err
 		}
+		change.AddedContent, change.Added, change.Deleted = content.text, content.added, content.deleted
+		applyScanFallback(&change, content.sawHunk)
 		changes = append(changes, change)
 	}
 	return changes, nil
 }
 
-func loadBaselineSiblingContent(ctx context.Context, workDir, baseRef, path string) (string, error) {
+// quarantine records a path whose content this run could not read, without
+// aborting the whole gate. One unreadable entry (a submodule gitlink whose
+// object is absent from the local store is the realistic case) must not stop
+// every other path in the change from being scanned; the entry carries its own
+// reason and the engine turns it into a finding, so the run still fails and
+// still says why.
+func quarantine(change Change, reason string) Change {
+	change.Unreadable = reason
+	change.BaselineContent = ""
+	change.CurrentContent = ""
+	change.AddedContent = ""
+	return change
+}
+
+// applyScanFallback keeps the mandatory leak scan honest when git rendered no
+// diff for a path whose content demonstrably changed.
+//
+// AddedContent is parsed out of `git diff --unified=0` hunk text, and git
+// produces no hunks for anything it treats as binary. A committed
+// `.gitattributes` line unsetting the `diff` attribute is enough to reach that
+// state on a plain text file, which fed the scanner an empty string, zeroed the
+// added and deleted counts the classifier scores, and printed "leak scan
+// completed (0 findings)" over a live credential. A check whose blinding is
+// indistinguishable from a clean result is worse than no check.
+//
+// So a text blob whose diff could not be derived is scanned whole. That
+// over-reports on that one path, which is the correct direction, and the run
+// says it happened. A genuinely binary blob is not scanned and is named as
+// such, because feeding binary to text patterns produces noise rather than
+// safety.
+func applyScanFallback(change *Change, sawHunk bool) {
+	if change.Status == risk.Deleted || sawHunk || change.BaselineContent == change.CurrentContent {
+		return
+	}
+	if isBinaryContent(change.CurrentContent) {
+		change.ScanState = ScanBinaryNotScanned
+		return
+	}
+	change.ScanState = ScanWholeBlobFallback
+	change.AddedContent = change.CurrentContent
+	change.Added = countLines(change.CurrentContent)
+	change.Deleted = countLines(change.BaselineContent)
+}
+
+func isBinaryContent(content string) bool {
+	limit := len(content)
+	if limit > 8000 {
+		limit = 8000
+	}
+	return strings.IndexByte(content[:limit], 0) >= 0
+}
+
+func countLines(content string) int {
+	if content == "" {
+		return 0
+	}
+	return strings.Count(strings.TrimSuffix(content, "\n"), "\n") + 1
+}
+
+// maxBaselineSiblings bounds the collision oracle's per-file fan-out. Each
+// sibling costs one `git show`, so a directory holding thousands of files
+// turned one classification into minutes of subprocess work. Past the cap the
+// context is reported truncated rather than silently partial, and the
+// classifier refuses to call a change mechanical on a partial view.
+const maxBaselineSiblings = 200
+
+func loadBaselineSiblingContent(ctx context.Context, workDir, baseRef, path string) (string, bool, error) {
 	dir := filepath.ToSlash(filepath.Dir(path))
 	ext := strings.ToLower(filepath.Ext(path))
 	if ext == "" {
-		return "", nil
+		return "", false, nil
 	}
 	scope := dir
 	if scope == "." {
@@ -92,21 +162,26 @@ func loadBaselineSiblingContent(ctx context.Context, workDir, baseRef, path stri
 	}
 	output, err := git.Run(ctx, workDir, "ls-tree", "-r", "--name-only", "-z", baseRef, "--", scope)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	var context strings.Builder
+	loaded := 0
 	for _, sibling := range splitNUL(output) {
 		if sibling == path || filepath.ToSlash(filepath.Dir(sibling)) != dir || strings.ToLower(filepath.Ext(sibling)) != ext {
 			continue
 		}
+		if loaded >= maxBaselineSiblings {
+			return context.String(), true, nil
+		}
 		content, err := showGitFile(ctx, workDir, baseRef, sibling)
 		if err != nil {
-			return "", err
+			return context.String(), true, nil
 		}
 		context.WriteString(content)
 		context.WriteByte('\n')
+		loaded++
 	}
-	return context.String(), nil
+	return context.String(), false, nil
 }
 
 func splitNUL(output string) []string {
@@ -134,7 +209,14 @@ func showGitFile(ctx context.Context, workDir, ref, path string) (string, error)
 	return git.Output(ctx, workDir, "show", ref+":"+path)
 }
 
-func loadAddedContent(ctx context.Context, workDir, baseRef, headRef, baselinePath, path string, rename bool, detection string) (string, int, int, error) {
+type addedContent struct {
+	text    string
+	added   int
+	deleted int
+	sawHunk bool
+}
+
+func loadAddedContent(ctx context.Context, workDir, baseRef, headRef, baselinePath, path string, rename bool, detection string) (addedContent, error) {
 	args := []string{"diff", "--unified=0", "--no-color", "--no-ext-diff"}
 	if rename {
 		args = append(args, detection)
@@ -147,11 +229,10 @@ func loadAddedContent(ctx context.Context, workDir, baseRef, headRef, baselinePa
 	}
 	diff, err := git.Output(ctx, workDir, args...)
 	if err != nil {
-		return "", 0, 0, fmt.Errorf("load added lines for %q: %w", path, err)
+		return addedContent{}, fmt.Errorf("load added lines for %q: %w", path, err)
 	}
 	var added strings.Builder
-	addedCount := 0
-	deletedCount := 0
+	result := addedContent{}
 	currentLine := 1
 	inHunk := false
 	for _, line := range strings.Split(diff, "\n") {
@@ -161,6 +242,7 @@ func loadAddedContent(ctx context.Context, workDir, baseRef, headRef, baselinePa
 		}
 		if match := hunkHeader.FindStringSubmatch(line); match != nil {
 			inHunk = true
+			result.sawHunk = true
 			start, _ := strconv.Atoi(match[1])
 			for currentLine < start {
 				added.WriteByte('\n')
@@ -176,16 +258,17 @@ func loadAddedContent(ctx context.Context, workDir, baseRef, headRef, baselinePa
 			added.WriteString(strings.TrimPrefix(line, "+"))
 			added.WriteByte('\n')
 			currentLine++
-			addedCount++
+			result.added++
 		case strings.HasPrefix(line, "-"):
-			deletedCount++
+			result.deleted++
 			continue
 		case strings.HasPrefix(line, " "):
 			added.WriteByte('\n')
 			currentLine++
 		}
 	}
-	return added.String(), addedCount, deletedCount, nil
+	result.text = added.String()
+	return result, nil
 }
 
 var hunkHeader = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)

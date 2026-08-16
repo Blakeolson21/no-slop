@@ -33,14 +33,21 @@ const (
 
 // FileChange is the classifier's path-level input.
 type FileChange struct {
-	Path            string
-	BaselinePath    string
-	Status          ChangeStatus
-	Added           int
-	Deleted         int
+	Path         string
+	BaselinePath string
+	Status       ChangeStatus
+	Added        int
+	Deleted      int
+	// BaselineContent and CurrentContent are the whole blob on each side.
 	BaselineContent string
-	BaselineContext string
 	CurrentContent  string
+	// BaselineContext is neighbouring baseline source the collision check
+	// reads. BaselineContextTruncated says the loader stopped short of the
+	// full set, which makes every collision answer from it unsound, so the
+	// classifier refuses to call the change mechanical rather than trusting a
+	// partial view.
+	BaselineContext          string
+	BaselineContextTruncated bool
 }
 
 // ChangeSet describes the complete diff and where it will land.
@@ -98,8 +105,14 @@ func Classify(change ChangeSet, cfg Config) (Decision, error) {
 			reversibility = "content-only change remains straightforward to revert on the default branch"
 		}
 		decision := Decision{
-			Tier:          TierLeakScanOnly,
-			BlastRadius:   Axis{Score: 0, Reason: "Markdown-only changes do not reach runtime code"},
+			Tier: TierLeakScanOnly,
+			// The reason states what was observed, not what it implies. The
+			// previous wording asserted that Markdown does not reach runtime
+			// code, which is false in an agent repository and was false in the
+			// exact case that mattered: an instruction file. Instruction files
+			// now take the high-risk branch above, so this branch really is
+			// ordinary prose, and it says only that.
+			BlastRadius:   Axis{Score: 0, Reason: "no runtime source file changed and no instruction surface matched"},
 			Novelty:       Axis{Score: 0, Reason: "Markdown-only content change"},
 			Reversibility: Axis{Score: 0, Reason: reversibility},
 		}
@@ -136,12 +149,30 @@ func finalizeDecision(decision Decision, cfg Config) (Decision, error) {
 func conditionOnProvenance(decision Decision, cfg Config) Decision {
 	laneID := strings.TrimSpace(cfg.AgentLaneID)
 	model := strings.TrimSpace(cfg.Model)
-	switch {
-	case cfg.ProvenanceStore == nil:
+	if cfg.ProvenanceStore == nil {
 		decision.Rationale = "no provenance history configured; using v1 policy"
 		return decision
-	case laneID == "" || model == "" || laneID == "unknown" || model == "unknown":
-		decision.Rationale = "no lane/model provenance key; using v1 policy"
+	}
+	if laneID == "" || model == "" || laneID == "unknown" || model == "unknown" {
+		// Omitting --lane-id was the cheapest of the escalation evasions: it
+		// printed the same line an honest first-time lane prints. It is only an
+		// evasion where identified history exists to hide from, so a repository
+		// that never supplied identities keeps the v1 route and one that does
+		// pays the full tier for a run that will not say who generated it.
+		identified, err := cfg.ProvenanceStore.HasIdentifiedHistory()
+		if err != nil {
+			decision.Tier = TierFullAdversarial
+			decision.ProvenanceEscalated = true
+			decision.Rationale = "provenance history could not be read; escalating to full-adversarial"
+			return decision
+		}
+		if identified {
+			decision.Tier = TierFullAdversarial
+			decision.ProvenanceEscalated = true
+			decision.Rationale = "no lane/model provenance key on a repository that records them; escalating to full-adversarial"
+			return decision
+		}
+		decision.Rationale = "no lane/model provenance key and no identified history; using v1 policy"
 		return decision
 	}
 	history, err := cfg.ProvenanceStore.Recent(laneID, model, 10)
@@ -156,10 +187,16 @@ func conditionOnProvenance(decision Decision, cfg Config) Decision {
 		return decision
 	}
 
+	// Accepted findings only. Subtracting rejections let a forged record with
+	// three rejected findings cancel a real record with three accepted ones,
+	// so the audited party could clear an active escalation by writing history
+	// rather than by producing better changes. Conditioning may only ever
+	// raise a tier, so counting accepted findings alone is also the only
+	// direction that matches what the mechanism is allowed to do.
 	scores := make(map[string]int)
 	for _, record := range history {
 		for lens, findings := range record.FindingsByLens {
-			scores[lens] += len(findings.Accepted) - len(findings.Rejected)
+			scores[lens] += len(findings.Accepted)
 		}
 	}
 	for lens, score := range scores {
@@ -267,15 +304,40 @@ func classifyBlastRadius(files []FileChange, configured []string) Axis {
 	return Axis{Score: 2, Reason: "source code can affect runtime behavior"}
 }
 
+// substantialSourceAddition reports a diff large enough that its integration
+// reach is broad regardless of where it landed.
+//
+// Two things it deliberately does not key on, because the author picks both.
+// It does not require the file to be newly created: identical logic appended to
+// an existing file has the same reach as the same logic in a new file, and
+// keying on creation let an author drop two tiers by choosing where to paste.
+// It does not trust physical line count alone: line breaks are a formatting
+// property, so a generated file holding thousands of declarations on a few
+// hundred lines scored as a small change. Net new declarations answer the
+// second, and either signal is enough.
 func substantialSourceAddition(files []FileChange) bool {
-	const substantialSourceLines = 500
+	const (
+		substantialSourceLines        = 500
+		substantialSourceDeclarations = 40
+	)
 	added := 0
+	declarations := 0
 	for _, file := range files {
-		if file.Status == Added && sourcePath(file.Path) && !isTestOrDocsPath(file.Path) {
-			added += file.Added
+		if file.Status == Deleted || !sourcePath(file.Path) || isTestOrDocsPath(file.Path) {
+			continue
 		}
+		added += file.Added
+		declarations += netNewDeclarationCount(file)
 	}
-	return added >= substantialSourceLines
+	return added >= substantialSourceLines || declarations >= substantialSourceDeclarations
+}
+
+func netNewDeclarationCount(file FileChange) int {
+	net := len(declaredIdentifiers(file.CurrentContent)) - len(declaredIdentifiers(file.BaselineContent))
+	if net < 0 {
+		return 0
+	}
+	return net
 }
 
 func classifyNovelty(files []FileChange) Axis {
@@ -292,10 +354,30 @@ func classifyNovelty(files []FileChange) Axis {
 	}) {
 		return Axis{Score: 0, Reason: "change is a mechanical rename"}
 	}
-	if allChanges(files, mechanicallyEquivalent) {
+	scope := newRenameScope(files)
+	if allChanges(files, func(file FileChange) bool { return mechanicallyEquivalent(file, scope) }) {
 		return Axis{Score: 0, Reason: "source token stream contains only consistent identifier substitutions"}
 	}
 	return Axis{Score: 2, Reason: "existing source logic changed"}
+}
+
+// renameScope holds the declarations the change set itself makes at head. It is
+// the evidence that separates a rename from a substitution.
+type renameScope struct {
+	headDeclarations map[string]struct{}
+}
+
+func newRenameScope(files []FileChange) renameScope {
+	scope := renameScope{headDeclarations: make(map[string]struct{})}
+	for _, file := range files {
+		if file.Status == Deleted {
+			continue
+		}
+		for name := range declaredIdentifiers(file.CurrentContent) {
+			scope.headDeclarations[name] = struct{}{}
+		}
+	}
+	return scope
 }
 
 type sourceToken struct {
@@ -303,11 +385,38 @@ type sourceToken struct {
 	text string
 }
 
-func mechanicallyEquivalent(file FileChange) bool {
+// mechanicallyEquivalent reports a change that renames symbols without
+// changing what the code does.
+//
+// The rule is stated positively, and that direction is the whole point. An
+// earlier version asked whether the substituted name collided with anything
+// already in scope, and answered from the same-directory, same-extension
+// siblings alone. Every symbol declared anywhere else was invisible, so
+// swapping `requireAdmin` for `allowAnyone` across a package boundary read as
+// a rename to a fresh name and routed an authorization weakening to the
+// cheapest tier. Widening the collision set only moves that boundary; there is
+// always another directory.
+//
+// So the evidence required is now the evidence a rename actually leaves. The
+// substituted name must be DECLARED by the change set itself at head, because
+// that is what renaming a symbol produces, and the replaced name must be gone
+// from the change set's declarations, because a rename removes the old name
+// rather than leaving both and picking the other one. A substitution to a
+// symbol this change never declares is a different symbol, not a new name for
+// the same one, and it scores as changed logic.
+//
+// The cost of the inversion is that a rename campaign whose declaration lives
+// outside the diff scores as changed logic, which buys a review round. The
+// cost of the previous direction was a missed authorization weakening at
+// exit 0. Undecidable resolves toward changed logic.
+func mechanicallyEquivalent(file FileChange, scope renameScope) bool {
 	if file.Status == Renamed {
 		return relocationPreservesCategory(file)
 	}
 	if file.Status != Modified || !relocationPreservesCategory(file) || !fileMatchesPath(file, sourcePath) || file.BaselineContent == "" || file.CurrentContent == "" || !sameBuildConstraints(file) {
+		return false
+	}
+	if file.BaselineContextTruncated {
 		return false
 	}
 	baseline := sourceTokens(file.BaselineContent)
@@ -343,6 +452,12 @@ func mechanicallyEquivalent(file FileChange) bool {
 		}
 		if identifierNamesMemberOfAnotherDeclaration(baseline, baselineEnclosing, index) ||
 			identifierNamesMemberOfAnotherDeclaration(current, currentEnclosing, index) {
+			return false
+		}
+		if _, declared := scope.headDeclarations[right.text]; !declared {
+			return false
+		}
+		if _, survives := scope.headDeclarations[left.text]; survives {
 			return false
 		}
 		if mapped, ok := forward[left.text]; ok && mapped != right.text {
@@ -416,7 +531,11 @@ func identifierControlsCallTarget(baseline, current []sourceToken, index int) bo
 	if index+1 >= len(baseline) || baseline[index+1].text != "(" || current[index+1].text != "(" {
 		return false
 	}
-	return index == 0 || (baseline[index-1].text != "func" && current[index-1].text != "func")
+	// The declaration itself is the one place a name followed by a parameter
+	// list is not a call target. Recognising only Go's `func` here made every
+	// JavaScript, TypeScript, and Python function rename score as a call-target
+	// change, which is stricter than intended and hid what the rule is for.
+	return index == 0 || (!declarationKeyword(baseline[index-1].text) && !declarationKeyword(current[index-1].text))
 }
 
 // identifierNamesMemberOfAnotherDeclaration reports whether the identifier at
@@ -478,6 +597,139 @@ func declarationKeyword(value string) bool {
 	default:
 		return false
 	}
+}
+
+// declaringKeywords introduce a name the file itself owns. Import and export
+// forms are deliberately absent: `import { allowAnyone }` binds a name in the
+// file but declares nothing, and counting it would restore the exact hole the
+// declaration rule exists to close, since swapping an import specifier is how
+// a cross-directory guard substitution is spelled.
+var declaringKeywords = map[string]struct{}{
+	"func": {}, "def": {}, "fn": {}, "function": {}, "class": {}, "struct": {},
+	"interface": {}, "type": {}, "enum": {}, "trait": {}, "impl": {}, "record": {},
+	"var": {}, "let": {}, "const": {}, "sub": {}, "proc": {}, "typedef": {},
+	"protocol": {}, "actor": {}, "object": {}, "union": {},
+}
+
+// declaredIdentifiers returns the names a source file declares itself.
+//
+// It reads the token stream rather than parsing, so it stays language-agnostic
+// and cheap, and it is deliberately incomplete: struct fields, plain
+// assignments, and imported bindings are not declarations here. Missing a real
+// declaration costs a review round; inventing one would hand back the
+// mechanical-rename route, so every ambiguous position is left out.
+func declaredIdentifiers(content string) map[string]struct{} {
+	declared := make(map[string]struct{})
+	if content == "" {
+		return declared
+	}
+	tokens := sourceTokens(content)
+	for index := 0; index < len(tokens); index++ {
+		token := tokens[index]
+		if token.kind == 'i' {
+			if _, ok := declaringKeywords[strings.ToLower(token.text)]; ok {
+				index = collectKeywordDeclaration(tokens, index, declared)
+			}
+			continue
+		}
+		if token.kind == 'p' && token.text == ":" && index+1 < len(tokens) && tokens[index+1].text == "=" {
+			collectShortVariableDeclaration(tokens, index, declared)
+		}
+	}
+	return declared
+}
+
+// collectKeywordDeclaration records the name a declaring keyword introduces,
+// plus the parameter names of a function-shaped declaration, and returns the
+// index the caller should continue from.
+func collectKeywordDeclaration(tokens []sourceToken, keyword int, declared map[string]struct{}) int {
+	cursor := keyword + 1
+	// A Go method receiver sits between `func` and the name.
+	if cursor < len(tokens) && tokens[cursor].text == "(" {
+		cursor = afterMatching(tokens, cursor)
+	}
+	if cursor >= len(tokens) || tokens[cursor].kind != 'i' || sourceKeyword(tokens[cursor].text) {
+		return keyword
+	}
+	declared[tokens[cursor].text] = struct{}{}
+	name := cursor
+	cursor++
+	if cursor < len(tokens) && tokens[cursor].text == "(" {
+		collectParameterNames(tokens, cursor, declared)
+		return afterMatching(tokens, cursor) - 1
+	}
+	return name
+}
+
+// collectParameterNames records the name position of each comma-separated
+// group in a declaration's parameter list, which is the first identifier of
+// the group in every layout this needs to handle: `name Type`, `name: Type`,
+// and a bare `name`. Later identifiers in a group are the type, not a name.
+func collectParameterNames(tokens []sourceToken, open int, declared map[string]struct{}) {
+	depth := 0
+	expectName := true
+	for index := open; index < len(tokens); index++ {
+		switch tokens[index].text {
+		case "(", "[", "{":
+			depth++
+			continue
+		case ")", "]", "}":
+			depth--
+			if depth == 0 {
+				return
+			}
+			continue
+		case ",":
+			if depth == 1 {
+				expectName = true
+			}
+			continue
+		}
+		if depth != 1 || !expectName || tokens[index].kind != 'i' {
+			continue
+		}
+		expectName = false
+		if !sourceKeyword(tokens[index].text) {
+			declared[tokens[index].text] = struct{}{}
+		}
+	}
+}
+
+// collectShortVariableDeclaration records every name in the comma-separated
+// list to the left of a Go `:=`.
+func collectShortVariableDeclaration(tokens []sourceToken, colon int, declared map[string]struct{}) {
+	expectName := true
+	for index := colon - 1; index >= 0; index-- {
+		if expectName {
+			if tokens[index].kind != 'i' || sourceKeyword(tokens[index].text) {
+				return
+			}
+			declared[tokens[index].text] = struct{}{}
+			expectName = false
+			continue
+		}
+		if tokens[index].text != "," {
+			return
+		}
+		expectName = true
+	}
+}
+
+// afterMatching returns the index just past the bracket group opened at open.
+func afterMatching(tokens []sourceToken, open int) int {
+	depth := 0
+	for index := open; index < len(tokens); index++ {
+		switch tokens[index].text {
+		case "(", "[", "{":
+			depth++
+		case ")", "]", "}":
+			depth--
+			if depth == 0 {
+				return index + 1
+			}
+		}
+	}
+	return len(tokens)
 }
 
 // enclosingBrackets returns, for each token, the index of the innermost
@@ -628,14 +880,40 @@ func allChanges(files []FileChange, predicate func(FileChange) bool) bool {
 	return true
 }
 
+// nonSourceExtensions names the file kinds that carry no executable behavior.
+// The set is the inverse of the old allowlist on purpose: an allowlist scored a
+// language it had not heard of as not-source at all, so a diff in Zig, Elixir,
+// Scala, or a shell script never reached the source branch of any axis. An
+// unrecognised extension is now source, which costs a review round on a data
+// format nobody listed and never silently drops a language off the map.
+var nonSourceExtensions = map[string]struct{}{
+	".md": {}, ".mdx": {}, ".markdown": {}, ".rst": {}, ".adoc": {}, ".txt": {},
+	".json": {}, ".yaml": {}, ".yml": {}, ".toml": {}, ".ini": {}, ".cfg": {},
+	".conf": {}, ".properties": {}, ".csv": {}, ".tsv": {}, ".lock": {},
+	".png": {}, ".jpg": {}, ".jpeg": {}, ".gif": {}, ".svg": {}, ".ico": {},
+	".webp": {}, ".pdf": {}, ".mp4": {}, ".mov": {}, ".webm": {}, ".tape": {},
+	".gz": {}, ".zip": {}, ".tar": {}, ".bin": {}, ".log": {}, ".golden": {},
+	".gitignore": {}, ".gitattributes": {}, ".gitmodules": {}, ".editorconfig": {},
+	".dockerignore": {}, ".npmrc": {}, ".nvmrc": {}, ".prettierrc": {}, ".env": {},
+}
+
+// nonSourceBaseNames names the extensionless files that are documentation or
+// metadata. Every other extensionless file stays source, because a file with a
+// shebang and no extension is exactly the shape an allowlist misses.
+var nonSourceBaseNames = map[string]struct{}{
+	"license": {}, "licence": {}, "notice": {}, "authors": {}, "contributors": {},
+	"codeowners": {}, "readme": {}, "changelog": {}, "owners": {}, "version": {},
+}
+
 func sourcePath(name string) bool {
-	ext := strings.ToLower(filepath.Ext(name))
-	switch ext {
-	case ".go", ".rs", ".py", ".rb", ".java", ".kt", ".js", ".jsx", ".ts", ".tsx", ".c", ".cc", ".cpp", ".h", ".hpp", ".cs", ".swift":
-		return true
-	default:
-		return false
+	lower := strings.ToLower(filepath.ToSlash(name))
+	ext := filepath.Ext(lower)
+	if ext == "" {
+		_, documentation := nonSourceBaseNames[filepath.Base(lower)]
+		return !documentation
 	}
+	_, nonSource := nonSourceExtensions[ext]
+	return !nonSource
 }
 
 func isTestOrDocsPath(name string) bool {
@@ -660,12 +938,59 @@ func highRiskPath(name string, configured []string) bool {
 			return true
 		}
 	}
+	if agentInstructionPath(lower) || gateControlPath(lower) {
+		return true
+	}
 	for _, pattern := range configured {
 		if pathmatch.Match(lower, pattern) {
 			return true
 		}
 	}
 	return dependencyPath(lower)
+}
+
+// agentInstructionBaseNames are the files an agent reads as orders. In a
+// repository whose contributors are AI, rewriting one of these is a privilege
+// change: it is how you tell the next agent that tests are optional. They are
+// built in rather than configured because the failure they close is a
+// default-configuration repository waving its own instruction rewrite through,
+// and a protection that only exists once an operator thinks to add it does not
+// protect the operator who did not.
+var agentInstructionBaseNames = map[string]struct{}{
+	"agents.md": {}, "agent.md": {}, "claude.md": {}, "codex.md": {}, "gemini.md": {},
+	"skill.md": {}, "cursorrules": {}, ".cursorrules": {}, ".windsurfrules": {},
+	".clinerules": {}, "copilot-instructions.md": {}, "llms.txt": {}, "conventions.md": {},
+}
+
+// agentInstructionDirs are trees whose whole purpose is instructing an agent.
+var agentInstructionDirs = []string{
+	".claude/", ".codex/", ".cursor/", ".windsurf/", ".github/instructions/",
+	".github/prompts/", "skills/", "prompts/",
+}
+
+func agentInstructionPath(lower string) bool {
+	if _, ok := agentInstructionBaseNames[filepath.Base(lower)]; ok {
+		return true
+	}
+	for _, dir := range agentInstructionDirs {
+		if strings.Contains("/"+lower, "/"+dir) {
+			return true
+		}
+	}
+	return false
+}
+
+// gateControlPath names the committed files that decide how strictly this gate
+// runs, or how git renders the diff every mechanical check reads. A change to
+// one of them is a change to the gate, and the gate does not review changes to
+// itself at the cheapest tier.
+func gateControlPath(lower string) bool {
+	switch filepath.Base(lower) {
+	case ".no-mistakes.yaml", ".no-mistakes.yml", ".gitattributes":
+		return true
+	default:
+		return false
+	}
 }
 
 func hardToReversePath(name string) bool {

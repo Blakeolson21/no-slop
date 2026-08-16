@@ -110,14 +110,18 @@ slop:
 
 ### slop
 
-Configure the `noslop gate` front stage. The classifier always prints its tier and reasons before continuing. Command-line `--tier` overrides the configured classifier result and prints the original and final tiers. A provenance-driven escalation refuses a lower override unless `--force-tier` is present, and either outcome prints both signals. The full-adversarial tier runs a lens review, a second adversarial challenge round, and the configured tests. Pass `--intent` when the deterministic scope pre-check and reviewer should compare the change with a stated request; without it, the scope pre-check emits no finding.
+Configure the `noslop gate` front stage. The classifier always prints its tier and reasons before continuing. Command-line `--tier` overrides the configured classifier result and prints the original and final tiers. A provenance-driven escalation refuses a lower override unless `--force-tier` is present, and either outcome prints both signals. The full-adversarial tier runs a lens review, a second adversarial challenge round, and the configured tests. Pass `--intent` when the deterministic scope pre-check and reviewer should compare the change with a stated request; without it, the scope pre-check reports itself as not armed on the mandatory-check line rather than contributing a silent zero.
+
+**Every `slop.*` value is read from the base ref, not from the working tree.** A gate whose strictness is configured by the artifact being gated is not a gate, so the whole block is resolved from `.no-mistakes.yaml` as it exists at the base revision, exactly as the daemon already treats these fields for a pushed branch. A value absent at the base ref means the built-in default; a base copy that is present but unparsable stops the run rather than falling back to a default. When the head worktree sets any of these fields differently, the base value is the one in force and the difference is reported as a `gate-config-drift` finding, so a change that edits the gate's own controls is itself flagged. An uncommitted `.no-mistakes.yaml` therefore changes nothing.
+
+`--blocklist` adds names to the configured private-name list rather than replacing it, so the command line cannot point the identity scan at an empty file.
 
 | Field | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `slop.data_dir` | `string` | `.noslop-data` | Repository-relative or absolute directory for append-only provenance history |
 | `slop.risk.single_review_threshold` | `int` | `3` | Minimum sum of the three risk axes for `single-review` |
 | `slop.risk.full_adversarial_threshold` | `int` | `6` | Minimum sum for `full-adversarial`; must be greater than the single-review threshold |
-| `slop.risk.high_risk_paths` | `string[]` | Empty | Extra glob patterns treated as high-reach paths, including Markdown instruction files |
+| `slop.risk.high_risk_paths` | `string[]` | Empty | Extra glob patterns treated as high-reach paths, on top of the built-in markers |
 | `slop.leak_scan.blocklist_file` | `string` | `.noslop-blocklist` | Repository-relative or absolute private-name file |
 | `slop.leak_scan.allow_exemptions` | `bool` | `true` | Honor and report inline `noslop:allow-leak` markers; set false to reject them |
 | `slop.prose.outbound_paths` | `string[]` | `outbound/**` | Paths whose changed Markdown is intended for publication |
@@ -129,15 +133,17 @@ Configure the `noslop gate` front stage. The classifier always prints its tier a
 
 Each completed `noslop gate` appends a schema-versioned JSON Lines record under `slop.data_dir`. The record includes provider, model, reasoning effort, agent lane identifier, change class, selected tier, accepted and rejected findings by lens, review rounds, fix growth, and outcome. Use `--provider`, `--model`, `--reasoning-effort`, `--lane-id`, and `--change-class` to identify the generating lane. Missing values are recorded as `unknown` and do not select lane/model history.
 
-For a known lane and model, the classifier reads the last 10 matching changes. Three net accepted findings for one lens raise the selected tier by one level, move repeated lenses to the front of the review prompt, and enable an available deterministic probe. `test-capitulation` enables `test-count-floor`. No matching history keeps the v1 route. Unreadable or malformed configured history selects `full-adversarial`. The selected rationale, lens priority, and probes print with the normal axis decision.
+For a known lane and model, the classifier reads the last 10 matching **distinct changes**, keeping only the most recent record per change id, so re-running the gate on one trivial change cannot age an incriminating record out of the window. Three accepted findings for one lens raise the selected tier by one level, move repeated lenses to the front of the review prompt, and enable an available deterministic probe. Rejections are recorded but never subtracted, because conditioning may only raise a tier and subtracting let a forged record cancel a real one. `test-capitulation` enables `test-count-floor`. No matching history keeps the v1 route. Unreadable or malformed configured history selects `full-adversarial`. The selected rationale, lens priority, and probes print with the normal axis decision.
 
-Because the caller supplies `--lane-id` and `--model`, provenance conditioning is advisory until a trusted external system supplies and enforces those values. Omitting either value or choosing a new value prevents prior lane history from matching.
+Omitting `--lane-id` or `--model` selects `full-adversarial` when the store already holds records that name a lane and model, because on such a repository an unidentified run is hiding from history that exists. A store with no identified records keeps the v1 route, so a repository that never opted into lane identity pays nothing.
+
+Because the caller supplies `--lane-id` and `--model`, provenance conditioning is advisory until a trusted external system supplies and enforces those values. Choosing a new lane value prevents prior lane history from matching. The history file also lives on the same filesystem as the change being judged, so a party with write access can delete it; that loses an escalation rather than granting a pass, and the resolved store location prints on every run.
 
 Provenance writes are append-only and serialized across concurrent gate processes. Keep the default local data directory out of version control. A later run reads only records whose agent lane identifier and model match exactly.
 
 The private-name file accepts one literal entry per line. Blank lines and lines beginning with `#` are ignored. Matching is case-insensitive. Keep real hostnames, codenames, project names, and other private identities out of the repository. If the built-in default `.noslop-blocklist` is absent, the gate prints that it is scanning without a private-name list and continues with built-in credential patterns. A path selected in repository config or with `--blocklist` is an operator commitment, so a missing configured path stops the gate. An unreadable file at either the default or configured path also stops the gate.
 
-Use `noslop:allow-leak` on the same source line as an intentional credential-shaped or private-name fixture. Every honored marker prints as `file:line` and is counted in the verdict summary. Set `slop.leak_scan.allow_exemptions: false` for CI jobs that must reject every marker instead of honoring it.
+Use `noslop:allow-leak` on the same source line as an intentional credential-shaped or private-name fixture. The marker must begin a comment or follow whitespace, so prose that merely quotes it does not exempt its own line. Every honored marker prints as `file:line` with the number of findings it actually suppressed, and the summary reports both the marker count and the suppressed count, because a marker on a clean line is not a bypass. Set `slop.leak_scan.allow_exemptions: false` for CI jobs that must reject every marker instead of honoring it.
 
 Markdown can opt into the prose oracle without a matching path by adding front matter:
 
@@ -149,9 +155,13 @@ outbound: true
 
 When `noslop gate --thread <url>` is provided, NoSlop requires at least one outbound artifact and calls `gh` to confirm that the target GitHub issue or pull request is open and to compare the draft with existing comments. No outbound artifact, an unavailable thread, or an unreadable thread fails the command closed.
 
-When an outbound line cites a repository-relative `.json` or `.csv` file and states a number, NoSlop checks that the number appears in or can be derived from the file's numeric values. Supported derivations include totals, counts, averages, minima, maxima, ratios between two named fields, and outcome percentages derived from named pass, fail, or skip fields. Direct claims against named evidence must name the matching field.
+When an outbound line cites a repository-relative `.json` or `.csv` file and states a number, NoSlop checks that the number appears in or can be derived from the file's numeric values. Supported derivations include totals, counts, averages, minima, maxima, ratios between two named fields, and outcome percentages derived from named pass, fail, or skip fields. Every derivation is computed over the fields the sentence names, when it names any, so a total that cites two fields must be the total of those two. A ratio binds numerator and denominator to the order the sentence names them. Direct claims against named evidence must name the matching field, and a cited file whose numbers carry no usable names supports no claim at all.
 
-The default thresholds let high-risk changes and new source additions of at least 500 lines reach `full-adversarial` on a feature branch. Smaller ordinary source changes remain eligible for `single-review`.
+The default thresholds let high-risk changes reach `full-adversarial` on a feature branch. A substantial source addition also reaches it: at least 500 added source lines, or at least 40 net new declarations, counted across the whole change rather than only in newly created files. Both halves matter, because keying on file creation let an author drop two tiers by pasting into an existing file, and physical line count alone missed a generated file holding thousands of declarations on a few hundred lines. Smaller ordinary source changes remain eligible for `single-review`.
+
+The following paths are high risk with no configuration at all, because rewriting one of them changes what the next agent is permitted to do: `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `SKILL.md`, `.cursorrules`, `copilot-instructions.md` and their siblings at any depth, the `.claude/`, `.codex/`, `.cursor/`, `skills/`, and `prompts/` trees, and the `.no-mistakes.yaml` and `.gitattributes` files that decide how strictly this gate runs and how git renders the diff every mechanical check reads.
+
+Glob patterns accept `**` as a multi-segment wildcard at any position, so `**/AGENTS.md` matches the file at any depth; `*` never crosses a path separator. A configured pattern that matches no path at head prints a warning, because a protection that silently covers nothing is indistinguishable from one that works.
 
 The complete lens definitions are in the [NoSlop taxonomy](./slop-taxonomy/).
 

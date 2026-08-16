@@ -87,7 +87,7 @@ func TestLoadGitChangesRecognizesExactRename(t *testing.T) {
 		AddedContent:    change.AddedContent,
 		BaselineContent: change.BaselineContent,
 		CurrentContent:  change.CurrentContent,
-	}}, "")
+	}}, "").Findings
 	if len(findings) != 0 {
 		t.Fatalf("exact rename produced findings: %+v", findings)
 	}
@@ -124,7 +124,7 @@ func TestLoadGitChangesPreservesModifiedRenameIdentity(t *testing.T) {
 	if strings.Contains(change.AddedContent, "increment i") {
 		t.Fatalf("added content rescanned unchanged comment: %q", change.AddedContent)
 	}
-	if findings := precheck.Scan([]precheck.File{{Path: change.Path, AddedContent: change.AddedContent, BaselineContent: change.BaselineContent, CurrentContent: change.CurrentContent}}, ""); len(findings) != 0 {
+	if findings := precheck.Scan([]precheck.File{{Path: change.Path, AddedContent: change.AddedContent, BaselineContent: change.BaselineContent, CurrentContent: change.CurrentContent}}, "").Findings; len(findings) != 0 {
 		t.Fatalf("modified rename produced findings: %+v", findings)
 	}
 }
@@ -190,7 +190,7 @@ func TestLoadGitChangesScansLowSimilarityAdditionsAsAdded(t *testing.T) {
 	if added == nil || added.BaselinePath != "" || added.Added < 500 {
 		t.Fatalf("changes = %+v, want cross-directory low-similarity addition", changes)
 	}
-	findings := precheck.Scan(precheckFiles, "")
+	findings := precheck.Scan(precheckFiles, "").Findings
 	if len(findings) != 2 || findings[0].Lens != "redundant-comment" || findings[0].Path != "aaa.go" || findings[1].Path != "modern/new.go" {
 		t.Fatalf("findings = %+v, want every matching added comment scanned", findings)
 	}
@@ -272,7 +272,7 @@ func TestLoadGitChangesPreservesLeadingBlankLineCoordinates(t *testing.T) {
 		AddedContent:    changes[0].AddedContent,
 		BaselineContent: changes[0].BaselineContent,
 		CurrentContent:  changes[0].CurrentContent,
-	}}, "")
+	}}, "").Findings
 	if len(findings) != 1 || findings[0].Lens != "redundant-comment" || findings[0].Line != 4 {
 		t.Fatalf("findings = %+v, want redundant comment on physical line 4", findings)
 	}

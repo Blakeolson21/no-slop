@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -180,7 +181,16 @@ func checkEvidenceLine(artifactPath string, lineNumber int, line, root string) [
 			continue
 		}
 		for _, claim := range assigned {
-			supported := numbersForOperation(evidence, detectOperation(line, claim), line)
+			supported, unverifiable := numbersForOperation(evidence, detectOperation(line, claim), line)
+			if unverifiable != "" {
+				findings = append(findings, Finding{
+					Kind:        EvidenceMismatch,
+					Path:        artifactPath,
+					Line:        lineNumber,
+					Description: fmt.Sprintf("a cited number cannot be verified against %q: %s", citation, unverifiable),
+				})
+				continue
+			}
 			if !containsNumber(supported, claim.value) {
 				findings = append(findings, Finding{
 					Kind:        EvidenceMismatch,
@@ -303,6 +313,12 @@ func evidenceValues(root, citation string) ([]evidenceValue, error) {
 	}
 }
 
+// collectJSONNumbers walks object keys in sorted order. Ranging over a Go map
+// gave the evidence slice a different order on every run, and every consumer
+// that indexed into that slice inherited the randomness: the same commit with
+// the same evidence accepted a true ratio on most runs and rejected it on the
+// rest. A gate that answers differently on a rerun is worse than one that is
+// too strict, because rerunning becomes a way to get the answer you wanted.
 func collectJSONNumbers(value any, name string, numbers *[]evidenceValue) {
 	switch typed := value.(type) {
 	case float64:
@@ -312,8 +328,13 @@ func collectJSONNumbers(value any, name string, numbers *[]evidenceValue) {
 			collectJSONNumbers(item, name, numbers)
 		}
 	case map[string]any:
-		for key, item := range typed {
-			collectJSONNumbers(item, key, numbers)
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			collectJSONNumbers(typed[key], key, numbers)
 		}
 	}
 }
@@ -365,14 +386,25 @@ func detectOperation(line string, claim numericClaim) evidenceOperation {
 	return closestKind
 }
 
-func numbersForOperation(evidence []evidenceValue, operation evidenceOperation, line string) []float64 {
+// numbersForOperation returns the values that would support the claim, or a
+// non-empty second result saying why no value could support it at all.
+//
+// Every aggregate is computed over the fields the sentence names, when it names
+// any. Computing sum, count, average, minimum, and maximum over the whole file
+// regardless meant a claim could name two fields and state a figure derived
+// from four others, and be accepted for it.
+func numbersForOperation(evidence []evidenceValue, operation evidenceOperation, line string) ([]float64, string) {
 	if len(evidence) == 0 {
-		return nil
+		return nil, ""
 	}
-	values := make([]float64, 0, len(evidence))
+	scoped := matchingEvidence(evidence, line)
+	if len(scoped) == 0 {
+		scoped = evidence
+	}
+	values := make([]float64, 0, len(scoped))
 	sum := 0.0
-	minimum, maximum := evidence[0].value, evidence[0].value
-	for _, item := range evidence {
+	minimum, maximum := scoped[0].value, scoped[0].value
+	for _, item := range scoped {
 		value := item.value
 		values = append(values, value)
 		sum += value
@@ -383,34 +415,38 @@ func numbersForOperation(evidence []evidenceValue, operation evidenceOperation, 
 	case operationDirect:
 		return directEvidenceNumbers(evidence, line)
 	case operationSum:
-		return []float64{sum}
+		return []float64{sum}, ""
 	case operationCount:
-		return []float64{float64(len(values))}
+		return []float64{float64(len(values))}, ""
 	case operationAverage:
-		return []float64{sum / float64(len(values))}
+		return []float64{sum / float64(len(values))}, ""
 	case operationMinimum:
-		return []float64{minimum}
+		return []float64{minimum}, ""
 	case operationMaximum:
-		return []float64{maximum}
+		return []float64{maximum}, ""
 	case operationPercent:
-		return namedPercentages(evidence, line)
+		return namedPercentages(evidence, line), ""
 	case operationRatio:
-		return namedRatios(evidence, line)
+		return namedRatios(evidence, line), ""
 	}
-	return nil
+	return nil, ""
 }
 
-func directEvidenceNumbers(evidence []evidenceValue, line string) []float64 {
+func directEvidenceNumbers(evidence []evidenceValue, line string) ([]float64, string) {
 	matched := matchingEvidence(evidence, line)
 	if len(matched) > 0 {
-		return evidenceNumbers(matched)
+		return evidenceNumbers(matched), ""
 	}
 	for _, item := range evidence {
 		if strings.TrimSpace(item.name) != "" {
-			return nil
+			return nil, ""
 		}
 	}
-	return evidenceNumbers(evidence)
+	// Nothing in the file carries a name, so no number in it can be bound to
+	// what the sentence claims. Accepting any literal that happens to appear
+	// is how "we shipped 4 fixes" passed against a file that merely contained
+	// a 4 somewhere.
+	return nil, "the file carries no named values, so no number in it can be bound to the claim"
 }
 
 func namedPercentages(evidence []evidenceValue, line string) []float64 {
@@ -436,26 +472,56 @@ func namedPercentages(evidence []evidenceValue, line string) []float64 {
 	return []float64{numerator.value / denominator * 100}
 }
 
+// namedRatios binds numerator and denominator to the order the sentence names
+// them. Taking them from the evidence slice's own order meant "the passed to
+// failed ratio" and "the failed to passed ratio" were the same question, and
+// which one the gate answered depended on JSON key iteration order.
 func namedRatios(evidence []evidenceValue, line string) []float64 {
-	matched := matchingEvidence(evidence, line)
+	matched := matchingEvidenceInMentionOrder(evidence, line)
 	if len(matched) != 2 || matched[1].value == 0 {
 		return nil
 	}
 	return []float64{matched[0].value / matched[1].value}
 }
 
-func matchingEvidence(evidence []evidenceValue, line string) []evidenceValue {
-	words := make(map[string]bool)
-	for _, word := range claimToken.FindAllString(strings.ToLower(line), -1) {
-		words[normalizeEvidenceName(word)] = true
+func evidenceNamePositions(line string) map[string]int {
+	lower := strings.ToLower(line)
+	positions := make(map[string]int)
+	for _, match := range claimToken.FindAllStringIndex(lower, -1) {
+		word := normalizeEvidenceName(lower[match[0]:match[1]])
+		if word == "" {
+			continue
+		}
+		if _, seen := positions[word]; !seen {
+			positions[word] = match[0]
+		}
 	}
+	return positions
+}
+
+func matchingEvidence(evidence []evidenceValue, line string) []evidenceValue {
+	positions := evidenceNamePositions(line)
 	var matched []evidenceValue
 	for _, item := range evidence {
 		name := normalizeEvidenceName(item.name)
-		if name != "" && words[name] {
+		if _, ok := positions[name]; name != "" && ok {
 			matched = append(matched, item)
 		}
 	}
+	return matched
+}
+
+func matchingEvidenceInMentionOrder(evidence []evidenceValue, line string) []evidenceValue {
+	positions := evidenceNamePositions(line)
+	matched := matchingEvidence(evidence, line)
+	sort.SliceStable(matched, func(left, right int) bool {
+		leftName := normalizeEvidenceName(matched[left].name)
+		rightName := normalizeEvidenceName(matched[right].name)
+		if positions[leftName] != positions[rightName] {
+			return positions[leftName] < positions[rightName]
+		}
+		return matched[left].name < matched[right].name
+	})
 	return matched
 }
 

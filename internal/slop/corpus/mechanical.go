@@ -50,7 +50,7 @@ func ReplayMandatory(ctx context.Context, diff []byte, options ReplayOptions) ([
 		currentTests = append(currentTests, testfloor.File{Path: file.path, Content: renderReplayLines(file.current)})
 	}
 	var findings []Finding
-	for _, finding := range precheck.Scan(precheckFiles, options.Intent) {
+	for _, finding := range precheck.Scan(precheckFiles, options.Intent).Findings {
 		findings = append(findings, Finding{
 			Lens:        finding.Lens,
 			Path:        finding.Path,

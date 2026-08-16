@@ -54,6 +54,12 @@ type Record struct {
 // Reader is the history seam consumed by the risk classifier.
 type Reader interface {
 	Recent(agentLaneID, model string, limit int) ([]Record, error)
+	// HasIdentifiedHistory reports whether this store holds any record that
+	// names a real generating lane and model. It exists so a run that supplies
+	// no identity can be told apart from a repository that never used
+	// identities: the first is hiding from history that exists, the second has
+	// no history to hide from.
+	HasIdentifiedHistory() (bool, error)
 }
 
 // Store appends records and reads recent generating-lane history.
@@ -63,6 +69,14 @@ type Store interface {
 }
 
 // FileStore keeps one append-only JSON Lines file under a repository data dir.
+//
+// Residual, accepted and bounded: the store lives on the same filesystem as the
+// change being judged, so a party with write access can delete or truncate it.
+// Deleting it reads as a first-time lane, which loses an escalation rather than
+// granting a pass, and the gate prints the store's location on every run
+// precisely so that reading the output tells you whether the history it
+// consulted was inside the worktree. Closing this properly needs a history the
+// audited party cannot write, which is a service, not a file.
 type FileStore struct {
 	dir string
 	now func() time.Time
@@ -116,13 +130,80 @@ func (s *FileStore) Append(record Record) error {
 	return nil
 }
 
-// Recent returns the last matching lane/model records in append order.
+// Recent returns the last matching lane/model records in append order, one per
+// distinct change.
+//
+// The de-duplication is load-bearing. A plain tail meant re-running the gate on
+// the same trivial change ten times evicted an incriminating record and
+// reversed an active escalation, at the cost of ten seconds. Keying the window
+// on distinct changes makes ageing history out cost ten real changes instead,
+// which is work rather than a loop. It does not make the window unreachable,
+// and it is not claimed to: see the FileStore doc comment.
 func (s *FileStore) Recent(agentLaneID, model string, limit int) ([]Record, error) {
-	if s == nil || strings.TrimSpace(s.dir) == "" {
-		return nil, fmt.Errorf("read provenance: data directory is not configured")
-	}
 	if limit <= 0 {
 		return nil, fmt.Errorf("read provenance: limit must be positive")
+	}
+	records, err := s.readAll()
+	if err != nil {
+		return nil, err
+	}
+	var matches []Record
+	for _, record := range records {
+		if record.AgentLaneID == agentLaneID && record.Model == model {
+			matches = append(matches, record)
+		}
+	}
+	matches = latestPerChange(matches)
+	if len(matches) > limit {
+		matches = append([]Record(nil), matches[len(matches)-limit:]...)
+	}
+	return matches, nil
+}
+
+// HasIdentifiedHistory reports whether any record names a real lane and model.
+func (s *FileStore) HasIdentifiedHistory() (bool, error) {
+	records, err := s.readAll()
+	if err != nil {
+		return false, err
+	}
+	for _, record := range records {
+		if identifiedKey(record.AgentLaneID) && identifiedKey(record.Model) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func identifiedKey(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	return trimmed != "" && trimmed != "unknown"
+}
+
+// latestPerChange keeps the last record written for each identified change id,
+// preserving the order in which those changes were first seen. A record whose
+// change id is absent or "unknown" names nothing, so it is never folded into
+// another: collapsing on a non-identity would drop real history.
+func latestPerChange(records []Record) []Record {
+	position := make(map[string]int, len(records))
+	var deduped []Record
+	for _, record := range records {
+		if !identifiedKey(record.ChangeID) {
+			deduped = append(deduped, record)
+			continue
+		}
+		if index, seen := position[record.ChangeID]; seen {
+			deduped[index] = record
+			continue
+		}
+		position[record.ChangeID] = len(deduped)
+		deduped = append(deduped, record)
+	}
+	return deduped
+}
+
+func (s *FileStore) readAll() ([]Record, error) {
+	if s == nil || strings.TrimSpace(s.dir) == "" {
+		return nil, fmt.Errorf("read provenance: data directory is not configured")
 	}
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
 		return nil, fmt.Errorf("read provenance: create data directory: %w", err)
@@ -142,7 +223,7 @@ func (s *FileStore) Recent(agentLaneID, model string, limit int) ([]Record, erro
 	}
 	defer file.Close()
 
-	var matches []Record
+	var records []Record
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	line := 0
@@ -155,17 +236,12 @@ func (s *FileStore) Recent(agentLaneID, model string, limit int) ([]Record, erro
 		if err := validateRecord(record); err != nil {
 			return nil, fmt.Errorf("read provenance: line %d: %w", line, err)
 		}
-		if record.AgentLaneID == agentLaneID && record.Model == model {
-			matches = append(matches, record)
-		}
+		records = append(records, record)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read provenance: scan history: %w", err)
 	}
-	if len(matches) > limit {
-		matches = append([]Record(nil), matches[len(matches)-limit:]...)
-	}
-	return matches, nil
+	return records, nil
 }
 
 func normalizeRecord(record *Record) {

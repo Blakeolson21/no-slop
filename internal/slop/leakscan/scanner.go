@@ -40,11 +40,15 @@ type Finding struct {
 	Description string
 }
 
-// Exemption identifies an inline marker honored by the scanner.
+// Exemption identifies an inline marker honored by the scanner. Suppressed is
+// how many findings the marker actually removed, which is not the same as how
+// many markers were seen: a marker on a clean line suppresses nothing, and
+// reporting it as a bypass gave a reviewer no way to size the real one.
 type Exemption struct {
-	Path   string
-	Line   int
-	Marker string
+	Path       string
+	Line       int
+	Marker     string
+	Suppressed int
 }
 
 // Result contains leak findings and every honored inline exemption.
@@ -96,13 +100,20 @@ func ParseBlocklist(content string) []string {
 	return entries
 }
 
+// exemptionMarker requires the marker to sit in a comment or at the end of the
+// line rather than merely appear somewhere in it. Plain `strings.Contains`
+// meant a sentence that quoted the marker exempted its own line, which is a
+// bypass anybody could trip over by writing documentation about the feature.
+var exemptionMarker = regexp.MustCompile(`(?i)(?:^|//|#|/\*|<!--|--|;|\s)\s*` + regexp.QuoteMeta(InlineExemption) + `\b`)
+
 // Scan checks text for secret shapes and private identity markers.
 func Scan(files []File, opts Options) Result {
 	var result Result
 	blocklist := append(DefaultBlocklist(), opts.Blocklist...)
 	for _, file := range files {
 		for index, line := range strings.Split(file.Content, "\n") {
-			if strings.Contains(strings.ToLower(line), InlineExemption) {
+			exempt := false
+			if exemptionMarker.MatchString(line) {
 				if opts.RefuseExemptions {
 					result.Findings = append(result.Findings, Finding{
 						Kind:        Secret,
@@ -111,42 +122,57 @@ func Scan(files []File, opts Options) Result {
 						Description: fmt.Sprintf("inline leak exemption %s is disabled by configuration", InlineExemption),
 					})
 				} else {
-					result.Exemptions = append(result.Exemptions, Exemption{Path: file.Path, Line: index + 1, Marker: InlineExemption})
-					continue
+					exempt = true
 				}
 			}
-			for _, pattern := range secretPatterns {
-				if pattern.re.MatchString(line) {
-					result.Findings = append(result.Findings, Finding{
-						Kind:        Secret,
-						Path:        file.Path,
-						Line:        index + 1,
-						Description: fmt.Sprintf("possible %s shape", pattern.name),
-					})
-				}
+			lineFindings := scanLine(file.Path, index+1, line, blocklist)
+			if exempt {
+				result.Exemptions = append(result.Exemptions, Exemption{
+					Path:       file.Path,
+					Line:       index + 1,
+					Marker:     InlineExemption,
+					Suppressed: len(lineFindings),
+				})
+				continue
 			}
-			for _, pattern := range identityPatterns {
-				if pattern.re.MatchString(line) {
-					result.Findings = append(result.Findings, Finding{
-						Kind:        Identity,
-						Path:        file.Path,
-						Line:        index + 1,
-						Description: fmt.Sprintf("possible %s", pattern.name),
-					})
-				}
-			}
-			lower := strings.ToLower(line)
-			for _, entry := range blocklist {
-				if entry != "" && strings.Contains(lower, strings.ToLower(entry)) {
-					result.Findings = append(result.Findings, Finding{
-						Kind:        Identity,
-						Path:        file.Path,
-						Line:        index + 1,
-						Description: "private name matches the configured identity blocklist",
-					})
-				}
-			}
+			result.Findings = append(result.Findings, lineFindings...)
 		}
 	}
 	return result
+}
+
+func scanLine(path string, lineNumber int, line string, blocklist []string) []Finding {
+	var findings []Finding
+	for _, pattern := range secretPatterns {
+		if pattern.re.MatchString(line) {
+			findings = append(findings, Finding{
+				Kind:        Secret,
+				Path:        path,
+				Line:        lineNumber,
+				Description: fmt.Sprintf("possible %s shape", pattern.name),
+			})
+		}
+	}
+	for _, pattern := range identityPatterns {
+		if pattern.re.MatchString(line) {
+			findings = append(findings, Finding{
+				Kind:        Identity,
+				Path:        path,
+				Line:        lineNumber,
+				Description: fmt.Sprintf("possible %s", pattern.name),
+			})
+		}
+	}
+	lower := strings.ToLower(line)
+	for _, entry := range blocklist {
+		if entry != "" && strings.Contains(lower, strings.ToLower(entry)) {
+			findings = append(findings, Finding{
+				Kind:        Identity,
+				Path:        path,
+				Line:        lineNumber,
+				Description: "private name matches the configured identity blocklist",
+			})
+		}
+	}
+	return findings
 }
