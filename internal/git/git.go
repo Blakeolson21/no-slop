@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Blakeolson21/no-slop/internal/safeurl"
+	"github.com/Blakeolson21/no-slop/internal/shellenv"
 	"github.com/Blakeolson21/no-slop/internal/winproc"
 )
 
@@ -252,11 +253,10 @@ func commandTimeout(args []string) time.Duration {
 // stack, so a wedge there is the same permanent orphan the deadline exists to
 // prevent. The returned cancel must be deferred by the caller.
 //
-// Cancelling the context kills git's own PID, which is exactly the process that
-// wedges in the case above. A grandchild of git that outlives it is a different
-// leak class, owned by the process-tree reap in internal/shellenv
-// (ConfigureShellCommand plus TerminateShellCommandGroup); commandWaitDelay
-// keeps such a survivor from wedging Wait here in the meantime.
+// Cancelling the context terminates the process tree rooted at git, including
+// credential helpers and transports that inherited its pipes. The shellenv
+// configuration supplies that process-tree boundary; commandWaitDelay remains
+// the final fail-closed backstop if teardown cannot converge.
 func newCommand(ctx context.Context, args ...string) *boundedCommand {
 	var ceiling time.Duration
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
@@ -266,6 +266,7 @@ func newCommand(ctx context.Context, args ...string) *boundedCommand {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.WaitDelay = commandWaitDelay
 	winproc.Harden(cmd)
+	shellenv.ConfigureShellCommand(cmd)
 	return &boundedCommand{cmd: cmd, ctx: ctx, cancel: cancel, ceiling: ceiling}
 }
 
@@ -339,6 +340,9 @@ func (c *boundedCommand) explain(err error) error {
 		}
 		return fmt.Errorf("exceeded the %s internal/git ceiling: %w: %w", c.ceiling, context.DeadlineExceeded, err)
 	}
+	if ctxErr := c.ctx.Err(); ctxErr != nil {
+		return fmt.Errorf("%w: %w", ctxErr, err)
+	}
 	if errors.Is(err, exec.ErrWaitDelay) {
 		return fmt.Errorf("git exited but a surviving child held its output pipe past the %s wait delay, so its output could not be confirmed complete: %w", commandWaitDelay, err)
 	}
@@ -376,7 +380,7 @@ func runInDirWithEnv(ctx context.Context, dir string, extraEnv []string, args ..
 		}
 		return "", fmt.Errorf("git %s: %w: %s", safeurl.RedactText(strings.Join(args, " ")), err, safeurl.RedactText(stderr))
 	}
-	return string(out), nil
+	return strings.TrimSpace(string(out)), nil
 }
 
 // ValidateBareRepository verifies both the filesystem shape and Git's own bare
