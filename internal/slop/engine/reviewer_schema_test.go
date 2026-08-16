@@ -61,3 +61,42 @@ func TestFindingWithoutALensIsRefused(t *testing.T) {
 		t.Fatal("a finding naming no lens was accepted")
 	}
 }
+
+// TestReviewerCannotAssertANonBlockingSeverity pins the one place an
+// externally supplied severity reaches Finding.Blocks. engine.SeverityNotice is
+// reserved for the submodule case the engine raises itself, so a reviewer
+// claiming it put the whole verdict in reach of a single word: the finding
+// printed under the findings list and the run still reached verdict pass at
+// exit 0. The reviewer's response is shaped by the diff under review, which is
+// exactly the input this gate does not trust.
+func TestReviewerCannotAssertANonBlockingSeverity(t *testing.T) {
+	t.Parallel()
+
+	for _, probe := range []struct {
+		name     string
+		severity string
+		want     string
+	}{
+		{"the reserved notice severity", "notice", engine.SeverityError},
+		{"a severity nobody defined", "cosmetic", engine.SeverityError},
+		{"an absent severity", "", engine.SeverityError},
+		{"an error stays an error", "error", engine.SeverityError},
+		{"a warning survives verbatim", "warning", "warning"},
+		{"an info survives verbatim", "info", "info"},
+	} {
+		response := `{"findings":[{"lens":"fabricated-authority","severity":"` + probe.severity + `","file":"auth.go","line":10,"description":"guard removed"}]}`
+		findings, err := engine.NewAgentReviewer(fixedAgent{output: response}, nil).Review(context.Background(), engine.ReviewRequest{})
+		if err != nil {
+			t.Fatalf("%s: %v", probe.name, err)
+		}
+		if len(findings) != 1 {
+			t.Fatalf("%s: findings = %+v, want the finding kept", probe.name, findings)
+		}
+		if findings[0].Severity != probe.want {
+			t.Errorf("%s: severity = %q, want %q", probe.name, findings[0].Severity, probe.want)
+		}
+		if !findings[0].Blocks() {
+			t.Errorf("%s: a reviewer finding did not block the verdict", probe.name)
+		}
+	}
+}

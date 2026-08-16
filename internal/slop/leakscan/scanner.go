@@ -108,11 +108,19 @@ func ParseBlocklist(content string) []string {
 	return entries
 }
 
-// exemptionMarker requires the marker to sit in a comment or at the end of the
-// line rather than merely appear somewhere in it. Plain `strings.Contains`
-// meant a sentence that quoted the marker exempted its own line, which is a
-// bypass anybody could trip over by writing documentation about the feature.
-var exemptionMarker = regexp.MustCompile(`(?i)(?:^|//|#|/\*|<!--|--|;|\s)\s*` + regexp.QuoteMeta(InlineExemption) + `\b`)
+// exemptionMarker requires the marker to open a comment or the line rather
+// than merely appear somewhere in it. Plain `strings.Contains` meant a sentence
+// that quoted the marker exempted its own line, which is a bypass anybody could
+// trip over by writing documentation about the feature.
+//
+// The alternatives are comment introducers plus start-of-line, and nothing
+// else. A bare whitespace alternative was there too, which reopened the exact
+// case the rest of the pattern closes: a marker is always preceded by
+// whitespace in a sentence, so `write noslop:allow-leak beside the key` matched
+// and suppressed the credential on its own line. Every legitimate placement is
+// still covered, because `\s*` after an introducer absorbs the space in
+// `key = "..." # noslop:allow-leak` and after `^` it absorbs indentation.
+var exemptionMarker = regexp.MustCompile(`(?i)(?:^|//|#|/\*|<!--|--|;)\s*` + regexp.QuoteMeta(InlineExemption) + `\b`)
 
 // IsBinaryContent reports whether these bytes have to be read through the
 // binary-safe renderings rather than as text.

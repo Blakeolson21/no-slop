@@ -97,6 +97,52 @@ func TestScanHonorsExplicitInlineExemptionOnOneLine(t *testing.T) {
 	}
 }
 
+// TestProseQuotingTheExemptionMarkerExemptsNothing pins that the marker has to
+// open a comment or the line. A bare whitespace alternative in the pattern
+// reopened the case the pattern exists to close: a marker is preceded by
+// whitespace in any sentence that mentions it, so documenting the feature beside
+// a credential suppressed that credential's own finding.
+func TestProseQuotingTheExemptionMarkerExemptsNothing(t *testing.T) {
+	t.Parallel()
+
+	result := leakscan.Scan([]leakscan.File{{
+		Path:    "docs/leak-scan.md",
+		Content: "Write noslop:allow-leak beside AKIAIOSFODNN7EXAMPLE to suppress it.\n", // noslop:allow-leak
+	}}, leakscan.Options{})
+	if len(result.Findings) != 1 {
+		t.Fatalf("findings = %+v, want the credential still reported", result.Findings)
+	}
+	if len(result.Exemptions) != 0 {
+		t.Fatalf("exemptions = %+v, want prose to exempt nothing", result.Exemptions)
+	}
+}
+
+// TestExemptionMarkerStillHonorsEveryCommentPlacement is the control for the
+// test above: closing the prose case must not cost a real marker.
+func TestExemptionMarkerStillHonorsEveryCommentPlacement(t *testing.T) {
+	t.Parallel()
+
+	for _, probe := range []struct {
+		name string
+		line string
+	}{
+		{"slash comment", `key := "AKIAIOSFODNN7EXAMPLE" // noslop:allow-leak`},   // noslop:allow-leak
+		{"hash comment", `key: AKIAIOSFODNN7EXAMPLE # noslop:allow-leak`},         // noslop:allow-leak
+		{"block comment", `key = "AKIAIOSFODNN7EXAMPLE" /* noslop:allow-leak */`}, // noslop:allow-leak
+		{"html comment", `AKIAIOSFODNN7EXAMPLE <!-- noslop:allow-leak -->`},       // noslop:allow-leak
+		{"sql comment", `key = 'AKIAIOSFODNN7EXAMPLE' -- noslop:allow-leak`},      // noslop:allow-leak
+		{"semicolon comment", `key = AKIAIOSFODNN7EXAMPLE ; noslop:allow-leak`},   // noslop:allow-leak
+	} {
+		result := leakscan.Scan([]leakscan.File{{Path: "fixtures/keys.txt", Content: probe.line + "\n"}}, leakscan.Options{})
+		if len(result.Findings) != 0 {
+			t.Errorf("%s: findings = %+v, want the marker honored", probe.name, result.Findings)
+		}
+		if len(result.Exemptions) != 1 {
+			t.Errorf("%s: exemptions = %+v, want the honored marker reported", probe.name, result.Exemptions)
+		}
+	}
+}
+
 // TestIsBinaryContentHasNoSniffWindow is T3 at the unit level. Git samples the
 // first 8000 bytes of a blob, and the engine's fallback keyed on whether git
 // produced hunks, so a NUL past that offset read as ordinary text on both sides

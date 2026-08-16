@@ -131,13 +131,38 @@ Task:
 		}
 		findings = append(findings, Finding{
 			Lens:        finding.Lens,
-			Severity:    finding.Severity,
+			Severity:    reviewerSeverity(finding.Severity),
 			Path:        finding.File,
 			Line:        finding.Line,
 			Description: finding.Description,
 		})
 	}
 	return findings, nil
+}
+
+// reviewerSeverities are the only severities a reviewer may assert.
+//
+// SeverityNotice is the one value that makes a finding non-blocking, and it is
+// reserved for the single case the engine raises itself. A reviewer's severity
+// arrives in a model response whose input is the diff under review, which is
+// this gate's stated threat model, so copying it verbatim put the verdict in
+// reach of one word: a real finding returned as "notice" printed under the
+// findings list and still reached `verdict: pass` at exit 0. The JSON schema
+// already excludes it, but schema conformance is the backend's best effort
+// rather than this package's guarantee, so nothing downstream may assume it
+// held. Anything unrecognised, including an absent severity, becomes blocking.
+var reviewerSeverities = map[string]struct{}{
+	SeverityError: {},
+	"warning":     {},
+	"info":        {},
+}
+
+func reviewerSeverity(reported string) string {
+	normalized := strings.ToLower(strings.TrimSpace(reported))
+	if _, ok := reviewerSeverities[normalized]; ok {
+		return normalized
+	}
+	return SeverityError
 }
 
 func statedIntent(intent string) string {

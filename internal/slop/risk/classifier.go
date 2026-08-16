@@ -430,7 +430,7 @@ func substantialSourceAddition(files []FileChange) bool {
 
 func netNewDeclarationCount(file FileChange) int {
 	lang := sourceLanguage(file.Path)
-	net := len(declaredNames(file.CurrentContent, lang)) - len(declaredNames(file.BaselineContent, lang))
+	net := len(declaredIdentifiers(file.CurrentContent, lang)) - len(declaredIdentifiers(file.BaselineContent, lang))
 	if net < 0 {
 		return 0
 	}
@@ -478,14 +478,14 @@ type renamePair struct {
 
 // familyScope is the rename evidence available to one language family.
 type familyScope struct {
-	// localRenames holds every declaration transition each file performs on
-	// itself, keyed by path. It is the ONLY evidence that counts. There is
-	// deliberately no cross-file map: see renameScope.
-	localRenames map[string]map[renamePair]struct{}
 	// headUses holds every identifier that still appears at head anywhere in
 	// this family's changed files, commentary included. A name a rename was
 	// supposed to retire but which survives somewhere is not evidence of a
 	// rename, so the mechanical route is refused rather than guessed at.
+	//
+	// This is the only thing a language family scopes, because it is the only
+	// question that is asked of files other than the judged one. Rename
+	// evidence is per file and lives on renameScope.
 	headUses map[string]struct{}
 }
 
@@ -523,10 +523,20 @@ type familyScope struct {
 // file and carried an authorization weakening to a passing verdict.
 type renameScope struct {
 	families map[string]*familyScope
+	// localRenames holds every declaration transition each file performs on
+	// itself, keyed by the file's path. It is the ONLY rename evidence that
+	// counts, and there is deliberately no cross-file map to consult beside it.
+	// A path is globally unique, so this is not keyed by language family: doing
+	// so would model a lookup that never happens, since a file is only ever
+	// asked about its own transitions.
+	localRenames map[string]map[renamePair]struct{}
 }
 
 func newRenameScope(files []FileChange) renameScope {
-	scope := renameScope{families: make(map[string]*familyScope)}
+	scope := renameScope{
+		families:     make(map[string]*familyScope),
+		localRenames: make(map[string]map[renamePair]struct{}),
+	}
 	for _, file := range files {
 		if !fileMatchesPath(file, sourcePath) {
 			continue
@@ -544,8 +554,8 @@ func newRenameScope(files []FileChange) renameScope {
 		if !ok {
 			continue
 		}
-		baseline, _ := declaredIdentifiers(file.BaselineContent, lang)
-		current, _ := declaredIdentifiers(file.CurrentContent, lang)
+		baseline := declaredIdentifiers(file.BaselineContent, lang)
+		current := declaredIdentifiers(file.CurrentContent, lang)
 		for previous, replacement := range substitutions {
 			_, declaredAtBase := baseline[previous]
 			_, survivesAtHead := current[previous]
@@ -554,10 +564,10 @@ func newRenameScope(files []FileChange) renameScope {
 			if !declaredAtBase || survivesAtHead || !declaredAtHead || existedAtBase {
 				continue
 			}
-			if family.localRenames[file.Path] == nil {
-				family.localRenames[file.Path] = make(map[renamePair]struct{})
+			if scope.localRenames[file.Path] == nil {
+				scope.localRenames[file.Path] = make(map[renamePair]struct{})
 			}
-			family.localRenames[file.Path][renamePair{previous: previous, current: replacement}] = struct{}{}
+			scope.localRenames[file.Path][renamePair{previous: previous, current: replacement}] = struct{}{}
 		}
 	}
 	return scope
@@ -567,10 +577,7 @@ func (s renameScope) family(name string) *familyScope {
 	if existing, ok := s.families[name]; ok {
 		return existing
 	}
-	created := &familyScope{
-		localRenames: make(map[string]map[renamePair]struct{}),
-		headUses:     make(map[string]struct{}),
-	}
+	created := &familyScope{headUses: make(map[string]struct{})}
 	s.families[name] = created
 	return created
 }
@@ -582,12 +589,8 @@ func (s renameScope) family(name string) *familyScope {
 // about a name, and following it requires knowing that the reference resolves
 // to that file rather than to any other declaration of the same name, which is
 // the question no token stream can answer. See renameScope.
-func (s renameScope) declaresRename(family, path, previous, current string) bool {
-	scope, ok := s.families[family]
-	if !ok {
-		return false
-	}
-	_, local := scope.localRenames[path][renamePair{previous: previous, current: current}]
+func (s renameScope) declaresRename(path, previous, current string) bool {
+	_, local := s.localRenames[path][renamePair{previous: previous, current: current}]
 	return local
 }
 
@@ -651,7 +654,7 @@ func mechanicallyEquivalent(file FileChange, scope renameScope) bool {
 	}
 	family := sourceLanguage(file.Path).family
 	for previous, replacement := range substitutions {
-		if !scope.declaresRename(family, file.Path, previous, replacement) {
+		if !scope.declaresRename(file.Path, previous, replacement) {
 			return false
 		}
 		if scope.oldNameSurvives(family, previous) {
@@ -877,18 +880,17 @@ var declaringKeywords = map[string]struct{}{
 // a declaration. That is not a nicety: `// TODO: let allowAnyone be dropped`,
 // sitting untouched in an unrelated file, was by itself enough evidence to make
 // a cross-package authorization substitution score as a rename.
-func declaredIdentifiers(content string, lang language) (map[string]struct{}, map[string]struct{}) {
+func declaredIdentifiers(content string, lang language) map[string]struct{} {
 	declared := make(map[string]struct{})
-	referenceable := make(map[string]struct{})
 	if content == "" {
-		return declared, referenceable
+		return declared
 	}
 	tokens := codeTokens(content, lang)
 	for index := 0; index < len(tokens); index++ {
 		token := tokens[index]
 		if token.kind == 'i' {
 			if _, ok := declaringKeywords[strings.ToLower(token.text)]; ok {
-				index = collectKeywordDeclaration(tokens, index, declared, referenceable)
+				index = collectKeywordDeclaration(tokens, index, declared)
 			}
 			continue
 		}
@@ -896,21 +898,13 @@ func declaredIdentifiers(content string, lang language) (map[string]struct{}, ma
 			collectShortVariableDeclaration(tokens, index, declared)
 		}
 	}
-	return declared, referenceable
-}
-
-// declaredNames is the whole-set half of declaredIdentifiers, for callers that
-// only need to know how many names a file introduces.
-func declaredNames(content string, lang language) map[string]struct{} {
-	all, _ := declaredIdentifiers(content, lang)
-	return all
+	return declared
 }
 
 // collectKeywordDeclaration records the name a declaring keyword introduces,
 // plus the parameter names of a function-shaped declaration, and returns the
-// index the caller should continue from. Only the keyword's own name is added
-// to the referenceable set.
-func collectKeywordDeclaration(tokens []sourceToken, keyword int, declared, referenceable map[string]struct{}) int {
+// index the caller should continue from.
+func collectKeywordDeclaration(tokens []sourceToken, keyword int, declared map[string]struct{}) int {
 	cursor := keyword + 1
 	// A Go method receiver sits between `func` and the name.
 	if cursor < len(tokens) && tokens[cursor].text == "(" {
@@ -920,11 +914,6 @@ func collectKeywordDeclaration(tokens []sourceToken, keyword int, declared, refe
 		return keyword
 	}
 	declared[tokens[cursor].text] = struct{}{}
-	// The keyword's own name is the only part of this another file could
-	// reference. The parameter names collected below are scoped to this
-	// declaration's body, and a short variable declaration is scoped tighter
-	// still, so neither can be what a reference elsewhere resolves to.
-	referenceable[tokens[cursor].text] = struct{}{}
 	name := cursor
 	cursor++
 	if cursor < len(tokens) && tokens[cursor].text == "(" {
