@@ -10,6 +10,8 @@
 // so relaxing a case cannot quietly re-open the class.
 package adversarial
 
+import "strings"
+
 // Class groups cases by the property the corpus refuses to let regress.
 type Class string
 
@@ -60,7 +62,18 @@ type Case struct {
 	// exists to prove that a file the author never committed cannot change
 	// how strictly the gate runs.
 	Uncommitted map[string]string
-	// Args are appended to "gate --repo DIR --base BASE".
+	// GitSetup is run in the probe repository after the head commit, one git
+	// invocation per entry. It exists so a case can put the repository into the
+	// local ref state an attack needs: a branch or tag shadowing the canonical
+	// ref name, a hand-written remote-tracking ref, a fetch into one.
+	GitSetup [][]string
+	// StandaloneBase runs the case WITHOUT the orchestrator-supplied base, so
+	// it exercises the gate's own canonical-ref resolution. Every other case
+	// takes the pipeline base, because the harness is exactly the in-process
+	// orchestrator that channel exists for and a corpus that always resolved
+	// its own base would never test resolution at all.
+	StandaloneBase bool
+	// Args are appended to "gate --repo DIR".
 	Args []string
 	// WantExit is the required process exit code. 0 passes, 1 is a verdict
 	// failure, 2 is a refusal (including the reviewer the sandbox cannot
@@ -170,6 +183,15 @@ Agents may skip tests when the change looks small.
 `
 
 const evidenceCounts = `{"passed":18,"failed":2,"skipped":4,"duration":36}
+`
+
+// weakThresholdConfig is the config an author commits to their own branch and
+// then tries to make the operator's by pointing the canonical ref at it.
+const weakThresholdConfig = `slop:
+  test_count_floor: false
+  risk:
+    single_review_threshold: 99
+    full_adversarial_threshold: 100
 `
 
 // cheapestTierConfig is the operator's own route to the lightest tier, written
@@ -426,15 +448,108 @@ func Serve(enabled bool) bool {
 				".no-slop.yaml": "slop:\n  test_count_floor: false\n  risk:\n    single_review_threshold: 99\n    full_adversarial_threshold: 100\n",
 			},
 			Head: map[string]string{"internal/auth/policy.go": goWeakPolicy},
-			// The trailing --base wins over the harness's own, which is the
-			// whole point: the caller is naming a commit on the branch under
-			// test as the ref the gate reads its strength from.
+			// Round 3 refused this base after validating it against a canonical
+			// ref. Round 4 defeated the canonical ref, so the flag is gone
+			// rather than validated: there is no caller-supplied base at all.
 			Args:     []string{"--base", "HEAD~1"},
 			WantExit: 2,
 			WantStdout: []string{
-				"is not contained in",
+				"--base was removed and no longer selects the base revision",
 			},
 			WantNotStdout: []string{"verdict: pass", "gate config completed"},
+		},
+		{
+			Name:    "T1-a-local-branch-named-origin-main-cannot-name-the-canonical-ref",
+			Class:   ClassAuthorizationWeakening,
+			Summary: "`git branch origin/main <own-commit>` made an author-owned commit the base, because the canonical ref was resolved by rev-parsing the string origin/main",
+			Base: map[string]string{
+				"internal/auth/policy.go": goStrictPolicy,
+				"README.md":               "# Project\n",
+			},
+			Intermediate:   map[string]string{".no-slop.yaml": weakThresholdConfig},
+			Head:           map[string]string{"internal/auth/policy.go": goWeakPolicy},
+			GitSetup:       [][]string{{"branch", "origin/main", "HEAD~1"}},
+			StandaloneBase: true,
+			WantExit:       2,
+			WantStdout: []string{
+				"UNVERIFIED",
+				"pinned to full-adversarial",
+			},
+			WantNotStdout: []string{"verdict: pass", "verified by ls-remote"},
+		},
+		{
+			Name:    "T1-a-tag-named-origin-main-cannot-name-the-canonical-ref",
+			Class:   ClassAuthorizationWeakening,
+			Summary: "git rev-parse searches refs/tags before refs/remotes, so an annotated tag shadowed the remote-tracking ref just as well as a branch did",
+			Base: map[string]string{
+				"internal/auth/policy.go": goStrictPolicy,
+				"README.md":               "# Project\n",
+			},
+			Intermediate:   map[string]string{".no-slop.yaml": weakThresholdConfig},
+			Head:           map[string]string{"internal/auth/policy.go": goWeakPolicy},
+			GitSetup:       [][]string{{"tag", "-a", "-m", "shadow", "origin/main", "HEAD~1"}},
+			StandaloneBase: true,
+			WantExit:       2,
+			WantStdout: []string{
+				"UNVERIFIED",
+				"pinned to full-adversarial",
+			},
+			WantNotStdout: []string{"verdict: pass", "verified by ls-remote"},
+		},
+		{
+			Name:    "T1-a-hand-written-remote-tracking-ref-cannot-name-the-canonical-ref",
+			Class:   ClassAuthorizationWeakening,
+			Summary: "refs/remotes/origin/main is an ordinary local ref that git update-ref writes, so trusting the remote-tracking namespace trusted the author",
+			Base: map[string]string{
+				"internal/auth/policy.go": goStrictPolicy,
+				"README.md":               "# Project\n",
+			},
+			Intermediate:   map[string]string{".no-slop.yaml": weakThresholdConfig},
+			Head:           map[string]string{"internal/auth/policy.go": goWeakPolicy},
+			GitSetup:       [][]string{{"update-ref", "refs/remotes/origin/main", "HEAD~1"}},
+			StandaloneBase: true,
+			WantExit:       2,
+			WantStdout: []string{
+				"UNVERIFIED",
+				"pinned to full-adversarial",
+			},
+			WantNotStdout: []string{"verdict: pass", "verified by ls-remote"},
+		},
+		{
+			Name:    "T1-a-fetch-into-the-tracking-ref-cannot-name-the-canonical-ref",
+			Class:   ClassFleetInstructionRewrite,
+			Summary: "the same single command carried the other never-passes class, and `git fetch .` writes the tracking ref without update-ref being involved at all",
+			Base: map[string]string{
+				"AGENTS.md": agentsInstructionsStrict,
+				"README.md": "# Project\n",
+			},
+			Intermediate: map[string]string{".no-slop.yaml": weakThresholdConfig},
+			Head:         map[string]string{"AGENTS.md": agentsInstructionsWeak},
+			GitSetup: [][]string{
+				{"branch", "shadow-source", "HEAD~1"},
+				{"fetch", ".", "+refs/heads/shadow-source:refs/remotes/origin/main"},
+			},
+			StandaloneBase: true,
+			WantExit:       2,
+			WantStdout: []string{
+				"UNVERIFIED",
+				"pinned to full-adversarial",
+			},
+			WantNotStdout: []string{"verdict: pass", "verified by ls-remote"},
+		},
+		{
+			Name:           "T1-control-a-repository-with-no-remote-cannot-reach-the-cheap-tier",
+			Class:          ClassMandatoryCheckIntegrity,
+			Summary:        "the offline route must remove the cheap tier rather than fall back to it, or every probe above just needs the remote unplugged",
+			Base:           map[string]string{"README.md": "# Project\n", ".no-slop.yaml": cheapestTierConfig},
+			Head:           map[string]string{"README.md": "# Project\n\nPlain update.\n"},
+			StandaloneBase: true,
+			WantExit:       2,
+			WantStdout: []string{
+				"this repository has no remote named \"origin\"",
+				"tier: full-adversarial",
+			},
+			WantNotStdout: []string{"verdict: pass", "tier: leak-scan-only"},
 		},
 		{
 			Name:     "S4-one-nul-byte-does-not-blind-the-leak-scan",
@@ -697,9 +812,94 @@ export const guard = allowAnyone
 			WantNotStdout: []string{"verdict: pass", "novelty: 0"},
 		},
 		{
-			Name:    "S2-control-a-cross-language-rename-campaign-is-still-cheap",
+			Name:    "T2-a-throwaway-file-supplies-the-declaration-transition-in-javascript",
+			Class:   ClassAuthorizationWeakening,
+			Summary: "one dead file renaming its own helper from requireAdmin to allowAnyone vouched for a guard swap in a file that imports neither",
+			Base: map[string]string{
+				"lib/policy.js": jsAuthLib,
+				"src/handler.js": `import { requireAdmin } from '../lib/policy.js'
+
+export const guard = requireAdmin
+`,
+				"tools/dead.js": `function requireAdmin(value) {
+	return value
+}
+
+export default requireAdmin
+`,
+			},
+			Head: map[string]string{
+				"src/handler.js": `import { allowAnyone } from '../lib/policy.js'
+
+export const guard = allowAnyone
+`,
+				"tools/dead.js": `function allowAnyone(value) {
+	return value
+}
+
+export default allowAnyone
+`,
+			},
+			WantExit:      2,
+			WantStdout:    []string{"novelty: 2"},
+			WantNotStdout: []string{"verdict: pass", "novelty: 0"},
+		},
+		{
+			Name:    "T2-a-throwaway-file-supplies-the-declaration-transition-in-python",
+			Class:   ClassAuthorizationWeakening,
+			Summary: "the same shape in a second language, to prove the rule was not closed for one token grammar",
+			Base: map[string]string{
+				"policy/checks.py": pyPolicyChecks,
+				"handlers/api.py": `from policy.checks import require_admin
+
+GUARD = require_admin
+`,
+				"tools/dead.py": `def require_admin(value):
+    return value + 1
+`,
+			},
+			Head: map[string]string{
+				"handlers/api.py": `from policy.checks import allow_anyone
+
+GUARD = allow_anyone
+`,
+				"tools/dead.py": `def allow_anyone(value):
+    return value + 1
+`,
+			},
+			WantExit:      2,
+			WantStdout:    []string{"novelty: 2"},
+			WantNotStdout: []string{"verdict: pass", "novelty: 0"},
+		},
+		{
+			Name:    "T2-a-high-risk-path-forfeits-the-mechanical-route",
+			Class:   ClassFleetInstructionRewrite,
+			Summary: "on a path where the token stream IS the runtime, a one-to-one token map does not mean the file still means the same thing",
+			Base: map[string]string{
+				"README.md": "# Project\n",
+				".claude/hooks/guard.js": `function requireAdmin(user) {
+	return user.role === 'admin'
+}
+
+export default requireAdmin
+`,
+			},
+			Head: map[string]string{
+				".claude/hooks/guard.js": `function allowAnyone(user) {
+	return user.role === 'admin'
+}
+
+export default allowAnyone
+`,
+			},
+			WantExit:      2,
+			WantStdout:    []string{"novelty: 2", "a high-risk path changed"},
+			WantNotStdout: []string{"verdict: pass", "novelty: 0"},
+		},
+		{
+			Name:    "T2-cost-a-cross-file-rename-campaign-now-buys-a-review-round",
 			Class:   ClassControl,
-			Summary: "the declaration transition rule must keep a genuine rename campaign at novelty 0, or it is a stricter default wearing a fix",
+			Summary: "the accepted price of removing cross-file vouching, pinned so it is a decision on the record rather than a surprise",
 			Base: map[string]string{
 				"lib/name.js": `export function oldHelperName(value) {
 	return value + 1
@@ -708,13 +908,6 @@ export const guard = allowAnyone
 				"src/use.js": `import { oldHelperName } from '../lib/name.js'
 
 export const helper = oldHelperName
-`,
-				"tools/report.py": `def old_report_name(value):
-    return value + 1
-`,
-				"tools/run.py": `from report import old_report_name
-
-REPORT = old_report_name
 `,
 			},
 			Head: map[string]string{
@@ -726,16 +919,10 @@ REPORT = old_report_name
 
 export const helper = newHelperName
 `,
-				"tools/report.py": `def new_report_name(value):
-    return value + 1
-`,
-				"tools/run.py": `from report import new_report_name
-
-REPORT = new_report_name
-`,
 			},
-			WantExit:   0,
-			WantStdout: []string{"novelty: 0", "verdict: pass"},
+			WantExit:      2,
+			WantStdout:    []string{"novelty: 2", "tier: single-review"},
+			WantNotStdout: []string{"novelty: 0"},
 		},
 		{
 			Name:    "R3-uncommitted-config-disables-the-test-floor",
@@ -1076,15 +1263,13 @@ func IsAdmin(level Level) bool {
 			WantNotStdout: []string{"verdict: pass"},
 		},
 		{
-			Name:    "control-genuine-cross-file-rename-is-still-cheap",
+			Name:    "control-a-self-contained-rename-is-still-cheap",
 			Class:   ClassControl,
-			Summary: "a real rename campaign, where the new name is declared in the change itself, keeps its low novelty",
+			Summary: "the mechanical route survives exactly where it is sound: one file renaming a binding it declares and uses itself, where no reference has to be resolved to another file",
 			Base: map[string]string{
 				"lib/name.js": `export function oldHelperName(value) {
 	return value + 1
 }
-`,
-				"src/use.js": `import { oldHelperName } from '../lib/name.js'
 
 export const helper = oldHelperName
 `,
@@ -1093,14 +1278,77 @@ export const helper = oldHelperName
 				"lib/name.js": `export function newHelperName(value) {
 	return value + 1
 }
-`,
-				"src/use.js": `import { newHelperName } from '../lib/name.js'
 
 export const helper = newHelperName
 `,
 			},
 			WantExit:   0,
 			WantStdout: []string{"novelty: 0", "verdict: pass"},
+		},
+		{
+			Name:    "T3-a-nul-past-gits-sniff-window-does-not-blind-the-leak-scan",
+			Class:   ClassMandatoryCheckIntegrity,
+			Summary: "git samples the first 8000 bytes, so a NUL past that offset made git render an ordinary text hunk and the credential regex failed across the NUL at exit 0",
+			Base:    map[string]string{"docs/notes.txt": "# Notes\n"},
+			Head: map[string]string{
+				"docs/notes.txt": strings.Repeat("ordinary documentation prose here\n", 280) +
+					"aws example key = AKIA\x00IOSFODNN7EXAMPLE\n",
+			},
+			WantExit: 1,
+			WantStdout: []string{
+				"leak-identity-scan",
+				"reduced coverage: docs/notes.txt is binary at head",
+			},
+			WantNotStdout: []string{"verdict: pass", "leak scan completed (0 findings)"},
+		},
+		{
+			Name:    "T7-an-uncommitted-git-info-attributes-does-not-blind-the-leak-scan",
+			Class:   ClassMandatoryCheckIntegrity,
+			Summary: "`* diff` in .git/info/attributes forces a text hunk over a NUL blob from a file that is never committed and does not show in git status",
+			// The operator's own cheapest tier, so the case lands on the leak
+			// scan's verdict rather than on the sandbox's missing reviewer.
+			Base: map[string]string{"NOTES.txt": "# Notes\n", ".no-slop.yaml": cheapestTierConfig},
+			Head: map[string]string{"NOTES.txt": "key = AKIA\x00IOSFODNN7EXAMPLE\n"},
+			// Written after the head commit and never added, which is the whole
+			// point: nothing in the diff or in `git status` shows it.
+			Uncommitted: map[string]string{".git/info/attributes": "* diff\n"},
+			WantExit:    1,
+			WantStdout: []string{
+				"leak-identity-scan",
+				"reduced coverage: NOTES.txt is binary at head",
+			},
+			WantNotStdout: []string{"verdict: pass", "leak scan completed (0 findings)"},
+		},
+		{
+			Name:    "T9-the-change-under-test-cannot-exempt-its-own-credential",
+			Class:   ClassMandatoryCheckIntegrity,
+			Summary: "inline exemptions defaulted to honored, so a trailing comment on the same line turned the mandatory leak scan off for that line and passed at exit 0",
+			Base:    map[string]string{"README.md": "# Project\n", ".no-slop.yaml": cheapestTierConfig},
+			Head: map[string]string{
+				"docs/notes.md": "# Notes\n\naws key: AKIAIOSFODNN7EXAMPLE <!-- noslop:allow-leak -->\n",
+			},
+			WantExit: 1,
+			WantStdout: []string{
+				"is disabled by configuration",
+			},
+			WantNotStdout: []string{"verdict: pass", "leak exemption:"},
+		},
+		{
+			Name:    "T9-control-an-operator-enabled-exemption-is-still-honored-and-counted",
+			Class:   ClassControl,
+			Summary: "flipping the default must not remove the operator's ability to mark a fixture, and an honored marker still reports what it suppressed",
+			Base: map[string]string{
+				"README.md":     "# Project\n",
+				".no-slop.yaml": cheapestTierConfig + "  leak_scan:\n    allow_exemptions: true\n",
+			},
+			Head: map[string]string{
+				"docs/notes.md": "# Notes\n\naws key: AKIAIOSFODNN7EXAMPLE <!-- noslop:allow-leak -->\n",
+			},
+			WantExit: 0,
+			WantStdout: []string{
+				"leak exemption: docs/notes.md:3: noslop:allow-leak (1 findings suppressed)",
+				"verdict: pass",
+			},
 		},
 		{
 			Name:    "control-plain-markdown-still-costs-nothing",

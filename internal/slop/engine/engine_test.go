@@ -43,7 +43,7 @@ func (duplicateMechanicalReviewer) Review(context.Context, engine.ReviewRequest)
 
 type staticHistory []provenance.Record
 
-func (h staticHistory) Recent(string, string, int) ([]provenance.Record, error) {
+func (h staticHistory) Window(string, string) ([]provenance.Record, error) {
 	return h, nil
 }
 

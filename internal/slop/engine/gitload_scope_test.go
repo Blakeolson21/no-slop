@@ -265,6 +265,53 @@ func TestSubmodulePointerBumpIsNamedNotMisreadAsABrokenBlob(t *testing.T) {
 	if len(check.Unarmed) != 1 || !strings.Contains(check.Unarmed[0], "sub") {
 		t.Fatalf("leak scan check = %+v, want the submodule named on the check line", check)
 	}
+
+	// T8: the bump raises the tier instead of failing the run outright. Its
+	// content is in another repository, so no mechanical check here will ever
+	// see it and the honest answer is a reviewer's. Failing unconditionally
+	// meant no repository with a submodule could ever get a passing gate, with
+	// no route through it but turning the gate off.
+	if result.Decision.Tier != risk.TierSingleReview {
+		t.Fatalf("tier = %q, want the unscannable pointer to raise the tier", result.Decision.Tier)
+	}
+	raised := false
+	for _, escalation := range result.Decision.Escalations {
+		if strings.Contains(escalation, "content this run cannot scan") && strings.Contains(escalation, "sub") {
+			raised = true
+		}
+	}
+	if !raised {
+		t.Fatalf("escalations = %v, want the raise explained", result.Decision.Escalations)
+	}
+	for _, finding := range result.Findings {
+		if finding.Lens == "submodule-pointer-unscanned" && finding.Blocks() {
+			t.Fatalf("the pointer bump still fails the run by itself: %+v", finding)
+		}
+	}
+}
+
+// TestAnUnreadableBlobStillBlocks is the other side of T8. Only the submodule
+// pointer became non-blocking, and only because its content genuinely lives
+// somewhere this gate cannot reach. A path this repository holds and cannot
+// read is a broken repository and still fails.
+func TestAnUnreadableBlobStillBlocks(t *testing.T) {
+	t.Parallel()
+
+	result, err := engine.Run(context.Background(), engine.Input{
+		WorkDir: t.TempDir(), Branch: "probe", DefaultBranch: "main",
+		Files: []engine.Change{{
+			Path:       "vendor/blob.bin",
+			Status:     risk.Modified,
+			Unreadable: "head blob for \"vendor/blob.bin\" could not be read: object missing",
+		}},
+		Config: engine.Config{Risk: risk.Config{SingleReviewThreshold: 90, FullReviewThreshold: 99}},
+	}, engine.Dependencies{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Passed {
+		t.Fatalf("an unreadable blob passed: %+v", result.Findings)
+	}
 }
 
 // TestAddingABinaryFileIsScannedNotBlocked pins the proportion of the R2 fix

@@ -27,7 +27,7 @@ func TestFileStoreAppendsVersionedRecordsAndReturnsRecentLaneModelHistory(t *tes
 		}
 	}
 
-	history, err := store.Recent("lane-a", "model-a", 10)
+	history, err := store.Window("lane-a", "model-a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestFileStoreSerializesConcurrentAppends(t *testing.T) {
 		}
 	}
 
-	history, err := store.Recent("lane-a", "model-a", total)
+	history, err := store.Window("lane-a", "model-a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestFileStoreRejectsMalformedHistory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, provenance.FileName), []byte("{not-json}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := provenance.NewFileStore(dir).Recent("lane-a", "model-a", 10); err == nil {
+	if _, err := provenance.NewFileStore(dir).Window("lane-a", "model-a"); err == nil {
 		t.Fatal("expected malformed history to fail closed")
 	}
 }
@@ -98,7 +98,7 @@ func TestFileStoreRejectsUnknownSchemaVersionHistory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, provenance.FileName), []byte("{\"schema_version\":2}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := provenance.NewFileStore(dir).Recent("lane-a", "model-a", 10)
+	_, err := provenance.NewFileStore(dir).Window("lane-a", "model-a")
 	if err == nil || !strings.Contains(err.Error(), "unsupported schema version 2") {
 		t.Fatalf("unknown-version error = %v, want schema validation", err)
 	}
@@ -108,7 +108,7 @@ func TestFileStoreReturnsNoHistoryBeforeDataDirectoryExists(t *testing.T) {
 	t.Parallel()
 
 	store := provenance.NewFileStore(filepath.Join(t.TempDir(), "not-created-yet"))
-	history, err := store.Recent("lane-a", "model-a", 10)
+	history, err := store.Window("lane-a", "model-a")
 	if err != nil {
 		t.Fatal(err)
 	}

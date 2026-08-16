@@ -81,6 +81,12 @@ type Config struct {
 	// drift becomes a finding so that a change editing the gate's own controls
 	// is itself flagged rather than silently ignored.
 	GateConfigDrift []string
+	// BaseUnverified carries the reason the canonical base could not be
+	// verified against the operator's remote. A run that could not establish
+	// which history is the operator's cannot certify anything against it, so it
+	// is pinned to the full tier, reads built-in defaults rather than a base
+	// config it cannot trust, and fails.
+	BaseUnverified string
 }
 
 // Input is the complete gate request.
@@ -95,13 +101,37 @@ type Input struct {
 	Config        Config
 }
 
-// Finding is one named gate failure.
+// Severity says whether a finding blocks the verdict.
+const (
+	// SeverityError is a finding the run fails on.
+	SeverityError = "error"
+	// SeverityNotice is a finding the run reports and does not fail on,
+	// because the answer it needs is a human's rather than the gate's.
+	//
+	// There is exactly one of these and adding a second needs the same
+	// argument: a submodule pointer bump moves content that lives in another
+	// repository, so no scan this gate can run will ever see it. Failing every
+	// such change unconditionally made the gate unusable in any repository that
+	// has a submodule and left no route but turning the gate off, which is a
+	// worse outcome than the one it was defending. The bump is named, the leak
+	// scan says it went unscanned, and the tier is RAISED so a reviewer looks at
+	// it. What is removed is only the automatic failure, not the visibility.
+	SeverityNotice = "notice"
+)
+
+// Finding is one named gate result. Severity decides whether it blocks.
 type Finding struct {
 	Lens        string
 	Severity    string
 	Path        string
 	Line        int
 	Description string
+}
+
+// Blocks reports whether this finding fails the run. An unset severity blocks,
+// so a finding added without thinking about severity fails closed.
+func (f Finding) Blocks() bool {
+	return f.Severity != SeverityNotice
 }
 
 // ReviewRequest is the narrow reviewer seam.
@@ -201,6 +231,8 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 	riskConfig := input.Config.Risk
 	riskConfig.OverrideTier = input.Config.TierOverride
 	riskConfig.ForceTier = input.Config.ForceTier
+	riskConfig.BaseUnverified = input.Config.BaseUnverified != ""
+	riskConfig.UnscannableContent = unscannableContentPaths(input.Files)
 	decision, err := risk.Classify(risk.ChangeSet{
 		Branch:        input.Branch,
 		DefaultBranch: input.DefaultBranch,
@@ -216,6 +248,16 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 		deps.OnDecision(decision)
 	}
 	result := Result{Decision: decision}
+
+	if input.Config.BaseUnverified != "" {
+		result.Findings = append(result.Findings, Finding{
+			Lens:     "base-ref-unverified",
+			Severity: SeverityError,
+			Description: fmt.Sprintf(
+				"%s; the gate reads its strength from the operator's history, so with that history unestablished it certifies nothing and every gate-strength value came from built-in defaults",
+				input.Config.BaseUnverified),
+		})
+	}
 
 	driftFindings := make([]Finding, 0, len(input.Config.GateConfigDrift))
 	for _, drift := range input.Config.GateConfigDrift {
@@ -362,8 +404,28 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 		}
 	}
 
-	result.Passed = len(result.Findings) == 0
+	result.Passed = true
+	for _, finding := range result.Findings {
+		if finding.Blocks() {
+			result.Passed = false
+			break
+		}
+	}
 	return result, nil
+}
+
+// unscannableContentPaths names every path in the change whose content this
+// gate structurally cannot read. It feeds the classifier rather than the
+// verdict: the answer to "something changed here that no scan of mine will ever
+// see" is a review, not a refusal.
+func unscannableContentPaths(files []Change) []string {
+	var paths []string
+	for _, file := range files {
+		if file.ScanState == ScanSubmodulePointer {
+			paths = append(paths, file.Path)
+		}
+	}
+	return paths
 }
 
 func runLensPrecheck(files []Change, intent string) ([]Finding, []string) {
@@ -419,13 +481,18 @@ func appendUniqueFindings(existing []Finding, additions ...Finding) []Finding {
 // runLeakScan returns findings, honored exemptions, the paths the scan could
 // not be run against at all, and the paths it read through a narrower window.
 //
-// A binary blob used to be named as unscanned and skipped. That was honest and
-// it was still a bypass: the whole diff of a plain text file becomes "binary"
-// the moment one NUL byte is prepended, so a single control character moved a
-// live credential out of the mandatory check's reach and the run passed at
-// exit 0. The bytes are scanned now, through leakscan's binary-safe renderings,
-// and the path is reported as degraded rather than as skipped. Adding an image
-// still passes, because a real image carries no credential shapes.
+// Whether a path is read as text or through the binary-safe renderings is
+// decided HERE, from the head blob's own bytes, and never from how git chose to
+// render the diff. Two rounds of this defect had the same root: a binary blob
+// was first skipped outright, then scanned but only when git's own hunk output
+// was missing. Git samples the first 8000 bytes, so one NUL past that offset
+// made git render an ordinary text hunk, the fallback returned early, the
+// regex failed across the NUL, and a live AWS key reached "completed (0
+// findings)" at exit 0 with nothing outside the committed diff. An uncommitted
+// `.git/info/attributes` line did the same from the other side. Reading the
+// bytes ourselves closes both with one condition, and leaves git attributes,
+// `.git/info/attributes`, and diff rendering with no influence at all over
+// whether leak scanning happens.
 func runLeakScan(files []Change, blocklist []string, refuseExemptions bool) ([]Finding, []leakscan.Exemption, []string, []string) {
 	input := make([]leakscan.File, 0, len(files))
 	var result []Finding
@@ -435,11 +502,11 @@ func runLeakScan(files []Change, blocklist []string, refuseExemptions bool) ([]F
 		if file.Unreadable != "" {
 			continue
 		}
-		switch file.ScanState {
-		case ScanSubmodulePointer:
+		if file.ScanState == ScanSubmodulePointer {
 			unscanned = append(unscanned, fmt.Sprintf("%s is a submodule pointer whose content is outside this repository", file.Path))
 			continue
-		case ScanBinarySafe:
+		}
+		if leakscan.IsBinaryContent(file.CurrentContent) {
 			degraded = append(degraded, fmt.Sprintf("%s is binary at head and was read through the binary-safe renderings", file.Path))
 			input = append(input, leakscan.File{Path: file.Path, Content: file.CurrentContent, Binary: true})
 			continue
@@ -464,11 +531,14 @@ func runLeakScan(files []Change, blocklist []string, refuseExemptions bool) ([]F
 // one submodule, from aborting a gate that could still have scanned every other
 // path in the change.
 //
-// A submodule pointer bump gets its own lens rather than the generic unreadable
-// one. It is not a broken repository: the content genuinely lives elsewhere and
-// this gate never saw it, so the run names the submodule and the two commits and
-// fails, which is the same fail-closed answer every other unscannable path
-// already gets. Reading a gitlink as a blob instead produced a git internal
+// A path this repository holds but could not read is a broken repository, and
+// it blocks. A submodule pointer bump is not: the content genuinely lives in
+// another repository and no scan available here will ever see it, so failing
+// every such change was a permanent refusal with no route through it, in a
+// shape an operator could only answer by not running the gate. It is reported
+// as a notice naming the submodule and both commits, the leak scan says the
+// path went unscanned, and the tier is raised so the change is reviewed rather
+// than waved past. Reading a gitlink as a blob instead produced a git internal
 // error on every healthy submodule bump, which is a broken gate rather than a
 // judgement about the change.
 func runContentIntegrity(files []Change) []Finding {
@@ -478,17 +548,17 @@ func runContentIntegrity(files []Change) []Finding {
 		case file.Unreadable != "":
 			findings = append(findings, Finding{
 				Lens:        "content-unreadable",
-				Severity:    "error",
+				Severity:    SeverityError,
 				Path:        file.Path,
 				Description: file.Unreadable,
 			})
 		case file.ScanState == ScanSubmodulePointer:
 			findings = append(findings, Finding{
 				Lens:     "submodule-pointer-unscanned",
-				Severity: "error",
+				Severity: SeverityNotice,
 				Path:     file.Path,
 				Description: fmt.Sprintf(
-					"submodule %q moved from %s to %s; its content is in another repository and was not scanned by this run",
+					"submodule %q moved from %s to %s; its content is in another repository and was not scanned by this run, so the tier is raised for review",
 					file.Path, file.SubmodulePointer.BaselineCommit, file.SubmodulePointer.HeadCommit),
 			})
 		}

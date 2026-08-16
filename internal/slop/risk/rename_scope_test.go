@@ -98,7 +98,33 @@ func TestSubstitutionToASymbolTheChangeNeverDeclaresIsChangedLogic(t *testing.T)
 // TestRenameDeclaredInsideTheChangeStaysMechanical is the other half. The fix
 // has to keep a genuine rename cheap, or it is not a discriminator, it is just
 // a stricter default wearing one.
-func TestRenameDeclaredInsideTheChangeStaysMechanical(t *testing.T) {
+// It replaces an earlier test that required a CROSS-FILE campaign to stay at
+// novelty 0. That property was removed deliberately in round 4: a transition
+// carried by any file in the language family was satisfiable by one throwaway
+// file renaming its own dead helper, and separating that from a real campaign
+// needs the reference resolved rather than the name matched. What survives is
+// the case where no resolution question arises, which is the one this pins.
+func TestASelfContainedRenameStaysMechanical(t *testing.T) {
+	t.Parallel()
+
+	decision := classify(t,
+		risk.FileChange{
+			Path:            "lib/name.js",
+			Status:          risk.Modified,
+			BaselineContent: "export function oldHelperName(value) {\n\treturn value + 1\n}\nexport const helper = oldHelperName\n",
+			CurrentContent:  "export function newHelperName(value) {\n\treturn value + 1\n}\nexport const helper = newHelperName\n",
+		},
+	)
+	if decision.Novelty.Score != 0 {
+		t.Fatalf("novelty = %d (%s), want 0 for a file renaming a binding it declares and uses itself",
+			decision.Novelty.Score, decision.Novelty.Reason)
+	}
+}
+
+// TestACrossFileRenameCampaignCostsAReviewRound pins the accepted price of the
+// removal above, so it stays a recorded decision rather than a regression
+// somebody later "fixes" by putting cross-file vouching back.
+func TestACrossFileRenameCampaignCostsAReviewRound(t *testing.T) {
 	t.Parallel()
 
 	decision := classify(t,
@@ -115,9 +141,9 @@ func TestRenameDeclaredInsideTheChangeStaysMechanical(t *testing.T) {
 			CurrentContent:  "import { newHelperName } from '../lib/name.js'\nexport const helper = newHelperName\n",
 		},
 	)
-	if decision.Novelty.Score != 0 {
-		t.Fatalf("novelty = %d (%s), want 0 for a rename the change itself declares",
-			decision.Novelty.Score, decision.Novelty.Reason)
+	if decision.Novelty.Score == 0 {
+		t.Fatalf("novelty = 0 (%s): a use site followed a transition performed by another file",
+			decision.Novelty.Reason)
 	}
 }
 

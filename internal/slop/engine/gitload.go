@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Blakeolson21/no-slop/internal/git"
+	"github.com/Blakeolson21/no-slop/internal/slop/leakscan"
 	"github.com/Blakeolson21/no-slop/internal/slop/risk"
 )
 
@@ -193,7 +194,10 @@ func applyScanFallback(change *Change, sawHunk bool) {
 	if change.Status == risk.Deleted || sawHunk || change.BaselineContent == change.CurrentContent {
 		return
 	}
-	if isBinaryContent(change.CurrentContent) {
+	// leakscan owns the binary decision, over the whole blob rather than git's
+	// 8000-byte sniff window. Mirroring git's window here is what let a NUL past
+	// offset 8000 read as text on both sides at once.
+	if leakscan.IsBinaryContent(change.CurrentContent) {
 		change.ScanState = ScanBinarySafe
 		return
 	}
@@ -201,14 +205,6 @@ func applyScanFallback(change *Change, sawHunk bool) {
 	change.AddedContent = change.CurrentContent
 	change.Added = countLines(change.CurrentContent)
 	change.Deleted = countLines(change.BaselineContent)
-}
-
-func isBinaryContent(content string) bool {
-	limit := len(content)
-	if limit > 8000 {
-		limit = 8000
-	}
-	return strings.IndexByte(content[:limit], 0) >= 0
 }
 
 func countLines(content string) int {

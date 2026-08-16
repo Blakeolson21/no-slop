@@ -20,11 +20,13 @@ const (
 type File struct {
 	Path    string
 	Content string
-	// Binary says git treats this blob as binary, so Content is raw bytes
-	// rather than a diff. It is scanned through the binary-safe renderings
-	// below rather than skipped: prepending one NUL byte to a plain text file
-	// was enough to turn the mandatory leak scan into a check that printed
-	// "completed (0 findings)" over a live AWS key and passed at exit 0.
+	// Binary says Content is a raw blob rather than diff text, so it is read
+	// through the binary-safe renderings below rather than line by line. The
+	// caller sets it from IsBinaryContent over the same bytes, never from git's
+	// rendering: prepending one NUL byte to a plain text file was enough to
+	// turn the mandatory leak scan into a check that printed "completed (0
+	// findings)" over a live AWS key and passed at exit 0, and moving the NUL
+	// past git's 8000-byte sniff window reopened it after the first fix.
 	Binary bool
 }
 
@@ -112,8 +114,42 @@ func ParseBlocklist(content string) []string {
 // bypass anybody could trip over by writing documentation about the feature.
 var exemptionMarker = regexp.MustCompile(`(?i)(?:^|//|#|/\*|<!--|--|;|\s)\s*` + regexp.QuoteMeta(InlineExemption) + `\b`)
 
-// binaryRenderings turns a blob git calls binary into text the line scanner can
-// read. Two renderings are needed and both are cheap.
+// IsBinaryContent reports whether these bytes have to be read through the
+// binary-safe renderings rather than as text.
+//
+// The decision belongs to the scanner and is taken from the bytes the scanner
+// is holding. It is deliberately not git's, and it deliberately does not look
+// at how the content arrived. Git samples the first 8000 bytes of a blob to
+// decide whether to render a diff at all, and the engine's fallback keyed on
+// whether hunks appeared, so both agreed that a plain text file carrying one
+// NUL past offset 8000 was ordinary text: the renderings never ran, the
+// credential regex failed across the NUL, and a live AWS key reached "leak scan
+// completed (0 findings)" at exit 0. An uncommitted `.git/info/attributes`
+// holding `* diff` reached the same state from the opposite direction, forcing
+// a text hunk over a NUL blob from a file that never appears in the commit and
+// does not show in `git status`.
+//
+// So there is no sampling window and no consultation of git's rendering. A NUL
+// anywhere, or any other C0 control byte that is not ordinary whitespace, means
+// the binary-safe renderings run. The cost is that a file carrying a stray
+// control byte is scanned whole rather than by diff hunk, which over-reports on
+// that one path and is the correct direction.
+func IsBinaryContent(content string) bool {
+	for index := 0; index < len(content); index++ {
+		switch current := content[index]; current {
+		case '\n', '\t', '\r', '\f', '\v':
+			continue
+		default:
+			if current == 0 || current < 0x20 || current == 0x7f {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// binaryRenderings turns a blob the scanner calls binary into text the line
+// scanner can read. Two renderings are needed and both are cheap.
 //
 // The first replaces control bytes with spaces, which preserves every line
 // boundary and recovers a plain text file carrying one stray NUL, the exact

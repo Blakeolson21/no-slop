@@ -55,7 +55,7 @@ func TestARerunCannotOverwriteAnIncriminatingRecord(t *testing.T) {
 	store := provenance.NewFileStore(dir)
 	appendRecord(t, store, "aaa..bbb", 3, "fail")
 
-	history, err := store.Recent("lane-a", "model-x", 10)
+	history, err := store.Window("lane-a", "model-x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestARerunCannotOverwriteAnIncriminatingRecord(t *testing.T) {
 	// because the run refused at the reviewer before producing any.
 	appendRecord(t, store, "aaa..bbb", 0, "error")
 
-	history, err = store.Recent("lane-a", "model-x", 10)
+	history, err = store.Window("lane-a", "model-x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestAWorseRerunRaisesTheRecord(t *testing.T) {
 	appendRecord(t, store, "aaa..bbb", 1, "fail")
 	appendRecord(t, store, "aaa..bbb", 4, "fail")
 
-	history, err := store.Recent("lane-a", "model-x", 10)
+	history, err := store.Window("lane-a", "model-x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestDistinctChangesStillEachCount(t *testing.T) {
 	appendRecord(t, store, "bbb..ccc", 1, "fail")
 	appendRecord(t, store, "ccc..ddd", 1, "fail")
 
-	history, err := store.Recent("lane-a", "model-x", 10)
+	history, err := store.Window("lane-a", "model-x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestDeletingTheHistoryIsNotAFreshStart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := provenance.NewFileStore(dir).Recent("lane-a", "model-x", 10)
+	_, err := provenance.NewFileStore(dir).Window("lane-a", "model-x")
 	if err == nil {
 		t.Fatal("deleting the history read as a first-time lane")
 	}
@@ -165,7 +165,7 @@ func TestTruncatingTheHistoryIsNotAFreshStart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = provenance.NewFileStore(dir).Recent("lane-a", "model-x", 10)
+	_, err = provenance.NewFileStore(dir).Window("lane-a", "model-x")
 	if err == nil {
 		t.Fatal("truncating the history read as a shorter honest history")
 	}
@@ -180,7 +180,7 @@ func TestTruncatingTheHistoryIsNotAFreshStart(t *testing.T) {
 func TestANeverWrittenStoreIsStillAFreshStart(t *testing.T) {
 	t.Parallel()
 
-	history, err := provenance.NewFileStore(t.TempDir()).Recent("lane-a", "model-x", 10)
+	history, err := provenance.NewFileStore(t.TempDir()).Window("lane-a", "model-x")
 	if err != nil {
 		t.Fatalf("an empty data directory refused to read: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestAStoreWrittenBeforeTheHighWaterMarkExistedIsAdopted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	history, err := provenance.NewFileStore(dir).Recent("lane-a", "model-x", 10)
+	history, err := provenance.NewFileStore(dir).Window("lane-a", "model-x")
 	if err != nil {
 		t.Fatalf("a pre-sidecar history refused to read: %v", err)
 	}

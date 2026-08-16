@@ -18,7 +18,7 @@ type countingHistory struct {
 	err        error
 }
 
-func (h countingHistory) Recent(string, string, int) ([]provenance.Record, error) {
+func (h countingHistory) Window(string, string) ([]provenance.Record, error) {
 	return h.records, h.err
 }
 

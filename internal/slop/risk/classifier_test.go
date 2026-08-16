@@ -14,7 +14,7 @@ type historyReader struct {
 	err     error
 }
 
-func (r historyReader) Recent(string, string, int) ([]provenance.Record, error) {
+func (r historyReader) Window(string, string) ([]provenance.Record, error) {
 	return r.records, r.err
 }
 
@@ -656,7 +656,7 @@ func TestClassifyConditionsTierLensOrderAndProbesOnLaneModelHistory(t *testing.T
 	if len(decision.DeterministicProbes) != 1 || decision.DeterministicProbes[0] != "test-count-floor" {
 		t.Fatalf("deterministic probes = %v", decision.DeterministicProbes)
 	}
-	want := "lane lane-x: 3 test-capitulation findings in last 3 changes, escalating"
+	want := "lane lane-x: 3 test-capitulation findings across 3 retained changes, escalating"
 	if !strings.Contains(decision.String(), want) {
 		t.Fatalf("decision rationale missing %q:\n%s", want, decision.String())
 	}
@@ -685,7 +685,7 @@ func TestClassifyWithNoLaneModelHistoryKeepsV1TierAndPrintsDefault(t *testing.T)
 	if conditioned.Tier != v1.Tier || conditioned.BlastRadius != v1.BlastRadius || conditioned.Novelty != v1.Novelty || conditioned.Reversibility != v1.Reversibility {
 		t.Fatalf("conditioned = %+v, want v1 route %+v", conditioned, v1)
 	}
-	if !strings.Contains(conditioned.String(), "no history for lane lane-new and model model-new; using v1 policy") {
+	if !strings.Contains(conditioned.String(), "no history for lane lane-new and model model-new and no identified history anywhere in the store; using v1 policy") {
 		t.Fatalf("decision does not print safe default:\n%s", conditioned.String())
 	}
 }

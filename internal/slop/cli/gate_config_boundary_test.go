@@ -36,6 +36,7 @@ func newBoundaryRepo(t *testing.T, base map[string]string) boundaryRepo {
 	runGit(t, dir, "add", "-A")
 	runGit(t, dir, "commit", "-m", "initial")
 	baseSHA := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	attachRemote(t, dir)
 	runGit(t, dir, "switch", "-c", "feature/probe")
 	return boundaryRepo{dir: dir, base: baseSHA}
 }
@@ -56,7 +57,7 @@ func (r boundaryRepo) commit(t *testing.T, files map[string]string) {
 func (r boundaryRepo) gate(t *testing.T, args ...string) (int, string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
-	full := append([]string{"gate", "--repo", r.dir, "--base", r.base}, args...)
+	full := append([]string{"gate", "--repo", r.dir}, args...)
 	code := slopcli.Run(context.Background(), full, &stdout, &stderr, slopcli.Options{
 		ReviewerFactory: func(context.Context, *config.Config, io.Writer) (engine.Reviewer, io.Closer, error) {
 			return nil, nil, errors.New("no runnable agent found")
@@ -71,6 +72,12 @@ func (r boundaryRepo) gate(t *testing.T, args ...string) (int, string) {
 // change can set is exactly the control this file exists to keep out of their
 // reach.
 const cheapTier = "slop:\n  risk:\n    single_review_threshold: 90\n    full_adversarial_threshold: 99\n"
+
+// cheapTierWithExemptions is cheapTier plus the operator's decision to honor
+// inline leak markers. Exemptions default OFF now: a change that can exempt its
+// own credential with a trailing comment has not been leak scanned, and the
+// gate shipped that as the out-of-box behavior.
+const cheapTierWithExemptions = cheapTier + "  leak_scan:\n    allow_exemptions: true\n"
 
 const twoTests = `package calc
 
@@ -260,7 +267,7 @@ func TestThreadFlagWithNoURLIsRefused(t *testing.T) {
 func TestExemptionAccountingReportsSuppressedFindings(t *testing.T) {
 	t.Parallel()
 
-	repo := newBoundaryRepo(t, map[string]string{"README.md": "# Project\n", ".no-slop.yaml": cheapTier})
+	repo := newBoundaryRepo(t, map[string]string{"README.md": "# Project\n", ".no-slop.yaml": cheapTierWithExemptions})
 	repo.commit(t, map[string]string{
 		"fixtures/notes.txt": "AKIAIOSFODNN7EXAMPLE # noslop:allow-leak\nplain line # noslop:allow-leak\n",
 	})

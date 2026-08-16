@@ -48,7 +48,7 @@ func TestReplayingOneChangeCannotEvictHistory(t *testing.T) {
 		}
 	}
 
-	history, err := store.Recent("lane-a", "model-x", 10)
+	history, err := store.Window("lane-a", "model-x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,31 +61,94 @@ func TestReplayingOneChangeCannotEvictHistory(t *testing.T) {
 	}
 }
 
-// TestTenDistinctChangesStillAgeHistoryOut states the residual plainly. The
-// window is a window; de-duplication makes ageing it out cost real changes
-// rather than a loop, and this test says so rather than leaving the reader to
-// assume the history is permanent.
-func TestTenDistinctChangesStillAgeHistoryOut(t *testing.T) {
+// TestDistinctChangesCannotAgeAnIncriminatingRecordOut replaces the test that
+// pinned the old last-10-distinct-changes window as an accepted residual.
+//
+// It was not a residual, it was the next eviction. `git commit --amend` mints a
+// fresh head SHA for byte-identical content, and the change id is
+// "<base>..<head>", so ten amends of one trivial README edit produced ten
+// distinct change ids and cleared a live escalation in seconds. The window's own
+// comment claimed this cost ten real changes.
+//
+// The reviewer's probe is reproduced literally: one incriminating record, then
+// twenty distinct change ids for the same trivial edit. Retention is by age and
+// severity with no count in it, so the record stays.
+func TestDistinctChangesCannotAgeAnIncriminatingRecordOut(t *testing.T) {
 	t.Parallel()
 
 	store := provenance.NewFileStore(t.TempDir())
 	if err := store.Append(findingRecord("lane-a", "model-x", "base..bad", time.Unix(1, 0), 3, 0)); err != nil {
 		t.Fatal(err)
 	}
-	for index := 0; index < 10; index++ {
-		clean := findingRecord("lane-a", "model-x", fmt.Sprintf("base..change%d", index), time.Unix(int64(index+2), 0), 0, 0)
+	for index := 0; index < 20; index++ {
+		clean := findingRecord("lane-a", "model-x", fmt.Sprintf("base..amend%d", index), time.Unix(int64(index+2), 0), 0, 0)
 		if err := store.Append(clean); err != nil {
 			t.Fatal(err)
 		}
 	}
-	history, err := store.Recent("lane-a", "model-x", 10)
+
+	history, err := store.Window("lane-a", "model-x")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, record := range history {
-		if record.ChangeID == "base..bad" {
-			t.Fatal("ten distinct changes should have aged the record out; the documented residual no longer matches the code")
-		}
+	if provenance.LensScores(history)["test-capitulation"] != 3 {
+		t.Fatalf("twenty distinct change ids evicted the incriminating record: scores = %v", provenance.LensScores(history))
+	}
+}
+
+// TestAnAgedRecordWithNoFindingsIsRetiredAndAnIncriminatingOneIsNot pins both
+// halves of the retention rule, so "retain everything forever" cannot pass for
+// the fix either.
+func TestAnAgedRecordWithNoFindingsIsRetiredAndAnIncriminatingOneIsNot(t *testing.T) {
+	t.Parallel()
+
+	store := provenance.NewFileStore(t.TempDir())
+	old := time.Now().UTC().Add(-2 * provenance.RetentionWindow)
+	if err := store.Append(findingRecord("lane-a", "model-x", "base..oldclean", old, 0, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append(findingRecord("lane-a", "model-x", "base..oldbad", old, 3, 0)); err != nil {
+		t.Fatal(err)
+	}
+
+	history, err := store.Window("lane-a", "model-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 || history[0].ChangeID != "base..oldbad" {
+		t.Fatalf("history = %+v, want only the aged incriminating record retained", history)
+	}
+}
+
+// TestOnlyAReviewedPassClearsALensScore is the other half of T4: an escalation
+// has to be clearable by something, and the only thing that clears it is the
+// escalated protocol actually running and coming back clean.
+func TestOnlyAReviewedPassClearsALensScore(t *testing.T) {
+	t.Parallel()
+
+	incriminating := findingRecord("lane-a", "model-x", "base..bad", time.Unix(1, 0), 3, 0)
+
+	cheapPass := findingRecord("lane-a", "model-x", "base..cheap", time.Unix(2, 0), 0, 0)
+	cheapPass.SelectedTier = "leak-scan-only"
+	cheapPass.Outcome = "pass"
+	if score := provenance.LensScores([]provenance.Record{incriminating, cheapPass})["test-capitulation"]; score != 3 {
+		t.Fatalf("a cheap-tier pass cleared the escalation: score = %d", score)
+	}
+
+	unreviewed := findingRecord("lane-a", "model-x", "base..noreview", time.Unix(3, 0), 0, 0)
+	unreviewed.SelectedTier = "full-adversarial"
+	unreviewed.Outcome = "pass"
+	unreviewed.Rounds = 0
+	if score := provenance.LensScores([]provenance.Record{incriminating, unreviewed})["test-capitulation"]; score != 3 {
+		t.Fatalf("a full-tier record that never ran its review rounds cleared the escalation: score = %d", score)
+	}
+
+	reviewed := findingRecord("lane-a", "model-x", "base..reviewed", time.Unix(4, 0), 0, 0)
+	reviewed.SelectedTier = "full-adversarial"
+	reviewed.Outcome = "pass"
+	reviewed.Rounds = 2
+	if score := provenance.LensScores([]provenance.Record{incriminating, reviewed})["test-capitulation"]; score != 0 {
+		t.Fatalf("a completed clean full-adversarial pass did not clear the escalation: score = %d", score)
 	}
 }
 

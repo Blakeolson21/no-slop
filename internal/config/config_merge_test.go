@@ -85,8 +85,11 @@ func TestMerge_SlopDefaults(t *testing.T) {
 	if cfg.Slop.LeakScan.BlocklistFile != ".noslop-blocklist" {
 		t.Fatalf("blocklist default = %q", cfg.Slop.LeakScan.BlocklistFile)
 	}
-	if !cfg.Slop.LeakScan.AllowExemptions {
-		t.Fatal("inline leak exemptions should default on")
+	// Inline leak exemptions default OFF. A mandatory check the audited party
+	// switches off for itself with a trailing comment is a mandatory check by
+	// name only, and it shipped that way out of the box.
+	if cfg.Slop.LeakScan.AllowExemptions {
+		t.Fatal("inline leak exemptions should default off")
 	}
 	if cfg.Slop.DataDir != ".noslop-data" {
 		t.Fatalf("NoSlop data dir default = %q", cfg.Slop.DataDir)

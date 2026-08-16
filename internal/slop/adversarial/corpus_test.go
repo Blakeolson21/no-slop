@@ -156,12 +156,25 @@ func runCase(t *testing.T, probe adversarial.Case) (int, string) {
 	for path, content := range probe.Uncommitted {
 		write(t, dir, path, content)
 	}
+	for _, setup := range probe.GitSetup {
+		git(t, dir, setup...)
+	}
 
-	args := append([]string{"gate", "--repo", dir, "--base", base}, probe.Args...)
+	// The harness is an in-process orchestrator that resolved the base itself,
+	// which is precisely the caller the pipeline channel exists for. It is a Go
+	// field with no command-line or file equivalent, so a case that wants to
+	// attack base resolution asks for StandaloneBase and gets none of it.
+	options := slopcli.Options{ReviewerFactory: unavailableReviewer}
+	if !probe.StandaloneBase {
+		options.PipelineBase = &slopcli.PipelineBase{
+			Commit:        base,
+			Origin:        "adversarial corpus harness",
+			DefaultBranch: "main",
+		}
+	}
+	args := append([]string{"gate", "--repo", dir}, probe.Args...)
 	var stdout, stderr bytes.Buffer
-	exitCode := slopcli.Run(context.Background(), args, &stdout, &stderr, slopcli.Options{
-		ReviewerFactory: unavailableReviewer,
-	})
+	exitCode := slopcli.Run(context.Background(), args, &stdout, &stderr, options)
 	return exitCode, stdout.String() + stderr.String()
 }
 

@@ -204,7 +204,10 @@ type SlopRiskRaw struct {
 	HighRiskPaths            []string `yaml:"high_risk_paths"`
 }
 
-// SlopLeakScanRaw controls the optional private-name blocklist file.
+// SlopLeakScanRaw controls the optional private-name blocklist file and
+// whether inline leak exemptions are honored at all. Both are read from the
+// base ref, and allow_exemptions defaults to false: a change that can exempt
+// its own credential with a trailing comment has not been leak scanned.
 type SlopLeakScanRaw struct {
 	BlocklistFile   string `yaml:"blocklist_file"`
 	AllowExemptions *bool  `yaml:"allow_exemptions"`
@@ -1963,7 +1966,14 @@ func resolveSlop(raw SlopRaw) Slop {
 			SingleReviewThreshold:    3,
 			FullAdversarialThreshold: 6,
 		},
-		LeakScan: SlopLeakScan{BlocklistFile: ".noslop-blocklist", AllowExemptions: true},
+		// Inline leak exemptions are OFF by default. A mandatory check the
+		// audited party turns off for itself with a comment on the same line is
+		// a mandatory check by name only, and shipping that as the out-of-box
+		// behavior meant the change under test could exempt its own credential
+		// and pass at exit 0 in a repository with no config at all. Honoring the
+		// marker is an operator decision, taken at the base ref like every other
+		// gate-strength decision.
+		LeakScan: SlopLeakScan{BlocklistFile: ".noslop-blocklist", AllowExemptions: false},
 		Prose: SlopProse{
 			OutboundPaths: []string{"outbound/**"},
 		},

@@ -36,7 +36,7 @@ func (r *emptyReviewer) Review(context.Context, engine.ReviewRequest) ([]engine.
 
 type failingProvenanceStore struct{}
 
-func (failingProvenanceStore) Recent(string, string, int) ([]provenance.Record, error) {
+func (failingProvenanceStore) Window(string, string) ([]provenance.Record, error) {
 	return nil, nil
 }
 
@@ -59,14 +59,14 @@ func TestRunGatePrintsMarkdownTierAndReasons(t *testing.T) {
 	writeFile(t, dir, "README.md", "# Project\n")
 	runGit(t, dir, "add", ".noslop-blocklist", "README.md")
 	runGit(t, dir, "commit", "-m", "initial")
-	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	attachRemote(t, dir)
 	runGit(t, dir, "switch", "-c", "docs/readme")
 	writeFile(t, dir, "README.md", "# Project\n\nPlain update.\n")
 	runGit(t, dir, "add", "README.md")
 	runGit(t, dir, "commit", "-m", "docs")
 
 	var stdout, stderr bytes.Buffer
-	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base, "--tier", "leak-scan-only"}, &stdout, &stderr, slopcli.Options{})
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--tier", "leak-scan-only"}, &stdout, &stderr, slopcli.Options{})
 	if exitCode != 0 {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
 	}
@@ -95,14 +95,14 @@ func TestRunGatePrintsMandatoryCheckStatus(t *testing.T) {
 	writeFile(t, dir, "README.md", "# Project\n")
 	runGit(t, dir, "add", "README.md")
 	runGit(t, dir, "commit", "-m", "initial")
-	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	attachRemote(t, dir)
 	runGit(t, dir, "switch", "-c", "docs/readme")
 	writeFile(t, dir, "README.md", "# Project\n\nPlain update.\n")
 	runGit(t, dir, "add", "README.md")
 	runGit(t, dir, "commit", "-m", "docs")
 
 	var stdout, stderr bytes.Buffer
-	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base}, &stdout, &stderr, slopcli.Options{})
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir}, &stdout, &stderr, slopcli.Options{})
 	if exitCode != 0 {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
 	}
@@ -138,14 +138,14 @@ func TestRunGateArmsScopeExpansionWhenIntentIsStated(t *testing.T) {
 	writeFile(t, dir, "README.md", "# Project\n")
 	runGit(t, dir, "add", "README.md")
 	runGit(t, dir, "commit", "-m", "initial")
-	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	attachRemote(t, dir)
 	runGit(t, dir, "switch", "-c", "docs/readme")
 	writeFile(t, dir, "README.md", "# Project\n\nPlain update.\n")
 	runGit(t, dir, "add", "README.md")
 	runGit(t, dir, "commit", "-m", "docs")
 
 	var stdout, stderr bytes.Buffer
-	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base, "--intent", "Refresh the README only."}, &stdout, &stderr, slopcli.Options{})
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--intent", "Refresh the README only."}, &stdout, &stderr, slopcli.Options{})
 	if exitCode != 0 {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
 	}
@@ -170,14 +170,14 @@ func TestRunGateAtTheOperatorsCheapestTierStillBlocksLeak(t *testing.T) {
 	writeFile(t, dir, "policy.go", "package policy\n")
 	runGit(t, dir, "add", ".no-slop.yaml", ".noslop-blocklist", "policy.go")
 	runGit(t, dir, "commit", "-m", "initial")
-	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	attachRemote(t, dir)
 	runGit(t, dir, "switch", "-c", "feature/policy")
 	writeFile(t, dir, "policy.go", "package policy\n\nconst token = \"ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ\"\n") // noslop:allow-leak
 	runGit(t, dir, "add", "policy.go")
 	runGit(t, dir, "commit", "-m", "change")
 
 	var stdout, stderr bytes.Buffer
-	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base}, &stdout, &stderr, slopcli.Options{})
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir}, &stdout, &stderr, slopcli.Options{})
 	if exitCode != 1 {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
 	}
@@ -207,7 +207,7 @@ func TestRunGateRaisesButNeverLowersTheComputedTier(t *testing.T) {
 	writeFile(t, dir, "internal/auth/policy.go", "package auth\n\nfunc Allow(role string, mfa bool) bool {\n\treturn role == \"admin\" && mfa\n}\n")
 	runGit(t, dir, "add", "-A")
 	runGit(t, dir, "commit", "-m", "initial")
-	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	attachRemote(t, dir)
 	runGit(t, dir, "switch", "-c", "feature/weaken")
 	writeFile(t, dir, "internal/auth/policy.go", "package auth\n\nfunc Allow(role string, mfa bool) bool {\n\treturn role == \"admin\" || mfa\n}\n")
 	runGit(t, dir, "add", "-A")
@@ -223,7 +223,7 @@ func TestRunGateRaisesButNeverLowersTheComputedTier(t *testing.T) {
 	} {
 		t.Run(probe.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			args := append([]string{"gate", "--repo", dir, "--base", base}, probe.args...)
+			args := append([]string{"gate", "--repo", dir}, probe.args...)
 			exitCode := slopcli.Run(context.Background(), args, &stdout, &stderr, slopcli.Options{})
 			if exitCode != 2 {
 				t.Fatalf("exit = %d, want the lowering refused\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
@@ -241,7 +241,7 @@ func TestRunGateRaisesButNeverLowersTheComputedTier(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	raise := []string{"gate", "--repo", dir, "--base", base, "--tier", "full-adversarial"}
+	raise := []string{"gate", "--repo", dir, "--tier", "full-adversarial"}
 	if code := slopcli.Run(context.Background(), raise, &stdout, &stderr, slopcli.Options{
 		ReviewerFactory: func(context.Context, *config.Config, io.Writer) (engine.Reviewer, io.Closer, error) {
 			return nil, nil, errors.New("no runnable agent found")
@@ -264,14 +264,14 @@ func TestRunGateUsesNoBlocklistWhenDefaultFileIsMissing(t *testing.T) {
 	writeFile(t, dir, "README.md", "# Project\n")
 	runGit(t, dir, "add", "README.md")
 	runGit(t, dir, "commit", "-m", "initial")
-	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	attachRemote(t, dir)
 	runGit(t, dir, "switch", "-c", "docs/readme")
 	writeFile(t, dir, "README.md", "# Project\n\nPlain update.\n")
 	runGit(t, dir, "add", "README.md")
 	runGit(t, dir, "commit", "-m", "docs")
 
 	var stdout, stderr bytes.Buffer
-	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base}, &stdout, &stderr, slopcli.Options{})
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir}, &stdout, &stderr, slopcli.Options{})
 	if exitCode != 0 {
 		t.Fatalf("exit = %d, want clean gate without a default blocklist\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
 	}
@@ -287,18 +287,20 @@ func TestRunGateReportsEveryHonoredLeakExemption(t *testing.T) {
 	runGit(t, dir, "init", "-b", "main")
 	runGit(t, dir, "config", "user.email", "test@example.com")
 	runGit(t, dir, "config", "user.name", "Test")
-	writeFile(t, dir, ".no-slop.yaml", cheapestTierConfig)
+	// Inline exemptions default OFF, so honoring one is an operator decision
+	// taken at the base ref like every other gate-strength decision.
+	writeFile(t, dir, ".no-slop.yaml", cheapestTierConfig+"  leak_scan:\n    allow_exemptions: true\n")
 	writeFile(t, dir, "README.md", "# Project\n")
 	runGit(t, dir, "add", ".no-slop.yaml", "README.md")
 	runGit(t, dir, "commit", "-m", "initial")
-	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	attachRemote(t, dir)
 	runGit(t, dir, "switch", "-c", "test/leak-fixtures")
 	writeFile(t, dir, "fixtures/tokens.txt", "TOKEN=ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ # noslop:allow-leak\nAWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE # noslop:allow-leak\n") // noslop:allow-leak
 	runGit(t, dir, "add", "fixtures/tokens.txt")
 	runGit(t, dir, "commit", "-m", "add fixtures")
 
 	var stdout, stderr bytes.Buffer
-	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base}, &stdout, &stderr, slopcli.Options{})
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir}, &stdout, &stderr, slopcli.Options{})
 	if exitCode != 0 {
 		t.Fatalf("exit = %d, want exemptions honored\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
 	}
@@ -321,17 +323,18 @@ func TestRunGateReportsLeakExemptionBeforeLaterReviewerError(t *testing.T) {
 	runGit(t, dir, "init", "-b", "main")
 	runGit(t, dir, "config", "user.email", "test@example.com")
 	runGit(t, dir, "config", "user.name", "Test")
+	writeFile(t, dir, ".no-slop.yaml", "slop:\n  leak_scan:\n    allow_exemptions: true\n")
 	writeFile(t, dir, "README.md", "# Project\n")
-	runGit(t, dir, "add", "README.md")
+	runGit(t, dir, "add", "-A")
 	runGit(t, dir, "commit", "-m", "initial")
-	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	attachRemote(t, dir)
 	runGit(t, dir, "switch", "-c", "test/leak-fixture")
 	writeFile(t, dir, "fixtures/token.txt", "TOKEN=ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ # noslop:allow-leak\n") // noslop:allow-leak
 	runGit(t, dir, "add", "fixtures/token.txt")
 	runGit(t, dir, "commit", "-m", "add fixture")
 
 	var stdout, stderr bytes.Buffer
-	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base}, &stdout, &stderr, slopcli.Options{
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir}, &stdout, &stderr, slopcli.Options{
 		ReviewerFactory: func(context.Context, *config.Config, io.Writer) (engine.Reviewer, io.Closer, error) {
 			return nil, nil, errors.New("review unavailable")
 		},
@@ -355,14 +358,14 @@ func TestRunGateCanRefuseInlineLeakExemptions(t *testing.T) {
 	writeFile(t, dir, "README.md", "# Project\n")
 	runGit(t, dir, "add", ".no-slop.yaml", "README.md")
 	runGit(t, dir, "commit", "-m", "initial")
-	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	attachRemote(t, dir)
 	runGit(t, dir, "switch", "-c", "test/leak-fixtures")
 	writeFile(t, dir, "fixtures/tokens.txt", "TOKEN=ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ # noslop:allow-leak\n") // noslop:allow-leak
 	runGit(t, dir, "add", "fixtures/tokens.txt")
 	runGit(t, dir, "commit", "-m", "add fixture")
 
 	var stdout, stderr bytes.Buffer
-	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base}, &stdout, &stderr, slopcli.Options{})
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir}, &stdout, &stderr, slopcli.Options{})
 	if exitCode != 1 {
 		t.Fatalf("exit = %d, want refused exemption to fail the gate\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
 	}
@@ -385,14 +388,14 @@ func TestRunGateFailsClosedWhenExplicitBlocklistIsMissing(t *testing.T) {
 	writeFile(t, dir, "README.md", "# Project\n")
 	runGit(t, dir, "add", "README.md")
 	runGit(t, dir, "commit", "-m", "initial")
-	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	attachRemote(t, dir)
 	runGit(t, dir, "switch", "-c", "docs/readme")
 	writeFile(t, dir, "README.md", "# Project\n\nPlain update.\n")
 	runGit(t, dir, "add", "README.md")
 	runGit(t, dir, "commit", "-m", "docs")
 
 	var stdout, stderr bytes.Buffer
-	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base, "--blocklist", "missing-private-names"}, &stdout, &stderr, slopcli.Options{})
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--blocklist", "missing-private-names"}, &stdout, &stderr, slopcli.Options{})
 	if exitCode != 2 {
 		t.Fatalf("exit = %d, want evaluation failure\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
 	}
@@ -412,14 +415,14 @@ func TestRunGateFailsClosedWhenConfiguredBlocklistIsMissing(t *testing.T) {
 	writeFile(t, dir, "README.md", "# Project\n")
 	runGit(t, dir, "add", ".no-slop.yaml", "README.md")
 	runGit(t, dir, "commit", "-m", "initial")
-	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	attachRemote(t, dir)
 	runGit(t, dir, "switch", "-c", "docs/readme")
 	writeFile(t, dir, "README.md", "# Project\n\nPlain update.\n")
 	runGit(t, dir, "add", "README.md")
 	runGit(t, dir, "commit", "-m", "docs")
 
 	var stdout, stderr bytes.Buffer
-	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base}, &stdout, &stderr, slopcli.Options{})
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir}, &stdout, &stderr, slopcli.Options{})
 	if exitCode != 2 {
 		t.Fatalf("exit = %d, want evaluation failure\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
 	}
@@ -451,14 +454,14 @@ func TestRunGateReportsBlocklistEntryCountSoAnEmptyListIsVisible(t *testing.T) {
 			writeFile(t, dir, "README.md", "# Project\n")
 			runGit(t, dir, "add", ".no-mistakes.yaml", ".noslop-blocklist", "README.md")
 			runGit(t, dir, "commit", "-m", "initial")
-			base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+			attachRemote(t, dir)
 			runGit(t, dir, "switch", "-c", "docs/readme")
 			writeFile(t, dir, "README.md", "# Project\n\nPlain update.\n")
 			runGit(t, dir, "add", "README.md")
 			runGit(t, dir, "commit", "-m", "docs")
 
 			var stdout, stderr bytes.Buffer
-			exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base}, &stdout, &stderr, slopcli.Options{})
+			exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir}, &stdout, &stderr, slopcli.Options{})
 			if exitCode != 0 {
 				t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
 			}
@@ -498,14 +501,14 @@ func TestRunGateFailsClosedWhenDefaultOrConfiguredBlocklistIsUnreadable(t *testi
 				runGit(t, dir, "add", ".no-slop.yaml")
 			}
 			runGit(t, dir, "commit", "-m", "initial")
-			base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+			attachRemote(t, dir)
 			runGit(t, dir, "switch", "-c", "docs/readme")
 			writeFile(t, dir, "README.md", "# Project\n\nPlain update.\n")
 			runGit(t, dir, "add", "README.md")
 			runGit(t, dir, "commit", "-m", "docs")
 
 			var stdout, stderr bytes.Buffer
-			exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base}, &stdout, &stderr, slopcli.Options{})
+			exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir}, &stdout, &stderr, slopcli.Options{})
 			if exitCode != 2 {
 				t.Fatalf("exit = %d, want unreadable blocklist failure\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
 			}
@@ -528,7 +531,7 @@ func TestRunGateAppendsProvenanceForBlockingFinding(t *testing.T) {
 	writeFile(t, dir, "calc_test.go", "package calc\nfunc TestPositive(t *testing.T) {}\nfunc TestNegative(t *testing.T) {}\n")
 	runGit(t, dir, "add", ".no-slop.yaml", ".noslop-blocklist", "calc_test.go")
 	runGit(t, dir, "commit", "-m", "initial")
-	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	attachRemote(t, dir)
 	runGit(t, dir, "switch", "-c", "feature/calculator")
 	writeFile(t, dir, "calc_test.go", "package calc\nfunc TestPositive(t *testing.T) {}\n")
 	runGit(t, dir, "add", "calc_test.go")
@@ -536,7 +539,7 @@ func TestRunGateAppendsProvenanceForBlockingFinding(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	exitCode := slopcli.Run(context.Background(), []string{
-		"gate", "--repo", dir, "--base", base,
+		"gate", "--repo", dir,
 		"--provider", "provider-a", "--model", "model-a", "--reasoning-effort", "high",
 		"--lane-id", "lane-a", "--change-class", "tests",
 	}, &stdout, &stderr, slopcli.Options{})
@@ -544,7 +547,7 @@ func TestRunGateAppendsProvenanceForBlockingFinding(t *testing.T) {
 		t.Fatalf("exit = %d, want blocking verdict\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
 	}
 
-	history, err := provenance.NewFileStore(filepath.Join(dir, ".review-history")).Recent("lane-a", "model-a", 10)
+	history, err := provenance.NewFileStore(filepath.Join(dir, ".review-history")).Window("lane-a", "model-a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -576,7 +579,7 @@ func TestRunGateConditionsDecisionOnConfiguredProvenanceStore(t *testing.T) {
 	writeFile(t, dir, "README.md", "# Project\n")
 	runGit(t, dir, "add", ".no-slop.yaml", ".noslop-blocklist", "README.md")
 	runGit(t, dir, "commit", "-m", "initial")
-	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	attachRemote(t, dir)
 	runGit(t, dir, "switch", "-c", "docs/readme")
 	writeFile(t, dir, "README.md", "# Project\n\nPlain update.\n")
 	runGit(t, dir, "add", "README.md")
@@ -604,7 +607,7 @@ func TestRunGateConditionsDecisionOnConfiguredProvenanceStore(t *testing.T) {
 	reviewer := &emptyReviewer{}
 	var stdout, stderr bytes.Buffer
 	exitCode := slopcli.Run(context.Background(), []string{
-		"gate", "--repo", dir, "--base", base,
+		"gate", "--repo", dir,
 		"--provider", "provider-a", "--model", "model-a", "--reasoning-effort", "high", "--lane-id", "lane-a",
 	}, &stdout, &stderr, slopcli.Options{
 		ReviewerFactory: func(context.Context, *config.Config, io.Writer) (engine.Reviewer, io.Closer, error) {
@@ -619,7 +622,7 @@ func TestRunGateConditionsDecisionOnConfiguredProvenanceStore(t *testing.T) {
 	}
 	for _, want := range []string{
 		"tier: single-review",
-		"lane lane-a: 3 test-capitulation findings in last 3 changes, escalating",
+		"lane lane-a: 3 test-capitulation findings across 3 retained changes, escalating",
 		"lens priority: test-capitulation",
 		"deterministic probes: test-count-floor",
 	} {
@@ -642,7 +645,7 @@ func TestRunGateRefusesToLowerAProvenanceEscalatedTier(t *testing.T) {
 	writeFile(t, dir, "README.md", "# Project\n")
 	runGit(t, dir, "add", "README.md")
 	runGit(t, dir, "commit", "-m", "initial")
-	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	attachRemote(t, dir)
 	runGit(t, dir, "switch", "-c", "docs/readme")
 	writeFile(t, dir, "README.md", "# Project\n\nPlain update.\n")
 	runGit(t, dir, "add", "README.md")
@@ -668,7 +671,7 @@ func TestRunGateRefusesToLowerAProvenanceEscalatedTier(t *testing.T) {
 	}
 
 	baseArgs := []string{
-		"gate", "--repo", dir, "--base", base, "--tier", "leak-scan-only",
+		"gate", "--repo", dir, "--tier", "leak-scan-only",
 		"--provider", "provider-a", "--model", "model-a", "--lane-id", "lane-a",
 	}
 	var refusedOut, refusedErr bytes.Buffer
@@ -678,7 +681,7 @@ func TestRunGateRefusesToLowerAProvenanceEscalatedTier(t *testing.T) {
 	}
 	for _, want := range []string{
 		"tier: single-review",
-		"provenance: lane lane-a: 3 test-capitulation findings in last 3 changes, escalating",
+		"provenance: lane lane-a: 3 test-capitulation findings across 3 retained changes, escalating",
 		"override refused: single-review -> leak-scan-only",
 	} {
 		if !strings.Contains(refusedOut.String(), want) {
@@ -722,7 +725,7 @@ func TestRunGateTreatsSiblingSymbolSubstitutionAsChangedLogic(t *testing.T) {
 	writeFile(t, dir, "policy.go", "package policy\n\nfunc allowed(isAdmin bool) bool { return isAdmin && strictMode }\n")
 	runGit(t, dir, "add", "flags.go", "policy.go")
 	runGit(t, dir, "commit", "-m", "initial")
-	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	attachRemote(t, dir)
 	runGit(t, dir, "switch", "-c", "feature/policy")
 	writeFile(t, dir, "policy.go", "package policy\n\nfunc allowed(isAdmin bool) bool { return isAdmin && permissiveMode }\n")
 	runGit(t, dir, "add", "policy.go")
@@ -730,7 +733,7 @@ func TestRunGateTreatsSiblingSymbolSubstitutionAsChangedLogic(t *testing.T) {
 
 	reviewer := &emptyReviewer{}
 	var stdout, stderr bytes.Buffer
-	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base}, &stdout, &stderr, slopcli.Options{
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir}, &stdout, &stderr, slopcli.Options{
 		ReviewerFactory: func(context.Context, *config.Config, io.Writer) (engine.Reviewer, io.Closer, error) {
 			return reviewer, nil, nil
 		},
@@ -764,14 +767,14 @@ func TestRunGateWithholdsTheVerdictWhenProvenanceCannotBeRecorded(t *testing.T) 
 	writeFile(t, dir, "calc_test.go", "package calc\nfunc TestPositive(t *testing.T) {}\nfunc TestNegative(t *testing.T) {}\n")
 	runGit(t, dir, "add", ".no-slop.yaml", "calc_test.go")
 	runGit(t, dir, "commit", "-m", "initial")
-	base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	attachRemote(t, dir)
 	runGit(t, dir, "switch", "-c", "test/remove-case")
 	writeFile(t, dir, "calc_test.go", "package calc\nfunc TestPositive(t *testing.T) {}\n")
 	runGit(t, dir, "add", "calc_test.go")
 	runGit(t, dir, "commit", "-m", "remove test")
 
 	var stdout, stderr bytes.Buffer
-	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base}, &stdout, &stderr, slopcli.Options{ProvenanceStore: failingProvenanceStore{}})
+	exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir}, &stdout, &stderr, slopcli.Options{ProvenanceStore: failingProvenanceStore{}})
 	if exitCode != 2 {
 		t.Fatalf("exit = %d, want bookkeeping failure\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
 	}
@@ -900,6 +903,23 @@ func writeDigestFrame(buffer *bytes.Buffer, value []byte) {
 	binary.BigEndian.PutUint64(size[:], uint64(len(value)))
 	buffer.Write(size[:])
 	buffer.Write(value)
+}
+
+// attachRemote gives a probe repository a real remote holding the current main,
+// because that is now the only thing the standalone gate will read a canonical
+// base from. `git ls-remote` works over a filesystem path, so this needs no
+// network and stays a local, deterministic test.
+//
+// Before round 4 these tests passed `--base <sha>` and never exercised base
+// resolution at all. The flag is gone: a base the caller names is a gate the
+// caller configures.
+func attachRemote(t *testing.T, dir string) string {
+	t.Helper()
+	remote := t.TempDir()
+	runGit(t, remote, "init", "--bare", "-b", "main")
+	runGit(t, dir, "remote", "add", "origin", remote)
+	runGit(t, dir, "push", "-q", "origin", "main")
+	return remote
 }
 
 func runGit(t *testing.T, dir string, args ...string) string {

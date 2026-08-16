@@ -27,12 +27,36 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/slop/risk"
 )
 
-// Options supplies test seams without widening the command interface.
+// PipelineBase is a base commit an orchestrating pipeline computed for this
+// run, supplied through the Go API rather than through the command line.
+//
+// This is the one channel that can name the base directly, and it exists
+// because a pipeline that carved the worktree, resolved the trunk, and knows
+// the exact commit the branch left it at is not the audited party. Reaching it
+// requires being in-process with the gate: `noslop gate` never sets it, no flag
+// reaches it, and no file or ref does either. That property is the whole point
+// and it is why the `--base` flag was removed rather than validated. A flag is
+// something the author of the change under test writes.
+type PipelineBase struct {
+	// Commit is the exact base revision the pipeline resolved.
+	Commit string
+	// Origin says how the pipeline resolved it, for the run header.
+	Origin string
+	// DefaultBranch is the trunk the pipeline branched from. The classifier
+	// scores reversibility differently on the default branch, and with no
+	// canonical ref detection running there is nothing else to read it from.
+	DefaultBranch string
+}
+
+// Options supplies the Go-API seams the command line deliberately does not
+// expose.
 type Options struct {
 	ReviewerFactory func(context.Context, *config.Config, io.Writer) (engine.Reviewer, io.Closer, error)
 	TestRunner      engine.TestRunner
 	ThreadReader    prose.ThreadReader
 	ProvenanceStore provenance.Store
+	// PipelineBase is the orchestrator-computed base. See PipelineBase.
+	PipelineBase *PipelineBase
 }
 
 // Run executes the noslop command and returns its process exit code.
@@ -124,7 +148,12 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 	flags := flag.NewFlagSet("gate", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	repo := flags.String("repo", ".", "repository worktree")
-	base := flags.String("base", "", "base revision, which must be an ancestor of HEAD on the canonical ref")
+	// --base is accepted only so that passing it produces an explanation
+	// instead of "flag provided but not defined". It cannot set the base. See
+	// resolveBase: a flag is written by the author of the change under test,
+	// and validating one against a canonical ref is the fix shape that failed
+	// in rounds 3 and 4.
+	base := flags.String("base", "", "removed; the base comes from the pipeline or from the remote, never from the command line")
 	head := flags.String("head", "HEAD", "head revision")
 	tier := flags.String("tier", "auto", "validation tier: auto, leak-scan-only, single-review, full-adversarial (may only raise the computed tier)")
 	forceTier := flags.Bool("force-tier", false, "accepted for compatibility; it can no longer lower a computed tier")
@@ -144,11 +173,18 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 	}
 
 	threadRequested := false
+	baseRequested := false
 	flags.Visit(func(f *flag.Flag) {
-		if f.Name == "thread" {
+		switch f.Name {
+		case "thread":
 			threadRequested = true
+		case "base":
+			baseRequested = true
 		}
 	})
+	if baseRequested || strings.TrimSpace(*base) != "" {
+		return fmt.Errorf("--base was removed and no longer selects the base revision. Gate strength is read from the base ref, so a base the caller names is a gate the caller configures: the canonical commit now comes from `git ls-remote` against the configured remote, or from an orchestrating pipeline through the Go API, and from nothing else. Set slop.base_ref at the canonical ref to point the gate at a different remote or branch")
+	}
 	if threadRequested && strings.TrimSpace(*thread) == "" {
 		return fmt.Errorf("--thread requires an issue or pull request URL")
 	}
@@ -170,13 +206,15 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 	if err != nil {
 		return fmt.Errorf("resolve head revision: %w", err)
 	}
-	resolvedBase, err := resolveBase(ctx, workDir, headRef, strings.TrimSpace(*base))
+	resolvedBase, err := resolveBase(ctx, workDir, headRef, opts.PipelineBase)
 	if err != nil {
 		return err
 	}
-	// Which ref supplied the gate's strength is printed on every run. The
-	// round-3 review passed an authorization weakening by naming a commit on
-	// its own branch as the base, and nothing in the output said so.
+	// Which commit supplied the gate's strength, and how the run established it
+	// is the operator's, is printed on every run. Round 3 passed an
+	// authorization weakening by naming a commit on its own branch, and round 4
+	// did it again through a local ref wearing the canonical ref's name, both
+	// times with a run header nothing could distinguish from an honest one.
 	fmt.Fprintln(stdout, resolvedBase.String())
 	baseRef := resolvedBase.Base
 	defaultBranch := resolvedBase.CanonicalBranch
@@ -184,7 +222,14 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 	// Every gate-strength value is resolved from the base ref, never from the
 	// worktree. See the loadBaseRepoConfig comment for why.
 	cfg := config.Merge(globalCfg, baseRepoCfg)
-	drift := slopConfigDrift(config.Merge(globalCfg, headRepoCfg).Slop, cfg.Slop)
+	// Drift compares the head's gate controls against the base's. With an
+	// unverified base there is no operator config to compare against, so the
+	// comparison would report every configured value as drift and say nothing
+	// true. The base-ref-unverified finding is the report in that case.
+	var drift []string
+	if resolvedBase.Verified() {
+		drift = slopConfigDrift(config.Merge(globalCfg, headRepoCfg).Slop, cfg.Slop)
+	}
 
 	changes, err := engine.LoadGitChanges(ctx, workDir, baseRef, headRef)
 	if err != nil {
@@ -263,6 +308,7 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 			ThreadURL:            strings.TrimSpace(*thread),
 			EvidenceRoot:         workDir,
 			GateConfigDrift:      drift,
+			BaseUnverified:       resolvedBase.Unverified,
 		},
 	}
 
@@ -687,144 +733,199 @@ func loadBlocklist(workDir, configured string, explicitlyConfigured bool) ([]str
 	return entries, fmt.Sprintf("leak scan: loaded %s private-name blocklist from %s (%d entries)", state, configured, len(entries)), nil
 }
 
-// ResolvedBase records which ref the gate took its strength from and how.
+// ResolvedBase records which commit supplied the gate's strength, and how the
+// run established that the commit is the operator's rather than the author's.
 type ResolvedBase struct {
-	// CanonicalRef is the ref the base must sit on, such as "origin/main".
+	// CanonicalRef names the ref the base sits on, in the form the run header
+	// prints, such as "origin/main".
 	CanonicalRef string
-	// CanonicalBranch is that ref's branch name, used for reversibility scoring.
+	// CanonicalBranch is that ref's branch name, used for reversibility
+	// scoring. It is left empty on an unverified base: a local ref does not get
+	// to tell the classifier which branch is the trunk.
 	CanonicalBranch string
+	// CanonicalCommit is the commit the remote reported for the canonical ref
+	// when this run asked it.
+	CanonicalCommit string
 	// Base is the resolved base commit.
 	Base string
-	// Config is the repository config read at Base.
+	// Config is the repository config read at Base. It is deliberately empty on
+	// an unverified base: a config read from a commit whose provenance this run
+	// could not establish is not the operator's config.
 	Config *config.RepoConfig
-	// Explicit says the caller supplied --base and it was verified.
-	Explicit bool
-	// Pinned says the canonical ref came from slop.base_ref at the base config
-	// rather than from detection.
+	// Pinned says the canonical ref came from slop.base_ref rather than from
+	// the conventional trunk names.
 	Pinned bool
+	// Pipeline says an orchestrating pipeline supplied the base directly.
+	Pipeline bool
+	// PipelineOrigin is that pipeline's own description of how it resolved it.
+	PipelineOrigin string
+	// Unverified carries the reason the canonical commit could not be
+	// established from the operator's remote. Empty means verified.
+	Unverified string
 }
 
+// Verified reports whether the base came from a source the author of the change
+// under test cannot write.
+func (r ResolvedBase) Verified() bool { return r.Unverified == "" }
+
+// String is the run header's base line. Each of the three routes reads
+// differently on purpose. The previous header printed "base: <sha> from
+// merge-base with origin/main" whether origin/main was the operator's remote
+// branch or a local branch the author had created ten seconds earlier under
+// that name, which made a defeated run byte-identical to an honest one.
 func (r ResolvedBase) String() string {
-	origin := "merge-base with " + r.CanonicalRef
-	if r.Explicit {
-		origin = "--base, verified as an ancestor of HEAD on " + r.CanonicalRef
+	switch {
+	case r.Pipeline:
+		return fmt.Sprintf("base: %s supplied by the orchestrating pipeline (%s); no local ref and no flag took part", r.Base, r.PipelineOrigin)
+	case !r.Verified():
+		return fmt.Sprintf("base: %s from merge-base with the LOCAL ref %s, UNVERIFIED: %s. Gate strength is pinned to full-adversarial and every slop.* value came from built-in defaults rather than from that commit", r.Base, r.CanonicalRef, r.Unverified)
 	}
 	pinned := ""
 	if r.Pinned {
-		pinned = " (canonical ref pinned by slop.base_ref)"
+		pinned = ", pinned by slop.base_ref"
 	}
-	return fmt.Sprintf("base: %s from %s%s", r.Base, origin, pinned)
+	return fmt.Sprintf("base: %s from merge-base with %s at %s, verified by ls-remote against the configured remote%s", r.Base, r.CanonicalRef, r.CanonicalCommit, pinned)
 }
 
 // resolveBase decides which commit supplies the gate's strength.
 //
-// It used to be whatever `--base` said, which put the last control back inside
-// the author's reach: committing a weakened .no-slop.yaml as the previous
-// commit on the author's own branch and running `--base HEAD~1` made that file
-// the operator's config, reported zero drift, and passed an authorization
-// weakening at exit 0. The base ref being outside the blast radius of the
-// change is the whole reason gate strength was moved there, and a caller-named
-// commit is not outside it.
+// Three rounds of review have taken the same control away from the caller in
+// three different disguises, and the shape of the answer is now the shape of
+// what is left after all of them.
 //
-// So the base is the merge-base of HEAD with a CANONICAL ref: the remote and
-// branch pinned by slop.base_ref in the repository config, or the detected
-// default branch when nothing is pinned. An explicit --base is still accepted,
-// because a pipeline legitimately knows the exact commit it branched from, but
-// only when it is both an ancestor of HEAD and contained in the canonical ref,
-// which is the pair of properties that makes it a commit the operator's history
-// already approved. Anything else exits 2 rather than being quietly honored.
+// Round 3 removed `--base` as given: naming a commit on the author's own branch
+// made the author's own weakened config the operator's config. The replacement
+// was merge-base with a canonical ref, and `--base` survived as a request
+// validated against that ref.
+//
+// Round 4 defeated the canonical ref itself. It was resolved by asking git to
+// rev-parse the string "origin/main", and `git rev-parse` searches refs/,
+// refs/tags/, refs/heads/, refs/remotes/ in order, so `git branch origin/main
+// <own-commit>`, `git tag origin/main <own-commit>`, `git update-ref
+// refs/remotes/origin/main <own-commit>`, and `git fetch . +<sha>:refs/remotes/
+// origin/main` each made an author-owned commit the base. Every one of those is
+// a single command, and remote-tracking refs are ordinary local refs: nothing
+// in a clone's object store is a statement about which history the operator
+// keeps.
+//
+// The lesson the round-4 reviewer drew is the rule this function follows: the
+// fixes that held REMOVED a capability, and the fixes that fell CONSTRAINED an
+// input the author can write. So there is no author-writable input here at all.
+// The resolution order is exactly three sources, and local ref state is not one
+// of them:
+//
+//  1. An orchestrating pipeline that supplies the base through the Go API. It
+//     carved the worktree and resolved the trunk itself, and reaching this
+//     channel requires being in-process with the gate.
+//  2. The network. `git ls-remote <configured remote URL> refs/heads/<branch>`
+//     is asked what the canonical branch points at, and the merge-base is taken
+//     against the commit the remote answered with. No local ref participates,
+//     under any name.
+//  3. Nothing. Offline, or with no remote, or with a remote that will not
+//     answer, the run is pinned to the full tier, reads built-in defaults
+//     instead of a base config it cannot trust, and fails with the reason
+//     named. It never lowers, which is the S1 move: the cheap route is removed
+//     rather than made conditional.
+//
+// `--base` is gone rather than validated, because validating it is the fix
+// shape that failed twice.
+//
+// The residual, stated plainly: the remote's URL comes from `.git/config`, which
+// is local. An author who repoints origin at a repository they control can still
+// make that repository's answer the canonical one. That is a materially louder
+// act than creating a ref, it is one an operator can see, and closing it needs
+// the URL pinned somewhere the change cannot rewrite. slop.base_ref.remote picks
+// which remote is asked, and it is read from the base config, so an operator who
+// wants that decision outside the worktree already has it.
+func resolveBase(ctx context.Context, workDir, headRef string, pipeline *PipelineBase) (ResolvedBase, error) {
+	if pipeline != nil {
+		return resolvePipelineBase(ctx, workDir, *pipeline)
+	}
+	resolved, verifyErr := resolveVerifiedBase(ctx, workDir, headRef)
+	if verifyErr == nil {
+		return resolved, nil
+	}
+	return unverifiedBase(ctx, workDir, headRef, verifyErr)
+}
+
+// resolvePipelineBase trusts the orchestrator's commit and only checks that it
+// names one. There is nothing further to verify: the pipeline is not the
+// audited party, and a pipeline that resolved the wrong commit has a bug rather
+// than a motive.
+func resolvePipelineBase(ctx context.Context, workDir string, pipeline PipelineBase) (ResolvedBase, error) {
+	requested := strings.TrimSpace(pipeline.Commit)
+	if requested == "" {
+		return ResolvedBase{}, fmt.Errorf("resolve base revision: the orchestrating pipeline supplied an empty base commit")
+	}
+	resolved, err := git.Run(ctx, workDir, "rev-parse", "--verify", requested+"^{commit}")
+	if err != nil {
+		return ResolvedBase{}, fmt.Errorf("resolve pipeline base %q: %w", requested, err)
+	}
+	base := strings.TrimSpace(resolved)
+	baseCfg, err := loadBaseRepoConfig(ctx, workDir, base)
+	if err != nil {
+		return ResolvedBase{}, err
+	}
+	origin := strings.TrimSpace(pipeline.Origin)
+	if origin == "" {
+		origin = "origin not stated"
+	}
+	return ResolvedBase{
+		CanonicalRef:    "the pipeline-supplied base",
+		CanonicalBranch: strings.TrimSpace(pipeline.DefaultBranch),
+		CanonicalCommit: base,
+		Base:            base,
+		Config:          baseCfg,
+		Pipeline:        true,
+		PipelineOrigin:  origin,
+	}, nil
+}
+
+// resolveVerifiedBase establishes the canonical commit from the remote and
+// takes the merge-base with head.
 //
 // The pin is read from the config at the provisionally resolved base, so an
 // operator can move the canonical ref without the move being self-certifying:
 // the ref that authorizes the change of ref is the previous canonical one.
-func resolveBase(ctx context.Context, workDir, headRef, requested string) (ResolvedBase, error) {
-	canonicalRef, canonicalBranch, err := detectCanonicalRef(ctx, workDir, config.SlopBaseRef{})
-	if err != nil {
+func resolveVerifiedBase(ctx context.Context, workDir, headRef string) (ResolvedBase, error) {
+	resolved, detectErr := canonicalBaseFor(ctx, workDir, headRef, config.SlopBaseRef{})
+	if detectErr != nil {
 		// A repository whose trunk is not called main or master has to be able
 		// to say so, and the config that says so cannot be read until a base
-		// exists. The head tree's copy names a candidate ref, and nothing else:
-		// the base resolved through it must itself carry the same pin, so the
-		// name has to already be established in the history it points at rather
-		// than asserted by the change under test.
+		// exists.
 		bootstrapped, bootstrapErr := bootstrapPinnedBase(ctx, workDir, headRef)
 		if bootstrapErr != nil {
-			return ResolvedBase{}, errors.Join(err, bootstrapErr)
+			return ResolvedBase{}, errors.Join(detectErr, bootstrapErr)
 		}
-		return applyRequestedBase(ctx, workDir, headRef, requested, bootstrapped)
+		return bootstrapped, nil
 	}
-	provisional, err := mergeBase(ctx, workDir, canonicalRef, headRef)
-	if err != nil {
-		return ResolvedBase{}, err
-	}
-	provisionalCfg, err := loadBaseRepoConfig(ctx, workDir, provisional)
-	if err != nil {
-		return ResolvedBase{}, err
-	}
-	pinned := false
-	if pin := config.Merge(config.DefaultGlobalConfig(), provisionalCfg).Slop.BaseRef; pin.Remote != "" || pin.Branch != "" {
-		pinnedRef, pinnedBranch, pinErr := detectCanonicalRef(ctx, workDir, pin)
-		if pinErr != nil {
-			return ResolvedBase{}, pinErr
-		}
-		if pinnedRef != canonicalRef {
-			canonicalRef, canonicalBranch, pinned = pinnedRef, pinnedBranch, true
-			provisional, err = mergeBase(ctx, workDir, canonicalRef, headRef)
-			if err != nil {
-				return ResolvedBase{}, err
-			}
-			provisionalCfg, err = loadBaseRepoConfig(ctx, workDir, provisional)
-			if err != nil {
-				return ResolvedBase{}, err
-			}
-		}
-	}
-
-	return applyRequestedBase(ctx, workDir, headRef, requested, ResolvedBase{
-		CanonicalRef:    canonicalRef,
-		CanonicalBranch: canonicalBranch,
-		Base:            provisional,
-		Config:          provisionalCfg,
-		Pinned:          pinned,
-	})
-}
-
-// applyRequestedBase verifies an explicit --base against the canonical ref the
-// caller had no say in, and leaves the resolved base alone when none was given.
-func applyRequestedBase(ctx context.Context, workDir, headRef, requested string, resolved ResolvedBase) (ResolvedBase, error) {
-	if requested == "" {
+	pin := config.Merge(config.DefaultGlobalConfig(), resolved.Config).Slop.BaseRef
+	if pin.Remote == "" && pin.Branch == "" {
 		return resolved, nil
 	}
-	explicit, err := git.Run(ctx, workDir, "rev-parse", requested+"^{commit}")
-	if err != nil {
-		return ResolvedBase{}, fmt.Errorf("resolve base revision %q: %w", requested, err)
+	pinned, pinErr := canonicalBaseFor(ctx, workDir, headRef, pin)
+	if pinErr != nil {
+		return ResolvedBase{}, pinErr
 	}
-	if !isAncestor(ctx, workDir, explicit, headRef) {
-		return ResolvedBase{}, fmt.Errorf("--base %s is not an ancestor of the head revision; the gate's strength is read from the base ref, so it may only be a commit the head already contains", requested)
+	if pinned.CanonicalRef == resolved.CanonicalRef {
+		return resolved, nil
 	}
-	if !isAncestor(ctx, workDir, explicit, resolved.CanonicalRef) {
-		return ResolvedBase{}, fmt.Errorf("--base %s is not contained in %s; the gate's strength is read from the base ref, so it may only be a commit the canonical ref already carries, not one on the branch under test", requested, resolved.CanonicalRef)
-	}
-	explicitCfg, err := loadBaseRepoConfig(ctx, workDir, explicit)
-	if err != nil {
-		return ResolvedBase{}, err
-	}
-	resolved.Base = explicit
-	resolved.Config = explicitCfg
-	resolved.Explicit = true
-	return resolved, nil
+	pinned.Pinned = true
+	return pinned, nil
 }
 
 // bootstrapPinnedBase is the one route by which the head tree gets a say in
-// which ref is canonical, and it is deliberately a dead end for an author.
+// which ref is canonical, and it is a dead end for an author.
 //
-// A repository whose trunk is not main or master has to be able to name it, and
-// the config that names it cannot be read before a base exists. So the head
-// tree's copy supplies a CANDIDATE ref, the base is resolved through it, and
-// the config at that base must independently carry the same pin. An author
-// pointing this at their own branch gets a base on their own branch whose
-// config either does not carry the pin, in which case the run refuses, or does,
-// in which case they committed the pin to the history the pin names, which is
-// the same bar as planting anything else in the operator's history.
+// The head tree's copy of slop.base_ref supplies a CANDIDATE remote and branch,
+// that branch is resolved on the remote, and the config at the resulting base
+// must independently carry the same pin. Round 4 defeated the previous version
+// of this by committing the pin with weak thresholds, pointing a local branch at
+// that commit, and naming the local branch: the pin resolved locally, so the
+// author's own commit certified itself. It cannot now, because the candidate is
+// resolved by asking the remote for refs/heads/<branch>. Planting the pin still
+// works, but only by pushing it to the operator's remote, which is the bar every
+// other route already has to clear.
 func bootstrapPinnedBase(ctx context.Context, workDir, headRef string) (ResolvedBase, error) {
 	headCfg, err := loadBaseRepoConfig(ctx, workDir, headRef)
 	if err != nil {
@@ -832,87 +933,157 @@ func bootstrapPinnedBase(ctx context.Context, workDir, headRef string) (Resolved
 	}
 	pin := config.Merge(config.DefaultGlobalConfig(), headCfg).Slop.BaseRef
 	if pin.Remote == "" && pin.Branch == "" {
-		return ResolvedBase{}, fmt.Errorf("no conventional default branch and no slop.base_ref at head to name one")
+		return ResolvedBase{}, fmt.Errorf("no conventional default branch on the configured remote and no slop.base_ref at head to name one")
 	}
-	canonicalRef, canonicalBranch, err := detectCanonicalRef(ctx, workDir, pin)
+	resolved, err := canonicalBaseFor(ctx, workDir, headRef, pin)
 	if err != nil {
 		return ResolvedBase{}, err
 	}
-	base, err := mergeBase(ctx, workDir, canonicalRef, headRef)
-	if err != nil {
-		return ResolvedBase{}, err
-	}
-	baseCfg, err := loadBaseRepoConfig(ctx, workDir, base)
-	if err != nil {
-		return ResolvedBase{}, err
-	}
-	confirmed := config.Merge(config.DefaultGlobalConfig(), baseCfg).Slop.BaseRef
+	confirmed := config.Merge(config.DefaultGlobalConfig(), resolved.Config).Slop.BaseRef
 	if confirmed != pin {
-		return ResolvedBase{}, fmt.Errorf("slop.base_ref at head names %q but the config at %s does not, so the head is naming its own canonical ref; commit the pin to that ref's history first", canonicalRef, base)
+		return ResolvedBase{}, fmt.Errorf("slop.base_ref at head names %q but the config at %s does not, so the head is naming its own canonical ref; commit the pin to that ref's history first", resolved.CanonicalRef, resolved.Base)
 	}
-	return ResolvedBase{
-		CanonicalRef:    canonicalRef,
-		CanonicalBranch: canonicalBranch,
-		Base:            base,
-		Config:          baseCfg,
-		Pinned:          true,
-	}, nil
+	resolved.Pinned = true
+	return resolved, nil
 }
 
-// detectCanonicalRef names the ref the base has to sit on. A pinned remote or
-// branch wins; otherwise the conventional default branch names, remote copy
-// first. Failing to find one aborts the run: a gate that cannot tell which
-// history is the operator's cannot tell whose config it is reading.
-//
-// `refs/remotes/origin/HEAD` is deliberately NOT consulted, and that is not a
-// simplification. It is an ordinary local symbolic ref: `git remote set-head`
-// writes it, and a clone made by fetching one branch records that branch in it.
-// Dogfooding this fix caught exactly that, with the gate happily naming
-// `origin/feature/slop-engine-v1` as the canonical ref for a change on
-// `feature/slop-engine-v1`, which is the whole defect S3 exists to close
-// wearing a different hat. A name the author of the change can set is not a
-// statement about which history is the operator's.
-func detectCanonicalRef(ctx context.Context, workDir string, pin config.SlopBaseRef) (string, string, error) {
+// canonicalBaseFor asks the remote what the canonical branch points at and
+// resolves the base from that commit alone.
+func canonicalBaseFor(ctx context.Context, workDir, headRef string, pin config.SlopBaseRef) (ResolvedBase, error) {
 	remote := strings.TrimSpace(pin.Remote)
-	branch := strings.TrimSpace(pin.Branch)
-	if branch != "" {
-		candidates := []string{branch}
-		if remote != "" {
-			candidates = []string{remote + "/" + branch, branch}
-		}
-		for _, candidate := range candidates {
-			if _, err := git.Run(ctx, workDir, "rev-parse", "--verify", candidate+"^{commit}"); err == nil {
-				return candidate, branch, nil
-			}
-		}
-		return "", "", fmt.Errorf("resolve canonical base ref: slop.base_ref names %q, which this repository does not have", strings.Join(candidates, " or "))
+	if remote == "" {
+		remote = "origin"
 	}
-
-	prefix := "origin"
-	if remote != "" {
-		prefix = remote
+	url, err := remoteURL(ctx, workDir, remote)
+	if err != nil {
+		return ResolvedBase{}, err
 	}
-	for _, name := range []string{"main", "master"} {
-		for _, candidate := range []string{prefix + "/" + name, name} {
-			if _, err := git.Run(ctx, workDir, "rev-parse", "--verify", candidate+"^{commit}"); err == nil {
-				return candidate, name, nil
-			}
+	branches := []string{"main", "master"}
+	if branch := strings.TrimSpace(pin.Branch); branch != "" {
+		branches = []string{branch}
+	}
+	reasons := make([]string, 0, len(branches))
+	for _, branch := range branches {
+		commit, lookupErr := remoteBranchCommit(ctx, workDir, url, branch)
+		if lookupErr != nil {
+			reasons = append(reasons, lookupErr.Error())
+			continue
 		}
+		if _, err := git.Run(ctx, workDir, "rev-parse", "--verify", "--quiet", commit+"^{commit}"); err != nil {
+			return ResolvedBase{}, fmt.Errorf("resolve canonical base ref: %s/%s is %s on the remote, and this repository's object store does not hold that commit; fetch %s before gating", remote, branch, commit, remote)
+		}
+		base, err := mergeBase(ctx, workDir, commit, headRef)
+		if err != nil {
+			return ResolvedBase{}, err
+		}
+		baseCfg, err := loadBaseRepoConfig(ctx, workDir, base)
+		if err != nil {
+			return ResolvedBase{}, err
+		}
+		return ResolvedBase{
+			CanonicalRef:    remote + "/" + branch,
+			CanonicalBranch: branch,
+			CanonicalCommit: commit,
+			Base:            base,
+			Config:          baseCfg,
+		}, nil
 	}
-	return "", "", fmt.Errorf("resolve canonical base ref: no %s/main, %s/master, main, or master in this repository; set slop.base_ref in the repository config to name the ref the gate should read its strength from", prefix, prefix)
+	return ResolvedBase{}, fmt.Errorf("resolve canonical base ref: %s", strings.Join(reasons, "; "))
 }
 
-func mergeBase(ctx context.Context, workDir, canonicalRef, headRef string) (string, error) {
-	base, err := git.Run(ctx, workDir, "merge-base", canonicalRef, headRef)
+// remoteURL names the remote the gate asks. A repository with no remote has no
+// history outside the change under test, so there is nothing here to fall back
+// to; the caller turns this into the unverified route rather than guessing.
+func remoteURL(ctx context.Context, workDir, remote string) (string, error) {
+	url, err := git.Run(ctx, workDir, "remote", "get-url", remote)
 	if err != nil {
-		return "", fmt.Errorf("resolve base revision: %s and the head revision share no history: %w", canonicalRef, err)
+		return "", fmt.Errorf("resolve canonical base ref: this repository has no remote named %q", remote)
+	}
+	trimmed := strings.TrimSpace(url)
+	if trimmed == "" {
+		return "", fmt.Errorf("resolve canonical base ref: remote %q has no URL", remote)
+	}
+	return trimmed, nil
+}
+
+// remoteBranchCommit asks the remote for one branch by its FULL refname.
+//
+// The full refname matters. A short name lets the remote's own tag namespace
+// answer for a branch, which is the same shadowing this whole path exists to
+// remove, one hop further out. Anything other than exactly one refs/heads/
+// answer is refused rather than picked from.
+func remoteBranchCommit(ctx context.Context, workDir, url, branch string) (string, error) {
+	refName := "refs/heads/" + branch
+	output, err := git.Run(ctx, workDir, "ls-remote", "--heads", "--exit-code", url, refName)
+	if err != nil {
+		return "", fmt.Errorf("remote %s does not answer for %s: %v", url, refName, err)
+	}
+	var commit string
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || fields[1] != refName {
+			continue
+		}
+		if commit != "" {
+			return "", fmt.Errorf("remote %s answered for %s more than once", url, refName)
+		}
+		commit = fields[0]
+	}
+	if !isObjectID(commit) {
+		return "", fmt.Errorf("remote %s returned no usable commit for %s", url, refName)
+	}
+	return commit, nil
+}
+
+// isObjectID reports whether a string is a full hexadecimal object id. It
+// exists so a remote's answer is parsed rather than interpolated.
+func isObjectID(value string) bool {
+	if len(value) != 40 && len(value) != 64 {
+		return false
+	}
+	for _, char := range value {
+		if !strings.ContainsRune("0123456789abcdef", char) {
+			return false
+		}
+	}
+	return true
+}
+
+// unverifiedBase supplies something to DIFF when the canonical commit could not
+// be established, and nothing else.
+//
+// The distinction is the whole point. A local ref may say what to compare
+// against, because getting that wrong produces a confusing diff. It may never
+// say how strictly to compare, because getting that wrong is the entire defect
+// class: the caller carries no config from here, the tier is pinned to
+// full-adversarial by risk.Config.BaseUnverified, and the run reports a
+// base-ref-unverified finding so it cannot end at exit 0.
+func unverifiedBase(ctx context.Context, workDir, headRef string, reason error) (ResolvedBase, error) {
+	for _, candidate := range []string{"origin/main", "origin/master", "main", "master"} {
+		commit, err := git.Run(ctx, workDir, "rev-parse", "--verify", "--quiet", candidate+"^{commit}")
+		if err != nil {
+			continue
+		}
+		base, err := mergeBase(ctx, workDir, strings.TrimSpace(commit), headRef)
+		if err != nil {
+			continue
+		}
+		return ResolvedBase{
+			CanonicalRef: candidate,
+			Base:         base,
+			Config:       &config.RepoConfig{},
+			Unverified:   reason.Error(),
+		}, nil
+	}
+	return ResolvedBase{}, fmt.Errorf("%w, and no local main or master names a commit to diff against either", reason)
+}
+
+func mergeBase(ctx context.Context, workDir, canonicalCommit, headRef string) (string, error) {
+	base, err := git.Run(ctx, workDir, "merge-base", canonicalCommit, headRef)
+	if err != nil {
+		return "", fmt.Errorf("resolve base revision: %s and the head revision share no history: %w", canonicalCommit, err)
 	}
 	return strings.TrimSpace(base), nil
-}
-
-func isAncestor(ctx context.Context, workDir, candidate, descendant string) bool {
-	_, err := git.Run(ctx, workDir, "merge-base", "--is-ancestor", candidate, descendant)
-	return err == nil
 }
 
 // printChecks prints every mandatory-check line and every finding gathered so
@@ -948,15 +1119,22 @@ func formatMandatoryCheck(check engine.MandatoryCheck) string {
 	return fmt.Sprintf("mandatory check: %s completed (%d findings, %s)", check.Name, check.Findings, strings.Join(qualifiers, ", "))
 }
 
+// formatFinding labels a blocking finding and a non-blocking notice
+// differently, so a reader never has to reconcile a printed "finding:" line
+// with a passing verdict.
 func formatFinding(finding engine.Finding) string {
+	label := "finding"
+	if !finding.Blocks() {
+		label = "notice"
+	}
 	location := finding.Path
 	if location != "" && finding.Line > 0 {
 		location = fmt.Sprintf("%s:%d", location, finding.Line)
 	}
 	if location != "" {
-		return fmt.Sprintf("finding: [%s] %s: %s", finding.Lens, location, finding.Description)
+		return fmt.Sprintf("%s: [%s] %s: %s", label, finding.Lens, location, finding.Description)
 	}
-	return fmt.Sprintf("finding: [%s] %s", finding.Lens, finding.Description)
+	return fmt.Sprintf("%s: [%s] %s", label, finding.Lens, finding.Description)
 }
 
 func printResult(stdout io.Writer, result engine.Result) {
@@ -998,6 +1176,7 @@ func printResult(stdout io.Writer, result engine.Result) {
 
 func writeUsage(output io.Writer) {
 	fmt.Fprintln(output, "NoSlop is the reviewer that knows the author is an AI.")
-	fmt.Fprintln(output, "usage: noslop gate [--repo DIR] [--base REF] [--head REF] [--intent TEXT] [--tier TIER] [--force-tier] [--thread URL] [--blocklist FILE] [--provider NAME] [--model NAME] [--reasoning-effort LEVEL] [--lane-id ID] [--change-class CLASS]")
+	fmt.Fprintln(output, "usage: noslop gate [--repo DIR] [--head REF] [--intent TEXT] [--tier TIER] [--force-tier] [--thread URL] [--blocklist FILE] [--provider NAME] [--model NAME] [--reasoning-effort LEVEL] [--lane-id ID] [--change-class CLASS]")
+	fmt.Fprintln(output, "       the base revision is not a flag: it comes from the configured remote, or from an orchestrating pipeline")
 	fmt.Fprintln(output, "       noslop evaluate --corpus DIR [--case-set FILE] --unconditioned-results FILE --conditioned-results FILE")
 }

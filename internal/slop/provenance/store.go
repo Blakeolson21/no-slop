@@ -54,7 +54,10 @@ type Record struct {
 
 // Reader is the history seam consumed by the risk classifier.
 type Reader interface {
-	Recent(agentLaneID, model string, limit int) ([]Record, error)
+	// Window returns the retained history for one lane and model, oldest
+	// first, one entry per distinct change folded to the worst outcome any run
+	// of it produced. It takes no limit on purpose: see FileStore.Window.
+	Window(agentLaneID, model string) ([]Record, error)
 	// HasIdentifiedHistory reports whether this store holds any record that
 	// names a real generating lane and model. It exists so a run that supplies
 	// no identity can be told apart from a repository that never used
@@ -76,14 +79,27 @@ const HighWaterFileName = "provenance-v1.count"
 
 // FileStore keeps one append-only JSON Lines file under a repository data dir.
 //
-// Residual, accepted and bounded: the store lives on the same filesystem as the
-// change being judged, so a party with write access can delete or truncate it.
-// The high-water sidecar makes that visible rather than free: a history shorter
-// than the count it has already accepted is reported as tampering, and the
-// classifier escalates on an unreadable history. Deleting both files together
-// still resets the store, and is deliberately not claimed otherwise. Closing
-// this properly needs a history the audited party cannot write, which is a
-// service, not a file.
+// Residual, accepted and bounded, and stated as exactly what it is rather than
+// as a guarantee. The store lives on the same filesystem as the change being
+// judged, so a party with write access can delete it, truncate it, or write
+// records into it by hand. What this file store guarantees is narrower than
+// "an escalation cannot be cleared":
+//
+//   - Deleting or truncating the history is caught, not prevented. The
+//     high-water sidecar makes a history shorter than the count already
+//     accepted read as tampering, and the classifier escalates on an unreadable
+//     history. Deleting the history and the sidecar TOGETHER still resets the
+//     store.
+//   - Re-running, replaying, or amending a change cannot evict anything. That
+//     part is structural: retention is by age and severity with no count in it,
+//     and each change folds to the worst result any run of it produced.
+//   - Hand-writing a plausible record is not prevented at all. Every field a
+//     forger would need is a field this file holds in the clear.
+//
+// Closing the last one needs a history the audited party cannot write, which is
+// a service rather than a file. slop.provenance_required refuses a run whose
+// store went missing, and pointing slop.data_dir at a directory the audited
+// party cannot write is the operator-side answer available today.
 type FileStore struct {
 	dir string
 	now func() time.Time
@@ -197,37 +213,109 @@ func countLines(path string) (int, error) {
 	return count, scanner.Err()
 }
 
-// Recent returns the last matching lane/model records in append order, one per
-// distinct change, each folded to the WORST outcome that change ever recorded.
+// RetentionWindow is how long an unremarkable record stays in the conditioning
+// window. A record that recorded accepted findings is retained past it, so the
+// window bounds bookkeeping rather than bounding accountability.
+const RetentionWindow = 90 * 24 * time.Hour
+
+// Window returns the retained matching lane/model history in append order, one
+// entry per distinct change, each folded to the WORST outcome any run of that
+// change recorded.
 //
-// Both halves are load-bearing. A plain tail meant re-running the gate on the
-// same trivial change ten times evicted an incriminating record and reversed an
-// active escalation, at the cost of ten seconds; keying the window on distinct
-// changes makes ageing history out cost ten real changes instead. But keeping
-// the LATEST record per change made that cheaper still: one identical re-run
-// appended a clean record under the same change id, that record replaced the
-// incriminating one, and the escalation was gone in a single command. So the
-// fold keeps the largest accepted-finding set any run of a change produced. A
-// re-run can now only ever confirm history or add to it.
-func (s *FileStore) Recent(agentLaneID, model string, limit int) ([]Record, error) {
-	if limit <= 0 {
-		return nil, fmt.Errorf("read provenance: limit must be positive")
-	}
+// The retention rule is age and severity, and it deliberately takes no count.
+// Every count-shaped rule this store has had was an eviction tool, because the
+// audited party mints the thing being counted:
+//
+//   - A plain tail of the last N RECORDS meant re-running the gate ten times on
+//     one trivial change aged an incriminating record out in ten seconds.
+//   - Keying on distinct CHANGES fixed that and left `git commit --amend`:
+//     amending mints a new head SHA for byte-identical content, so ten amends
+//     of one README edit produced ten distinct change ids and cleared a live
+//     escalation just as fast. The store's own comment claimed this cost ten
+//     real changes; it cost ten commit objects describing one one-line diff.
+//   - Keeping the LATEST record per change was cheaper still: one identical
+//     re-run overwrote the incriminating record outright.
+//
+// There is no count an author cannot inflate, so no count decides retention. A
+// record is retained while it is younger than RetentionWindow, and a record
+// carrying accepted findings is retained regardless of age. Rotation therefore
+// cannot remove an incriminating record at any price; only a reviewed pass
+// clears its weight, which LensScores decides from the history itself.
+func (s *FileStore) Window(agentLaneID, model string) ([]Record, error) {
 	records, err := s.readAll()
 	if err != nil {
 		return nil, err
 	}
+	cutoff := s.now().UTC().Add(-RetentionWindow)
 	var matches []Record
 	for _, record := range records {
-		if record.AgentLaneID == agentLaneID && record.Model == model {
-			matches = append(matches, record)
+		if record.AgentLaneID != agentLaneID || record.Model != model {
+			continue
+		}
+		if record.RecordedAt.Before(cutoff) && !incriminating(record) {
+			continue
+		}
+		matches = append(matches, record)
+	}
+	return worstPerChange(matches), nil
+}
+
+// incriminating reports whether a record carries accepted findings, which is
+// the property that exempts it from ageing out.
+func incriminating(record Record) bool {
+	for _, findings := range record.FindingsByLens {
+		if len(findings.Accepted) > 0 {
+			return true
 		}
 	}
-	matches = worstPerChange(matches)
-	if len(matches) > limit {
-		matches = append([]Record(nil), matches[len(matches)-limit:]...)
+	return false
+}
+
+// LensScores counts the accepted findings each lens carries across a retained
+// window, and is the one place a lens's weight can be cleared.
+//
+// Accepted findings only. Subtracting rejections let a forged record with three
+// rejected findings cancel a real record with three accepted ones, so the
+// audited party could clear an active escalation by writing history rather than
+// by producing better changes.
+//
+// A lens's count resets at a REVIEWED PASS: a record whose change actually ran
+// the full-adversarial protocol, completed its review rounds, passed, and
+// carried no accepted finding for that lens. That is the only thing that clears
+// an escalation. Rotation cannot, because Window retains incriminating records
+// regardless of age, and a re-run cannot, because worstPerChange keeps the
+// worst result any run of a change produced.
+//
+// The residual is stated rather than papered over: this store is a file on the
+// same filesystem as the change being judged, so a party with write access can
+// hand-write a record claiming a clean full-adversarial pass, exactly as they
+// can hand-write anything else in it. What the rule removes is the version that
+// needed no forgery at all. slop.provenance_required and a data directory the
+// audited party cannot write are the operator-side answers; see the FileStore
+// comment.
+func LensScores(records []Record) map[string]int {
+	scores := make(map[string]int)
+	for _, record := range records {
+		reviewed := isReviewedPass(record)
+		for lens, findings := range record.FindingsByLens {
+			scores[lens] += len(findings.Accepted)
+		}
+		if !reviewed {
+			continue
+		}
+		for lens := range scores {
+			if len(record.FindingsByLens[lens].Accepted) == 0 {
+				scores[lens] = 0
+			}
+		}
 	}
-	return matches, nil
+	return scores
+}
+
+// isReviewedPass reports whether a record is evidence that the escalated
+// protocol actually ran on this change and came back clean.
+func isReviewedPass(record Record) bool {
+	return record.SelectedTier == "full-adversarial" && record.Outcome == "pass" && record.Rounds >= 2
 }
 
 // HasIdentifiedHistory reports whether any record names a real lane and model.

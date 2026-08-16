@@ -305,29 +305,56 @@ func TestRenameIsRefusedWhileTheOldNameStillAppears(t *testing.T) {
 	}
 }
 
-// TestGenuineRenameCampaignStaysMechanical is the discriminator's other half,
-// restated against the new rule so a stricter default cannot masquerade as a
-// fix. The declaring file performs the transition, the use site follows it, and
-// the old name is gone.
-func TestGenuineRenameCampaignStaysMechanical(t *testing.T) {
+// TestAThrowawayFileCannotVouchForAnotherFilesSubstitution is the round-4
+// probe, and it replaces the test that required a cross-file campaign to score
+// novelty 0.
+//
+// The old test and this probe differ in exactly one respect: whether the file
+// performing the transition is the one the use site's reference resolves to.
+// `src/handler.js` imports `allowAnyone` from `lib/policy.js`, which the diff
+// never touches, while `tools/dead.js` renames its own dead helper through the
+// same pair and appears nowhere in `src/handler.js`. No rule that matches names
+// rather than resolving references can separate them, so cross-file vouching is
+// gone and the campaign pays a review round.
+func TestAThrowawayFileCannotVouchForAnotherFilesSubstitution(t *testing.T) {
 	t.Parallel()
 
 	decision := classify(t,
 		risk.FileChange{
-			Path:            "lib/name.js",
+			Path:            "src/handler.js",
 			Status:          risk.Modified,
-			BaselineContent: "export function oldHelperName(value) {\n\treturn value + 1\n}\n",
-			CurrentContent:  "export function newHelperName(value) {\n\treturn value + 1\n}\n",
+			BaselineContent: "import { requireAdmin } from '../lib/policy.js'\nexport const guard = requireAdmin\n",
+			CurrentContent:  "import { allowAnyone } from '../lib/policy.js'\nexport const guard = allowAnyone\n",
 		},
 		risk.FileChange{
-			Path:            "src/use.js",
+			Path:            "tools/dead.js",
 			Status:          risk.Modified,
-			BaselineContent: "import { oldHelperName } from '../lib/name.js'\nexport const helper = oldHelperName\n",
-			CurrentContent:  "import { newHelperName } from '../lib/name.js'\nexport const helper = newHelperName\n",
+			BaselineContent: "function requireAdmin(value) {\n\treturn value\n}\nexport default requireAdmin\n",
+			CurrentContent:  "function allowAnyone(value) {\n\treturn value\n}\nexport default allowAnyone\n",
 		},
 	)
-	if decision.Novelty.Score != 0 {
-		t.Fatalf("novelty = %d (%s), want 0 for a rename the change itself performs",
-			decision.Novelty.Score, decision.Novelty.Reason)
+	if decision.Novelty.Score == 0 {
+		t.Fatalf("novelty = 0 (%s): a dead file's own rename paid for a guard swap it has no relationship to",
+			decision.Novelty.Reason)
+	}
+}
+
+// TestAHighRiskPathForfeitsTheMechanicalRoute covers the other half of the T2
+// rule. On a path where the token stream is the runtime, a one-to-one token map
+// does not mean the file still means what it meant.
+func TestAHighRiskPathForfeitsTheMechanicalRoute(t *testing.T) {
+	t.Parallel()
+
+	decision := classify(t,
+		risk.FileChange{
+			Path:            ".claude/hooks/guard.js",
+			Status:          risk.Modified,
+			BaselineContent: "function requireAdmin(user) {\n\treturn user.admin\n}\nexport default requireAdmin\n",
+			CurrentContent:  "function allowAnyone(user) {\n\treturn user.admin\n}\nexport default allowAnyone\n",
+		},
+	)
+	if decision.Novelty.Score == 0 {
+		t.Fatalf("novelty = 0 (%s): a self-contained rename on an instruction surface took the cheap route",
+			decision.Novelty.Reason)
 	}
 }

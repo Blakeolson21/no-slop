@@ -153,7 +153,7 @@ func TestTierFlagStillRaises(t *testing.T) {
 // which is exactly the threshold conditionOnProvenance escalates on.
 type escalatingHistory struct{}
 
-func (escalatingHistory) Recent(string, string, int) ([]provenance.Record, error) {
+func (escalatingHistory) Window(string, string) ([]provenance.Record, error) {
 	records := make([]provenance.Record, 3)
 	for index := range records {
 		records[index] = provenance.Record{

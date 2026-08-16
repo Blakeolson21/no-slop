@@ -67,6 +67,16 @@ type Config struct {
 	ProvenanceStore       provenance.Reader
 	AgentLaneID           string
 	Model                 string
+	// UnscannableContent names paths whose content the gate structurally
+	// cannot read, a submodule gitlink being the only current case. Their
+	// presence raises the tier: nothing this run can do will inspect them, so
+	// the answer has to come from a reviewer.
+	UnscannableContent []string
+	// BaseUnverified says the canonical base could not be established from the
+	// operator's remote. Gate strength is read from the base ref, so a run that
+	// does not know which history is the operator's is pinned to the full tier
+	// and can be lowered by nothing.
+	BaseUnverified bool
 }
 
 // Axis records one risk score and the evidence behind it.
@@ -89,6 +99,10 @@ type Decision struct {
 	ProvenanceEscalated bool
 	PriorityLenses      []string
 	DeterministicProbes []string
+	// Escalations names every reason the tier was raised after scoring, in the
+	// order the raises were applied. They print on their own lines so a raise
+	// is never something a reader has to infer from the tier alone.
+	Escalations []string
 }
 
 // Classify chooses a validation tier from the change's reach, novelty, and
@@ -118,7 +132,7 @@ func Classify(change ChangeSet, cfg Config) (Decision, error) {
 		return finalizeDecision(decision, cfg)
 	}
 
-	novelty := classifyNovelty(change.Files)
+	novelty := classifyNovelty(change.Files, cfg.HighRiskPaths)
 	if markdownOnly(change.Files) && highRisk {
 		novelty = Axis{Score: 2, Reason: "high-risk instructions or content behavior changed"}
 	}
@@ -140,9 +154,55 @@ func Classify(change ChangeSet, cfg Config) (Decision, error) {
 	return finalizeDecision(decision, cfg)
 }
 
+// finalizeDecision applies every raise the scored axes do not carry, then the
+// caller's tier request, which may only ever raise. Order matters only in that
+// nothing here can lower: each step takes the maximum of what it holds and what
+// it is given, so their sequence cannot change the outcome.
 func finalizeDecision(decision Decision, cfg Config) (Decision, error) {
 	decision = conditionOnProvenance(decision, cfg)
+	decision = raiseForUnscannableContent(decision, cfg)
+	decision = pinUnverifiedBaseToFullTier(decision, cfg)
 	return applyOverride(decision, cfg.OverrideTier, cfg.ForceTier)
+}
+
+// raiseForUnscannableContent raises the tier once for content this gate cannot
+// read at all. A submodule pointer bump is the case: its content is in another
+// repository, so every mechanical check here is structurally blind to it and
+// the only honest answer is a reviewer's. This used to be an unconditional
+// failure, which no repository using submodules could ever clear.
+func raiseForUnscannableContent(decision Decision, cfg Config) Decision {
+	if len(cfg.UnscannableContent) == 0 {
+		return decision
+	}
+	raised := raiseTier(decision.Tier)
+	decision.Escalations = append(decision.Escalations, fmt.Sprintf(
+		"content this run cannot scan (%s) raises the tier to %s",
+		strings.Join(cfg.UnscannableContent, ", "), raised))
+	decision.Tier = raised
+	return decision
+}
+
+// pinUnverifiedBaseToFullTier pins a run whose canonical base could not be
+// verified against the operator's remote to the full tier.
+//
+// Every gate-strength value is read from the base ref, so a run that cannot
+// establish which history is the operator's has no trustworthy source for any
+// of them. The answer is the S1 answer: the cheap routes are removed rather
+// than constrained. This is a pin and not a raise, so no threshold, no
+// provenance rationale, and no flag reaches below it.
+func pinUnverifiedBaseToFullTier(decision Decision, cfg Config) Decision {
+	if !cfg.BaseUnverified {
+		return decision
+	}
+	if decision.Tier != TierFullAdversarial {
+		decision.Escalations = append(decision.Escalations,
+			"the canonical base could not be verified against the operator's remote, so the tier is pinned to full-adversarial")
+		decision.Tier = TierFullAdversarial
+		return decision
+	}
+	decision.Escalations = append(decision.Escalations,
+		"the canonical base could not be verified against the operator's remote; the tier was already full-adversarial")
+	return decision
 }
 
 func conditionOnProvenance(decision Decision, cfg Config) Decision {
@@ -152,19 +212,31 @@ func conditionOnProvenance(decision Decision, cfg Config) Decision {
 		decision.Rationale = "no provenance history configured; using v1 policy"
 		return decision
 	}
+	// Nothing authenticates --lane-id or --model. They are strings the audited
+	// party writes about itself, so every identity path has to cost the same,
+	// or the cheapest one becomes the policy.
+	//
+	// The first version punished OMISSION only, on the reasoning that omitting
+	// is an evasion where identified history exists to hide from. That reasoning
+	// is right and the rule built from it was still backwards: asserting a lane
+	// the store has never seen took the v1 route, so `--lane-id lane-zzz`
+	// cleared a live escalation that omitting the flag could not. Silence was
+	// punished and lying was free, which inverts the incentive the omission rule
+	// exists to create.
+	//
+	// So on a store that already records identities, an unverifiable key and an
+	// absent one are the same thing: an omitted lane, an "unknown" lane, and a
+	// first-contact lane all escalate. A repository that has never recorded an
+	// identity has no history to hide from and keeps the v1 route on every one
+	// of those paths, which is the same symmetry read the other way.
+	identified, err := cfg.ProvenanceStore.HasIdentifiedHistory()
+	if err != nil {
+		decision.Tier = TierFullAdversarial
+		decision.ProvenanceEscalated = true
+		decision.Rationale = "provenance history could not be read; escalating to full-adversarial"
+		return decision
+	}
 	if laneID == "" || model == "" || laneID == "unknown" || model == "unknown" {
-		// Omitting --lane-id was the cheapest of the escalation evasions: it
-		// printed the same line an honest first-time lane prints. It is only an
-		// evasion where identified history exists to hide from, so a repository
-		// that never supplied identities keeps the v1 route and one that does
-		// pays the full tier for a run that will not say who generated it.
-		identified, err := cfg.ProvenanceStore.HasIdentifiedHistory()
-		if err != nil {
-			decision.Tier = TierFullAdversarial
-			decision.ProvenanceEscalated = true
-			decision.Rationale = "provenance history could not be read; escalating to full-adversarial"
-			return decision
-		}
 		if identified {
 			decision.Tier = TierFullAdversarial
 			decision.ProvenanceEscalated = true
@@ -174,7 +246,7 @@ func conditionOnProvenance(decision Decision, cfg Config) Decision {
 		decision.Rationale = "no lane/model provenance key and no identified history; using v1 policy"
 		return decision
 	}
-	history, err := cfg.ProvenanceStore.Recent(laneID, model, 10)
+	history, err := cfg.ProvenanceStore.Window(laneID, model)
 	if err != nil {
 		decision.Tier = TierFullAdversarial
 		decision.ProvenanceEscalated = true
@@ -182,22 +254,17 @@ func conditionOnProvenance(decision Decision, cfg Config) Decision {
 		return decision
 	}
 	if len(history) == 0 {
-		decision.Rationale = fmt.Sprintf("no history for lane %s and model %s; using v1 policy", laneID, model)
+		if identified {
+			decision.Tier = TierFullAdversarial
+			decision.ProvenanceEscalated = true
+			decision.Rationale = fmt.Sprintf("lane %s and model %s have no records on a repository that already records identities, and a self-asserted key with nothing behind it is treated exactly like an omitted one; escalating to full-adversarial", laneID, model)
+			return decision
+		}
+		decision.Rationale = fmt.Sprintf("no history for lane %s and model %s and no identified history anywhere in the store; using v1 policy", laneID, model)
 		return decision
 	}
 
-	// Accepted findings only. Subtracting rejections let a forged record with
-	// three rejected findings cancel a real record with three accepted ones,
-	// so the audited party could clear an active escalation by writing history
-	// rather than by producing better changes. Conditioning may only ever
-	// raise a tier, so counting accepted findings alone is also the only
-	// direction that matches what the mechanism is allowed to do.
-	scores := make(map[string]int)
-	for _, record := range history {
-		for lens, findings := range record.FindingsByLens {
-			scores[lens] += len(findings.Accepted)
-		}
-	}
+	scores := provenance.LensScores(history)
 	for lens, score := range scores {
 		if score >= 3 {
 			decision.PriorityLenses = append(decision.PriorityLenses, lens)
@@ -212,14 +279,14 @@ func conditionOnProvenance(decision Decision, cfg Config) Decision {
 		return decision.PriorityLenses[left] < decision.PriorityLenses[right]
 	})
 	if len(decision.PriorityLenses) == 0 {
-		decision.Rationale = fmt.Sprintf("lane %s: no repeated lens threshold in last %d changes; keeping v1 policy", laneID, len(history))
+		decision.Rationale = fmt.Sprintf("lane %s: no repeated lens threshold across %d retained changes; keeping v1 policy", laneID, len(history))
 		return decision
 	}
 
 	primary := decision.PriorityLenses[0]
 	decision.Tier = raiseTier(decision.Tier)
 	decision.ProvenanceEscalated = true
-	decision.Rationale = fmt.Sprintf("lane %s: %d %s findings in last %d changes, escalating", laneID, scores[primary], primary, len(history))
+	decision.Rationale = fmt.Sprintf("lane %s: %d %s findings across %d retained changes, escalating", laneID, scores[primary], primary, len(history))
 	for _, lens := range decision.PriorityLenses {
 		if lens == "test-capitulation" {
 			decision.DeterministicProbes = append(decision.DeterministicProbes, "test-count-floor")
@@ -370,7 +437,7 @@ func netNewDeclarationCount(file FileChange) int {
 	return net
 }
 
-func classifyNovelty(files []FileChange) Axis {
+func classifyNovelty(files []FileChange, highRiskPaths []string) Axis {
 	for _, file := range files {
 		if file.Status == Added && (file.Added >= 50 || sourcePath(file.Path)) {
 			return Axis{Score: 3, Reason: "change introduces a new source artifact or substantial new logic"}
@@ -383,6 +450,16 @@ func classifyNovelty(files []FileChange) Axis {
 		return file.Status == Renamed && relocationPreservesCategory(file)
 	}) {
 		return Axis{Score: 0, Reason: "change is a mechanical rename"}
+	}
+	// A high-risk path in the diff forfeits the mechanical route outright. The
+	// cheap tier is for edits whose meaning a token comparison can settle, and
+	// on the paths this repository calls high-risk the token stream IS the
+	// runtime: an instruction file, a skill, or the gate's own config means
+	// something different after a rename even when every token maps one to one.
+	// Most such paths already fell out because they are not source, which made
+	// the exemption look complete; a source file under a high-risk glob did not.
+	if anyPath(files, func(name string) bool { return highRiskPath(name, highRiskPaths) }) {
+		return Axis{Score: 2, Reason: "a high-risk path changed, so the mechanical-substitution route does not apply"}
 	}
 	scope := newRenameScope(files)
 	if allChanges(files, func(file FileChange) bool { return mechanicallyEquivalent(file, scope) }) {
@@ -401,17 +478,9 @@ type renamePair struct {
 
 // familyScope is the rename evidence available to one language family.
 type familyScope struct {
-	// renames holds the declaration transitions another file may follow. Only
-	// referenceable declarations qualify: a parameter or a short variable is
-	// scoped to one function body, so it can never be what a reference in a
-	// different file resolves to, and letting one vouch for a cross-file
-	// substitution is the cheapest decoy left once names alone stopped
-	// counting. Renaming `function helper(x)` to `function helper(requireAdmin)`
-	// costs nothing to plant and would otherwise pay for swapping a guard.
-	renames map[renamePair]struct{}
-	// localRenames holds every transition each file performs, keyed by path,
-	// including the local ones. A file may follow its own local rename, because
-	// within one file a renamed parameter really is the same binding.
+	// localRenames holds every declaration transition each file performs on
+	// itself, keyed by path. It is the ONLY evidence that counts. There is
+	// deliberately no cross-file map: see renameScope.
 	localRenames map[string]map[renamePair]struct{}
 	// headUses holds every identifier that still appears at head anywhere in
 	// this family's changed files, commentary included. A name a rename was
@@ -420,20 +489,38 @@ type familyScope struct {
 	headUses map[string]struct{}
 }
 
-// renameScope is the evidence that separates a rename from a substitution.
+// renameScope is the evidence that separates a rename from a substitution, and
+// the history of this rule is the argument for how narrow it now is.
 //
-// The previous version was a flat set of every name the change set declared at
-// head, and that is free to manufacture: any second file renaming anything at
-// all to the target name supplied it, in any language, and so did a comment
-// shaped like a declaration. Six probes in five languages reached "verdict:
-// pass" at exit 0 on an authorization weakening that way.
+// Version one asked whether the substituted name collided with anything in the
+// same directory. Every symbol declared elsewhere was invisible, so a guard
+// swap across a package boundary read as a rename to a fresh name.
 //
-// What a rename actually leaves is a transition. Some changed file must have
-// declared the old name at base, must not declare it at head, and must declare
-// the new name at head without having declared it at base, and the file that
-// performs the transition must itself be a consistent identifier substitution.
-// A use site is then allowed to follow that exact pair, in the same language
-// family, and only while the old name has genuinely stopped appearing.
+// Version two asked whether the change set DECLARED the new name at head. That
+// is free to manufacture: any second file renaming anything at all to the
+// target name supplied it, in any language, and so did a comment shaped like a
+// declaration. Six probes in five languages passed an authorization weakening.
+//
+// Version three asked for a declaration TRANSITION carried by some file in the
+// same language family, with only referenceable declarations qualifying. That
+// killed all six probes and cost one throwaway file to defeat: `tools/dead.js`
+// renaming its own dead `requireAdmin` to `allowAnyone` vouched for
+// `src/handler.js` swapping a guard it imports from `lib/policy.js`, which the
+// diff never touches. Confirmed in JavaScript and Python at novelty 0, exit 0.
+//
+// Each version constrained the evidence and the control moved one layer down,
+// because the question the rule can actually answer is about names and the
+// question that matters is about resolution. Deciding whether `src/handler.js`
+// means the `allowAnyone` in `lib/policy.js` or the one in `tools/dead.js`
+// requires resolving the reference, which a token stream cannot do in any
+// language, let alone all of them.
+//
+// So the cross-file route is REMOVED rather than constrained again. A file may
+// follow only the transitions it performs on itself, where the binding really
+// is the same binding and no resolution question arises. A genuine rename
+// campaign that spans files now scores as changed logic and buys one review
+// round; that cost was weighed and accepted, against a bypass that cost one
+// file and carried an authorization weakening to a passing verdict.
 type renameScope struct {
 	families map[string]*familyScope
 }
@@ -457,8 +544,8 @@ func newRenameScope(files []FileChange) renameScope {
 		if !ok {
 			continue
 		}
-		baseline, baselineReferenceable := declaredIdentifiers(file.BaselineContent, lang)
-		current, currentReferenceable := declaredIdentifiers(file.CurrentContent, lang)
+		baseline, _ := declaredIdentifiers(file.BaselineContent, lang)
+		current, _ := declaredIdentifiers(file.CurrentContent, lang)
 		for previous, replacement := range substitutions {
 			_, declaredAtBase := baseline[previous]
 			_, survivesAtHead := current[previous]
@@ -467,16 +554,10 @@ func newRenameScope(files []FileChange) renameScope {
 			if !declaredAtBase || survivesAtHead || !declaredAtHead || existedAtBase {
 				continue
 			}
-			pair := renamePair{previous: previous, current: replacement}
 			if family.localRenames[file.Path] == nil {
 				family.localRenames[file.Path] = make(map[renamePair]struct{})
 			}
-			family.localRenames[file.Path][pair] = struct{}{}
-			_, previousReferenceable := baselineReferenceable[previous]
-			_, replacementReferenceable := currentReferenceable[replacement]
-			if previousReferenceable && replacementReferenceable {
-				family.renames[pair] = struct{}{}
-			}
+			family.localRenames[file.Path][renamePair{previous: previous, current: replacement}] = struct{}{}
 		}
 	}
 	return scope
@@ -487,7 +568,6 @@ func (s renameScope) family(name string) *familyScope {
 		return existing
 	}
 	created := &familyScope{
-		renames:      make(map[renamePair]struct{}),
 		localRenames: make(map[string]map[renamePair]struct{}),
 		headUses:     make(map[string]struct{}),
 	}
@@ -495,21 +575,20 @@ func (s renameScope) family(name string) *familyScope {
 	return created
 }
 
-// declaresRename reports whether the change set carried the exact declaration
-// transition the substitution claims to be following: either in the file being
-// judged, where a local binding counts, or in another file of the same language
-// family through a declaration that file could actually expose.
+// declaresRename reports whether the file being judged performed, on itself,
+// the exact declaration transition its substitution claims to be following.
+//
+// Only the file's own transitions count. Another file's transition is a claim
+// about a name, and following it requires knowing that the reference resolves
+// to that file rather than to any other declaration of the same name, which is
+// the question no token stream can answer. See renameScope.
 func (s renameScope) declaresRename(family, path, previous, current string) bool {
 	scope, ok := s.families[family]
 	if !ok {
 		return false
 	}
-	pair := renamePair{previous: previous, current: current}
-	if _, local := scope.localRenames[path][pair]; local {
-		return true
-	}
-	_, declared := scope.renames[pair]
-	return declared
+	_, local := scope.localRenames[path][renamePair{previous: previous, current: current}]
+	return local
 }
 
 // oldNameSurvives reports whether the retired name still appears at head
@@ -556,9 +635,12 @@ type sourceToken struct {
 // A NAME is not that evidence, and the round-3 review proved it: a flat set of
 // names the change set declared at head was satisfiable by any second file
 // renaming anything to the target name, and by a comment shaped like a
-// declaration. So the evidence is now a declaration TRANSITION carried by a
-// real file in the same language family, and the retired name has to have
-// genuinely stopped appearing. See renameScope.
+// declaration. A declaration TRANSITION carried by any file in the family was
+// not enough either, and the round-4 review proved that: one throwaway file
+// renaming its own dead helper vouched for a guard swap it has no relationship
+// to. So the transition must be the judged file's OWN, the retired name has to
+// have genuinely stopped appearing, and a high-risk path anywhere in the diff
+// forfeits the route entirely. See renameScope.
 func mechanicallyEquivalent(file FileChange, scope renameScope) bool {
 	if file.Status == Renamed {
 		return relocationPreservesCategory(file)
@@ -1245,6 +1327,9 @@ func (d Decision) String() string {
 		printed += fmt.Sprintf("\noverride raised: %s -> %s", d.OriginalTier, d.Tier)
 	}
 	printed += "\nprovenance: " + d.Rationale
+	for _, escalation := range d.Escalations {
+		printed += "\nescalation: " + escalation
+	}
 	if len(d.PriorityLenses) > 0 {
 		printed += "\nlens priority: " + strings.Join(d.PriorityLenses, ", ")
 	}

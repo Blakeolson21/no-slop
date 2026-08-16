@@ -48,7 +48,7 @@ Every finding carries its lens name. [The taxonomy](docs/src/content/docs/refere
 
 ### Artifact-class oracles
 
-Secrets and private identity markers are scanned at every tier. The scanner recognizes common credential shapes, personal home paths, and private names from a local blocklist. A missing built-in default blocklist means no private-name list; an explicitly configured missing file and any unreadable file stop evaluation. Findings identify the file and line without copying the matched value. Every honored `noslop:allow-leak` marker prints its file and line and counts in the verdict. Set `slop.leak_scan.allow_exemptions: false` when CI must reject all inline exemptions.
+Secrets and private identity markers are scanned at every tier. The scanner recognizes common credential shapes, personal home paths, and private names from a local blocklist. A missing built-in default blocklist means no private-name list; an explicitly configured missing file and any unreadable file stop evaluation. Findings identify the file and line without copying the matched value. Inline `noslop:allow-leak` markers are rejected by default, because a change that can exempt its own credential with a trailing comment has not been leak scanned. Set `slop.leak_scan.allow_exemptions: true` at the base ref to honor them; each honored marker then prints its file and line with the number of findings it actually suppressed.
 
 Outbound text can be selected by a configured path or `outbound: true` front matter. The prose oracle checks AI-tell vocabulary, em dashes, cited JSON or CSV numbers, and optional live GitHub issue or pull request state. With `--thread`, it uses `gh` to verify the thread is open and checks whether an existing comment already makes substantially the same claim. An explicit thread with no outbound artifact is an evaluation error.
 
@@ -76,38 +76,40 @@ Review committed changes against the merge base of the default branch:
 ./bin/noslop gate
 ```
 
-Name the comparison explicitly:
+Name the head revision explicitly:
 
 ```sh
-./bin/noslop gate --base origin/main --head HEAD
+./bin/noslop gate --head HEAD
 ```
 
 Supply the requested scope when the gate should mechanically compare new files and reviewer findings with intent:
 
 ```sh
-./bin/noslop gate --base origin/main --intent "Add the no-store response header only."
+./bin/noslop gate --intent "Add the no-store response header only."
 ```
 
 Raise validation depth:
 
 ```sh
-./bin/noslop gate --base origin/main --tier full-adversarial
+./bin/noslop gate --tier full-adversarial
 ```
 
 `--tier` is escalate-only. It may raise the computed tier and never lower it, because the caller of this command and the author of the change it is gating are routinely the same agent. Any request to lower it, including with `--force-tier`, exits 2 and names the tier the classifier computed. Raise `slop.risk` thresholds in the repository config if a cheaper route is genuinely correct; that config is read from the base ref, which the change under test cannot reach.
 
-`--base` is checked the same way. The base is the merge-base of the head with a canonical ref, and an explicit `--base` is accepted only when it is an ancestor of the head that the canonical ref already carries. Every run prints which commit supplied the gate's strength and how it was chosen.
+There is no `--base` flag. Gate strength is read from the base ref, so a base the caller names is a gate the caller configures, and validating one against a canonical ref was not enough: every name that resolution used, including `refs/remotes/origin/main`, is a local ref a single git command writes. The canonical commit now comes from `git ls-remote` against the configured remote, or from an orchestrating pipeline through the Go API, and from nothing else. A run that cannot establish it is pinned to `full-adversarial`, reads built-in defaults instead of a base config it cannot trust, and fails. Every run prints which commit supplied the gate's strength and how it was verified.
+
+Set `slop.base_ref.remote` and `slop.base_ref.branch` in the repository config to point the gate at a different remote or a long-lived release branch.
 
 Check outbound text against a live GitHub thread:
 
 ```sh
-./bin/noslop gate --base origin/main --thread https://github.com/owner/repo/issues/123
+./bin/noslop gate --thread https://github.com/owner/repo/issues/123
 ```
 
 Capture generating-agent provenance for conditioning and later evaluation:
 
 ```sh
-./bin/noslop gate --base origin/main \
+./bin/noslop gate \
   --provider example-provider \
   --model example-model \
   --reasoning-effort high \
@@ -120,7 +122,7 @@ Because the caller supplies `--lane-id` and `--model`, provenance conditioning i
 Use a different private-name blocklist:
 
 ```sh
-./bin/noslop gate --base origin/main --blocklist .private-names
+./bin/noslop gate --blocklist .private-names
 ```
 
 Exit code `0` means pass, `1` means findings blocked the gate, and `2` means the gate could not evaluate the change.
@@ -133,7 +135,7 @@ NoSlop uses the existing `.no-slop.yaml` repository config shape:
 slop:
   data_dir: ".noslop-data"
   leak_scan:
-    allow_exemptions: false
+    allow_exemptions: true
   test_command: "go test -race ./..."
 ```
 
