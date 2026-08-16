@@ -25,7 +25,7 @@ Description: Tests were changed to accept the implementation instead of preservi
 
 Reviewer guidance: Compare test strength with the base revision. Look for deleted cases, skipped tests, numeric tolerances changed to larger thresholds, weaker assertions, changed expected values without independent evidence, and coverage removed from an important branch. A passing suite is not proof when the suite became easier to pass.
 
-Mechanical pre-check: Test-count floor plus numeric tolerance comparison. NoSlop counts recognizable test declarations in the changed files at the base and head revisions and detects a changed `>` threshold that became numerically larger. Either finding blocks at every tier, including an operator override, even when the configured test command passes.
+Mechanical pre-check: Test-count floor plus numeric tolerance comparison. NoSlop counts recognizable test declarations in the changed files at the base and head revisions and detects a changed `>` threshold that became numerically larger. Both revisions are counted through the same code-only view the removed-guard detector uses, with comments and multi-line string literals blanked, so a deleted test kept as inert text does not keep the count level. Either finding blocks at every tier, including an operator override, even when the configured test command passes.
 
 ## Self-consistent oracle
 
@@ -55,7 +55,7 @@ Description: A fix quietly adds behavior or infrastructure beyond the requested 
 
 Reviewer guidance: Compare every new file and subsystem with the stated intent and original failing path. Flag unrelated cleanup, new features, generalized frameworks, schema work, or enforcement systems that were not needed for the smallest correct fix. Do not flag a shared fix merely because it touches multiple callers when that is the actual invariant owner.
 
-Mechanical pre-check: With `--intent`, detect a new runtime or schema file that contradicts an explicit scope limit such as wording-only, header-only, or no schema change. A new subsystem named by the intent is acquitted. Without stated intent, this pre-check emits nothing.
+Mechanical pre-check: With `--intent`, detect a new runtime or schema file that contradicts an explicit scope limit such as wording-only, header-only, or no schema change. A new subsystem named by the intent is acquitted. The check can only act on an intent that states a scope limit it recognizes, so a missing intent and an intent with no such limit both report the check as not armed rather than letting it contribute a silent zero.
 
 ## Asserted follow-up without artifact
 
@@ -75,7 +75,9 @@ Description: An unknown, failed, timed-out, or unparsed state becomes permission
 
 Reviewer guidance: Follow error, empty, timeout, parse-failure, and default branches. Flag paths where could-not-determine becomes `nil, nil`, true, allow, ready, healthy, empty findings, a privileged object, or another permissive result without an explicit policy.
 
-Mechanical pre-check: Detect a newly added permissive return within an error, not-found, timeout, or unreadable-state branch. A nearby comment that names an explicit permissive policy prevents a mechanical finding and leaves the judgment to review.
+Mechanical pre-check: Two detectors. The first flags a newly added permissive return within an error, not-found, timeout, or unreadable-state branch. It has no comment-based suppression: a comment declaring the permissive branch intentional is written by the party being checked and is verified against nothing, so it never stands the detector down.
+
+The second asks whether the change dropped a refusing check, and asks it across the whole change set by clause identity rather than by counting guards. A guard clause the change stopped carrying is excused only when the same clause and refusing action is added somewhere in the change set, and each relocated clause is spent once, so unrelated new guards never pay for a deletion. Both revisions are read through a code-only view with comments and multi-line string literals blanked, so a deleted guard kept as inert text still reads as removed. Every unmatched clause is reported with its base-revision path and line and a short digest of the clause, never the clause text, because the removed clause may be exactly the credential the change deleted. This finding blocks at every tier and has no exemption path; an in-place reword, a deletion of dead code, and a consolidation of two checks into one all pay that price by design.
 
 ## Rule applied in one place, not its sibling
 
@@ -107,12 +109,12 @@ A configured missing blocklist and an unreadable blocklist stop evaluation. Inli
 
 Whether a blob is read as text or through the binary-safe renderings is decided from the blob's own bytes, never from git's rendering of the diff. Git samples the first 8000 bytes of a file to decide whether to emit hunks, so keying on git's output meant one NUL past that offset made both git and the scanner call the blob text, the credential pattern failed across the NUL, and the check reported zero findings over a live key. Committed `.gitattributes`, the uncommitted `.git/info/attributes`, and diff rendering therefore have no influence at all over whether leak scanning happens. A blob carrying a NUL or another non-whitespace control byte is scanned whole through both renderings and reported as reduced coverage.
 
-Every completed verdict reports the status and finding count for the lens pre-check, leak scan, test-count floor, and prose oracle. A disabled test-count floor is stated explicitly. The other lens pre-checks run at every tier.
+Every completed verdict reports the status and finding count for the lens pre-check, leak scan, test-count floor, and prose oracle. A check that could not look reports `not armed` and a check that looked at less than everything reports `reduced coverage`, so a silent zero is never read as a clean result. A disabled test-count floor is stated explicitly. The other lens pre-checks run at every tier.
 
 NoSlop ships generic placeholder entries only. It does not ship any operator's actual hostnames, codenames, project names, or identity data.
 
 ## Provenance conditioning
 
-Provenance history does not add another lens. It changes the policy applied to the same catalog. When one generating lane and model accumulates three net accepted findings for a lens in its last 10 changes, NoSlop raises the tier by one level and reviews repeated lenses first. Repeated `test-capitulation` findings can also enable the configurable test-count floor when its static repository setting is off; the other conservative lens pre-checks always run.
+Provenance history does not add another lens. It changes the policy applied to the same catalog. When one generating lane and model accumulates three accepted findings for a lens in its retained history, NoSlop raises the tier by one level and reviews repeated lenses first. Repeated `test-capitulation` findings can also enable the configurable test-count floor when its static repository setting is off; the other conservative lens pre-checks always run.
 
-No matching history preserves the unconditioned v1 route and prints that default. Unreadable or malformed history selects `full-adversarial` because the policy could not establish that a lighter tier is safe. A lower `--tier` that contradicts provenance is refused unless the operator also supplies `--force-tier`; the output prints both the escalation and any forced override.
+The retention rule, what clears a lens score, and how an unverifiable lane identity is treated are owned by the [repository config reference](/no-slop/reference/repo-config/#slop). No matching history preserves the unconditioned v1 route and prints that default. Unreadable or malformed history selects `full-adversarial` because the policy could not establish that a lighter tier is safe.

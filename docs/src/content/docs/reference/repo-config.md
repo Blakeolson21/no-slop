@@ -101,7 +101,7 @@ slop:
       - ".github/workflows/**"
   leak_scan:
     blocklist_file: ".noslop-blocklist"
-    allow_exemptions: true
+    allow_exemptions: false
   prose:
     outbound_paths:
       - "outbound/**"

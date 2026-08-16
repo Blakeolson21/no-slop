@@ -6,7 +6,7 @@ Most review tools evaluate a diff as if a person wrote it. AI-authored changes h
 
 NoSlop makes those patterns a first-class review contract. It classifies the change before spending reviewer time, applies named AI-authorship lenses, and uses artifact-specific checks for code and outbound prose.
 
-When generating-agent provenance is supplied, NoSlop also conditions the policy on the last 10 changes from that lane and model. Repeated accepted findings can raise the tier, move affected lenses first, and enable mapped deterministic probes. Every decision prints the history rationale. Missing history keeps the v1 route and says so; unreadable history selects `full-adversarial`.
+When generating-agent provenance is supplied, NoSlop also conditions the policy on the retained history for that lane and model. Repeated accepted findings can raise the tier, move affected lenses first, and enable mapped deterministic probes. Every decision prints the history rationale. Missing history keeps the v1 route and says so; unreadable history selects `full-adversarial`.
 
 This repository is derived from [kunchenguid/no-mistakes](https://github.com/kunchenguid/no-mistakes) under the MIT License. The pipeline command is now canonically `no-slop`; `no-mistakes` remains a compatibility alias. The separate `noslop gate` policy engine can run before that pipeline or on its own.
 
@@ -134,8 +134,9 @@ NoSlop uses the existing `.no-slop.yaml` repository config shape:
 ```yaml
 slop:
   data_dir: ".noslop-data"
-  leak_scan:
-    allow_exemptions: true
+  base_ref:
+    remote: "origin"
+    branch: "main"
   test_command: "go test -race ./..."
 ```
 
