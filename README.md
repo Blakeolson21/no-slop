@@ -28,7 +28,7 @@ The selected tier and all three reasons print before validation continues. Use `
 | `single-review` | Mandatory checks and one reviewer pass through every slop lens |
 | `full-adversarial` | Mandatory checks, a lens review, an adversarial challenge round, the test-count floor, and the configured test command |
 
-A Markdown-only diff routes to `leak-scan-only` unless it is an agent instruction file, matches a configured high-risk path, or the operator overrides it. Rewriting `AGENTS.md`, `CLAUDE.md`, a `SKILL.md`, or the repository's own `.no-mistakes.yaml` is high risk with no configuration at all, because in an agent repository those files are the runtime. Substantial source additions also reach the full tier even on a feature branch, counted across the whole change rather than only in newly created files.
+A Markdown-only diff routes to `leak-scan-only` unless it is an agent instruction file, matches a configured high-risk path, or the operator overrides it. Rewriting `AGENTS.md`, `CLAUDE.md`, a `SKILL.md`, or the repository's own `.no-slop.yaml` is high risk with no configuration at all, because in an agent repository those files are the runtime. Substantial source additions also reach the full tier even on a feature branch, counted across the whole change rather than only in newly created files.
 
 ### AI-slop lenses
 
