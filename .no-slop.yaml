@@ -22,13 +22,6 @@ slop:
       - "internal/security/**"
       - ".github/workflows/**"
       - "migrations/**"
-  leak_scan:
-    # Inline exemptions default off, because a change that can exempt its own
-    # credential with a trailing comment has not been leak scanned. This
-    # repository turns them on deliberately: its leak-scan fixtures are
-    # credential-shaped by definition and every honored marker is reported with
-    # the number of findings it actually suppressed.
-    allow_exemptions: true
   prose:
     outbound_paths:
       - "outbound/**"

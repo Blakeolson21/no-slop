@@ -83,6 +83,46 @@ func TestExtractingGuardsIntoANewFileIsAMoveNotARemoval(t *testing.T) {
 	}
 }
 
+// TestUnrelatedGuardPaddingDoesNotExcuseARemoval closes the hole that
+// aggregating by count opened. The compensating clauses are written by the same
+// change being judged, so any rule that only counts them is satisfied by
+// padding: three unrelated `if err != nil { return err }` bodies added in the
+// same commit brought the change-set total back to level and suppressed the
+// blocking finding for a file that had just lost three authorization guards.
+func TestUnrelatedGuardPaddingDoesNotExcuseARemoval(t *testing.T) {
+	t.Parallel()
+
+	padding := "package util\n\nfunc A(err error) error {\n\tif err != nil {\n\t\treturn err\n\t}\n\treturn nil\n}\n\n" +
+		"func B(err error) error {\n\tif err != nil {\n\t\treturn err\n\t}\n\treturn nil\n}\n\n" +
+		"func C(err error) error {\n\tif err != nil {\n\t\treturn err\n\t}\n\treturn nil\n}\n"
+	result := precheck.Scan([]precheck.File{
+		{
+			Path: "internal/auth/policy.go",
+			BaselineContent: "package auth\n\nfunc Authorize(role, token, scope string) error {\n" +
+				"\tif role != \"admin\" {\n\t\treturn errForbidden\n\t}\n" +
+				"\tif token == \"\" {\n\t\treturn errNoToken\n\t}\n" +
+				"\tif scope != \"write\" {\n\t\treturn errNoScope\n\t}\n" +
+				"\treturn nil\n}\n",
+			CurrentContent: "package auth\n\nfunc Authorize(role, token, scope string) error {\n\treturn nil\n}\n",
+		},
+		{
+			Path:            "internal/util/pad.go",
+			BaselineContent: "",
+			AddedContent:    padding,
+			CurrentContent:  padding,
+		},
+	}, "")
+	found := false
+	for _, finding := range result.Findings {
+		if strings.Contains(finding.Description, "refusing checks dropped") && finding.Path == "internal/auth/policy.go" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("guard-shaped padding excused an authorization deletion: %+v", result.Findings)
+	}
+}
+
 // TestExtractingGuardsAndDroppingOneStillReports is the control for the test
 // above. Counting across the change set must not become a licence to delete a
 // guard while moving its neighbours, so a change set that nets negative still

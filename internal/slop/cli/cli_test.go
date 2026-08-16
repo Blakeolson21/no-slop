@@ -280,6 +280,41 @@ func TestRunGateUsesNoBlocklistWhenDefaultFileIsMissing(t *testing.T) {
 	}
 }
 
+// TestRunGateNamesAPathScannedWholeBecauseGitEmittedNoHunks pins the reporting
+// half of the diff-suppressed fallback. A committed `-diff` attribute makes git
+// produce no hunks, so the scanner reads the whole head blob instead of the
+// added lines. The state was recorded on the loaded change and read by nothing,
+// so the run printed "leak scan completed (N findings)" with no qualifier and an
+// operator could not tell that path had been read through a different window
+// than every other path.
+func TestRunGateNamesAPathScannedWholeBecauseGitEmittedNoHunks(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	writeFile(t, dir, ".no-slop.yaml", cheapestTierConfig)
+	writeFile(t, dir, ".gitattributes", "NOTES.md -diff\n")
+	writeFile(t, dir, "NOTES.md", "# Notes\n\nnothing here yet\n")
+	writeFile(t, dir, "README.md", "# Project\n")
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-m", "initial")
+	attachRemote(t, dir)
+	runGit(t, dir, "switch", "-c", "docs/notes")
+	writeFile(t, dir, "NOTES.md", "# Notes\n\nplain prose with no credential\n")
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-m", "notes")
+
+	var stdout, stderr bytes.Buffer
+	slopcli.Run(context.Background(), []string{"gate", "--repo", dir}, &stdout, &stderr, slopcli.Options{})
+	output := stdout.String() + stderr.String()
+	want := "reduced coverage: NOTES.md produced no diff hunks, so the whole head blob was scanned instead of the added lines"
+	if !strings.Contains(output, want) {
+		t.Fatalf("the leak scan did not name the path it read through a different window:\nwant %q\n%s", want, output)
+	}
+}
+
 func TestRunGateReportsEveryHonoredLeakExemption(t *testing.T) {
 	t.Parallel()
 

@@ -1376,6 +1376,29 @@ export const helper = newHelperName
 			WantNotStdout: []string{"refusing checks dropped"},
 		},
 		{
+			Name:    "R1-guard-shaped-padding-does-not-excuse-an-authorization-deletion",
+			Class:   ClassAuthorizationWeakening,
+			Summary: "aggregating guard clauses by COUNT let three unrelated `if err != nil` lines added in the same commit cancel the deletion of three authorization guards",
+			Base: map[string]string{
+				"README.md":     "# Project\n",
+				".no-slop.yaml": cheapestTierConfig,
+				"internal/auth/policy.go": "package auth\n\nfunc Authorize(role string, token string, scope string) error {\n" +
+					"\tif role != \"admin\" {\n\t\treturn errForbidden\n\t}\n" +
+					"\tif token == \"\" {\n\t\treturn errNoToken\n\t}\n" +
+					"\tif scope != \"write\" {\n\t\treturn errNoScope\n\t}\n" +
+					"\treturn nil\n}\n",
+			},
+			Head: map[string]string{
+				"internal/auth/policy.go": "package auth\n\nfunc Authorize(role string, token string, scope string) error {\n\treturn nil\n}\n",
+				"internal/util/pad.go": "package util\n\nfunc A(err error) error {\n\tif err != nil {\n\t\treturn err\n\t}\n\treturn nil\n}\n\n" +
+					"func B(err error) error {\n\tif err != nil {\n\t\treturn err\n\t}\n\treturn nil\n}\n\n" +
+					"func C(err error) error {\n\tif err != nil {\n\t\treturn err\n\t}\n\treturn nil\n}\n",
+			},
+			WantExit:      1,
+			WantStdout:    []string{"refusing checks dropped"},
+			WantNotStdout: []string{"verdict: pass"},
+		},
+		{
 			Name:    "R1-deleting-guards-outright-still-blocks",
 			Class:   ClassMandatoryCheckIntegrity,
 			Summary: "counting across the change set must not become a licence to delete a guard, so the same shape with no replacement file still fails",

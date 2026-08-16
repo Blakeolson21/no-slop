@@ -543,6 +543,15 @@ func runLeakScan(files []Change, blocklist []string, refuseExemptions bool) ([]F
 			input = append(input, leakscan.File{Path: file.Path, Content: file.CurrentContent, Binary: true})
 			continue
 		}
+		// A text blob whose diff git would not render is scanned whole rather
+		// than by hunk. That is a different window from every other path, so it
+		// has to reach the mandatory-check line: the state was recorded on the
+		// change and read by nothing, which left the run output byte-identical
+		// to a path scanned normally while AGENTS.md claimed the fallback "says
+		// so". A check that saw a path differently must say which path.
+		if file.ScanState == ScanWholeBlobFallback {
+			degraded = append(degraded, fmt.Sprintf("%s produced no diff hunks, so the whole head blob was scanned instead of the added lines", file.Path))
+		}
 		input = append(input, leakscan.File{Path: file.Path, Content: file.AddedContent})
 	}
 	scan := leakscan.Scan(input, leakscan.Options{Blocklist: blocklist, RefuseExemptions: refuseExemptions})
