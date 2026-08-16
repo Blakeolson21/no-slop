@@ -247,11 +247,11 @@ func detectRemovedGuards(files []File) []Finding {
 		for _, signature := range unmatchedRemovedGuards(relocated, file) {
 			findings = append(findings, Finding{
 				Lens: "fail-open-default",
-				Path: file.Path,
+				Path: baselinePathOf(file),
 				Line: removedGuardLine(file, signature),
 				Description: fmt.Sprintf(
-					"refusing checks dropped: the guard at this line was removed and no equivalent clause is added anywhere in this change (clause %s)",
-					guardDigest(signature)),
+					"refusing checks dropped: this location is a BASE-revision coordinate, so read it with `git show <base-ref>:%s`; the guard there was removed and no equivalent clause is added anywhere in this change (clause %s)",
+					baselinePathOf(file), guardDigest(signature)),
 			})
 		}
 	}
@@ -283,14 +283,31 @@ func unmatchedRemovedGuards(pool map[string]int, file File) []string {
 	return unmatched
 }
 
-// removedGuardLine points at the baseline line that carried this clause.
+// removedGuardLine points at the BASE-revision line that carried this clause.
+//
+// The clause itself is only ever reported as a digest, so this coordinate is the
+// operator's whole route back to it, and the route only works if the revision it
+// belongs to is stated. The head file does not have the guard at that line by
+// definition: the change deleted it. The finding says so and names the path in
+// its base spelling, which is what a rename makes different from the head path.
 func removedGuardLine(file File, signature string) int {
-	for _, occurrence := range guardOccurrences(file.Path, file.BaselineContent) {
+	for _, occurrence := range guardOccurrences(baselinePathOf(file), file.BaselineContent) {
 		if occurrence.signature == signature {
 			return occurrence.line + 1
 		}
 	}
 	return 1
+}
+
+// baselinePathOf names the file as the base revision spelled it, falling back to
+// the head path when the change is not a rename. Stripping is per file kind, so
+// scanning a ported handler.py with the Go spec left its docstrings unblanked
+// and read guard-shaped prose inside them as code the change deleted.
+func baselinePathOf(file File) string {
+	if file.BaselinePath != "" {
+		return file.BaselinePath
+	}
+	return file.Path
 }
 
 // guardDigest identifies a clause without reproducing it.
@@ -307,22 +324,37 @@ func guardDigest(signature string) string {
 	return hex.EncodeToString(sum[:])[:12]
 }
 
+// guardSide is one revision of a file: its content and the path whose extension
+// says how to strip it.
+type guardSide struct {
+	path    string
+	content string
+}
+
+func baselineSide(file File) guardSide {
+	return guardSide{path: baselinePathOf(file), content: file.BaselineContent}
+}
+
+func headSide(file File) guardSide {
+	return guardSide{path: file.Path, content: file.CurrentContent}
+}
+
 // removedGuardSignatures is the multiset of guard clauses this file stopped
 // carrying, netted against the ones it still carries.
 func removedGuardSignatures(file File) map[string]int {
-	return signatureSurplus(file.Path, file.BaselineContent, file.CurrentContent)
+	return signatureSurplus(baselineSide(file), headSide(file))
 }
 
 // addedGuardSignatures is the mirror: the guard clauses this file did not carry
 // before and does now.
 func addedGuardSignatures(file File) map[string]int {
-	return signatureSurplus(file.Path, file.CurrentContent, file.BaselineContent)
+	return signatureSurplus(headSide(file), baselineSide(file))
 }
 
-func signatureSurplus(path, have, against string) map[string]int {
-	other := countSignatures(path, against)
+func signatureSurplus(have, against guardSide) map[string]int {
+	other := countSignatures(against.path, against.content)
 	surplus := make(map[string]int)
-	for signature, count := range countSignatures(path, have) {
+	for signature, count := range countSignatures(have.path, have.content) {
 		if extra := count - other[signature]; extra > 0 {
 			surplus[signature] = extra
 		}

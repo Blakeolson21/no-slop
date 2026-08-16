@@ -193,6 +193,69 @@ func TestGuardsKeptAsInertTextAreStillRemoved(t *testing.T) {
 	}
 }
 
+// TestCrossLanguageRenameStripsEachRevisionWithItsOwnSpec pins that the baseline
+// is read as the language the BASE revision spelled it. Stripping is per file
+// kind, so scanning a ported handler.py with the head's Go spec left its
+// docstring unblanked; the guard-shaped prose inside counted as present at
+// baseline and absent at head, and a port that deleted no check at all drew a
+// blocking finding with no exemption path.
+func TestCrossLanguageRenameStripsEachRevisionWithItsOwnSpec(t *testing.T) {
+	t.Parallel()
+
+	result := precheck.Scan([]precheck.File{{
+		Path:         "internal/svc/handler.go",
+		BaselinePath: "internal/svc/handler.py",
+		BaselineContent: "def handle(token):\n" +
+			"    \"\"\"Legacy notes, kept as prose rather than code.\n" +
+			"    if token == \"\":\n" +
+			"        return None\n" +
+			"    \"\"\"\n" +
+			"    return None\n",
+		CurrentContent: "package svc\n\nfunc Handle(token string) error {\n\treturn nil\n}\n",
+	}}, "")
+	for _, finding := range result.Findings {
+		if strings.Contains(finding.Description, "refusing checks dropped") {
+			t.Fatalf("prose inside a baseline docstring was read as a deleted guard: %+v", finding)
+		}
+	}
+}
+
+// TestRemovedGuardFindingLocatesTheClauseInTheBaseRevision pins the operator's
+// only route back to the clause. The description carries a digest rather than
+// the source, so the coordinate is the whole locator, and it is a BASE-revision
+// coordinate: the head file does not have the guard at that line, because the
+// change deleted it. Rendering it as a bare path:line read as a head location.
+func TestRemovedGuardFindingLocatesTheClauseInTheBaseRevision(t *testing.T) {
+	t.Parallel()
+
+	result := precheck.Scan([]precheck.File{{
+		Path:         "internal/svc/handler.go",
+		BaselinePath: "internal/svc/legacy_handler.go",
+		BaselineContent: "package svc\n\nfunc Handle(user string) error {\n" +
+			"\tif user == \"\" {\n\t\treturn errBadUser\n\t}\n\treturn nil\n}\n",
+		CurrentContent: "package svc\n\nfunc Handle(user string) error {\n\treturn nil\n}\n",
+	}}, "")
+	found := false
+	for _, finding := range result.Findings {
+		if !strings.Contains(finding.Description, "refusing checks dropped") {
+			continue
+		}
+		found = true
+		if finding.Path != "internal/svc/legacy_handler.go" {
+			t.Errorf("finding path = %q, want the base-revision spelling", finding.Path)
+		}
+		if finding.Line != 4 {
+			t.Errorf("finding line = %d, want the baseline line that carried the guard", finding.Line)
+		}
+		if !strings.Contains(finding.Description, "BASE-revision") {
+			t.Errorf("the finding does not say which revision its coordinate belongs to: %q", finding.Description)
+		}
+	}
+	if !found {
+		t.Fatalf("deleting the guard produced no finding: %+v", result.Findings)
+	}
+}
+
 // TestRemovedGuardFindingDoesNotReproduceBaselineSource keeps deleted source out
 // of stdout and the on-disk provenance record. The leak scan reads head content
 // only, so a credential that exists solely at the baseline is exactly what

@@ -602,6 +602,73 @@ func TestRunGateAppendsProvenanceForBlockingFinding(t *testing.T) {
 	}
 }
 
+// TestRunGateRecordsANoticeWithoutRatchetingProvenance is the mirror of the test
+// above, at the branch point that actually routes a finding. The store-level
+// proof hand-builds records that already carry Noticed, so it passes even if
+// provenanceRecord still filed notices as accepted; only a gated run that
+// produces a real notice proves the routing. A notice filed as accepted pins its
+// record past retention forever and counts toward the lens escalation, which is
+// the permanent penalty the non-blocking severity exists to remove.
+func TestRunGateRecordsANoticeWithoutRatchetingProvenance(t *testing.T) {
+	t.Parallel()
+
+	upstream := t.TempDir()
+	runGit(t, upstream, "init", "-b", "main")
+	runGit(t, upstream, "config", "user.email", "test@example.com")
+	runGit(t, upstream, "config", "user.name", "Test")
+	writeFile(t, upstream, "lib.txt", "one\n")
+	runGit(t, upstream, "add", "-A")
+	runGit(t, upstream, "commit", "-m", "one")
+	first := strings.TrimSpace(runGit(t, upstream, "rev-parse", "HEAD"))
+	writeFile(t, upstream, "lib.txt", "two\n")
+	runGit(t, upstream, "add", "-A")
+	runGit(t, upstream, "commit", "-m", "two")
+	second := strings.TrimSpace(runGit(t, upstream, "rev-parse", "HEAD"))
+
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	writeFile(t, dir, ".no-slop.yaml", "slop:\n  data_dir: .review-history\n  risk:\n    single_review_threshold: 90\n    full_adversarial_threshold: 99\n")
+	writeFile(t, dir, "README.md", "# Project\n")
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "-c", "protocol.file.allow=always", "submodule", "add", "-q", upstream, "sub")
+	runGit(t, dir, "-C", "sub", "checkout", "-q", first)
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-m", "initial")
+	attachRemote(t, dir)
+	runGit(t, dir, "switch", "-c", "feature/bump")
+	runGit(t, dir, "-C", "sub", "checkout", "-q", second)
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-m", "bump submodule")
+
+	var stdout, stderr bytes.Buffer
+	slopcli.Run(context.Background(), []string{
+		"gate", "--repo", dir,
+		"--provider", "provider-a", "--model", "model-a", "--reasoning-effort", "high",
+		"--lane-id", "lane-a", "--change-class", "deps",
+	}, &stdout, &stderr, slopcli.Options{ReviewerFactory: noReviewer})
+	output := stdout.String() + stderr.String()
+	if !strings.Contains(output, "submodule-pointer-unscanned") {
+		t.Fatalf("the run produced no submodule notice:\n%s", output)
+	}
+
+	history, err := provenance.NewFileStore(filepath.Join(dir, ".review-history")).Window("lane-a", "model-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("history = %+v, want one record", history)
+	}
+	findings := history[0].FindingsByLens["submodule-pointer-unscanned"]
+	if len(findings.Accepted) != 0 {
+		t.Errorf("a notice was recorded as an accepted finding, so it ratchets: %+v", findings)
+	}
+	if len(findings.Noticed) != 1 {
+		t.Errorf("recorded notices = %+v, want the notice kept for visibility", findings)
+	}
+}
+
 func TestRunGateConditionsDecisionOnConfiguredProvenanceStore(t *testing.T) {
 	t.Parallel()
 
