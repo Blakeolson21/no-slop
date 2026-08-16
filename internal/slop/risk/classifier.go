@@ -321,6 +321,8 @@ func mechanicallyEquivalent(file FileChange) bool {
 			baselineIdentifiers[token.text] = struct{}{}
 		}
 	}
+	baselineEnclosing := enclosingBrackets(baseline)
+	currentEnclosing := enclosingBrackets(current)
 	forward := make(map[string]string)
 	reverse := make(map[string]string)
 	changed := false
@@ -337,6 +339,10 @@ func mechanicallyEquivalent(file FileChange) bool {
 			return false
 		}
 		if identifierControlsCallTarget(baseline, current, index) {
+			return false
+		}
+		if identifierNamesMemberOfAnotherDeclaration(baseline, baselineEnclosing, index) ||
+			identifierNamesMemberOfAnotherDeclaration(current, currentEnclosing, index) {
 			return false
 		}
 		if mapped, ok := forward[left.text]; ok && mapped != right.text {
@@ -411,6 +417,96 @@ func identifierControlsCallTarget(baseline, current []sourceToken, index int) bo
 		return false
 	}
 	return index == 0 || (baseline[index-1].text != "func" && current[index-1].text != "func")
+}
+
+// identifierNamesMemberOfAnotherDeclaration reports whether the identifier at
+// index selects a member of a declaration this file does not own: a
+// composite-literal or dictionary key, or a keyword argument at a call site.
+// Those positions read as ordinary identifiers to the token comparison, so
+// without this rule `Policy{RequireAdmin: true}` to `Policy{RequireAnyUser:
+// true}` and `check(fail_closed=True)` to `check(fail_open=True)` both score as
+// consistent renames and route an authorization change to the cheapest tier.
+// The sibling-file collision check cannot see either one, because the field and
+// the parameter are declared in another package.
+//
+// A declaration's own parameter list is excluded, so annotated parameters
+// (`def guard(actor: str)`, `function f(strict: boolean)`) and default values
+// stay renameable. Everything undecidable here resolves toward changed logic,
+// which costs a review round rather than a missed weakening.
+func identifierNamesMemberOfAnotherDeclaration(tokens []sourceToken, enclosing []int, index int) bool {
+	if index+1 >= len(tokens) {
+		return false
+	}
+	open := enclosing[index]
+	if open < 0 {
+		return false
+	}
+	switch tokens[index+1].text {
+	case ":":
+		// `:=` is a short variable declaration, not a key.
+		if index+2 < len(tokens) && tokens[index+2].text == "=" {
+			return false
+		}
+		if tokens[open].text == "{" {
+			return true
+		}
+		return tokens[open].text == "(" && parenOpensCall(tokens, open)
+	case "=":
+		// `==` and every compound comparison read as two punctuation tokens.
+		if index+2 < len(tokens) && tokens[index+2].text == "=" {
+			return false
+		}
+		return tokens[open].text == "(" && parenOpensCall(tokens, open)
+	default:
+		return false
+	}
+}
+
+// parenOpensCall reports whether the parenthesis at openIndex begins a call
+// argument list rather than a declaration's parameter list.
+func parenOpensCall(tokens []sourceToken, openIndex int) bool {
+	if openIndex <= 0 || tokens[openIndex-1].kind != 'i' {
+		return false
+	}
+	return openIndex < 2 || !declarationKeyword(tokens[openIndex-2].text)
+}
+
+func declarationKeyword(value string) bool {
+	switch strings.ToLower(value) {
+	case "func", "def", "fn", "function", "class", "sub", "proc":
+		return true
+	default:
+		return false
+	}
+}
+
+// enclosingBrackets returns, for each token, the index of the innermost
+// unclosed opening bracket, or -1 at the top level.
+func enclosingBrackets(tokens []sourceToken) []int {
+	enclosing := make([]int, len(tokens))
+	var open []int
+	for index, token := range tokens {
+		if token.kind == 'p' {
+			switch token.text {
+			case ")", "]", "}":
+				if len(open) > 0 {
+					open = open[:len(open)-1]
+				}
+			}
+		}
+		if len(open) == 0 {
+			enclosing[index] = -1
+		} else {
+			enclosing[index] = open[len(open)-1]
+		}
+		if token.kind == 'p' {
+			switch token.text {
+			case "(", "[", "{":
+				open = append(open, index)
+			}
+		}
+	}
+	return enclosing
 }
 
 func sourceTokens(content string) []sourceToken {

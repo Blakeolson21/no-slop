@@ -314,6 +314,47 @@ func TestRunGateFailsClosedWhenConfiguredBlocklistIsMissing(t *testing.T) {
 	}
 }
 
+func TestRunGateReportsBlocklistEntryCountSoAnEmptyListIsVisible(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		blocklist string
+		want      string
+	}{
+		"entries present": {blocklist: "zephyrbox\nquiethollow\n", want: "leak scan: loaded configured private-name blocklist from .noslop-blocklist (2 entries)"},
+		"comments only":   {blocklist: "# add one private name per line\n\n", want: "leak scan: loaded configured private-name blocklist from .noslop-blocklist (0 entries)"},
+		"file is empty":   {blocklist: "", want: "leak scan: loaded configured private-name blocklist from .noslop-blocklist (0 entries)"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			runGit(t, dir, "init", "-b", "main")
+			runGit(t, dir, "config", "user.email", "test@example.com")
+			runGit(t, dir, "config", "user.name", "Test")
+			writeFile(t, dir, ".no-mistakes.yaml", "slop:\n  leak_scan:\n    blocklist_file: .noslop-blocklist\n")
+			writeFile(t, dir, ".noslop-blocklist", tc.blocklist)
+			writeFile(t, dir, "README.md", "# Project\n")
+			runGit(t, dir, "add", ".no-mistakes.yaml", ".noslop-blocklist", "README.md")
+			runGit(t, dir, "commit", "-m", "initial")
+			base := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+			runGit(t, dir, "switch", "-c", "docs/readme")
+			writeFile(t, dir, "README.md", "# Project\n\nPlain update.\n")
+			runGit(t, dir, "add", "README.md")
+			runGit(t, dir, "commit", "-m", "docs")
+
+			var stdout, stderr bytes.Buffer
+			exitCode := slopcli.Run(context.Background(), []string{"gate", "--repo", dir, "--base", base}, &stdout, &stderr, slopcli.Options{})
+			if exitCode != 0 {
+				t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
+			}
+			if !strings.Contains(stdout.String(), tc.want) {
+				t.Fatalf("output missing %q:\n%s", tc.want, stdout.String())
+			}
+		})
+	}
+}
+
 func TestRunGateFailsClosedWhenDefaultOrConfiguredBlocklistIsUnreadable(t *testing.T) {
 	t.Parallel()
 

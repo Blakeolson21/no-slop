@@ -491,6 +491,109 @@ func TestClassifyCallTargetAndArgumentSwapAsChangedLogic(t *testing.T) {
 	}
 }
 
+func TestClassifyMemberSelectionSwapAsChangedLogic(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		path     string
+		baseline string
+		current  string
+	}{
+		"composite literal field": {
+			path:     "policy.go",
+			baseline: "package policy\n\nimport \"example.com/auth\"\n\nfunc guard() auth.Policy { return auth.Policy{RequireAdmin: true} }\n",
+			current:  "package policy\n\nimport \"example.com/auth\"\n\nfunc guard() auth.Policy { return auth.Policy{RequireAnyUser: true} }\n",
+		},
+		"keyword argument": {
+			path:     "policy.py",
+			baseline: "from vendor import check\n\n\ndef guard(actor):\n    return check(actor, fail_closed=True)\n",
+			current:  "from vendor import check\n\n\ndef guard(actor):\n    return check(actor, fail_open=True)\n",
+		},
+		"dictionary key": {
+			path:     "policy.py",
+			baseline: "from vendor import apply\n\n\ndef guard(actor):\n    return apply({deny_unknown: actor})\n",
+			current:  "from vendor import apply\n\n\ndef guard(actor):\n    return apply({allow_unknown: actor})\n",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			decision, err := risk.Classify(risk.ChangeSet{
+				Branch:        "feature/authorization-policy",
+				DefaultBranch: "main",
+				Files: []risk.FileChange{{
+					Path:            test.path,
+					Status:          risk.Modified,
+					Added:           1,
+					Deleted:         1,
+					BaselineContent: test.baseline,
+					CurrentContent:  test.current,
+				}},
+			}, risk.Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Novelty.Score != 2 {
+				t.Fatalf("novelty = %+v, want changed logic", decision.Novelty)
+			}
+			if decision.Tier == risk.TierLeakScanOnly {
+				t.Fatalf("tier = %q, want reviewer tier", decision.Tier)
+			}
+		})
+	}
+}
+
+func TestClassifyDeclarationParameterRenameStaysMechanical(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		path     string
+		baseline string
+		current  string
+	}{
+		"annotated python parameter": {
+			path:     "cache.py",
+			baseline: "def key(input: str) -> str:\n    return input\n",
+			current:  "def key(value: str) -> str:\n    return value\n",
+		},
+		"typescript parameter": {
+			path:     "cache.ts",
+			baseline: "export function key(input: string): string {\n  return input;\n}\n",
+			current:  "export function key(value: string): string {\n  return value;\n}\n",
+		},
+		"go short variable declaration": {
+			path:     "cache.go",
+			baseline: "package cache\n\nfunc key(seed string) string {\n\tinput := seed\n\treturn input\n}\n",
+			current:  "package cache\n\nfunc key(seed string) string {\n\tvalue := seed\n\treturn value\n}\n",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			decision, err := risk.Classify(risk.ChangeSet{
+				Branch:        "refactor/parameter-name",
+				DefaultBranch: "main",
+				Files: []risk.FileChange{{
+					Path:            test.path,
+					Status:          risk.Modified,
+					Added:           2,
+					Deleted:         2,
+					BaselineContent: test.baseline,
+					CurrentContent:  test.current,
+				}},
+			}, risk.Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Novelty.Score != 0 {
+				t.Fatalf("novelty = %+v, want mechanical source edit", decision.Novelty)
+			}
+		})
+	}
+}
+
 func TestClassifyLiteralOrOperatorChangeAsLogic(t *testing.T) {
 	t.Parallel()
 

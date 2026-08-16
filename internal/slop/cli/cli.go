@@ -417,7 +417,11 @@ func loadBlocklist(workDir, configured string, explicitlyConfigured bool) ([]str
 	if explicitlyConfigured {
 		state = "configured"
 	}
-	return leakscan.ParseBlocklist(string(content)), fmt.Sprintf("leak scan: loaded %s private-name blocklist from %s", state, configured), nil
+	// The entry count is printed because a readable file with no entries scans
+	// exactly like a missing one, and an operator reading only "loaded" cannot
+	// tell a working identity policy from an empty one.
+	entries := leakscan.ParseBlocklist(string(content))
+	return entries, fmt.Sprintf("leak scan: loaded %s private-name blocklist from %s (%d entries)", state, configured, len(entries)), nil
 }
 
 func detectDefaultBranch(ctx context.Context, workDir string) string {
