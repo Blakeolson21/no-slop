@@ -77,7 +77,9 @@ func TestRunGatePrintsMarkdownTierAndReasons(t *testing.T) {
 		"reversibility:",
 		"review: skipped",
 		"tests: skipped",
-		"verdict: pass",
+		// Standalone runs are advisory since round 5: the base came from the
+		// repository under test, so the run reports rather than certifies.
+		"advisory-clean",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("output missing %q:\n%s", want, stdout.String())
@@ -184,7 +186,7 @@ func TestRunGateAtTheOperatorsCheapestTierStillBlocksLeak(t *testing.T) {
 	for _, want := range []string{
 		"tier: leak-scan-only",
 		"finding: [leak-identity-scan] policy.go:3",
-		"verdict: fail",
+		"advisory-blocked",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("output missing %q:\n%s", want, stdout.String())
@@ -343,7 +345,7 @@ func TestRunGateReportsEveryHonoredLeakExemption(t *testing.T) {
 		"leak exemption: fixtures/tokens.txt:1: noslop:allow-leak",
 		"leak exemption: fixtures/tokens.txt:2: noslop:allow-leak",
 		"leak scan: 2 leak exemptions honored",
-		"verdict: pass",
+		"advisory-clean",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("stdout missing %q:\n%s", want, stdout.String())
@@ -473,9 +475,9 @@ func TestRunGateReportsBlocklistEntryCountSoAnEmptyListIsVisible(t *testing.T) {
 		blocklist string
 		want      string
 	}{
-		"entries present": {blocklist: "zephyrbox\nquiethollow\n", want: "leak scan: loaded configured private-name blocklist from .noslop-blocklist (2 entries)"},
-		"comments only":   {blocklist: "# add one private name per line\n\n", want: "leak scan: loaded configured private-name blocklist from .noslop-blocklist (0 entries)"},
-		"file is empty":   {blocklist: "", want: "leak scan: loaded configured private-name blocklist from .noslop-blocklist (0 entries)"},
+		"entries present": {blocklist: "zephyrbox\nquiethollow\n", want: "leak scan: loaded configured private-name blocklist from .noslop-blocklist at the base ref (2 entries)"},
+		"comments only":   {blocklist: "# add one private name per line\n\n", want: "leak scan: loaded configured private-name blocklist from .noslop-blocklist at the base ref (0 entries)"},
+		"file is empty":   {blocklist: "", want: "leak scan: loaded configured private-name blocklist from .noslop-blocklist at the base ref (0 entries)"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

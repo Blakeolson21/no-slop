@@ -55,11 +55,33 @@ func TestCorpusInvariant(t *testing.T) {
 		if !probe.Class.NeverPasses() {
 			continue
 		}
-		if probe.WantExit == 0 {
-			t.Errorf("case %q is in class %s and may not expect exit 0", probe.Name, probe.Class)
-		}
 		if !contains(probe.WantNotStdout, "verdict: pass") {
 			t.Errorf("case %q is in class %s and must forbid \"verdict: pass\"", probe.Name, probe.Class)
+		}
+		// Round 5 split the product into two modes, and the invariant splits with
+		// it. A CERTIFYING case takes the orchestrator-supplied base and may
+		// render a verdict, so for those classes exit 0 is still forbidden
+		// outright: exit 0 there means the gate blessed the change.
+		//
+		// An ADVISORY case resolved its base from inside the repository under
+		// test, and the capability to certify from there has been removed rather
+		// than hardened, so exit 0 no longer means anything was blessed. What
+		// must hold instead is stronger and easier to audit: the run prints no
+		// verdict line of any kind, and it prints the sentence that says why.
+		// Requiring exit 2 here would have been the weaker rule, because it would
+		// have been satisfiable by any refusal for any reason while the run still
+		// claimed to have certified something.
+		if probe.StandaloneBase {
+			if !contains(probe.WantNotStdout, "verdict:") {
+				t.Errorf("case %q resolves its own base, so it must forbid every \"verdict:\" line rather than only a passing one", probe.Name)
+			}
+			if !contains(probe.WantStdout, adversarial.AdvisoryBanner) {
+				t.Errorf("case %q resolves its own base, so it must require the advisory banner naming what the run is not", probe.Name)
+			}
+			continue
+		}
+		if probe.WantExit == 0 {
+			t.Errorf("case %q is in class %s and takes the orchestrator base, so it may not expect exit 0", probe.Name, probe.Class)
 		}
 	}
 	for _, class := range []adversarial.Class{

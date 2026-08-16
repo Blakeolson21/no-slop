@@ -60,6 +60,91 @@ type Record struct {
 	Rounds          int                     `json:"rounds"`
 	FixGrowth       int                     `json:"fix_growth"`
 	Outcome         string                  `json:"outcome"`
+	// JudgedContent names the kinds of content this run actually looked at:
+	// some subset of "source", "tests", and "docs". It is DERIVED from the
+	// changed paths and is deliberately not the caller-supplied
+	// --change-class, because it decides what a clean pass is evidence of and
+	// a self-asserted field decides nothing. Absent means unknown, which
+	// clears nothing. See LensScores.
+	JudgedContent []string `json:"judged_content,omitempty"`
+}
+
+// Content kinds a run can judge. They are coarse on purpose: the question they
+// answer is "could this change have exercised that lens at all", and a finer
+// taxonomy would be a second classifier to keep honest.
+const (
+	ContentSource = "source"
+	ContentTests  = "tests"
+	ContentDocs   = "docs"
+)
+
+// ReachedVerdict reports whether a record describes a run that actually got to
+// a verdict, as opposed to one that refused before reaching one.
+//
+// The distinction is the U5 finding. runGate appends a record whenever a
+// decision was reached, including with outcome "error" when the run refused,
+// which is right for the audit trail and wrong as evidence about a lane: a
+// first-contact lane escalated to full-adversarial, could not reach a reviewer,
+// recorded its own refusal, and on the next run had history. One throwaway
+// invocation bought the v1 route, so lying stayed cheaper than silence, which
+// is the exact asymmetry the first-contact rule was written to remove.
+//
+// Unrecognized and empty outcomes are not verdicts. An outcome this build does
+// not know is not evidence that a run was judged.
+func ReachedVerdict(record Record) bool {
+	return record.Outcome == "pass" || record.Outcome == "fail"
+}
+
+// HasVerdictHistory reports whether any record in a lane's window describes a
+// run that reached a verdict. It is what "this lane has history" means, and it
+// is a separate question from whether the window is empty.
+func HasVerdictHistory(records []Record) bool {
+	for _, record := range records {
+		if ReachedVerdict(record) {
+			return true
+		}
+	}
+	return false
+}
+
+// contentThatExercises maps a lens to the content kinds a change must contain
+// for a clean pass over it to be evidence about that lens.
+//
+// The names are owned by internal/slop/lenses; this is the scoring question
+// asked of them, and TestEveryCatalogLensHasAClearingRule fails when the two
+// drift. Anything not listed is exercised by any content, which is the right
+// default for the finding sources that are not review lenses at all
+// (leak-identity-scan, gate-config-drift, and the rest): a leak can be in any
+// file, so any reviewed clean pass is evidence about it.
+var contentThatExercises = map[string][]string{
+	// Both of these are questions about a change's tests. A change with no
+	// tests in it answers neither, however carefully it was reviewed.
+	"test-capitulation":      {ContentTests},
+	"self-consistent-oracle": {ContentTests},
+
+	// These are questions about code. Documentation cannot answer them, and
+	// this repository is one where a documentation change reaches
+	// full-adversarial on the axes alone, so the difference is not theoretical.
+	"vacuous-check":                         {ContentSource, ContentTests},
+	"comment-defended-workaround":           {ContentSource, ContentTests},
+	"redundant-comment":                     {ContentSource, ContentTests},
+	"fail-open-default":                     {ContentSource},
+	"rule-applied-in-one-place-not-sibling": {ContentSource},
+
+	// scope-expansion and asserted-followup-without-artifact are deliberately
+	// absent: a documentation change can exceed its stated scope and can claim
+	// a follow-up that does not exist, so any content is evidence about them.
+}
+
+// ContentThatExercises returns the content kinds a clean reviewed pass must
+// have covered before it counts as evidence about this lens. An empty result
+// would mean an escalation with no route out, which is why the catalog drift
+// test refuses one.
+func ContentThatExercises(lens string) []string {
+	if required, ok := contentThatExercises[lens]; ok {
+		return append([]string(nil), required...)
+	}
+	return []string{ContentSource, ContentTests, ContentDocs}
 }
 
 // Reader is the history seam consumed by the risk classifier.
@@ -296,13 +381,24 @@ func incriminating(record Record) bool {
 // regardless of age, and a re-run cannot, because worstPerChange keeps the
 // worst result any run of a change produced.
 //
+// A reviewed pass clears only the lenses its own change could have exercised,
+// which is the U6 fix. The reset used to run over every lens in the window
+// regardless of what the passing change contained, so in a repository where
+// editing an instruction file reaches full-adversarial on the axes alone, a
+// documentation change that passed a real two-round review cleared an
+// accumulated test-capitulation escalation while containing no tests at all.
+// That is not forgery and needed no tampering: it is a clean pass being read as
+// evidence about a question it never asked. What content answers which question
+// is contentThatExercises, and a record that does not say what it judged clears
+// nothing.
+//
 // The residual is stated rather than papered over: this store is a file on the
 // same filesystem as the change being judged, so a party with write access can
-// hand-write a record claiming a clean full-adversarial pass, exactly as they
-// can hand-write anything else in it. What the rule removes is the version that
-// needed no forgery at all. slop.provenance_required and a data directory the
-// audited party cannot write are the operator-side answers; see the FileStore
-// comment.
+// hand-write a record claiming a clean full-adversarial pass over any content
+// they like, exactly as they can hand-write anything else in it. What the rule
+// removes is the version that needed no forgery at all.
+// slop.provenance_required and a data directory the audited party cannot write
+// are the operator-side answers; see the FileStore comment.
 func LensScores(records []Record) map[string]int {
 	scores := make(map[string]int)
 	for _, record := range records {
@@ -313,13 +409,34 @@ func LensScores(records []Record) map[string]int {
 		if !reviewed {
 			continue
 		}
+		judged := make(map[string]bool, len(record.JudgedContent))
+		for _, kind := range record.JudgedContent {
+			judged[kind] = true
+		}
 		for lens := range scores {
-			if len(record.FindingsByLens[lens].Accepted) == 0 {
-				scores[lens] = 0
+			if len(record.FindingsByLens[lens].Accepted) > 0 {
+				continue
 			}
+			if !exercisedBy(lens, judged) {
+				continue
+			}
+			scores[lens] = 0
 		}
 	}
 	return scores
+}
+
+// exercisedBy reports whether a change over these content kinds could have
+// exercised this lens. An empty content set is a record that did not say, which
+// answers no for every lens: an undeterminable input must not resolve to the
+// permissive result, and clearing is the permissive result.
+func exercisedBy(lens string, judged map[string]bool) bool {
+	for _, kind := range ContentThatExercises(lens) {
+		if judged[kind] {
+			return true
+		}
+	}
+	return false
 }
 
 // isReviewedPass reports whether a record is evidence that the escalated

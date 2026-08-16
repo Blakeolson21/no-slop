@@ -253,14 +253,23 @@ func conditionOnProvenance(decision Decision, cfg Config) Decision {
 		decision.Rationale = fmt.Sprintf("history could not be read for lane %s and model %s; escalating to full-adversarial", laneID, model)
 		return decision
 	}
-	if len(history) == 0 {
+	// History means runs this lane was actually judged on, not rows it wrote.
+	// A first-contact lane escalates to full-adversarial, and an escalated run
+	// that cannot reach a reviewer still appends its own record with outcome
+	// "error", which is right for the audit trail and was being read as this
+	// lane's history: one throwaway invocation bought the v1 route on the very
+	// next run, so a fresh assertion escalated exactly once while omission
+	// escalated forever. Records that never reached a verdict stay in the
+	// window and still carry their findings; what they no longer do is answer
+	// "has this lane been judged here before".
+	if !provenance.HasVerdictHistory(history) {
 		if identified {
 			decision.Tier = TierFullAdversarial
 			decision.ProvenanceEscalated = true
-			decision.Rationale = fmt.Sprintf("lane %s and model %s have no records on a repository that already records identities, and a self-asserted key with nothing behind it is treated exactly like an omitted one; escalating to full-adversarial", laneID, model)
+			decision.Rationale = fmt.Sprintf("lane %s and model %s have no run that reached a verdict on a repository that already records identities, and a self-asserted key with nothing behind it is treated exactly like an omitted one; escalating to full-adversarial", laneID, model)
 			return decision
 		}
-		decision.Rationale = fmt.Sprintf("no history for lane %s and model %s and no identified history anywhere in the store; using v1 policy", laneID, model)
+		decision.Rationale = fmt.Sprintf("no judged history for lane %s and model %s and no identified history anywhere in the store; using v1 policy", laneID, model)
 		return decision
 	}
 
@@ -465,7 +474,23 @@ func classifyNovelty(files []FileChange, highRiskPaths []string) Axis {
 	if allChanges(files, func(file FileChange) bool { return mechanicallyEquivalent(file, scope) }) {
 		return Axis{Score: 0, Reason: "source token stream contains only consistent identifier substitutions"}
 	}
+	// The reason a change scored 2 has to be the reason it actually scored 2. A
+	// change whose token stream never moved contains no substitutions at all,
+	// and reporting it as changed logic would be no more auditable than the
+	// substitution claim it replaced: neither sentence would describe the edit
+	// in front of the reviewer.
+	if allChanges(files, tokenNeutral) {
+		return Axis{Score: 2, Reason: "file content changed with no token difference at all, so there is no rename evidence to read"}
+	}
 	return Axis{Score: 2, Reason: "existing source logic changed"}
+}
+
+// tokenNeutral reports a modified file whose head token stream is identical to
+// its baseline one. In a whitespace-insensitive language that is a reformat or
+// a comment edit; in Python, YAML, make, or shell it can be the whole change.
+func tokenNeutral(file FileChange) bool {
+	_, changed, ok := tokenSubstitutions(file)
+	return ok && !changed
 }
 
 // renamePair is one declaration transition a single changed file performs: the
@@ -608,6 +633,10 @@ func (s renameScope) oldNameSurvives(family, previous string) bool {
 type sourceToken struct {
 	kind byte
 	text string
+	// offset is where this token starts in the content it was read from. It is
+	// what lets the whitespace BETWEEN tokens be recovered without a second
+	// scanner that could drift from this one. See separatorSkeleton.
+	offset int
 }
 
 // mechanicallyEquivalent reports a change that renames symbols without
@@ -652,16 +681,33 @@ func mechanicallyEquivalent(file FileChange, scope renameScope) bool {
 	if !ok {
 		return false
 	}
-	family := sourceLanguage(file.Path).family
+	// A change with no token difference is not a mechanical substitution. It is
+	// an unexplained edit, and it took this route for four rounds because every
+	// guard above lives inside the loop below, which an empty map never enters.
+	// The old answer was `changed || BaselineContent != CurrentContent`, whose
+	// second clause is true of every change that has ever been gated, so a file
+	// whose token stream did not move at all was waved through while the run
+	// printed that it contained only consistent identifier substitutions. In
+	// Python one moved `return` is that edit; in shell one space is.
+	if !changed {
+		return false
+	}
+	lang := sourceLanguage(file.Path)
+	// Where layout is syntax, an identical token stream is not evidence that
+	// the code does the same thing, so a real rename cannot carry an
+	// indentation move through on the strength of the rename alone.
+	if lang.lineStructureSignificant && !sameLineStructure(file, sourceTokens(file.BaselineContent), sourceTokens(file.CurrentContent)) {
+		return false
+	}
 	for previous, replacement := range substitutions {
 		if !scope.declaresRename(file.Path, previous, replacement) {
 			return false
 		}
-		if scope.oldNameSurvives(family, previous) {
+		if scope.oldNameSurvives(lang.family, previous) {
 			return false
 		}
 	}
-	return changed || file.BaselineContent != file.CurrentContent
+	return true
 }
 
 // tokenSubstitutions reports the identifier substitutions that turn a file's
@@ -1026,8 +1072,66 @@ func enclosingBrackets(tokens []sourceToken) []int {
 // sourceTokens reads every byte of the file, commentary included. It is the
 // stream the baseline-to-head comparison runs over, because a comment edit is a
 // content edit and has to stay visible to it.
+//
+// Whitespace is skipped here and recovered separately by separatorSkeleton,
+// rather than emitted as tokens. Injecting whitespace into this stream would
+// have changed which tokens are neighbours, and the guards that decide whether
+// a substitution controls a call target or names a member of another
+// declaration read exactly those neighbours; a fix that quietly loosened them
+// would have been a trade rather than a repair.
 func sourceTokens(content string) []sourceToken {
 	return tokenize(content, commentSyntax{})
+}
+
+// separatorSkeleton is the whitespace between the tokens, in order, normalized
+// to the part of it a language can mean something by.
+//
+// A gap that crosses a line boundary keeps the indentation that follows the
+// last newline, because that indentation is what decides block membership in
+// Python, YAML, and a make recipe. A gap within one line collapses to a single
+// space, because no language here distinguishes one space from three, and a gap
+// that was not there at all stays empty, because a gap appearing between two
+// tokens is exactly the shell word split that turned `rm -rf $BUILD/artifacts`
+// into a command that deletes the build root.
+//
+// Blank lines are deliberately invisible: the count of newlines is dropped and
+// only the trailing indentation is kept, so adding a separating blank line does
+// not read as a logic change in any of these languages.
+func separatorSkeleton(content string, tokens []sourceToken) []string {
+	skeleton := make([]string, 0, len(tokens))
+	cursor := 0
+	for _, token := range tokens {
+		skeleton = append(skeleton, normalizedGap(content[cursor:token.offset]))
+		cursor = token.offset + len(token.text)
+	}
+	return append(skeleton, normalizedGap(content[cursor:]))
+}
+
+func normalizedGap(gap string) string {
+	if gap == "" {
+		return ""
+	}
+	if newline := strings.LastIndexByte(gap, '\n'); newline >= 0 {
+		return "\n" + gap[newline+1:]
+	}
+	return " "
+}
+
+// sameLineStructure reports whether two revisions of a file lay their tokens
+// out the same way. It is asked only of languages whose layout is syntax; see
+// language.lineStructureSignificant.
+func sameLineStructure(file FileChange, baseline, current []sourceToken) bool {
+	before := separatorSkeleton(file.BaselineContent, baseline)
+	after := separatorSkeleton(file.CurrentContent, current)
+	if len(before) != len(after) {
+		return false
+	}
+	for index := range before {
+		if before[index] != after[index] {
+			return false
+		}
+	}
+	return true
 }
 
 // codeTokens drops commentary before tokenizing. It is the stream declarations
@@ -1052,21 +1156,21 @@ func tokenize(content string, comments commentSyntax) []sourceToken {
 			for end < len(content) && isIdentifierPart(content[end]) {
 				end++
 			}
-			tokens = append(tokens, sourceToken{kind: 'i', text: content[index:end]})
+			tokens = append(tokens, sourceToken{kind: 'i', text: content[index:end], offset: index})
 			index = end
 		case current == '"' || current == '\'' || current == '`':
 			end := quotedTokenEnd(content, index, current)
-			tokens = append(tokens, sourceToken{kind: 'l', text: content[index:end]})
+			tokens = append(tokens, sourceToken{kind: 'l', text: content[index:end], offset: index})
 			index = end
 		case current >= '0' && current <= '9':
 			end := index + 1
 			for end < len(content) && (isIdentifierPart(content[end]) || content[end] == '.') {
 				end++
 			}
-			tokens = append(tokens, sourceToken{kind: 'l', text: content[index:end]})
+			tokens = append(tokens, sourceToken{kind: 'l', text: content[index:end], offset: index})
 			index = end
 		default:
-			tokens = append(tokens, sourceToken{kind: 'p', text: content[index : index+1]})
+			tokens = append(tokens, sourceToken{kind: 'p', text: content[index : index+1], offset: index})
 			index++
 		}
 	}

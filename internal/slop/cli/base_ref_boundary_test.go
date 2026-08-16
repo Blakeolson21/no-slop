@@ -170,7 +170,7 @@ func TestTheVerifiedBaseNamesTheRemoteAndTheCommitItAnswered(t *testing.T) {
 	runGit(t, dir, "add", "-A")
 	runGit(t, dir, "commit", "-m", "initial")
 	trunk := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
-	attachRemote(t, dir)
+	remote := attachRemote(t, dir)
 	runGit(t, dir, "switch", "-c", "docs/readme")
 	writeFile(t, dir, "README.md", "# Project\n\nPlain update.\n")
 	runGit(t, dir, "add", "-A")
@@ -180,9 +180,15 @@ func TestTheVerifiedBaseNamesTheRemoteAndTheCommitItAnswered(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d\n%s", code, output)
 	}
-	want := "base: " + trunk + " from merge-base with origin/main at " + trunk + ", verified by ls-remote against the configured remote"
+	want := "base: " + trunk + " from merge-base with origin/main at " + trunk + ", resolved by ls-remote against "
 	if !strings.Contains(output, want) {
 		t.Fatalf("run header missing %q:\n%s", want, output)
+	}
+	// The URL itself is the round-5 addition. "verified by ls-remote against
+	// the configured remote" named no remote, so a run redirected by one
+	// insteadOf rewrite printed the same sentence as an honest one.
+	if !strings.Contains(output, remote) {
+		t.Fatalf("run header does not name the remote it asked (%s):\n%s", remote, output)
 	}
 }
 
@@ -325,7 +331,7 @@ func TestNoConventionalTrunkNeedsAPinAlreadyInHistory(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d, want an established pin honored\n%s", code, output)
 	}
-	if !strings.Contains(output, "base: "+tip+" from merge-base with origin/trunk at "+tip+", verified by ls-remote against the configured remote, pinned by slop.base_ref") {
+	if !strings.Contains(output, "base: "+tip+" from merge-base with origin/trunk at "+tip+", resolved by ls-remote against ") || !strings.Contains(output, "pinned by slop.base_ref") {
 		t.Fatalf("the established pin was not used or not reported:\n%s", output)
 	}
 
@@ -414,8 +420,8 @@ func TestPinnedBaseRefSelectsTheCanonicalRef(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d\n%s", code, output)
 	}
-	want := "base: " + releaseTip + " from merge-base with origin/release at " + releaseTip + ", verified by ls-remote against the configured remote, pinned by slop.base_ref"
-	if !strings.Contains(output, want) {
+	want := "base: " + releaseTip + " from merge-base with origin/release at " + releaseTip + ", resolved by ls-remote against "
+	if !strings.Contains(output, want) || !strings.Contains(output, "pinned by slop.base_ref") {
 		t.Fatalf("the pinned canonical ref was not used or not reported:\n%s", output)
 	}
 }
@@ -545,6 +551,30 @@ func TestAFreshSelfAssertedLaneCostsTheSameAsAnOmittedOne(t *testing.T) {
 		}
 		if !strings.Contains(output, "escalating to full-adversarial") {
 			t.Fatalf("%s: the escalation is not explained:\n%s", probe.name, output)
+		}
+	}
+
+	// Round 5 found the escalation cost exactly one throwaway invocation. The
+	// escalated run cannot reach a reviewer, so it exits 2 and appends its own
+	// record with outcome "error", and the next run under the same fresh
+	// identity found history and took the v1 route. The record is still written,
+	// because a refused run belongs in the audit trail; what it no longer does
+	// is answer "has this lane been judged here". Running the same probes a
+	// second time is the whole test.
+	for _, probe := range []struct {
+		name string
+		args []string
+	}{
+		{"omitted, second run", nil},
+		{"fresh lane, second run", []string{"--lane-id", "lane-zzz", "--model", "model-x"}},
+		{"both fresh, second run", []string{"--lane-id", "lane-zzz", "--model", "model-zzz"}},
+	} {
+		code, output := runGateIn(t, dir, probe.args...)
+		if code == 0 {
+			t.Fatalf("%s: one throwaway run bought the cheap route:\n%s", probe.name, output)
+		}
+		if !strings.Contains(output, "tier: full-adversarial") {
+			t.Fatalf("%s: the escalation was shed by the first run's own record:\n%s", probe.name, output)
 		}
 	}
 }

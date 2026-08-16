@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // Kind identifies a leak finding class.
@@ -165,6 +166,65 @@ func IsBinaryContent(content string) bool {
 	return false
 }
 
+// HasInvisibleRunes reports whether these bytes carry a character that renders
+// as nothing a reviewer can see.
+//
+// It is deliberately a separate question from IsBinaryContent. Round 4 keyed
+// the binary decision on the C0 range and closed both NUL shapes; round 5
+// walked around it with U+200B and U+0085, which are text by that decision and
+// break the credential regex just as completely. The obvious next move was to
+// widen the byte range again, and it is the move this family has already made
+// four times: whatever class the code names, the character just outside it is
+// the next probe.
+//
+// So this does not decide binary-vs-text at all. Making a byte order mark mean
+// "binary" would report reduced coverage on ordinary text files, which is the
+// same dishonest check line in the other direction. It decides only whether
+// there is a SECOND reading of these bytes worth scanning, and Scan then scans
+// both. A credential now has to survive the file as written and the file with
+// its invisible characters removed.
+//
+// The class is Unicode's own answer to "renders as nothing": format characters
+// (Cf, which covers U+200B, U+FEFF, U+00AD, the bidi marks and isolates, and
+// the word joiner), the C1 controls including U+0085, and the line and
+// paragraph separators U+2028 and U+2029. Ordinary whitespace is excluded
+// because it is visible in its effect and is what line structure is made of.
+func HasInvisibleRunes(content string) bool {
+	for _, current := range content {
+		if invisibleRune(current) {
+			return true
+		}
+	}
+	return false
+}
+
+func invisibleRune(value rune) bool {
+	switch value {
+	case '\n', '\t', '\r', '\f', '\v', ' ':
+		return false
+	}
+	return unicode.Is(unicode.Cf, value) ||
+		unicode.Is(unicode.Cc, value) ||
+		unicode.Is(unicode.Zl, value) ||
+		unicode.Is(unicode.Zp, value)
+}
+
+// withoutInvisibleRunes is the second reading: the same bytes with everything
+// that renders as nothing taken out, so a pattern broken only by an invisible
+// character matches again. The characters are removed rather than replaced with
+// a space, because a space would break the credential just as well.
+func withoutInvisibleRunes(content string) string {
+	var out strings.Builder
+	out.Grow(len(content))
+	for _, current := range content {
+		if invisibleRune(current) {
+			continue
+		}
+		out.WriteRune(current)
+	}
+	return out.String()
+}
+
 // binaryRenderings turns a blob the scanner calls binary into text the line
 // scanner can read. Two renderings are needed and both are cheap.
 //
@@ -198,9 +258,28 @@ func binaryRenderings(content string) []string {
 			stripped = append(stripped, current)
 		}
 	}
-	renderings := []string{string(spaced)}
-	if text := string(stripped); text != renderings[0] {
+	return dedupeRenderings(string(spaced), string(stripped))
+}
+
+// dedupeRenderings keeps each distinct reading once, in order, and adds the
+// invisible-character-free reading of each. A blob can be binary AND carry a
+// zero-width space inside a credential, and closing one of those without the
+// other leaves the shortest path open.
+func dedupeRenderings(candidates ...string) []string {
+	renderings := make([]string, 0, len(candidates)*2)
+	seen := make(map[string]bool, len(candidates)*2)
+	add := func(text string) {
+		if seen[text] {
+			return
+		}
+		seen[text] = true
 		renderings = append(renderings, text)
+	}
+	for _, candidate := range candidates {
+		add(candidate)
+		if HasInvisibleRunes(candidate) {
+			add(withoutInvisibleRunes(candidate))
+		}
 	}
 	return renderings
 }
@@ -210,7 +289,7 @@ func Scan(files []File, opts Options) Result {
 	var result Result
 	blocklist := append(DefaultBlocklist(), opts.Blocklist...)
 	for _, file := range files {
-		renderings := []string{file.Content}
+		renderings := dedupeRenderings(file.Content)
 		if file.Binary {
 			renderings = binaryRenderings(file.Content)
 		}

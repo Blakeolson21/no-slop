@@ -132,9 +132,26 @@ The base is resolved in exactly three steps:
 
 A repository whose trunk is neither `main` nor `master` names it in `slop.base_ref`, and that name has to already be committed to the ref it points at, which is now a ref on the remote rather than any local branch. The pin is read from the config at the provisionally resolved base, so moving the canonical ref is authorized by the previous canonical ref rather than by the change proposing the move. Every run prints the base commit and how it was verified, and the three routes print differently: an unverified run cannot be mistaken for a verified one.
 
-The residual is that the remote's URL comes from `.git/config`, which is local. An author who repoints `origin` at a repository they control can still make that repository's answer canonical. That is a materially louder act than creating a ref, and `slop.base_ref.remote` is read from the base config, so which remote is asked is itself an operator decision.
+### Advisory and certifying runs
+
+**A standalone `noslop gate` run is advisory and cannot certify anything.** Only a base supplied by an orchestrating pipeline can, and that split is the answer to a question five review rounds settled by exhaustion: every input a run could resolve a base from, inside a repository the author of the change under test controls, is an input that author writes. The flag, then a local ref wearing the canonical name, then `refs/remotes/*`, then `remote.origin.url` in `.git/config`, and finally a `url.<X>.insteadOf` pair in the ambient `GIT_CONFIG_*` environment, which writes nothing to disk, does not appear in `git status`, and is gone when the process exits. Each round closed the named route and the control moved one input further out.
+
+So the capability was removed rather than hardened again:
+
+- **Advisory mode** is every standalone run. It resolves a base, reads the config there, runs every check, prints every finding, and exits non-zero on a blocking one. Its closing line is `advisory-clean` or `advisory-blocked`, each carrying `advisory: base supplied by this repository; not a certification`. It never prints `verdict:`.
+- **Certifying mode** requires `slopcli.Options.PipelineBase`. Reaching that channel means being in-process with the gate, so the base was computed by something that is not the audited party. Only this mode prints `verdict: pass` or `verdict: fail`.
+
+Grepping a log for `verdict:` therefore finds every certification and nothing else.
+
+`slop.base_ref.remote` is a convenience for a repository whose trunk is not `main` or `master`. It is **not** a mitigation for the above and earlier versions of this page were wrong to present it as one: the pin is read from the config at a provisionally resolved base, and that provisional base came from `origin`, so an author who has already repointed `origin` supplies the base the pin is then read from. The remote URL is also printed on the base line of every run, with any credential redacted, because the previous header said only "verified by ls-remote against the configured remote" and so read identically whether the remote was the operator's forge or a bare repository in `/tmp`.
+
+### The private-name blocklist
 
 `--blocklist` adds names to the configured private-name list rather than replacing it, so the command line cannot point the identity scan at an empty file.
+
+**The blocklist's content is read from the base ref when the file is tracked there**, and a differing head copy is a blocking `gate-config-drift` finding in both directions, exactly as a `slop.*` value is. Until round 5 only the PATH came from the base ref while the CONTENT came from the head worktree, so a single `: > .noslop-blocklist` disarmed an operator's identity policy with no drift reported anywhere.
+
+**When the file is not tracked at the base ref, its content sits outside the base-ref boundary and the run says so on its state line.** This is the documented local case rather than a hole left open: `.noslop-blocklist` is private data that repositories are expected to gitignore, so there is frequently nothing at the base ref to read. For that copy the guarantee is the printed entry count and nothing stronger. An operator who wants the blocklist inside the boundary commits it to the base branch.
 
 | Field | Type | Default | Purpose |
 | --- | --- | --- | --- |

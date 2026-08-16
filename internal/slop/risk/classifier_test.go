@@ -631,9 +631,16 @@ func TestClassifyConditionsTierLensOrderAndProbesOnLaneModelHistory(t *testing.T
 
 	records := make([]provenance.Record, 3)
 	for index := range records {
-		records[index] = provenance.Record{FindingsByLens: map[string]provenance.LensFindings{
-			"test-capitulation": {Accepted: []provenance.Finding{{Description: "test weakened"}}},
-		}}
+		// Outcome "fail" because these are runs that reached a verdict. A
+		// record whose run never got that far is bookkeeping, not this lane's
+		// history, which is what stopped one throwaway invocation from buying a
+		// fresh lane the v1 route.
+		records[index] = provenance.Record{
+			Outcome: "fail",
+			FindingsByLens: map[string]provenance.LensFindings{
+				"test-capitulation": {Accepted: []provenance.Finding{{Description: "test weakened"}}},
+			},
+		}
 	}
 	decision, err := risk.Classify(risk.ChangeSet{
 		Branch:        "docs/update",
@@ -685,7 +692,7 @@ func TestClassifyWithNoLaneModelHistoryKeepsV1TierAndPrintsDefault(t *testing.T)
 	if conditioned.Tier != v1.Tier || conditioned.BlastRadius != v1.BlastRadius || conditioned.Novelty != v1.Novelty || conditioned.Reversibility != v1.Reversibility {
 		t.Fatalf("conditioned = %+v, want v1 route %+v", conditioned, v1)
 	}
-	if !strings.Contains(conditioned.String(), "no history for lane lane-new and model model-new and no identified history anywhere in the store; using v1 policy") {
+	if !strings.Contains(conditioned.String(), "no judged history for lane lane-new and model model-new and no identified history anywhere in the store; using v1 policy") {
 		t.Fatalf("decision does not print safe default:\n%s", conditioned.String())
 	}
 }

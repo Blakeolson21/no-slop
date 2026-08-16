@@ -205,6 +205,16 @@ const cheapestTierConfig = `slop:
     full_adversarial_threshold: 99
 `
 
+// AdvisoryBanner is the sentence a run prints when its base came from the
+// repository under test, in place of the certification it is not making.
+//
+// It is written out here rather than imported from the CLI on purpose. A corpus
+// pins user-visible strings, so changing the sentence has to break the corpus:
+// importing the constant would let the wording that tells an operator "this was
+// not a certification" be edited to say anything at all with every case still
+// green.
+const AdvisoryBanner = "advisory: base supplied by this repository; not a certification"
+
 // utf16le renders text the way a UTF-16 little-endian file carries it, which is
 // the encoding whose every second byte is a NUL.
 func utf16le(text string) string {
@@ -474,8 +484,9 @@ func Serve(enabled bool) bool {
 			WantStdout: []string{
 				"UNVERIFIED",
 				"pinned to full-adversarial",
+				AdvisoryBanner,
 			},
-			WantNotStdout: []string{"verdict: pass", "verified by ls-remote"},
+			WantNotStdout: []string{"verdict:", "verdict: pass", "resolved by ls-remote"},
 		},
 		{
 			Name:    "T1-a-tag-named-origin-main-cannot-name-the-canonical-ref",
@@ -493,8 +504,9 @@ func Serve(enabled bool) bool {
 			WantStdout: []string{
 				"UNVERIFIED",
 				"pinned to full-adversarial",
+				AdvisoryBanner,
 			},
-			WantNotStdout: []string{"verdict: pass", "verified by ls-remote"},
+			WantNotStdout: []string{"verdict:", "verdict: pass", "resolved by ls-remote"},
 		},
 		{
 			Name:    "T1-a-hand-written-remote-tracking-ref-cannot-name-the-canonical-ref",
@@ -512,8 +524,9 @@ func Serve(enabled bool) bool {
 			WantStdout: []string{
 				"UNVERIFIED",
 				"pinned to full-adversarial",
+				AdvisoryBanner,
 			},
-			WantNotStdout: []string{"verdict: pass", "verified by ls-remote"},
+			WantNotStdout: []string{"verdict:", "verdict: pass", "resolved by ls-remote"},
 		},
 		{
 			Name:    "T1-a-fetch-into-the-tracking-ref-cannot-name-the-canonical-ref",
@@ -534,8 +547,9 @@ func Serve(enabled bool) bool {
 			WantStdout: []string{
 				"UNVERIFIED",
 				"pinned to full-adversarial",
+				AdvisoryBanner,
 			},
-			WantNotStdout: []string{"verdict: pass", "verified by ls-remote"},
+			WantNotStdout: []string{"verdict:", "verdict: pass", "resolved by ls-remote"},
 		},
 		{
 			Name:           "T1-control-a-repository-with-no-remote-cannot-reach-the-cheap-tier",
@@ -548,8 +562,114 @@ func Serve(enabled bool) bool {
 			WantStdout: []string{
 				"this repository has no remote named \"origin\"",
 				"tier: full-adversarial",
+				AdvisoryBanner,
 			},
-			WantNotStdout: []string{"verdict: pass", "tier: leak-scan-only"},
+			WantNotStdout: []string{"verdict:", "tier: leak-scan-only"},
+		},
+		{
+			Name:    "U1-repointing-the-remote-cannot-certify",
+			Class:   ClassAuthorizationWeakening,
+			Summary: "`git remote set-url origin <own-repo>` made the author's own commit the one ls-remote answered with, and the run certified against it at exit 0",
+			Base: map[string]string{
+				"internal/auth/policy.go": goStrictPolicy,
+				"README.md":               "# Project\n",
+			},
+			Intermediate: map[string]string{".no-slop.yaml": weakThresholdConfig},
+			Head:         map[string]string{"internal/auth/policy.go": goWeakPolicy},
+			GitSetup: [][]string{
+				{"init", "--bare", "../authored.git"},
+				{"push", "../authored.git", "HEAD~1:refs/heads/main"},
+				{"remote", "add", "origin", "../authored.git"},
+			},
+			StandaloneBase: true,
+			WantExit:       0,
+			WantStdout: []string{
+				"resolved by ls-remote against ../authored.git",
+				AdvisoryBanner,
+				"advisory-clean",
+			},
+			WantNotStdout: []string{"verdict:", "verdict: pass"},
+		},
+		{
+			Name:    "U1-an-insteadof-rewrite-cannot-certify",
+			Class:   ClassAuthorizationWeakening,
+			Summary: "the remote URL never had to change: one url.<X>.insteadOf entry redirected the honest URL, and the header named neither the rewrite nor the URL it reached",
+			Base: map[string]string{
+				"internal/auth/policy.go": goStrictPolicy,
+				"README.md":               "# Project\n",
+			},
+			Intermediate: map[string]string{".no-slop.yaml": weakThresholdConfig},
+			Head:         map[string]string{"internal/auth/policy.go": goWeakPolicy},
+			GitSetup: [][]string{
+				{"init", "--bare", "../operator.git"},
+				{"push", "../operator.git", "main:refs/heads/main"},
+				{"init", "--bare", "../authored.git"},
+				{"push", "../authored.git", "HEAD~1:refs/heads/main"},
+				{"remote", "add", "origin", "../operator.git"},
+				{"config", "url.../authored.git.insteadOf", "../operator.git"},
+			},
+			StandaloneBase: true,
+			WantExit:       0,
+			WantStdout: []string{
+				// git applies the rewrite before answering get-url, so the header
+				// names the repository actually asked rather than the one
+				// .git/config appears to name. That disclosure is worth having and
+				// is not what makes the run safe: the run is safe because it
+				// cannot certify either way.
+				"resolved by ls-remote against ../authored.git",
+				AdvisoryBanner,
+				"advisory-clean",
+			},
+			WantNotStdout: []string{"verdict:", "verdict: pass"},
+		},
+		{
+			Name:    "U1-origin-pointed-at-the-worktree-cannot-certify",
+			Class:   ClassFleetInstructionRewrite,
+			Summary: "the cheapest on-disk route needs no second repository at all: force the local trunk back and let the worktree answer for itself",
+			Base: map[string]string{
+				"AGENTS.md": agentsInstructionsStrict,
+				"README.md": "# Project\n",
+			},
+			Intermediate: map[string]string{".no-slop.yaml": weakThresholdConfig},
+			Head:         map[string]string{"AGENTS.md": agentsInstructionsWeak},
+			GitSetup: [][]string{
+				{"branch", "-f", "main", "HEAD~1"},
+				{"remote", "add", "origin", "."},
+			},
+			StandaloneBase: true,
+			WantExit:       0,
+			WantStdout: []string{
+				"resolved by ls-remote against .",
+				AdvisoryBanner,
+				"advisory-clean",
+			},
+			WantNotStdout: []string{"verdict:", "verdict: pass"},
+		},
+		{
+			Name:    "U1-control-an-honest-remote-that-answers-is-still-only-advisory",
+			Class:   ClassMandatoryCheckIntegrity,
+			Summary: "the verified ls-remote route had no corpus case at all, so nothing pinned what a standalone run does when the remote answers honestly",
+			Base: map[string]string{
+				"README.md": "# Project\n",
+			},
+			Head: map[string]string{"README.md": "# Project\n\nPlain update.\n"},
+			GitSetup: [][]string{
+				{"init", "--bare", "../operator.git"},
+				{"push", "../operator.git", "main:refs/heads/main"},
+				{"remote", "add", "origin", "../operator.git"},
+			},
+			StandaloneBase: true,
+			WantExit:       0,
+			WantStdout: []string{
+				"resolved by ls-remote against ../operator.git",
+				"tier: leak-scan-only",
+				AdvisoryBanner,
+				"advisory-clean",
+			},
+			// Nothing is wrong with this change and every check passed. It still
+			// cannot be certified, because the commit it was judged against came
+			// from a remote list the author of the change writes.
+			WantNotStdout: []string{"verdict:", "UNVERIFIED"},
 		},
 		{
 			Name:     "S4-one-nul-byte-does-not-blind-the-leak-scan",
@@ -575,6 +695,47 @@ func Serve(enabled bool) bool {
 				"leak-identity-scan",
 			},
 			WantNotStdout: []string{"verdict: pass"},
+		},
+		{
+			Name:     "U4-a-zero-width-space-inside-a-credential-does-not-blind-the-leak-scan",
+			Class:    ClassMandatoryCheckIntegrity,
+			Summary:  "the binary decision was C0-only, so one U+200B left the file text, broke the credential regex, and returned the round-4 T3 result of completed (0 findings) at exit 0",
+			Base:     map[string]string{"docs/notes.txt": "release notes\n"},
+			Head:     map[string]string{"docs/notes.txt": "release notes\naws key = AKIA\u200bIOSFODNN7EXAMPLE\n"},
+			WantExit: 1,
+			WantStdout: []string{
+				"leak-identity-scan",
+				"read more than one way",
+			},
+			WantNotStdout: []string{"verdict: pass"},
+		},
+		{
+			Name:     "U4-a-c1-control-inside-a-credential-does-not-blind-the-leak-scan",
+			Class:    ClassMandatoryCheckIntegrity,
+			Summary:  "U+0085 is the same shape one range further out, which is how every previous version of this fix was walked around",
+			Base:     map[string]string{"docs/notes.txt": "release notes\n"},
+			Head:     map[string]string{"docs/notes.txt": "release notes\naws key = AKIA\u0085IOSFODNN7EXAMPLE\n"},
+			WantExit: 1,
+			WantStdout: []string{
+				"leak-identity-scan",
+			},
+			WantNotStdout: []string{"verdict: pass"},
+		},
+		{
+			Name:    "U4-control-a-byte-order-mark-does-not-degrade-an-ordinary-file",
+			Class:   ClassControl,
+			Summary: "reading a file two ways must not read as reduced coverage, or the qualifier stops meaning anything on the files that need it",
+			Base: map[string]string{
+				"README.md":     "# Project\n",
+				".no-slop.yaml": cheapestTierConfig,
+			},
+			Head:     map[string]string{"README.md": "\ufeff# Project\n\nPlain update.\n"},
+			WantExit: 0,
+			WantStdout: []string{
+				"read more than one way",
+				"verdict: pass",
+			},
+			WantNotStdout: []string{"reduced coverage: README.md"},
 		},
 		{
 			Name:    "S4-control-an-added-image-still-passes",

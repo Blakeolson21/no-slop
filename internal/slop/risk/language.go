@@ -16,6 +16,22 @@ import (
 type language struct {
 	family  string
 	comment commentSyntax
+	// lineStructureSignificant says whitespace carries meaning in this language,
+	// so two revisions with identical token streams can still do different
+	// things. It exists because the mechanical route compares token streams and
+	// the tokenizer skips whitespace: in Python, moving one `return` one level
+	// in turns an all-checks-must-pass loop into first-check-wins with a
+	// byte-identical stream, and in shell `$BUILD/artifacts` and `$BUILD
+	// /artifacts` tokenize alike while one deletes the build root.
+	//
+	// It is a per-language property rather than a blanket rule because the cost
+	// falls on the other side. Where blocks are delimited by braces, where the
+	// newlines fall is not a statement about behavior, and treating it as one
+	// would charge a review round for every formatter run. So the flag is set
+	// for the languages whose layout IS syntax, and for every extension this
+	// table has never heard of, which is the fail-closed direction: an unknown
+	// language is not evidence that its whitespace is decoration.
+	lineStructureSignificant bool
 }
 
 // commentSyntax names the byte sequences that begin commentary. Comment text is
@@ -38,6 +54,7 @@ var (
 	lispComments    = commentSyntax{line: []string{";"}}
 	erlangComments  = commentSyntax{line: []string{"%"}}
 	haskellComments = commentSyntax{line: []string{"--"}, blocks: [][2]string{{"{-", "-}"}}}
+	fsharpComments  = commentSyntax{line: []string{"//"}, blocks: [][2]string{{"(*", "*)"}}}
 
 	// unknownComments is the fail-closed union for an extension nobody listed.
 	// Stripping a byte range that was really code loses a declaration, which
@@ -60,7 +77,8 @@ var languagesByExtension = map[string]language{
 	".ts": {family: "ecmascript", comment: cComments}, ".tsx": {family: "ecmascript", comment: cComments},
 	".mts": {family: "ecmascript", comment: cComments}, ".cts": {family: "ecmascript", comment: cComments},
 
-	".py": {family: "python", comment: hashComments}, ".pyi": {family: "python", comment: hashComments},
+	".py":  {family: "python", comment: hashComments, lineStructureSignificant: true},
+	".pyi": {family: "python", comment: hashComments, lineStructureSignificant: true},
 
 	".rb": {family: "ruby", comment: rubyComments}, ".rake": {family: "ruby", comment: rubyComments},
 	".gemspec": {family: "ruby", comment: rubyComments},
@@ -82,17 +100,34 @@ var languagesByExtension = map[string]language{
 	".zig":    {family: "zig", comment: cComments},
 	".groovy": {family: "groovy", comment: cComments},
 
-	".sh": {family: "shell", comment: hashComments}, ".bash": {family: "shell", comment: hashComments},
-	".zsh": {family: "shell", comment: hashComments}, ".ksh": {family: "shell", comment: hashComments},
+	// Shell is here for word splitting rather than for indentation: an argument
+	// that gains a space becomes two arguments, and a heredoc body is read by
+	// its line structure.
+	".sh":   {family: "shell", comment: hashComments, lineStructureSignificant: true},
+	".bash": {family: "shell", comment: hashComments, lineStructureSignificant: true},
+	".zsh":  {family: "shell", comment: hashComments, lineStructureSignificant: true},
+	".ksh":  {family: "shell", comment: hashComments, lineStructureSignificant: true},
+
+	// YAML and make recipes are layout languages outright: indentation decides
+	// which key a value belongs to, and a recipe line is identified by its
+	// leading tab.
+	".yaml": {family: "yaml", comment: hashComments, lineStructureSignificant: true},
+	".yml":  {family: "yaml", comment: hashComments, lineStructureSignificant: true},
+	".mk":   {family: "make", comment: hashComments, lineStructureSignificant: true},
+	".make": {family: "make", comment: hashComments, lineStructureSignificant: true},
 
 	".pl": {family: "perl", comment: hashComments}, ".pm": {family: "perl", comment: hashComments},
 	".ex": {family: "elixir", comment: hashComments}, ".exs": {family: "elixir", comment: hashComments},
 	".r": {family: "r", comment: hashComments}, ".jl": {family: "julia", comment: hashComments},
-	".nim": {family: "nim", comment: hashComments}, ".cr": {family: "crystal", comment: hashComments},
+	".nim": {family: "nim", comment: hashComments, lineStructureSignificant: true},
+	".cr":  {family: "crystal", comment: hashComments},
 
 	".sql": {family: "sql", comment: sqlComments},
 	".lua": {family: "lua", comment: luaComments},
-	".hs":  {family: "haskell", comment: haskellComments},
+	".hs":  {family: "haskell", comment: haskellComments, lineStructureSignificant: true},
+	".fs":  {family: "fsharp", comment: fsharpComments, lineStructureSignificant: true},
+	".fsi": {family: "fsharp", comment: fsharpComments, lineStructureSignificant: true},
+	".fsx": {family: "fsharp", comment: fsharpComments, lineStructureSignificant: true},
 	".erl": {family: "erlang", comment: erlangComments}, ".hrl": {family: "erlang", comment: erlangComments},
 
 	".clj": {family: "clojure", comment: lispComments}, ".cljs": {family: "clojure", comment: lispComments},
@@ -115,9 +150,15 @@ func sourceLanguage(path string) language {
 		// An extensionless executable script is the shape an allowlist misses.
 		// It gets the union comment set and a family keyed on its base name, so
 		// it neither vouches for anything else nor loses its own declarations.
-		return language{family: "path:" + strings.ToLower(filepath.Base(filepath.ToSlash(path))), comment: unknownComments}
+		// A Makefile and a shell script with no suffix both land here, which is
+		// the other reason the unknown case treats line structure as syntax.
+		return language{
+			family:                   "path:" + strings.ToLower(filepath.Base(filepath.ToSlash(path))),
+			comment:                  unknownComments,
+			lineStructureSignificant: true,
+		}
 	}
-	return language{family: "ext:" + extension, comment: unknownComments}
+	return language{family: "ext:" + extension, comment: unknownComments, lineStructureSignificant: true}
 }
 
 // commentEnd returns the index just past the comment starting at index, or

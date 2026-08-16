@@ -77,17 +77,36 @@ type Config struct {
 	ForceTier            bool
 	ThreadURL            string
 	EvidenceRoot         string
-	// GateConfigDrift names each gate-strength field the head worktree sets
+	// GateConfigDrift names each gate-strength input the head worktree sets
 	// differently from the base ref. The base value is the one in force; the
 	// drift becomes a finding so that a change editing the gate's own controls
 	// is itself flagged rather than silently ignored.
-	GateConfigDrift []string
+	GateConfigDrift []ConfigDrift
 	// BaseUnverified carries the reason the canonical base could not be
 	// verified against the operator's remote. A run that could not establish
 	// which history is the operator's cannot certify anything against it, so it
 	// is pinned to the full tier, reads built-in defaults rather than a base
 	// config it cannot trust, and fails.
 	BaseUnverified string
+}
+
+// ConfigDrift is one gate-strength input the head sets differently from the
+// base ref, and the file a reviewer should open to see it.
+//
+// It carries its own path because the drift set stopped being one file. The
+// repo config was the only member until round 5 found that the private-name
+// blocklist's CONTENT was read from the head worktree while only its PATH came
+// from the base, so emptying a tracked, operator-configured list disarmed the
+// identity scan with no drift reported anywhere. Naming .no-slop.yaml as the
+// location of that finding would have sent the reviewer to the wrong file.
+//
+// Detail is the whole sentence, built by the caller that found the drift,
+// because what a contributor should do about it differs by input: a slop.*
+// value lands on the base branch in its own commit, and a blocklist entry
+// lands there too but is not a yaml key anybody can grep for.
+type ConfigDrift struct {
+	Path   string
+	Detail string
 }
 
 // Input is the complete gate request.
@@ -190,6 +209,18 @@ type MandatoryCheck struct {
 	// through a narrower window" are different claims, and reporting the second
 	// as the first is what made a scanned binary blob read as a skipped one.
 	Degraded []string
+	// Widened names the parts of this check that had to be read more than one
+	// way to be read at all.
+	//
+	// It is the third distinct claim and not a variant of Degraded, which says
+	// coverage was LOST. A file carrying a zero-width space inside a credential
+	// was scanned as written and again with the invisible characters removed, so
+	// coverage was gained rather than lost, and filing that under reduced
+	// coverage would tell a reviewer to distrust the one result they should
+	// trust most. It is reported at all because "completed (0 findings)" over a
+	// file whose bytes render two different ways is a sentence a reviewer should
+	// be able to see the shape of.
+	Widened []string
 }
 
 // TestRunner executes the configured full-tier test command.
@@ -269,11 +300,15 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 
 	driftFindings := make([]Finding, 0, len(input.Config.GateConfigDrift))
 	for _, drift := range input.Config.GateConfigDrift {
+		path := drift.Path
+		if path == "" {
+			path = identity.RepoConfigName
+		}
 		driftFindings = append(driftFindings, Finding{
 			Lens:        "gate-config-drift",
 			Severity:    "error",
-			Path:        identity.RepoConfigName,
-			Description: drift + "; land the slop.* change on the base branch first, because a config change cannot certify itself",
+			Path:        path,
+			Description: drift.Detail,
 		})
 	}
 	result.Findings = append(result.Findings, driftFindings...)
@@ -292,7 +327,7 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 		Unarmed:  unarmed,
 	})
 
-	leakFindings, exemptions, unscanned, degraded := runLeakScan(input.Files, input.Config.Blocklist, input.Config.RefuseLeakExemptions)
+	leakFindings, exemptions, unscanned, degraded, widened := runLeakScan(input.Files, input.Config.Blocklist, input.Config.RefuseLeakExemptions)
 	result.Findings = append(result.Findings, leakFindings...)
 	result.LeakExemptions = exemptions
 	if deps.OnLeakExemptions != nil {
@@ -304,6 +339,7 @@ func Run(ctx context.Context, input Input, deps Dependencies) (Result, error) {
 		Findings: len(leakFindings),
 		Unarmed:  unscanned,
 		Degraded: degraded,
+		Widened:  widened,
 	})
 	testFloorEnabled := input.Config.TestCountFloor || containsProbe(decision.DeterministicProbes, "test-count-floor")
 	testFloorFindings := []Finding(nil)
@@ -525,11 +561,12 @@ func appendUniqueFindings(existing []Finding, additions ...Finding) []Finding {
 // bytes ourselves closes both with one condition, and leaves git attributes,
 // `.git/info/attributes`, and diff rendering with no influence at all over
 // whether leak scanning happens.
-func runLeakScan(files []Change, blocklist []string, refuseExemptions bool) ([]Finding, []leakscan.Exemption, []string, []string) {
+func runLeakScan(files []Change, blocklist []string, refuseExemptions bool) ([]Finding, []leakscan.Exemption, []string, []string, []string) {
 	input := make([]leakscan.File, 0, len(files))
 	var result []Finding
 	var unscanned []string
 	var degraded []string
+	var widened []string
 	for _, file := range files {
 		if file.Unreadable != "" {
 			continue
@@ -537,6 +574,12 @@ func runLeakScan(files []Change, blocklist []string, refuseExemptions bool) ([]F
 		if file.ScanState == ScanSubmodulePointer {
 			unscanned = append(unscanned, fmt.Sprintf("%s is a submodule pointer whose content is outside this repository", file.Path))
 			continue
+		}
+		// The invisible-character reading is reported over the head blob for a
+		// binary path and over the added lines for a text one, matching what the
+		// scanner is actually handed in each case.
+		if leakscan.HasInvisibleRunes(file.CurrentContent) {
+			widened = append(widened, fmt.Sprintf("%s carries Unicode format or control characters, so it was read both as written and with them removed", file.Path))
 		}
 		if leakscan.IsBinaryContent(file.CurrentContent) {
 			degraded = append(degraded, fmt.Sprintf("%s is binary at head and was read through the binary-safe renderings", file.Path))
@@ -564,7 +607,7 @@ func runLeakScan(files []Change, blocklist []string, refuseExemptions bool) ([]F
 			Description: finding.Description,
 		})
 	}
-	return result, scan.Exemptions, unscanned, degraded
+	return result, scan.Exemptions, unscanned, degraded, widened
 }
 
 // runContentIntegrity turns every path whose content this run could not see

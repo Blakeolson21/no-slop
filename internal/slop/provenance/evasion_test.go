@@ -211,12 +211,26 @@ func TestOnlyAReviewedPassClearsALensScore(t *testing.T) {
 		t.Fatalf("a full-tier record that never ran its review rounds cleared the escalation: score = %d", score)
 	}
 
-	reviewed := findingRecord("lane-a", "model-x", "base..reviewed", time.Unix(4, 0), 0, 0)
+	// Round 5 added the second half of the requirement. A reviewed clean pass
+	// clears a lens only when its own change contained content that lens can be
+	// found in, so a full-adversarial pass over a change with no tests in it is
+	// no longer evidence about how this lane writes tests.
+	elsewhere := findingRecord("lane-a", "model-x", "base..elsewhere", time.Unix(4, 0), 0, 0)
+	elsewhere.SelectedTier = "full-adversarial"
+	elsewhere.Outcome = "pass"
+	elsewhere.Rounds = 2
+	elsewhere.JudgedContent = []string{provenance.ContentDocs}
+	if score := provenance.LensScores([]provenance.Record{incriminating, elsewhere})["test-capitulation"]; score != 3 {
+		t.Fatalf("a reviewed pass over documentation cleared a test-lens escalation: score = %d", score)
+	}
+
+	reviewed := findingRecord("lane-a", "model-x", "base..reviewed", time.Unix(5, 0), 0, 0)
 	reviewed.SelectedTier = "full-adversarial"
 	reviewed.Outcome = "pass"
 	reviewed.Rounds = 2
+	reviewed.JudgedContent = []string{provenance.ContentSource, provenance.ContentTests}
 	if score := provenance.LensScores([]provenance.Record{incriminating, reviewed})["test-capitulation"]; score != 0 {
-		t.Fatalf("a completed clean full-adversarial pass did not clear the escalation: score = %d", score)
+		t.Fatalf("a completed clean full-adversarial pass over tests did not clear the escalation: score = %d", score)
 	}
 }
 

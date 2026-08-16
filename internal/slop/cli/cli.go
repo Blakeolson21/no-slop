@@ -18,6 +18,7 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/config"
 	"github.com/Blakeolson21/no-slop/internal/git"
 	"github.com/Blakeolson21/no-slop/internal/identity"
+	"github.com/Blakeolson21/no-slop/internal/safeurl"
 	"github.com/Blakeolson21/no-slop/internal/slop/corpus"
 	"github.com/Blakeolson21/no-slop/internal/slop/engine"
 	"github.com/Blakeolson21/no-slop/internal/slop/leakscan"
@@ -226,9 +227,14 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 	// unverified base there is no operator config to compare against, so the
 	// comparison would report every configured value as drift and say nothing
 	// true. The base-ref-unverified finding is the report in that case.
-	var drift []string
-	if resolvedBase.Verified() {
-		drift = slopConfigDrift(config.Merge(globalCfg, headRepoCfg).Slop, cfg.Slop)
+	var drift []engine.ConfigDrift
+	if resolvedBase.Resolved() {
+		for _, detail := range slopConfigDrift(config.Merge(globalCfg, headRepoCfg).Slop, cfg.Slop) {
+			drift = append(drift, engine.ConfigDrift{
+				Path:   identity.RepoConfigName,
+				Detail: detail + "; land the slop.* change on the base branch first, because a config change cannot certify itself",
+			})
+		}
 	}
 
 	changes, err := engine.LoadGitChanges(ctx, workDir, baseRef, headRef)
@@ -248,13 +254,20 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 	// the base-ref resolution above closes for the committed config.
 	blocklistPath := cfg.Slop.LeakScan.BlocklistFile
 	blocklistConfigured := strings.TrimSpace(baseRepoCfg.Slop.LeakScan.BlocklistFile) != ""
-	blocklistEntries, blocklistState, err := loadBlocklist(workDir, blocklistPath, blocklistConfigured)
+	blocklistEntries, blocklistState, blocklistDrift, err := loadBlocklist(ctx, workDir, baseRef, blocklistPath, blocklistConfigured, resolvedBase.Resolved())
 	if err != nil {
 		return err
 	}
 	fmt.Fprintln(stdout, blocklistState)
+	if blocklistDrift != nil {
+		drift = append(drift, *blocklistDrift)
+	}
 	if override := strings.TrimSpace(*blocklist); override != "" {
-		extraEntries, extraState, extraErr := loadBlocklist(workDir, override, true)
+		// The override reads the worktree and only ever ADDS names, so it cannot
+		// weaken the base ref's list and does not join the drift comparison. It
+		// is still named on its own line: adding names from a file the change
+		// under test can write is a fact a reviewer should see.
+		extraEntries, extraState, _, extraErr := loadBlocklist(ctx, workDir, baseRef, override, true, false)
 		if extraErr != nil {
 			return extraErr
 		}
@@ -352,6 +365,7 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 				ReasoningEffort: *reasoningEffort,
 				LaneID:          *laneID,
 				ChangeClass:     resolvedChangeClass(*changeClass, changes),
+				JudgedContent:   judgedContent(changes),
 				ChangeID:        baseRef + ".." + headRef,
 			}, selectedDecision, result, "error"))
 			if recordErr != nil {
@@ -378,12 +392,13 @@ func runGate(ctx context.Context, args []string, stdout, stderr io.Writer, opts 
 		ReasoningEffort: *reasoningEffort,
 		LaneID:          *laneID,
 		ChangeClass:     resolvedChangeClass(*changeClass, changes),
+		JudgedContent:   judgedContent(changes),
 		ChangeID:        baseRef + ".." + headRef,
 	}, result.Decision, result, outcome)); err != nil {
 		printChecks(stdout, result)
 		return fmt.Errorf("record provenance: %w", err)
 	}
-	printResult(stdout, result)
+	printResult(stdout, result, resolvedBase.Certifying())
 	if !result.Passed {
 		return &gateVerdictError{}
 	}
@@ -397,6 +412,9 @@ type provenanceInput struct {
 	LaneID          string
 	ChangeClass     string
 	ChangeID        string
+	// JudgedContent is derived from the changed paths, never from a flag. See
+	// judgedContent and provenance.LensScores.
+	JudgedContent []string
 }
 
 func provenanceRecord(input provenanceInput, decision risk.Decision, result engine.Result, outcome string) provenance.Record {
@@ -430,6 +448,7 @@ func provenanceRecord(input provenanceInput, decision risk.Decision, result engi
 		ReasoningEffort: input.ReasoningEffort,
 		AgentLaneID:     input.LaneID,
 		ChangeClass:     input.ChangeClass,
+		JudgedContent:   input.JudgedContent,
 		SelectedTier:    string(decision.Tier),
 		FindingsByLens:  byLens,
 		Rounds:          result.ReviewRounds,
@@ -483,16 +502,31 @@ func loadBaseRepoConfig(ctx context.Context, workDir, baseRef string) (*config.R
 }
 
 func readBaseRepoConfigFile(ctx context.Context, workDir, baseRef, name string) ([]byte, bool, error) {
+	data, present, err := readBaseFile(ctx, workDir, baseRef, name)
+	if err != nil {
+		return nil, false, fmt.Errorf("read base repo config: %w", err)
+	}
+	return data, present, nil
+}
+
+// readBaseFile reads one tracked path out of the base revision, reporting
+// separately whether the path exists there at all. Absent is a valid answer and
+// unreadable is not: an input the gate reads its strength from must never
+// resolve to the permissive default because a git command failed.
+//
+// git.Output rather than git.Run, because blob content is data and trailing
+// whitespace in it is data too.
+func readBaseFile(ctx context.Context, workDir, baseRef, name string) ([]byte, bool, error) {
 	listing, err := git.Output(ctx, workDir, "ls-tree", "--name-only", "-z", baseRef, "--", name)
 	if err != nil {
-		return nil, false, fmt.Errorf("read base repo config listing at %s: %w", baseRef, err)
+		return nil, false, fmt.Errorf("read listing for %s at %s: %w", name, baseRef, err)
 	}
 	if strings.TrimSpace(strings.ReplaceAll(listing, "\x00", "")) == "" {
 		return nil, false, nil
 	}
 	content, err := git.Output(ctx, workDir, "show", baseRef+":"+name)
 	if err != nil {
-		return nil, false, fmt.Errorf("read base repo config at %s: %w", baseRef, err)
+		return nil, false, fmt.Errorf("read %s at %s: %w", name, baseRef, err)
 	}
 	return []byte(content), true, nil
 }
@@ -659,6 +693,52 @@ func resolveDataDir(workDir, configured string) string {
 	return filepath.Join(workDir, configured)
 }
 
+// judgedContent names the kinds of content this run actually looked at.
+//
+// It is derived from the changed paths and deliberately ignores
+// --change-class. The recorded change class exists for a reader and is a string
+// the caller asserts about itself; this decides whether a later clean pass
+// counts as evidence about a lens, and every self-asserted input this product
+// has trusted with a decision has been an evasion route. See
+// provenance.LensScores.
+//
+// A path is counted once per kind it belongs to, and a test file counts as
+// tests rather than as source: the question a lens asks about tests is asked of
+// test files.
+func judgedContent(changes []engine.Change) []string {
+	var source, tests, docs bool
+	for _, change := range changes {
+		path := strings.ToLower(filepath.ToSlash(change.Path))
+		extension := filepath.Ext(path)
+		switch {
+		case strings.HasSuffix(path, "_test.go") ||
+			strings.Contains(path, ".test.") ||
+			strings.Contains(path, ".spec.") ||
+			strings.HasPrefix(filepath.Base(path), "test_") ||
+			strings.Contains(path, "/test/") ||
+			strings.Contains(path, "/tests/") ||
+			strings.HasPrefix(path, "test/") ||
+			strings.HasPrefix(path, "tests/"):
+			tests = true
+		case extension == ".md" || extension == ".mdx" || strings.HasPrefix(path, "docs/"):
+			docs = true
+		default:
+			source = true
+		}
+	}
+	content := make([]string, 0, 3)
+	if source {
+		content = append(content, provenance.ContentSource)
+	}
+	if tests {
+		content = append(content, provenance.ContentTests)
+	}
+	if docs {
+		content = append(content, provenance.ContentDocs)
+	}
+	return content
+}
+
 func resolvedChangeClass(configured string, changes []engine.Change) string {
 	if configured = strings.TrimSpace(configured); configured != "" {
 		return configured
@@ -712,35 +792,91 @@ func defaultReviewerFactory(ctx context.Context, cfg *config.Config, stderr io.W
 	return engine.NewAgentReviewer(ag, func(text string) { fmt.Fprint(stderr, text) }), ag, nil
 }
 
-func loadBlocklist(workDir, configured string, explicitlyConfigured bool) ([]string, string, error) {
+// loadBlocklist reads the private-name blocklist, preferring the copy at the
+// base ref over the copy in the head worktree.
+//
+// The path came from the base config from the moment the boundary was drawn,
+// and the CONTENT did not, which made the blocklist the one gate-strength input
+// the change under test still supplied. `.noslop-blocklist` is not a field of
+// config.Slop, so the reflective drift comparison never saw it either: a single
+// `: > .noslop-blocklist` disarmed an operator's identity policy and the run
+// reported a clean gate config and a clean leak scan.
+//
+// So the content joins the boundary. When the file is tracked at the base ref,
+// the base copy is the one in force and a differing head copy is DRIFT, named
+// in both directions for the same reason a slop.* change is: the run that would
+// bless the edit is the run the edit reconfigures.
+//
+// The documented local case survives, because it has to. `.noslop-blocklist` is
+// documented as private data that is gitignored, and a repository using it that
+// way has nothing at the base ref to read. Such a run keeps reading the
+// worktree and SAYS SO on its own state line, which is the honest report: that
+// half of the identity scan sits outside the base-ref boundary and its only
+// defence is the printed entry count.
+func loadBlocklist(ctx context.Context, workDir, baseRef, configured string, explicitlyConfigured, baseReadable bool) ([]string, string, *engine.ConfigDrift, error) {
 	if configured == "" {
-		return nil, "leak scan: no private-name blocklist configured", nil
-	}
-	path := configured
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(workDir, path)
-	}
-	content, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) && !explicitlyConfigured {
-			return nil, fmt.Sprintf("leak scan: no private-name blocklist (default path %s not present)", configured), nil
-		}
-		state := "default"
-		if explicitlyConfigured {
-			state = "configured"
-		}
-		return nil, "", fmt.Errorf("read private-name blocklist (%s path %s): %w", state, configured, err)
+		return nil, "leak scan: no private-name blocklist configured", nil, nil
 	}
 	state := "default"
 	if explicitlyConfigured {
 		state = "configured"
 	}
+	// An absolute path is never a path in the repository's tree, so there is no
+	// base-ref copy of it to prefer.
+	trackedAtBase := false
+	var baseContent []byte
+	if baseReadable && !filepath.IsAbs(configured) {
+		data, present, err := readBaseFile(ctx, workDir, baseRef, filepath.ToSlash(configured))
+		if err != nil {
+			return nil, "", nil, err
+		}
+		baseContent, trackedAtBase = data, present
+	}
+
+	path := configured
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(workDir, path)
+	}
+	headContent, headErr := os.ReadFile(path)
+
+	if trackedAtBase {
+		entries := leakscan.ParseBlocklist(string(baseContent))
+		var drift *engine.ConfigDrift
+		if headErr == nil && string(headContent) != string(baseContent) {
+			headEntries := leakscan.ParseBlocklist(string(headContent))
+			drift = &engine.ConfigDrift{
+				Path: configured,
+				// The entry counts are named and the entries never are. This
+				// file is a list of private identities, so printing what
+				// changed would put them on stdout and into the provenance
+				// record, which is the failure the whole check exists to stop.
+				Detail: fmt.Sprintf(
+					"the private-name blocklist has %d entries at head and %d at the base ref; the base ref's copy is the one in force, and a head edit to it cannot change how strictly this run scans. Land the blocklist change on the base branch first",
+					len(headEntries), len(entries)),
+			}
+		}
+		return entries, fmt.Sprintf("leak scan: loaded %s private-name blocklist from %s at the base ref (%d entries)", state, configured, len(entries)), drift, nil
+	}
+
+	if headErr != nil {
+		if errors.Is(headErr, os.ErrNotExist) && !explicitlyConfigured {
+			return nil, fmt.Sprintf("leak scan: no private-name blocklist (default path %s not present)", configured), nil, nil
+		}
+		return nil, "", nil, fmt.Errorf("read private-name blocklist (%s path %s): %w", state, configured, headErr)
+	}
 	// The entry count is printed because a readable file with no entries scans
 	// exactly like a missing one, and an operator reading only "loaded" cannot
-	// tell a working identity policy from an empty one.
-	entries := leakscan.ParseBlocklist(string(content))
-	return entries, fmt.Sprintf("leak scan: loaded %s private-name blocklist from %s (%d entries)", state, configured, len(entries)), nil
+	// tell a working identity policy from an empty one. It is the only defence
+	// this branch has, which is why the line says where the content came from.
+	entries := leakscan.ParseBlocklist(string(headContent))
+	return entries, fmt.Sprintf("leak scan: loaded %s private-name blocklist from %s in the head worktree, which is not tracked at the base ref, so its content is outside the base-ref boundary (%d entries)", state, configured, len(entries)), nil, nil
 }
+
+// advisoryBanner is the sentence a run prints in place of the certification it
+// is not making. Every route except an orchestrator-supplied base carries it,
+// because every other route resolves the base from inside a repository the
+// author of the change under test controls.
+const advisoryBanner = "advisory: base supplied by this repository; not a certification"
 
 // ResolvedBase records which commit supplied the gate's strength, and how the
 // run established that the commit is the operator's rather than the author's.
@@ -755,6 +891,13 @@ type ResolvedBase struct {
 	// CanonicalCommit is the commit the remote reported for the canonical ref
 	// when this run asked it.
 	CanonicalCommit string
+	// RemoteURL is the URL this run actually asked, after git applied every
+	// insteadOf rewrite it knows about, with any userinfo redacted. The round-5
+	// header named neither the URL nor the rewrite, so a run against
+	// /tmp/evil.git printed the same sentence as a run against the operator's
+	// forge. It is disclosure only: naming the URL does not make it trustworthy,
+	// which is the whole reason this route can no longer certify.
+	RemoteURL string
 	// Base is the resolved base commit.
 	Base string
 	// Config is the repository config read at Base. It is deliberately empty on
@@ -773,34 +916,85 @@ type ResolvedBase struct {
 	Unverified string
 }
 
-// Verified reports whether the base came from a source the author of the change
-// under test cannot write.
-func (r ResolvedBase) Verified() bool { return r.Unverified == "" }
+// Resolved reports whether a canonical commit came back from a remote at all.
+//
+// It was called Verified until round 5, and the rename is the finding. What
+// asking a remote establishes is that some repository answered for a branch
+// name, which is not evidence about whose repository it was: the URL comes from
+// .git/config, from the remote list, or from an insteadOf rewrite in the
+// ambient environment, and the author of the change under test writes all
+// three. Whether a run may certify is a separate question with a separate
+// answer; see Certifying.
+func (r ResolvedBase) Resolved() bool { return r.Unverified == "" }
 
-// String is the run header's base line. Each of the three routes reads
-// differently on purpose. The previous header printed "base: <sha> from
-// merge-base with origin/main" whether origin/main was the operator's remote
-// branch or a local branch the author had created ten seconds earlier under
-// that name, which made a defeated run byte-identical to an honest one.
+// Certifying reports whether this run may render a verdict.
+//
+// It is a method over the resolution route rather than a field, so there is no
+// value anywhere for a later change to set by hand. Exactly one route answers
+// true, and the argument is the round-5 theorem: every input a standalone run
+// could resolve a base from lives inside the repository the author of the
+// change under test controls. Refs are author-writable, .git/config is
+// author-writable, the remote list is author-writable, and the ambient
+// GIT_CONFIG_* environment is author-writable while writing nothing to disk at
+// all. Five rounds hardened five instances of that and the control moved one
+// input further out each time.
+//
+// An orchestrating pipeline is outside that boundary because it carved the
+// worktree and resolved the trunk before the author's process existed, and
+// reaching the channel requires being in-process with the gate.
+func (r ResolvedBase) Certifying() bool { return r.Pipeline }
+
+// String is the run header's base line. Each route reads differently on
+// purpose. The previous header printed "base: <sha> from merge-base with
+// origin/main" whether origin/main was the operator's remote branch or a local
+// branch the author had created ten seconds earlier under that name, and the
+// round-4 replacement printed "verified by ls-remote against the configured
+// remote" without ever naming which remote that was, so a run redirected to
+// /tmp/evil.git by one environment variable read exactly like an honest one.
 func (r ResolvedBase) String() string {
 	switch {
 	case r.Pipeline:
 		return fmt.Sprintf("base: %s supplied by the orchestrating pipeline (%s); no local ref and no flag took part", r.Base, r.PipelineOrigin)
-	case !r.Verified():
-		return fmt.Sprintf("base: %s from merge-base with the LOCAL ref %s, UNVERIFIED: %s. Gate strength is pinned to full-adversarial and every slop.* value came from built-in defaults rather than from that commit", r.Base, r.CanonicalRef, r.Unverified)
+	case !r.Resolved():
+		return fmt.Sprintf("base: %s from merge-base with the LOCAL ref %s, UNVERIFIED: %s. Gate strength is pinned to full-adversarial and every slop.* value came from built-in defaults rather than from that commit; %s", r.Base, r.CanonicalRef, r.Unverified, advisoryBanner)
 	}
 	pinned := ""
 	if r.Pinned {
 		pinned = ", pinned by slop.base_ref"
 	}
-	return fmt.Sprintf("base: %s from merge-base with %s at %s, verified by ls-remote against the configured remote%s", r.Base, r.CanonicalRef, r.CanonicalCommit, pinned)
+	return fmt.Sprintf("base: %s from merge-base with %s at %s, resolved by ls-remote against %s%s; %s", r.Base, r.CanonicalRef, r.CanonicalCommit, r.RemoteURL, pinned, advisoryBanner)
 }
 
-// resolveBase decides which commit supplies the gate's strength.
+// resolveBase decides which commit supplies the gate's strength, and whether
+// the run that follows is allowed to certify anything.
 //
-// Three rounds of review have taken the same control away from the caller in
-// three different disguises, and the shape of the answer is now the shape of
-// what is left after all of them.
+// THE ROUND-5 THEOREM. Any base a run resolves from inside a repository the
+// author of the change under test controls is a base that author can choose.
+// Five rounds proved it by exhaustion rather than by argument, each one closing
+// the named instance and each one finding the control one input further out:
+// the `--base` flag, then a local ref wearing the canonical name, then
+// `refs/remotes/*`, then `remote.origin.url` in `.git/config`, and finally a
+// `url.<X>.insteadOf` pair in the ambient GIT_CONFIG_* environment, which
+// leaves nothing on disk, does not show in `git status`, and is gone when the
+// process exits. Refs, config, remotes, and environment are all things the
+// author writes, and there is no sixth input hiding behind them that is not.
+//
+// So the capability is removed rather than the instance. There are two modes:
+//
+//   - CERTIFYING, reached only through Options.PipelineBase. An orchestrator
+//     carved the worktree and resolved the trunk before the author's process
+//     existed, and reaching that channel requires being in-process with the
+//     gate. This is the only mode that may print "verdict:".
+//   - ADVISORY, every other route. The run does all the same work, reports
+//     every finding, and exits non-zero on a blocking one; what it may not do
+//     is certify, because the commit it judged against is one the theorem says
+//     the author could have chosen. ls-remote resolution stays because a base
+//     resolved from the operator's usual remote is the most useful thing to
+//     diff against, and because a run with no base at all can say almost
+//     nothing. It stays as convenience, not as evidence.
+//
+// The history below is kept because it is the argument for why this shape is
+// the answer rather than a sixth hardening of a sixth input.
 //
 // Round 3 removed `--base` as given: naming a commit on the author's own branch
 // made the author's own weakened config the operator's config. The replacement
@@ -825,11 +1019,12 @@ func (r ResolvedBase) String() string {
 //
 //  1. An orchestrating pipeline that supplies the base through the Go API. It
 //     carved the worktree and resolved the trunk itself, and reaching this
-//     channel requires being in-process with the gate.
+//     channel requires being in-process with the gate. CERTIFYING.
 //  2. The network. `git ls-remote <configured remote URL> refs/heads/<branch>`
 //     is asked what the canonical branch points at, and the merge-base is taken
 //     against the commit the remote answered with. No local ref participates,
-//     under any name.
+//     under any name. ADVISORY: the URL is one the author writes, so the answer
+//     is something to diff against and nothing more.
 //  3. Nothing. Offline, or with no remote, or with a remote that will not
 //     answer, the run is pinned to the full tier, reads built-in defaults
 //     instead of a base config it cannot trust, and fails with the reason
@@ -839,13 +1034,12 @@ func (r ResolvedBase) String() string {
 // `--base` is gone rather than validated, because validating it is the fix
 // shape that failed twice.
 //
-// The residual, stated plainly: the remote's URL comes from `.git/config`, which
-// is local. An author who repoints origin at a repository they control can still
-// make that repository's answer the canonical one. That is a materially louder
-// act than creating a ref, it is one an operator can see, and closing it needs
-// the URL pinned somewhere the change cannot rewrite. slop.base_ref.remote picks
-// which remote is asked, and it is read from the base config, so an operator who
-// wants that decision outside the worktree already has it.
+// slop.base_ref.remote is NOT a mitigation and must not be documented as one.
+// It was presented as making the choice of remote an operator decision, and it
+// cannot be: resolveVerifiedBase resolves a provisional base with an empty pin
+// first, so an author who has already repointed origin supplies the base the
+// pin is then read from. Its honest description is a convenience for a
+// repository whose trunk is not called main or master.
 func resolveBase(ctx context.Context, workDir, headRef string, pipeline *PipelineBase) (ResolvedBase, error) {
 	if pipeline != nil {
 		return resolvePipelineBase(ctx, workDir, *pipeline)
@@ -993,8 +1187,13 @@ func canonicalBaseFor(ctx context.Context, workDir, headRef string, pin config.S
 			CanonicalRef:    remote + "/" + branch,
 			CanonicalBranch: branch,
 			CanonicalCommit: commit,
-			Base:            base,
-			Config:          baseCfg,
+			// Redacted because a remote URL routinely carries userinfo, and a
+			// gate that printed a credential into its own run header and its own
+			// provenance record would be leaking exactly what its leak scan
+			// exists to catch. internal/safeurl is the one owner of that.
+			RemoteURL: safeurl.Redact(url),
+			Base:      base,
+			Config:    baseCfg,
 		}, nil
 	}
 	return ResolvedBase{}, fmt.Errorf("resolve canonical base ref: %s", strings.Join(reasons, "; "))
@@ -1115,12 +1314,15 @@ func formatMandatoryCheck(check engine.MandatoryCheck) string {
 	if !check.Enabled {
 		return fmt.Sprintf("mandatory check: %s disabled", check.Name)
 	}
-	qualifiers := make([]string, 0, 2)
+	qualifiers := make([]string, 0, 3)
 	if len(check.Unarmed) > 0 {
 		qualifiers = append(qualifiers, "not armed: "+strings.Join(check.Unarmed, "; "))
 	}
 	if len(check.Degraded) > 0 {
 		qualifiers = append(qualifiers, "reduced coverage: "+strings.Join(check.Degraded, "; "))
+	}
+	if len(check.Widened) > 0 {
+		qualifiers = append(qualifiers, "read more than one way: "+strings.Join(check.Widened, "; "))
 	}
 	if len(qualifiers) == 0 {
 		return fmt.Sprintf("mandatory check: %s completed (%d findings)", check.Name, check.Findings)
@@ -1146,7 +1348,17 @@ func formatFinding(finding engine.Finding) string {
 	return fmt.Sprintf("%s: [%s] %s", label, finding.Lens, finding.Description)
 }
 
-func printResult(stdout io.Writer, result engine.Result) {
+// printResult prints the run's outcome, and it is the single place the product
+// decides whether a run may certify anything.
+//
+// "verdict:" is reserved for a certifying run. A run whose base came from the
+// repository under test prints an advisory line instead, and the two vocabularies
+// are deliberately disjoint so that grepping a log for "verdict:" finds every
+// certification and nothing else. The advisory line is not a softer verdict: it
+// reports the same work, over the same checks, with the same exit code, and
+// says only that the commit it judged against is one the author could have
+// chosen.
+func printResult(stdout io.Writer, result engine.Result, certifying bool) {
 	for _, check := range result.MandatoryChecks {
 		fmt.Fprintln(stdout, formatMandatoryCheck(check))
 	}
@@ -1176,10 +1388,15 @@ func printResult(stdout io.Writer, result engine.Result) {
 		}
 		fmt.Fprintf(stdout, "leak scan: %d %s honored, %d findings suppressed\n", count, label, suppressed)
 	}
-	if result.Passed {
+	switch {
+	case certifying && result.Passed:
 		fmt.Fprintln(stdout, "verdict: pass")
-	} else {
+	case certifying:
 		fmt.Fprintln(stdout, "verdict: fail")
+	case result.Passed:
+		fmt.Fprintf(stdout, "advisory-clean; %s\n", advisoryBanner)
+	default:
+		fmt.Fprintf(stdout, "advisory-blocked; %s\n", advisoryBanner)
 	}
 }
 
@@ -1187,5 +1404,7 @@ func writeUsage(output io.Writer) {
 	fmt.Fprintln(output, "NoSlop is the reviewer that knows the author is an AI.")
 	fmt.Fprintln(output, "usage: noslop gate [--repo DIR] [--head REF] [--intent TEXT] [--tier TIER] [--force-tier] [--thread URL] [--blocklist FILE] [--provider NAME] [--model NAME] [--reasoning-effort LEVEL] [--lane-id ID] [--change-class CLASS]")
 	fmt.Fprintln(output, "       the base revision is not a flag: it comes from the configured remote, or from an orchestrating pipeline")
+	fmt.Fprintln(output, "       a standalone run is ADVISORY and cannot certify, because the base it resolved came from this repository;")
+	fmt.Fprintln(output, "       only a base supplied by an orchestrator prints a verdict")
 	fmt.Fprintln(output, "       noslop evaluate --corpus DIR [--case-set FILE] --unconditioned-results FILE --conditioned-results FILE")
 }

@@ -96,9 +96,11 @@ Raise validation depth:
 
 `--tier` is escalate-only. It may raise the computed tier and never lower it, because the caller of this command and the author of the change it is gating are routinely the same agent. Any request to lower it, including with `--force-tier`, exits 2 and names the tier the classifier computed. Raise `slop.risk` thresholds in the repository config if a cheaper route is genuinely correct; that config is read from the base ref, which the change under test cannot reach.
 
-There is no `--base` flag. Gate strength is read from the base ref, so a base the caller names is a gate the caller configures, and validating one against a canonical ref was not enough: every name that resolution used, including `refs/remotes/origin/main`, is a local ref a single git command writes. The canonical commit now comes from `git ls-remote` against the configured remote, or from an orchestrating pipeline through the Go API, and from nothing else. A run that cannot establish it is pinned to `full-adversarial`, reads built-in defaults instead of a base config it cannot trust, and fails. Every run prints which commit supplied the gate's strength and how it was verified.
+There is no `--base` flag. Gate strength is read from the base ref, so a base the caller names is a gate the caller configures. The canonical commit comes from `git ls-remote` against the configured remote, or from an orchestrating pipeline through the Go API, and from nothing else. A run that cannot establish it is pinned to `full-adversarial`, reads built-in defaults instead of a base config it cannot trust, and fails.
 
-Set `slop.base_ref.remote` and `slop.base_ref.branch` in the repository config to point the gate at a different remote or a long-lived release branch.
+**A standalone run is advisory and cannot certify.** It runs every check and prints every finding, and its closing line is `advisory-clean` or `advisory-blocked` rather than a verdict. Certification requires a base supplied by an orchestrating pipeline, because every input a run can resolve a base from inside the repository under test is one the author of the change writes: refs, `.git/config`, the remote list, and the ambient `GIT_CONFIG_*` environment. Five review rounds hardened five of those in turn and the control moved one input further out each time, so the capability was removed instead. Every run prints the base commit and the remote URL it asked, with any credential redacted.
+
+Set `slop.base_ref.remote` and `slop.base_ref.branch` in the repository config to point the gate at a different remote or a long-lived release branch. That is a convenience for a repository whose trunk is not `main` or `master`, not a trust boundary.
 
 Check outbound text against a live GitHub thread:
 

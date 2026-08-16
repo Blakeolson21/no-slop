@@ -429,9 +429,16 @@ func TestRunConditionedDeterministicProbeRunsWhenConfiguredFloorIsOff(t *testing
 
 	history := make(staticHistory, 3)
 	for index := range history {
-		history[index] = provenance.Record{FindingsByLens: map[string]provenance.LensFindings{
-			"test-capitulation": {Accepted: []provenance.Finding{{Description: "test weakened"}}},
-		}}
+		// Outcome "fail" because these are runs that reached a verdict. A
+		// record whose run never got that far is bookkeeping, not this lane's
+		// history, which is what stopped one throwaway invocation from buying a
+		// fresh lane the v1 route.
+		history[index] = provenance.Record{
+			Outcome: "fail",
+			FindingsByLens: map[string]provenance.LensFindings{
+				"test-capitulation": {Accepted: []provenance.Finding{{Description: "test weakened"}}},
+			},
+		}
 	}
 	reviewer := &countingReviewer{}
 	tests := &countingTests{}
