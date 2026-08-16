@@ -1422,6 +1422,56 @@ export const helper = newHelperName
 			WantNotStdout: []string{"verdict: pass"},
 		},
 		{
+			Name:    "R1-guards-kept-as-inert-text-are-still-removed",
+			Class:   ClassAuthorizationWeakening,
+			Summary: "the detector read raw lines, so parking the deleted guards in a raw string literal left them matching at head and the removal netted to zero with no finding at all",
+			Base: map[string]string{
+				"README.md":     "# Project\n",
+				".no-slop.yaml": cheapestTierConfig,
+				"internal/auth/policy.go": "package auth\n\nfunc Authorize(role string, token string, scope string) error {\n" +
+					"\tif role != \"admin\" {\n\t\treturn errForbidden\n\t}\n" +
+					"\tif token == \"\" {\n\t\treturn errNoToken\n\t}\n" +
+					"\tif scope != \"write\" {\n\t\treturn errNoScope\n\t}\n" +
+					"\treturn nil\n}\n",
+			},
+			Head: map[string]string{
+				"internal/auth/policy.go": "package auth\n\nfunc Authorize(role string, token string, scope string) error {\n\treturn nil\n}\n\n" +
+					"const legacyAuthorize = `\n" +
+					"\tif role != \"admin\" {\n\t\treturn errForbidden\n\t}\n" +
+					"\tif token == \"\" {\n\t\treturn errNoToken\n\t}\n" +
+					"\tif scope != \"write\" {\n\t\treturn errNoScope\n\t}\n" +
+					"`\n",
+			},
+			WantExit:      1,
+			WantStdout:    []string{"refusing checks dropped"},
+			WantNotStdout: []string{"verdict: pass"},
+		},
+		{
+			Name:    "R1-guards-kept-inside-a-block-comment-are-still-removed",
+			Class:   ClassAuthorizationWeakening,
+			Summary: "a /* ... */ wrapper around the same clauses reached the identical outcome, because isComment only tested each line's own prefix",
+			Base: map[string]string{
+				"README.md":     "# Project\n",
+				".no-slop.yaml": cheapestTierConfig,
+				"internal/auth/policy.go": "package auth\n\nfunc Authorize(role string, token string, scope string) error {\n" +
+					"\tif role != \"admin\" {\n\t\treturn errForbidden\n\t}\n" +
+					"\tif token == \"\" {\n\t\treturn errNoToken\n\t}\n" +
+					"\tif scope != \"write\" {\n\t\treturn errNoScope\n\t}\n" +
+					"\treturn nil\n}\n",
+			},
+			Head: map[string]string{
+				"internal/auth/policy.go": "package auth\n\nfunc Authorize(role string, token string, scope string) error {\n\treturn nil\n}\n\n" +
+					"/*\n" +
+					"\tif role != \"admin\" {\n\t\treturn errForbidden\n\t}\n" +
+					"\tif token == \"\" {\n\t\treturn errNoToken\n\t}\n" +
+					"\tif scope != \"write\" {\n\t\treturn errNoScope\n\t}\n" +
+					"*/\n",
+			},
+			WantExit:      1,
+			WantStdout:    []string{"refusing checks dropped"},
+			WantNotStdout: []string{"verdict: pass"},
+		},
+		{
 			Name:    "R1-deleting-guards-outright-still-blocks",
 			Class:   ClassMandatoryCheckIntegrity,
 			Summary: "counting across the change set must not become a licence to delete a guard, so the same shape with no replacement file still fails",

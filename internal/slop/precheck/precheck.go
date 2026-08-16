@@ -4,6 +4,8 @@
 package precheck
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -15,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/Blakeolson21/no-slop/internal/slop/srcstrip"
 )
 
 // File contains the revision views needed by deterministic lens checks.
@@ -188,11 +192,26 @@ func Scan(files []File, intent string) Result {
 // what makes distinct guards look alike: under a consistent renaming
 // `if user == "" { return errForbidden }` and `if cache == "" { return errMissing }`
 // have the same shape, so allowing it would reopen the padding bypass for the
-// price of choosing better padding. The cost of exactness is that an in-place
-// edit that rewords a condition or renames a variable inside a guard now
-// reports, where the count rule was silent.
+// price of choosing better padding.
 //
-// Two residuals, both inherent to matching a token stream:
+// REMOVING A REFUSING CHECK ALWAYS BLOCKS, and there is no exemption path by
+// design. `--tier` only raises, `allow_exemptions` covers the leak scan alone,
+// and nothing here reads a value the change can write. The override is a human
+// adjudicating the finding at the orchestrator layer, not a flag or a config
+// key. Three shapes pay that price and are costs rather than defects:
+//
+//   - An in-place edit that rewords a condition or renames a variable inside a
+//     guard. The clause that left has no identical twin arriving, and no token
+//     stream can tell that from swapping a guard for an unrelated one.
+//   - Deleting dead code inside a surviving file. Its clauses leave the change
+//     set matching nothing, so a commit that drops an unreachable helper
+//     carrying `if err != nil { return err }` reports. This file's own history
+//     is the worked example: the commit that deleted the previous count-based
+//     detector removed three such clauses.
+//   - Consolidating two checks into one, which the count rule also reported.
+//
+// Two residuals, both inherent to matching a token stream, are limits rather
+// than accepted costs:
 //
 // The relocation target is not checked for reachability. Copying the identical
 // clause and its refusing action into a helper nobody calls, or into a file that
@@ -202,12 +221,9 @@ func Scan(files []File, intent string) Result {
 // strictly narrower than the count rule it replaced, because the author has to
 // reproduce the exact clause rather than any three guard-shaped lines.
 //
-// A file deleted outright is not read as removing its guards. Its clauses leave
-// the change set with nothing matching them, so the identity rule alone would
-// report every commit that drops a dead file carrying an `if err != nil`, and
-// this finding blocks at every tier with no exemption path. The carve-out is
-// deliberate and it is a hole: deleting a file and adding a replacement without
-// its guards is not caught here.
+// A file deleted outright is not read as removing its guards, because otherwise
+// every commit that drops a dead file would block. It is a hole: deleting a file
+// and adding a replacement without its guards is not caught here.
 func detectRemovedGuards(files []File) []Finding {
 	relocated := make(map[string]int)
 	for _, file := range files {
@@ -234,8 +250,8 @@ func detectRemovedGuards(files []File) []Finding {
 				Path: file.Path,
 				Line: removedGuardLine(file, signature),
 				Description: fmt.Sprintf(
-					"refusing checks dropped: %q was removed and no equivalent clause is added anywhere in this change",
-					signature),
+					"refusing checks dropped: the guard at this line was removed and no equivalent clause is added anywhere in this change (clause %s)",
+					guardDigest(signature)),
 			})
 		}
 	}
@@ -269,7 +285,7 @@ func unmatchedRemovedGuards(pool map[string]int, file File) []string {
 
 // removedGuardLine points at the baseline line that carried this clause.
 func removedGuardLine(file File, signature string) int {
-	for _, occurrence := range guardOccurrences(splitLines(file.BaselineContent)) {
+	for _, occurrence := range guardOccurrences(file.Path, file.BaselineContent) {
 		if occurrence.signature == signature {
 			return occurrence.line + 1
 		}
@@ -277,22 +293,36 @@ func removedGuardLine(file File, signature string) int {
 	return 1
 }
 
+// guardDigest identifies a clause without reproducing it.
+//
+// The signature is the baseline source with whitespace removed, and the leak
+// scan only ever reads HEAD content, so a credential living solely at the
+// baseline is exactly what a deletion of `if apiKey != "sk-live-..." { ... }`
+// removes: never scanned, never redacted. Printing the clause put that string
+// on stdout and into the provenance record on disk. The digest keeps every
+// clause distinguishable, and the file and line already tell an operator where
+// to look.
+func guardDigest(signature string) string {
+	sum := sha256.Sum256([]byte(signature))
+	return hex.EncodeToString(sum[:])[:12]
+}
+
 // removedGuardSignatures is the multiset of guard clauses this file stopped
 // carrying, netted against the ones it still carries.
 func removedGuardSignatures(file File) map[string]int {
-	return signatureSurplus(file.BaselineContent, file.CurrentContent)
+	return signatureSurplus(file.Path, file.BaselineContent, file.CurrentContent)
 }
 
 // addedGuardSignatures is the mirror: the guard clauses this file did not carry
 // before and does now.
 func addedGuardSignatures(file File) map[string]int {
-	return signatureSurplus(file.CurrentContent, file.BaselineContent)
+	return signatureSurplus(file.Path, file.CurrentContent, file.BaselineContent)
 }
 
-func signatureSurplus(have, against string) map[string]int {
-	other := countSignatures(against)
+func signatureSurplus(path, have, against string) map[string]int {
+	other := countSignatures(path, against)
 	surplus := make(map[string]int)
-	for signature, count := range countSignatures(have) {
+	for signature, count := range countSignatures(path, have) {
 		if extra := count - other[signature]; extra > 0 {
 			surplus[signature] = extra
 		}
@@ -300,9 +330,9 @@ func signatureSurplus(have, against string) map[string]int {
 	return surplus
 }
 
-func countSignatures(content string) map[string]int {
+func countSignatures(path, content string) map[string]int {
 	counts := make(map[string]int)
-	for _, occurrence := range guardOccurrences(splitLines(content)) {
+	for _, occurrence := range guardOccurrences(path, content) {
 		counts[occurrence.signature]++
 	}
 	return counts
@@ -328,7 +358,18 @@ type guardOccurrence struct {
 // guardOccurrences returns every line that opens a refusing check. A line
 // carrying both the clause and its subject is one; a clause whose subject sits
 // in its short body is also one, counted at the clause.
-func guardOccurrences(lines []string) []guardOccurrence {
+// guardOccurrences scans a CODE-ONLY view of the file.
+//
+// Reading raw lines meant a guard could be kept as inert text rather than
+// deleted: wrapping the three authorization clauses in a `/* ... */` block, or
+// parking them in a raw string literal, left them matching at head, so the
+// removal netted to zero against the baseline and the detector produced no
+// finding at all. That costs the author no compilable code, which made it
+// cheaper than every padding shape this detector already refuses. Stripping is
+// shared with the test-count floor (internal/slop/srcstrip) because it is the
+// same defect family: a check that reads text the compiler never sees.
+func guardOccurrences(path, content string) []guardOccurrence {
+	lines := splitLines(srcstrip.BlankPath(path, content))
 	var found []guardOccurrence
 	for number, line := range lines {
 		if isComment(line) || !guardClause.MatchString(line) {

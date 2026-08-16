@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/Blakeolson21/no-slop/internal/slop/srcstrip"
 )
 
 // File is one source artifact from a revision.
@@ -22,55 +24,46 @@ type Result struct {
 	Passed   bool
 }
 
-// language describes how one file kind spells tests, comments, and giving up.
+// language describes how one file kind spells tests and giving up. What a
+// comment or an inert multi-line literal looks like is NOT here: that is the
+// same question the removed-guard detector asks, and both read it from
+// internal/slop/srcstrip so one file kind cannot be stripped two ways.
 type language struct {
 	declaration    *regexp.Regexp
-	lineComment    []string
-	blockComment   *regexp.Regexp
 	perLine        bool
 	annotationLead bool
 }
 
-// languages recognises a test declaration and, just as importantly, knows what
-// a comment looks like in that file kind. A single comment rule that treated
-// `#` as a comment everywhere blanked every Rust `#[test]`, which is the shape
-// of mistake that makes a floor quietly stop counting.
+// languages recognises a test declaration. Getting the comment rule wrong is
+// the neighbouring mistake that makes a floor quietly stop counting: a single
+// rule treating `#` as a comment everywhere blanked every Rust `#[test]`, which
+// is why the strip spec is per file kind and shared rather than guessed here.
 var languages = map[string]language{
 	".go": {
 		declaration: regexp.MustCompile(`^\s*func\s+Test[A-Za-z0-9_]+\s*\(`),
-		lineComment: []string{"//"},
 		perLine:     true,
 	},
 	".py": {
 		declaration:    regexp.MustCompile(`^\s*(?:async\s+)?def\s+test_[A-Za-z0-9_]+\s*\(`),
-		lineComment:    []string{"#"},
-		blockComment:   regexp.MustCompile(`(?s)"""(?:.*?)"""|'''(?:.*?)'''`),
 		perLine:        true,
 		annotationLead: true,
 	},
 	".rb": {
 		declaration: regexp.MustCompile(`^\s*(?:it|specify|test)\s+['"]`),
-		lineComment: []string{"#"},
 		perLine:     true,
 	},
 	".java": {
 		declaration:    regexp.MustCompile(`^\s*@Test\b`),
-		lineComment:    []string{"//"},
-		blockComment:   regexp.MustCompile(`(?s)/\*.*?\*/`),
 		perLine:        true,
 		annotationLead: true,
 	},
 	".kt": {
 		declaration:    regexp.MustCompile(`^\s*@Test\b`),
-		lineComment:    []string{"//"},
-		blockComment:   regexp.MustCompile(`(?s)/\*.*?\*/`),
 		perLine:        true,
 		annotationLead: true,
 	},
 	".rs": {
 		declaration:    regexp.MustCompile(`^\s*#\[test\]`),
-		lineComment:    []string{"//"},
-		blockComment:   regexp.MustCompile(`(?s)/\*.*?\*/`),
 		perLine:        true,
 		annotationLead: true,
 	},
@@ -82,9 +75,7 @@ var languages = map[string]language{
 // cannot match this pattern, so they are excluded by construction rather than
 // by a second scan.
 var javascriptLanguage = language{
-	declaration:  regexp.MustCompile(`\b(?:it|test)\s*\(`),
-	lineComment:  []string{"//"},
-	blockComment: regexp.MustCompile(`(?s)/\*.*?\*/`),
+	declaration: regexp.MustCompile(`\b(?:it|test)\s*\(`),
 }
 
 func languageFor(ext string) (language, bool) {
@@ -129,7 +120,7 @@ func Count(files []File) int {
 		if !ok {
 			continue
 		}
-		lines := strings.Split(stripComments(file.Content, spec), "\n")
+		lines := strings.Split(srcstrip.BlankPath(file.Path, file.Content), "\n")
 		if !spec.perLine {
 			for _, line := range lines {
 				total += len(spec.declaration.FindAllStringIndex(line, -1))
@@ -178,27 +169,4 @@ func matchesSkipMarker(line string) bool {
 		}
 	}
 	return false
-}
-
-// stripComments blanks out commented regions before counting. Counting them
-// meant a commented-out test still held its place in the inventory, so the
-// floor could be satisfied by deleting nothing and running nothing.
-func stripComments(content string, spec language) string {
-	blank := func(match string) string {
-		return strings.Repeat("\n", strings.Count(match, "\n"))
-	}
-	if spec.blockComment != nil {
-		content = spec.blockComment.ReplaceAllStringFunc(content, blank)
-	}
-	lines := strings.Split(content, "\n")
-	for index, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		for _, marker := range spec.lineComment {
-			if strings.HasPrefix(trimmed, marker) {
-				lines[index] = ""
-				break
-			}
-		}
-	}
-	return strings.Join(lines, "\n")
 }

@@ -155,6 +155,75 @@ func TestSameFileGuardPaddingDoesNotExcuseARemoval(t *testing.T) {
 	}
 }
 
+// TestGuardsKeptAsInertTextAreStillRemoved closes the cheapest bypass this
+// detector had. Signatures were collected from raw lines, so parking the
+// deleted clauses in a raw string literal or a block comment left them matching
+// at head: the removal netted to zero and no finding was produced at all. That
+// costs the author no compilable code, unlike every padding shape already
+// refused.
+func TestGuardsKeptAsInertTextAreStillRemoved(t *testing.T) {
+	t.Parallel()
+
+	const guards = "\tif role != \"admin\" {\n\t\treturn errForbidden\n\t}\n" +
+		"\tif token == \"\" {\n\t\treturn errNoToken\n\t}\n"
+	baseline := "package auth\n\nfunc Authorize(role, token string) error {\n" + guards + "\treturn nil\n}\n"
+	gutted := "package auth\n\nfunc Authorize(role, token string) error {\n\treturn nil\n}\n\n"
+
+	for _, probe := range []struct {
+		name    string
+		current string
+	}{
+		{"raw string literal", gutted + "const legacy = `\n" + guards + "`\n"},
+		{"block comment", gutted + "/*\n" + guards + "*/\n"},
+	} {
+		result := precheck.Scan([]precheck.File{{
+			Path:            "internal/auth/policy.go",
+			BaselineContent: baseline,
+			CurrentContent:  probe.current,
+		}}, "")
+		found := false
+		for _, finding := range result.Findings {
+			if strings.Contains(finding.Description, "refusing checks dropped") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: keeping the guards as inert text excused their removal: %+v", probe.name, result.Findings)
+		}
+	}
+}
+
+// TestRemovedGuardFindingDoesNotReproduceBaselineSource keeps deleted source out
+// of stdout and the on-disk provenance record. The leak scan reads head content
+// only, so a credential that exists solely at the baseline is exactly what
+// deleting a hardcoded secret check removes: never scanned, never redacted.
+func TestRemovedGuardFindingDoesNotReproduceBaselineSource(t *testing.T) {
+	t.Parallel()
+
+	const secret = "sk-live-51H8fAKEfAKEfAKEfAKE"
+	result := precheck.Scan([]precheck.File{{
+		Path:            "internal/auth/policy.go",
+		BaselineContent: "package auth\n\nfunc Authorize(apiKey string) error {\n\tif apiKey != \"" + secret + "\" {\n\t\treturn errUnauthorized\n\t}\n\treturn nil\n}\n",
+		CurrentContent:  "package auth\n\nfunc Authorize(apiKey string) error {\n\treturn nil\n}\n",
+	}}, "")
+	reported := false
+	for _, finding := range result.Findings {
+		if !strings.Contains(finding.Description, "refusing checks dropped") {
+			continue
+		}
+		reported = true
+		if strings.Contains(finding.Description, secret) {
+			t.Fatalf("the finding reproduced a baseline-only credential: %q", finding.Description)
+		}
+		if finding.Line == 0 {
+			t.Errorf("the finding carries no line, so the digest is the only way to locate the clause: %+v", finding)
+		}
+	}
+	if !reported {
+		t.Fatalf("deleting the guard produced no finding: %+v", result.Findings)
+	}
+}
+
 // TestRelocatingAGuardWithinOneFileStaysSilent is the false-positive control for
 // the test above. Moving a guard into a helper in the same file keeps the clause
 // in the change set, so identity matching cancels it and nothing reports.
