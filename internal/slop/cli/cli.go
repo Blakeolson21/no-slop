@@ -740,7 +740,17 @@ func (r ResolvedBase) String() string {
 func resolveBase(ctx context.Context, workDir, headRef, requested string) (ResolvedBase, error) {
 	canonicalRef, canonicalBranch, err := detectCanonicalRef(ctx, workDir, config.SlopBaseRef{})
 	if err != nil {
-		return ResolvedBase{}, err
+		// A repository whose trunk is not called main or master has to be able
+		// to say so, and the config that says so cannot be read until a base
+		// exists. The head tree's copy names a candidate ref, and nothing else:
+		// the base resolved through it must itself carry the same pin, so the
+		// name has to already be established in the history it points at rather
+		// than asserted by the change under test.
+		bootstrapped, bootstrapErr := bootstrapPinnedBase(ctx, workDir, headRef)
+		if bootstrapErr != nil {
+			return ResolvedBase{}, errors.Join(err, bootstrapErr)
+		}
+		return applyRequestedBase(ctx, workDir, headRef, requested, bootstrapped)
 	}
 	provisional, err := mergeBase(ctx, workDir, canonicalRef, headRef)
 	if err != nil {
@@ -769,17 +779,21 @@ func resolveBase(ctx context.Context, workDir, headRef, requested string) (Resol
 		}
 	}
 
-	resolved := ResolvedBase{
+	return applyRequestedBase(ctx, workDir, headRef, requested, ResolvedBase{
 		CanonicalRef:    canonicalRef,
 		CanonicalBranch: canonicalBranch,
 		Base:            provisional,
 		Config:          provisionalCfg,
 		Pinned:          pinned,
-	}
+	})
+}
+
+// applyRequestedBase verifies an explicit --base against the canonical ref the
+// caller had no say in, and leaves the resolved base alone when none was given.
+func applyRequestedBase(ctx context.Context, workDir, headRef, requested string, resolved ResolvedBase) (ResolvedBase, error) {
 	if requested == "" {
 		return resolved, nil
 	}
-
 	explicit, err := git.Run(ctx, workDir, "rev-parse", requested+"^{commit}")
 	if err != nil {
 		return ResolvedBase{}, fmt.Errorf("resolve base revision %q: %w", requested, err)
@@ -787,8 +801,8 @@ func resolveBase(ctx context.Context, workDir, headRef, requested string) (Resol
 	if !isAncestor(ctx, workDir, explicit, headRef) {
 		return ResolvedBase{}, fmt.Errorf("--base %s is not an ancestor of the head revision; the gate's strength is read from the base ref, so it may only be a commit the head already contains", requested)
 	}
-	if !isAncestor(ctx, workDir, explicit, canonicalRef) {
-		return ResolvedBase{}, fmt.Errorf("--base %s is not contained in %s; the gate's strength is read from the base ref, so it may only be a commit the canonical ref already carries, not one on the branch under test", requested, canonicalRef)
+	if !isAncestor(ctx, workDir, explicit, resolved.CanonicalRef) {
+		return ResolvedBase{}, fmt.Errorf("--base %s is not contained in %s; the gate's strength is read from the base ref, so it may only be a commit the canonical ref already carries, not one on the branch under test", requested, resolved.CanonicalRef)
 	}
 	explicitCfg, err := loadBaseRepoConfig(ctx, workDir, explicit)
 	if err != nil {
@@ -800,11 +814,64 @@ func resolveBase(ctx context.Context, workDir, headRef, requested string) (Resol
 	return resolved, nil
 }
 
+// bootstrapPinnedBase is the one route by which the head tree gets a say in
+// which ref is canonical, and it is deliberately a dead end for an author.
+//
+// A repository whose trunk is not main or master has to be able to name it, and
+// the config that names it cannot be read before a base exists. So the head
+// tree's copy supplies a CANDIDATE ref, the base is resolved through it, and
+// the config at that base must independently carry the same pin. An author
+// pointing this at their own branch gets a base on their own branch whose
+// config either does not carry the pin, in which case the run refuses, or does,
+// in which case they committed the pin to the history the pin names, which is
+// the same bar as planting anything else in the operator's history.
+func bootstrapPinnedBase(ctx context.Context, workDir, headRef string) (ResolvedBase, error) {
+	headCfg, err := loadBaseRepoConfig(ctx, workDir, headRef)
+	if err != nil {
+		return ResolvedBase{}, err
+	}
+	pin := config.Merge(config.DefaultGlobalConfig(), headCfg).Slop.BaseRef
+	if pin.Remote == "" && pin.Branch == "" {
+		return ResolvedBase{}, fmt.Errorf("no conventional default branch and no slop.base_ref at head to name one")
+	}
+	canonicalRef, canonicalBranch, err := detectCanonicalRef(ctx, workDir, pin)
+	if err != nil {
+		return ResolvedBase{}, err
+	}
+	base, err := mergeBase(ctx, workDir, canonicalRef, headRef)
+	if err != nil {
+		return ResolvedBase{}, err
+	}
+	baseCfg, err := loadBaseRepoConfig(ctx, workDir, base)
+	if err != nil {
+		return ResolvedBase{}, err
+	}
+	confirmed := config.Merge(config.DefaultGlobalConfig(), baseCfg).Slop.BaseRef
+	if confirmed != pin {
+		return ResolvedBase{}, fmt.Errorf("slop.base_ref at head names %q but the config at %s does not, so the head is naming its own canonical ref; commit the pin to that ref's history first", canonicalRef, base)
+	}
+	return ResolvedBase{
+		CanonicalRef:    canonicalRef,
+		CanonicalBranch: canonicalBranch,
+		Base:            base,
+		Config:          baseCfg,
+		Pinned:          true,
+	}, nil
+}
+
 // detectCanonicalRef names the ref the base has to sit on. A pinned remote or
-// branch wins; otherwise origin's published HEAD, then the conventional default
-// branch names, remote copy first. Failing to find one aborts the run: a gate
-// that cannot tell which history is the operator's cannot tell whose config it
-// is reading.
+// branch wins; otherwise the conventional default branch names, remote copy
+// first. Failing to find one aborts the run: a gate that cannot tell which
+// history is the operator's cannot tell whose config it is reading.
+//
+// `refs/remotes/origin/HEAD` is deliberately NOT consulted, and that is not a
+// simplification. It is an ordinary local symbolic ref: `git remote set-head`
+// writes it, and a clone made by fetching one branch records that branch in it.
+// Dogfooding this fix caught exactly that, with the gate happily naming
+// `origin/feature/slop-engine-v1` as the canonical ref for a change on
+// `feature/slop-engine-v1`, which is the whole defect S3 exists to close
+// wearing a different hat. A name the author of the change can set is not a
+// statement about which history is the operator's.
 func detectCanonicalRef(ctx context.Context, workDir string, pin config.SlopBaseRef) (string, string, error) {
 	remote := strings.TrimSpace(pin.Remote)
 	branch := strings.TrimSpace(pin.Branch)
@@ -821,19 +888,11 @@ func detectCanonicalRef(ctx context.Context, workDir string, pin config.SlopBase
 		return "", "", fmt.Errorf("resolve canonical base ref: slop.base_ref names %q, which this repository does not have", strings.Join(candidates, " or "))
 	}
 
-	detected := ""
-	if remoteHead, err := git.Run(ctx, workDir, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"); err == nil {
-		detected = strings.TrimPrefix(strings.TrimSpace(remoteHead), "origin/")
-	}
-	names := []string{"main", "master"}
-	if detected != "" {
-		names = append([]string{detected}, names...)
-	}
 	prefix := "origin"
 	if remote != "" {
 		prefix = remote
 	}
-	for _, name := range names {
+	for _, name := range []string{"main", "master"} {
 		for _, candidate := range []string{prefix + "/" + name, name} {
 			if _, err := git.Run(ctx, workDir, "rev-parse", "--verify", candidate+"^{commit}"); err == nil {
 				return candidate, name, nil

@@ -182,6 +182,96 @@ func TestABaseThatIsNotAnAncestorOfHeadIsRefused(t *testing.T) {
 	}
 }
 
+// TestLocalOriginHeadCannotNameTheCanonicalRef is the same defect wearing a
+// different hat, caught by dogfooding this fix on its own branch.
+// refs/remotes/origin/HEAD is an ordinary local symbolic ref: `git remote
+// set-head` writes it, and a clone made by fetching one branch records that
+// branch in it. Consulting it let the branch under test nominate itself as the
+// history the gate reads its strength from.
+func TestLocalOriginHeadCannotNameTheCanonicalRef(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	writeFile(t, dir, "internal/auth/policy.go", strictAuthPolicy)
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-m", "initial")
+	trunk := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	runGit(t, dir, "switch", "-c", "feature/weaken")
+	writeFile(t, dir, ".no-slop.yaml", weakGateConfig)
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-m", "weak config")
+	writeFile(t, dir, "internal/auth/policy.go", weakAuthPolicy)
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-m", "weaken auth")
+
+	// Both remote-tracking refs exist, and origin/HEAD names the branch under
+	// test, which is exactly the state a single-branch clone leaves behind.
+	runGit(t, dir, "update-ref", "refs/remotes/origin/main", trunk)
+	runGit(t, dir, "update-ref", "refs/remotes/origin/feature/weaken", "HEAD")
+	runGit(t, dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/feature/weaken")
+
+	code, output := runGateIn(t, dir)
+	if !strings.Contains(output, "base: "+trunk+" from merge-base with origin/main") {
+		t.Fatalf("origin/HEAD steered the canonical ref:\n%s", output)
+	}
+	if code == 0 {
+		t.Fatalf("the auth weakening passed:\n%s", output)
+	}
+	if !strings.Contains(output, "gate-config-drift") {
+		t.Fatalf("the weakened config was honored rather than reported:\n%s", output)
+	}
+}
+
+// TestNoConventionalTrunkNeedsAPinAlreadyInHistory covers the bootstrap. A
+// repository whose trunk is neither main nor master has to be able to name it,
+// and the head tree is the only place that name can come from before a base
+// exists, so the base it resolves to must independently carry the same pin.
+func TestNoConventionalTrunkNeedsAPinAlreadyInHistory(t *testing.T) {
+	t.Parallel()
+
+	newRepo := func(t *testing.T, pinAtTrunk bool) (string, string) {
+		t.Helper()
+		dir := t.TempDir()
+		runGit(t, dir, "init", "-b", "trunk")
+		runGit(t, dir, "config", "user.email", "test@example.com")
+		runGit(t, dir, "config", "user.name", "Test")
+		if pinAtTrunk {
+			writeFile(t, dir, ".no-slop.yaml", "slop:\n  base_ref:\n    branch: trunk\n")
+		}
+		writeFile(t, dir, "README.md", "# Project\n")
+		runGit(t, dir, "add", "-A")
+		runGit(t, dir, "commit", "-m", "initial")
+		tip := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+		runGit(t, dir, "switch", "-c", "feature/work")
+		writeFile(t, dir, ".no-slop.yaml", "slop:\n  base_ref:\n    branch: trunk\n")
+		writeFile(t, dir, "README.md", "# Project\n\nWork.\n")
+		runGit(t, dir, "add", "-A")
+		runGit(t, dir, "commit", "-m", "work")
+		return dir, tip
+	}
+
+	established, tip := newRepo(t, true)
+	code, output := runGateIn(t, established)
+	if code != 0 {
+		t.Fatalf("exit = %d, want an established pin honored\n%s", code, output)
+	}
+	if !strings.Contains(output, "base: "+tip+" from merge-base with trunk (canonical ref pinned by slop.base_ref)") {
+		t.Fatalf("the established pin was not used or not reported:\n%s", output)
+	}
+
+	asserted, _ := newRepo(t, false)
+	code, output = runGateIn(t, asserted)
+	if code != 2 {
+		t.Fatalf("exit = %d, want a head-only pin refused\n%s", code, output)
+	}
+	if !strings.Contains(output, "is naming its own canonical ref") {
+		t.Fatalf("the refusal does not explain the bootstrap rule:\n%s", output)
+	}
+}
+
 // TestPinnedBaseRefSelectsTheCanonicalRef covers the operator-side knob. The
 // pin is read from the config at the provisionally resolved base, so moving the
 // canonical ref is authorized by the previous canonical ref rather than by the
