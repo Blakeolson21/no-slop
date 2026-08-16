@@ -52,8 +52,12 @@ var (
 	// provider, or format. Matching the literal strings "transport ==",
 	// "provider ==" and three more meant a fifth dispatch axis, or a `===`, was
 	// invisible.
-	dispatchComparison = regexp.MustCompile(`(?i)\b(?:transport|provider|platform|protocol|format|scheme|backend|driver|vendor|channel|adapter|kind|mode)\s*(?:==|===|!=|\.equals\()`)
+	// The dispatch axes stay concrete. Adding generic words like "kind" and
+	// "mode" matched ordinary code (`token.kind == 'p'`) and turned an
+	// unrelated switch into a sibling-rule finding.
+	dispatchComparison = regexp.MustCompile(`(?i)\b(?:transport|provider|platform|protocol|format|scheme|backend|driver|vendor|channel)\s*(?:==|===|!=|\.equals\()`)
 	explicitBranch     = regexp.MustCompile(`(?i)\bif\b[^\n]*\bexplicit`)
+	conditionalLine    = regexp.MustCompile(`(?i)^\s*(?:\}\s*)?(?:else\s+if|if|elif|elsif|unless|when|catch|except|rescue)\b`)
 	literalToken       = regexp.MustCompile(`["'0-9]`)
 	computedExpression = regexp.MustCompile(`[A-Za-z_]`)
 	upperCaseStart     = regexp.MustCompile(`^[A-Z]`)
@@ -1209,16 +1213,29 @@ func splitReturnValues(rest string) []string {
 	return values
 }
 
+// errorContextNear reports whether the nearest conditional above lineNumber is
+// the one that tests for an error, timeout, or unreadable state.
+//
+// It asks about the NEAREST conditional rather than any error mention in the
+// window. Scanning the whole window flagged every `return true, nil` that
+// happened to sit a few lines below an unrelated `if err != nil`, which in Go
+// is most of them: the shape is the ordinary success path of a (bool, error)
+// function, not a permissive error default. Anchoring on the enclosing branch
+// keeps `if err != nil { return true }` caught and lets the success path go.
 func errorContextNear(lines []string, lineNumber, distance int) bool {
 	start := lineNumber - distance
 	if start < 1 {
 		start = 1
 	}
-	for number := start; number <= lineNumber && number <= len(lines); number++ {
-		lower := strings.ToLower(lines[number-1])
-		if errorContextPattern.MatchString(lower) {
-			return true
+	for number := lineNumber; number >= start; number-- {
+		if number > len(lines) {
+			continue
 		}
+		line := lines[number-1]
+		if !conditionalLine.MatchString(line) {
+			continue
+		}
+		return errorContextPattern.MatchString(strings.ToLower(line))
 	}
 	return false
 }
@@ -1407,15 +1424,22 @@ func defendsAWorkaround(comment string) bool {
 	return containsStem(comment, workaroundStems...)
 }
 
-// followupStems name a comment asserting that somebody else will handle it.
-var followupStems = []string{
-	"filed", "filea", "tracked", "trackedin", "tracking", "assigned", "approved",
-	"scheduled", "ticketed", "logged", "raised", "signedoff", "agreedwith",
-	"willbedone", "followup", "followsup",
-}
+// followupVerb names the claim that somebody has taken the work on, and
+// followupDeferral names the admission that it has not happened yet. Both are
+// required.
+//
+// The verb alone is not the signal: a doc comment saying "maps an assigned name
+// to the first line that assigns it" uses one and defers nothing. These match
+// on word boundaries rather than on a letter skeleton, because collapsing the
+// spaces made "a new file, and" contain "file a" and made a test named
+// TestFollowupDetection assert its own follow-up.
+var (
+	followupVerb     = regexp.MustCompile(`(?i)\b(?:filed|filing|tracked|tracking|assigned|approved|scheduled|ticketed|logged|raised|signed\s+off|agreed)\b`)
+	followupDeferral = regexp.MustCompile(`(?i)\b(?:todo|fixme|hack|xxx|later|next|follow[\s-]?up|removal|remove|removing|temporar\w*|deferred|defer|future|eventually|upcoming|quarter|for\s+now)\b`)
+)
 
 func assertsAFollowup(comment string) bool {
-	return containsStem(comment, followupStems...)
+	return followupVerb.MatchString(comment) && followupDeferral.MatchString(comment)
 }
 
 func containsAny(value string, needles ...string) bool {

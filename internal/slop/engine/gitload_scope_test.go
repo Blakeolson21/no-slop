@@ -142,7 +142,7 @@ func TestLeakScanContentSurvivesADiffSuppressingGitattribute(t *testing.T) {
 		t.Fatal(err)
 	}
 	notes := changeFor(t, changes, "NOTES.md")
-	if !strings.Contains(notes.AddedContent, "AKIAIOSFODNN7EXAMPLE") {
+	if !strings.Contains(notes.AddedContent, "AKIAIOSFODNN7EXAMPLE") { // noslop:allow-leak
 		t.Fatalf("scannable content is empty, so the leak scan would report clean: %+v", notes)
 	}
 	if notes.ScanState != engine.ScanWholeBlobFallback {

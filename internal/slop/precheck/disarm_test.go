@@ -101,11 +101,14 @@ func TestWorkaroundDetectionSurvivesRewording(t *testing.T) {
 func TestFollowupDetectionSurvivesRewording(t *testing.T) {
 	t.Parallel()
 
+	// Each of these both claims somebody has the work and admits it has not
+	// happened. A comment that only uses the verb is not a deferral, which is
+	// why the detector needs both halves.
 	for _, comment := range []string{
-		"// Filed with the platform team.",
-		"// Tracking this separately.",
-		"// Will be done in the next pass.",
-		"// Signed off by the reviewer.",
+		"// Filed with the platform team for a later fix.",
+		"// Tracking removal of this path separately.",
+		"// TODO: assigned to the platform team.",
+		"// Signed off for removal next quarter.",
 	} {
 		result := precheck.Scan([]precheck.File{{
 			Path:           "client.go",
@@ -116,7 +119,7 @@ func TestFollowupDetectionSurvivesRewording(t *testing.T) {
 			t.Errorf("comment %q produced no follow-up finding: %+v", comment, result.Findings)
 		}
 	}
-	withReference := "// Filed as https://example.com/issues/12."
+	withReference := "// TODO: Filed as https://example.com/issues/12."
 	result := precheck.Scan([]precheck.File{{
 		Path:           "client.go",
 		AddedContent:   "\n" + withReference + "\n",

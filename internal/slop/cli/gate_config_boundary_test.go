@@ -280,7 +280,7 @@ func TestProseQuotingTheMarkerDoesNotExemptItsOwnLine(t *testing.T) {
 
 	repo := newBoundaryRepo(t, map[string]string{"README.md": "# Project\n"})
 	repo.commit(t, map[string]string{
-		"fixtures/notes.txt": "the marker noslop:allow-leakage is not the marker, key AKIAIOSFODNN7EXAMPLE\n",
+		"fixtures/notes.txt": "the marker noslop:allow-leakage is not the marker, key AKIAIOSFODNN7EXAMPLE\n", // noslop:allow-leak
 	})
 
 	code, output := repo.gate(t, "--tier", "leak-scan-only")
