@@ -263,8 +263,10 @@ validation at Review, and publishes it through Push**; a PR that is merely behin
 either, since the platform merges it. The one exception is when that monitor is
 no longer running - the PR was closed, the run was aborted or superseded, it
 idle-timed-out, or its auto-fix attempts were exhausted - in which case recover
-with `no-slop rerun`, which cancels the stale monitor and re-runs the full
-pipeline including a deterministic rebase step. Do **not** reach for
+with `no-slop rerun`. When the failed run has an exact, mechanically
+verified post-validation delivery checkpoint, the rerun resumes at Push without
+repeating Review, Test, or Document; otherwise it fails closed to the full
+pipeline, including a deterministic rebase step. Do **not** reach for
 `no-slop axi run` to refresh a still-active PR: after `checks-passed` it
 reattaches to the running monitor (HEAD unchanged) and returns its output
 without rebasing.
