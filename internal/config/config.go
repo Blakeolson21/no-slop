@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Blakeolson21/no-slop/internal/evidence"
 	"github.com/Blakeolson21/no-slop/internal/identity"
 	"github.com/Blakeolson21/no-slop/internal/types"
 	"github.com/Blakeolson21/no-slop/internal/winproc"
@@ -59,10 +60,31 @@ const (
 	// with an agent round, but they are not free: each one keeps the monitor
 	// polling the same commit, so the budget stays small by construction.
 	MaxCIRerunTransient = 5
+	// DefaultEvalMaxCases caps the auto-captured local eval corpus. Cases
+	// share one object pool per repository, so the marginal cost of a case is
+	// its JSON records plus the objects its commits actually introduced, not a
+	// copy of the repository. The cap exists to bound that JSON and to keep
+	// the corpus a recent, representative window rather than an archive.
+	DefaultEvalMaxCases = 200
+	// DefaultEvalDiversifiedSize caps the official gold-only eval set.
+	// 0 means one gold case per stratum with no Hamilton bound.
+	DefaultEvalDiversifiedSize = 32
+	// DefaultEvidenceRetention is how long a run's on-disk evidence survives
+	// before the daemon reaps it. It is comfortably longer than typical PR
+	// review latency because a PR body references these artifacts by local path
+	// whenever publishing is off or the provider has no derivable links. This
+	// is no-mistakes' own budget: the point of owning it is that no OS temp
+	// timer decides when a user's screenshots disappear.
+	DefaultEvidenceRetention = 14 * 24 * time.Hour
+	// DefaultEvidenceMaxRuns caps how many run directories survive regardless
+	// of age, so a burst of parallel runs that all land inside the retention
+	// window still cannot grow the directory without bound.
+	DefaultEvidenceMaxRuns = 200
 )
 
 // GlobalConfig represents ~/.no-mistakes/config.yaml.
 type GlobalConfig struct {
+	SourceYAML           []byte              `yaml:"-"`
 	Agent                types.AgentName     `yaml:"agent"`
 	Agents               []types.AgentName   `yaml:"-"`
 	ACPXPath             string              `yaml:"acpx_path"`
@@ -88,6 +110,11 @@ type GlobalConfig struct {
 	Commit CommitRaw
 	Intent IntentRaw
 	Test   TestRaw
+	// Eval is resolved at load time because it is global-only: it describes
+	// this machine's local eval corpus (disk, retention, whether review rounds
+	// record replay provenance), never a repository policy. Keeping it out of
+	// RepoConfig means no pushed branch can enable, disable, or resize it.
+	Eval Eval
 }
 
 // globalConfigRaw is the on-disk YAML representation with duration as string.
@@ -108,6 +135,7 @@ type globalConfigRaw struct {
 	Commit               CommitRaw           `yaml:"commit"`
 	Intent               IntentRaw           `yaml:"intent"`
 	Test                 TestRaw             `yaml:"test"`
+	Eval                 EvalRaw             `yaml:"eval"`
 }
 
 // RepoConfig represents .no-slop.yaml in a repo root.
@@ -433,26 +461,31 @@ type AutoFix struct {
 
 // Config is the merged result of global + per-repo configuration.
 type Config struct {
-	Agent                types.AgentName
-	Agents               []types.AgentName
-	ACPXPath             string
-	ACPRegistryOverrides map[string]string
-	AgentPathOverride    map[string]string
-	AgentArgsOverride    map[string][]string
-	CITimeout            time.Duration
-	StepQuietWarning     time.Duration
-	LogLevel             string
-	SessionReuse         bool
-	Commands             Commands
-	IgnorePatterns       []string
-	AutoFix              AutoFix
-	CI                   CI
-	Commit               Commit
-	Intent               Intent
-	Test                 Test
-	Document             Document
-	Review               Review
-	Slop                 Slop
+	ReplayGlobalYAML      []byte
+	ReplayRepoYAML        []byte
+	TrustedConfigSHA      string
+	CaptureEvalProvenance bool
+	Agent                 types.AgentName
+	Agents                []types.AgentName
+	ACPXPath              string
+	ACPRegistryOverrides  map[string]string
+	AgentPathOverride     map[string]string
+	AgentArgsOverride     map[string][]string
+	CITimeout             time.Duration
+	StepQuietWarning      time.Duration
+	LogLevel              string
+	SessionReuse          bool
+	Eval                  Eval
+	Commands              Commands
+	IgnorePatterns        []string
+	AutoFix               AutoFix
+	CI                    CI
+	Commit                Commit
+	Intent                Intent
+	Test                  Test
+	Document              Document
+	Review                Review
+	Slop                  Slop
 	// DisableProjectSettings is the resolved, trusted-only opt-out (see the
 	// RepoConfig field). When true, gate agents are launched with their
 	// project-level settings/instructions suppressed; the daemon fails the run
@@ -530,6 +563,25 @@ type TestRaw struct {
 type EvidenceRaw struct {
 	StoreInRepo *bool   `yaml:"store_in_repo"`
 	Dir         *string `yaml:"dir"`
+	// Branch selects the orphan evidence branch. It names a git ref the
+	// daemon pushes to with the maintainer's credentials, so it is honored
+	// ONLY from the trusted default-branch copy of .no-mistakes.yaml (see
+	// EffectiveRepoConfig): a contributor's pushed branch must not be able to
+	// aim evidence commits at another branch of the repository.
+	Branch *string `yaml:"branch"`
+	// LocalRoot, Retention, and MaxRuns describe this MACHINE's evidence
+	// storage: where the daemon writes artifacts on local disk and how long it
+	// keeps them. They are global-only - Merge resolves them straight from
+	// GlobalConfig and never from a repository, trusted copy included. A
+	// repository does not get to name a filesystem path the daemon writes to,
+	// nor to set the retention budget for a resource every other repository on
+	// the machine shares. (Contrast Branch, which is trusted-repo-settable
+	// because a branch genuinely is per-repository state.)
+	//
+	// LocalRoot must be absolute; see validateTestRaw.
+	LocalRoot *string `yaml:"local_root"`
+	Retention *string `yaml:"retention"`
+	MaxRuns   *int    `yaml:"max_runs"`
 }
 
 // Test is the resolved test-step config.
@@ -538,12 +590,58 @@ type Test struct {
 }
 
 // Evidence is the resolved test-evidence config. When StoreInRepo is true, the
-// test step writes evidence artifacts into Dir (relative to the repo worktree)
-// so they are committed, pushed, and viewable directly on the PR. Otherwise
-// evidence stays in a temporary directory referenced only by local path.
+// run publishes its evidence artifacts to the orphan Branch of the same
+// repository, under Dir, and links them from the pull request body. Evidence
+// never enters the pushed code branch, so it never reaches the default
+// branch's history. Otherwise evidence stays on local disk under LocalRoot,
+// referenced only by local path.
 type Evidence struct {
 	StoreInRepo bool
 	Dir         string
+	Branch      string
+	// LocalRoot overrides the app-root default for on-disk evidence; empty
+	// means paths.EvidenceDir(). Retention and MaxRuns bound how much of it
+	// survives: no-mistakes reaps its own evidence rather than leaving that to
+	// an OS temp-directory timer. Zero disables the corresponding bound.
+	LocalRoot string
+	Retention time.Duration
+	MaxRuns   int
+}
+
+// EvalRaw is the YAML representation of local evaluation-corpus settings.
+// Pointer fields distinguish "not set" (nil) from explicit zero/false values.
+type EvalRaw struct {
+	CaptureProvenance *bool `yaml:"capture_provenance"`
+	AutoCapture       *bool `yaml:"auto_capture"`
+	MaxCases          *int  `yaml:"max_cases"`
+	DiversifiedSize   *int  `yaml:"diversified_size"`
+}
+
+// Eval is the resolved local evaluation-corpus config. It is deliberately a
+// first-class configuration key rather than an environment variable: the
+// daemon is a long-lived launchd/systemd service whose unit file is re-rendered
+// on install and update, and only proxy variables survive that re-render, so an
+// environment-gated corpus would silently stop collecting after an update.
+//
+// CaptureProvenance is the upstream half: it makes every review round record
+// the exact commit and configuration inputs a replay needs. A round written
+// with it off can never be captured afterwards, because the pinned global
+// configuration is a point-in-time snapshot that no longer exists anywhere.
+//
+// AutoCapture is the downstream half: it freezes each finished run's review
+// passes into the local corpus without anyone running a command. It has no
+// effect while CaptureProvenance is off, since there is nothing to freeze.
+type Eval struct {
+	CaptureProvenance bool
+	AutoCapture       bool
+	// MaxCases caps the auto-captured corpus. 0 keeps every case. Pruning is
+	// oldest-first and never removes a case that already has recorded
+	// candidate replays, so a corpus you have spent tokens on is never
+	// silently reclaimed underneath a comparison.
+	MaxCases int
+	// DiversifiedSize caps the official gold-only eval set. 0 means one gold
+	// case per stratum (no Hamilton bound). Unlabeled cases never fill it.
+	DiversifiedSize int
 }
 
 // IntentRaw is the YAML representation of user-intent extraction settings.
@@ -736,10 +834,20 @@ intent:
   # disabled_readers: [codex]
 
 # Test-step evidence artifacts (screenshots, recordings, logs the test step
-# gathers to demonstrate the change works). By default they are kept in a
-# temporary directory and referenced by local path. Opt in to store_in_repo to
-# commit them into the repo under a readable, branch-named directory so they are
-# pushed and render directly on the PR.
+# gathers to demonstrate the change works). By default they are kept on local
+# disk under <NM_HOME>/evidence and referenced by local path. Opt in to
+# store_in_repo to publish them to an orphan evidence branch in the same
+# repository and link them from the PR body. The evidence branch shares no
+# history with your code branches, so artifacts never enter the pushed branch or
+# the default branch.
+#
+# no-mistakes reaps its own evidence rather than leaving that to an OS temp
+# directory timer: retention ages run directories out (default 14 days) and
+# max_runs caps how many survive regardless of age (default 200). Set retention
+# to "unlimited", or either to 0, to disable that bound. local_root moves the
+# directory to another disk and must be an absolute path. These three are
+# global-only - a repository's .no-mistakes.yaml cannot change where this
+# machine writes evidence or how long it keeps it.
 # test:
 #   evidence:
 #     store_in_repo: true
@@ -1217,21 +1325,27 @@ func DefaultGlobalConfig() *GlobalConfig {
 		DaemonConnectTimeout: DefaultDaemonConnectTimeout,
 		LogLevel:             "info",
 		SessionReuse:         true,
+		Eval:                 evalDefaults(),
 	}
 }
 
 // LoadGlobal reads global config from path. Returns defaults if file doesn't exist.
 func LoadGlobal(path string) (*GlobalConfig, error) {
 	cfg := DefaultGlobalConfig()
-
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
+			cfg.SourceYAML = []byte("{}\n")
 			return cfg, nil
 		}
 		return nil, fmt.Errorf("read global config: %w", err)
 	}
+	return LoadGlobalFromBytes(data)
+}
 
+func LoadGlobalFromBytes(data []byte) (*GlobalConfig, error) {
+	cfg := DefaultGlobalConfig()
+	cfg.SourceYAML = append([]byte(nil), data...)
 	var raw globalConfigRaw
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
@@ -1239,6 +1353,12 @@ func LoadGlobal(path string) (*GlobalConfig, error) {
 		return nil, fmt.Errorf("parse global config: %w", err)
 	}
 	if err := validateCommitRaw(raw.Commit); err != nil {
+		return nil, fmt.Errorf("parse global config: %w", err)
+	}
+	if err := validateTestRaw(raw.Test); err != nil {
+		return nil, fmt.Errorf("parse global config: %w", err)
+	}
+	if err := validateEvalRaw(raw.Eval); err != nil {
 		return nil, fmt.Errorf("parse global config: %w", err)
 	}
 
@@ -1302,6 +1422,7 @@ func LoadGlobal(path string) (*GlobalConfig, error) {
 	cfg.Commit = raw.Commit
 	cfg.Intent = raw.Intent
 	cfg.Test = raw.Test
+	applyEvalOverrides(&cfg.Eval, &raw.Eval)
 
 	return cfg, nil
 }
@@ -1481,6 +1602,9 @@ func parseRepoConfig(data []byte) (*RepoConfig, error) {
 	if err := validateReviewRaw(cfg.Review); err != nil {
 		return nil, fmt.Errorf("parse repo config: %w", err)
 	}
+	if err := validateTestRaw(cfg.Test); err != nil {
+		return nil, fmt.Errorf("parse repo config: %w", err)
+	}
 	if err := validateSlopRaw(cfg.Slop); err != nil {
 		return nil, fmt.Errorf("parse repo config: %w", err)
 	}
@@ -1648,6 +1772,8 @@ func validatePathInstructionGlob(pattern string) error {
 // Non-executing fields (ignore patterns, auto-fix, commit, intent, test) are
 // always taken from the pushed copy, matching prior behavior, since they cannot
 // run arbitrary shell, select a process, or spend the maintainer's CI minutes.
+// The single exception inside test is evidence.branch, which names a git ref
+// the daemon pushes to and is therefore trusted-only.
 func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *RepoConfig {
 	if pushed == nil {
 		pushed = &RepoConfig{}
@@ -1680,6 +1806,13 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		// billed to the repository. It is trusted-only for that reason, so a
 		// pushed branch cannot raise its own rerun budget to the cap.
 		effective.CI = trusted.CI
+		// test.evidence.branch names the git ref evidence commits are pushed
+		// to with the maintainer's credentials. It is trusted-only so a pushed
+		// branch cannot aim them at another branch of the repository; the rest
+		// of test.evidence stays pushed-readable because it only picks where
+		// artifacts are collected. The publisher independently refuses any
+		// branch without its marker file, so this is defense in depth.
+		effective.Test.Evidence.Branch = trusted.Test.Evidence.Branch
 	} else {
 		effective.Document = DocumentRaw{}
 		effective.Slop = SlopRaw{}
@@ -1687,6 +1820,7 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		effective.DisableProjectSettings = false
 		effective.NoCI = false
 		effective.CI = CIRaw{}
+		effective.Test.Evidence.Branch = nil
 	}
 	if allowRepoCommands {
 		return &effective
@@ -1760,11 +1894,20 @@ func testDefaults() Test {
 		Evidence: Evidence{
 			StoreInRepo: false,
 			Dir:         ".no-slop/evidence",
+			Branch:      evidence.DefaultBranch,
+			Retention:   DefaultEvidenceRetention,
+			MaxRuns:     DefaultEvidenceMaxRuns,
 		},
 	}
 }
 
 // applyTestOverrides applies non-nil raw values onto resolved defaults.
+// The branch name is validated at config parse time (validateTestRaw), so an
+// unusable value never reaches here.
+//
+// It deliberately covers only the repository-relevant half of test.evidence.
+// The local-storage half is applied separately by applyEvidenceStorageOverrides
+// so a repository config can never reach it (see EvidenceRaw.LocalRoot).
 func applyTestOverrides(dst *Test, src *TestRaw) {
 	if src.Evidence.StoreInRepo != nil {
 		dst.Evidence.StoreInRepo = *src.Evidence.StoreInRepo
@@ -1772,6 +1915,128 @@ func applyTestOverrides(dst *Test, src *TestRaw) {
 	if src.Evidence.Dir != nil && strings.TrimSpace(*src.Evidence.Dir) != "" {
 		dst.Evidence.Dir = strings.TrimSpace(*src.Evidence.Dir)
 	}
+	if src.Evidence.Branch != nil && strings.TrimSpace(*src.Evidence.Branch) != "" {
+		if branch, err := evidence.NormalizeBranch(*src.Evidence.Branch); err == nil {
+			dst.Evidence.Branch = branch
+		}
+	}
+}
+
+// applyEvidenceStorageOverrides applies the global-only local-storage half of
+// test.evidence. Merge calls it with the GlobalConfig copy and nothing else, so
+// neither a pushed nor a trusted repository config can move the daemon's
+// evidence directory or change its retention budget. Values are validated at
+// config parse time (validateTestRaw), so an unusable value never reaches here.
+func applyEvidenceStorageOverrides(dst *Evidence, src *EvidenceRaw) {
+	if src.LocalRoot != nil && strings.TrimSpace(*src.LocalRoot) != "" {
+		dst.LocalRoot = strings.TrimSpace(*src.LocalRoot)
+	}
+	if src.Retention != nil {
+		if d, err := parseEvidenceRetention(*src.Retention); err == nil {
+			dst.Retention = d
+		}
+	}
+	if src.MaxRuns != nil && *src.MaxRuns >= 0 {
+		dst.MaxRuns = *src.MaxRuns
+	}
+}
+
+// parseEvidenceRetention interprets test.evidence.retention. The keyword
+// "unlimited" (also "none"/"off"/"never"), or any non-positive duration,
+// disables age-based reaping and resolves to 0, which keeps every run's
+// evidence until the max_runs ceiling removes it.
+func parseEvidenceRetention(value string) (time.Duration, error) {
+	trimmed := strings.ToLower(strings.TrimSpace(value))
+	switch trimmed {
+	case "":
+		return DefaultEvidenceRetention, nil
+	case "unlimited", "none", "off", "never":
+		return 0, nil
+	}
+	d, err := time.ParseDuration(trimmed)
+	if err != nil {
+		return 0, fmt.Errorf("test.evidence.retention: parse %q: %w", value, err)
+	}
+	if d <= 0 {
+		return 0, nil
+	}
+	return d, nil
+}
+
+// evalDefaults returns the default local evaluation-corpus settings. Both
+// halves are on by default: provenance is unrecoverable if it was not recorded
+// at review time, and a corpus nobody has to remember to collect is the only
+// kind that exists when a comparison is finally needed. The default cap keeps
+// the corpus a rolling window rather than an unbounded archive.
+func evalDefaults() Eval {
+	return Eval{CaptureProvenance: true, AutoCapture: true, MaxCases: DefaultEvalMaxCases, DiversifiedSize: DefaultEvalDiversifiedSize}
+}
+
+// applyEvalOverrides applies non-nil raw values onto resolved defaults. The
+// max_cases value is validated at config parse time (validateEvalRaw).
+func applyEvalOverrides(dst *Eval, src *EvalRaw) {
+	if src.CaptureProvenance != nil {
+		dst.CaptureProvenance = *src.CaptureProvenance
+	}
+	if src.AutoCapture != nil {
+		dst.AutoCapture = *src.AutoCapture
+	}
+	if src.MaxCases != nil && *src.MaxCases >= 0 {
+		dst.MaxCases = *src.MaxCases
+	}
+	if src.DiversifiedSize != nil && *src.DiversifiedSize >= 0 {
+		dst.DiversifiedSize = *src.DiversifiedSize
+	}
+}
+
+// validateEvalRaw fails the config closed on a negative eval.max_cases. A
+// negative cap has no defensible meaning here - it is neither "keep everything"
+// (0) nor a bound - so surfacing the typo beats guessing which one was meant.
+func validateEvalRaw(raw EvalRaw) error {
+	if raw.MaxCases != nil && *raw.MaxCases < 0 {
+		return fmt.Errorf("eval.max_cases must be 0 (keep every case) or greater, got %d", *raw.MaxCases)
+	}
+	if raw.DiversifiedSize != nil && *raw.DiversifiedSize < 0 {
+		return fmt.Errorf("eval.diversified_size must be 0 (one gold case per stratum) or greater, got %d", *raw.DiversifiedSize)
+	}
+	return nil
+}
+
+// validateTestRaw fails the config closed on a test.evidence.branch value Git
+// would reject as a branch name. Rejecting the config surfaces the typo where
+// the user can fix it, rather than letting a run reach the push and fail there.
+//
+// Like validateReviewRaw this deliberately also runs on the PUSHED copy even
+// though EffectiveRepoConfig only honors the trusted branch name: a branch
+// carrying an invalid value has to fail before it merges.
+func validateTestRaw(test TestRaw) error {
+	if test.Evidence.Branch != nil {
+		if _, err := evidence.NormalizeBranch(*test.Evidence.Branch); err != nil {
+			return fmt.Errorf("test.evidence.branch: %w", err)
+		}
+	}
+	// local_root must be absolute. The daemon's working directory is a bare
+	// gate repository, so a relative path would resolve somewhere the operator
+	// never named - and evidence would silently scatter instead of landing
+	// where they asked. Surface the mistake in the config rather than at run
+	// time. Like branch, this also validates the PUSHED copy even though the
+	// value is honored only from the global config: a branch carrying an
+	// invalid value has to fail before it merges.
+	if test.Evidence.LocalRoot != nil {
+		root := strings.TrimSpace(*test.Evidence.LocalRoot)
+		if root != "" && !filepath.IsAbs(root) {
+			return fmt.Errorf("test.evidence.local_root must be an absolute path, got %q", root)
+		}
+	}
+	if test.Evidence.Retention != nil {
+		if _, err := parseEvidenceRetention(*test.Evidence.Retention); err != nil {
+			return err
+		}
+	}
+	if test.Evidence.MaxRuns != nil && *test.Evidence.MaxRuns < 0 {
+		return fmt.Errorf("test.evidence.max_runs must be 0 (keep every run) or greater, got %d", *test.Evidence.MaxRuns)
+	}
+	return nil
 }
 
 // autoFixDefaults returns the default auto-fix configuration.
@@ -1872,6 +2137,10 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 	test := testDefaults()
 	applyTestOverrides(&test, &global.Test)
 	applyTestOverrides(&test, &repo.Test)
+	// Applied last and from the global config only: where the daemon writes
+	// evidence on this machine, and how long it keeps it, is never a
+	// repository's decision (see EvidenceRaw.LocalRoot).
+	applyEvidenceStorageOverrides(&test.Evidence, &global.Test.Evidence)
 
 	commit := Commit{FixMessage: DefaultFixMessageTemplate}
 	if global.Commit.FixMessage != nil {
@@ -1894,6 +2163,7 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		StepQuietWarning:     global.StepQuietWarning,
 		LogLevel:             global.LogLevel,
 		SessionReuse:         global.SessionReuse,
+		Eval:                 global.Eval,
 		Commands:             repo.Commands,
 		IgnorePatterns:       repo.IgnorePatterns,
 		AutoFix:              af,
@@ -1922,6 +2192,22 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 	}
 
 	return cfg
+}
+
+// EnableEvalProvenance pins the exact configuration this run reviews under so
+// a later replay grades a candidate against identical conditions.
+func (c *Config) EnableEvalProvenance(global *GlobalConfig, repo *RepoConfig) error {
+	if c == nil || global == nil || repo == nil {
+		return fmt.Errorf("eval provenance requires merged, global, and repository configuration")
+	}
+	repoYAML, err := yaml.Marshal(repo)
+	if err != nil {
+		return fmt.Errorf("serialize eval repository configuration: %w", err)
+	}
+	c.ReplayGlobalYAML = append([]byte(nil), global.SourceYAML...)
+	c.ReplayRepoYAML = repoYAML
+	c.CaptureEvalProvenance = true
+	return nil
 }
 
 func resolveSlop(raw SlopRaw) Slop {

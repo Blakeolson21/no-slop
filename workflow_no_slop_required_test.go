@@ -275,7 +275,7 @@ func generatedPipelineBody(t *testing.T) string {
 		{ID: "review", StepName: types.StepReview, Status: types.StepStatusCompleted},
 	}, map[string][]*db.StepRound{
 		"review": []*db.StepRound{{Round: 1, Trigger: "initial"}},
-	})
+	}, "0123456789abcdef0123456789abcdef01234567")
 	if strings.TrimSpace(body) == "" {
 		t.Fatal("pipeline summary builder returned an empty PR body")
 	}

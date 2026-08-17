@@ -170,9 +170,16 @@ func commitAgentFixes(sctx *pipeline.StepContext, stepName types.StepName, summa
 	if err := adoptBranchRef(sctx, headSHA); err != nil {
 		return err
 	}
+	startingHead := strings.TrimSpace(sctx.ReviewStartingHeadSHA)
+	if startingHead == "" {
+		startingHead = sctx.Run.HeadSHA
+	}
 	sctx.Run.HeadSHA = headSHA
 	if err := sctx.DB.UpdateRunHeadSHA(sctx.Run.ID, headSHA); err != nil {
 		return err
+	}
+	if stepName == types.StepReview {
+		pipeline.PersistUncertifiedPipelineRange(sctx, startingHead, headSHA)
 	}
 	if commitMessage != "" {
 		sctx.Log(fmt.Sprintf("committed agent fixes: %s", commitMessage))

@@ -505,6 +505,7 @@ func updateHeadSHA(ctx context.Context, sctx *pipeline.StepContext) (*pipeline.S
 		return nil, fmt.Errorf("resolve head after rebase: %w", err)
 	}
 	if headSHA != "" && headSHA != sctx.Run.HeadSHA {
+		oldHead := sctx.Run.HeadSHA
 		// Anchor the rebased head on the gate branch ref before recording it.
 		// The pipeline worktree is detached, so without this the recorded head
 		// is referenced by nothing: the worktree is removed at the end of the
@@ -517,6 +518,7 @@ func updateHeadSHA(ctx context.Context, sctx *pipeline.StepContext) (*pipeline.S
 		if err := adoptBranchRef(sctx, headSHA); err != nil {
 			return nil, err
 		}
+		pipeline.RemapUncertifiedPipelineRangeAfterRebase(sctx, oldHead, headSHA)
 		sctx.Run.HeadSHA = headSHA
 		if err := sctx.DB.UpdateRunHeadSHA(sctx.Run.ID, headSHA); err != nil {
 			return nil, err

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -47,6 +48,117 @@ func TestTerminateShellCommandGroup_ReapsGrandchildAfterCleanExit(t *testing.T) 
 	if !pidGoneWithin(grandchild, 5*time.Second) {
 		_ = syscall.Kill(grandchild, syscall.SIGKILL)
 		t.Fatalf("grandchild %d still alive after TerminateShellCommandGroup; group leaked", grandchild)
+	}
+}
+
+// TestTerminateShellCommandGroup_AsksBeforeKilling pins that a surviving
+// group member receives SIGTERM and can flush its own state before escalation.
+func TestTerminateShellCommandGroup_AsksBeforeKilling(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "grandchild.pid")
+	termFile := filepath.Join(dir, "grandchild.term")
+	readyFile := filepath.Join(dir, "grandchild.ready")
+
+	cmd := exec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestTerminateShellCommandGroupTermHelper$")
+	cmd.Env = append(os.Environ(),
+		"NM_SHELLENV_TERM_HELPER=leader",
+		"NM_SHELLENV_TERM_PID="+pidFile,
+		"NM_SHELLENV_TERM_READY="+readyFile,
+		"NM_SHELLENV_TERM_FILE="+termFile,
+	)
+	ConfigureShellCommand(cmd)
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("leader Run: %v", err)
+	}
+	grandchild := readPID(t, pidFile, 5*time.Second)
+	t.Cleanup(func() { _ = syscall.Kill(grandchild, syscall.SIGKILL) })
+
+	TerminateShellCommandGroup(cmd)
+
+	if !pidGoneWithin(grandchild, 5*time.Second) {
+		t.Fatalf("grandchild %d still alive after TerminateShellCommandGroup", grandchild)
+	}
+	if _, err := os.Stat(termFile); err != nil {
+		t.Fatalf("grandchild never ran its SIGTERM handler: %v", err)
+	}
+}
+
+func TestTerminateShellCommandGroupTermHelper(t *testing.T) {
+	switch os.Getenv("NM_SHELLENV_TERM_HELPER") {
+	case "leader":
+		child := exec.Command(os.Args[0], "-test.run=^TestTerminateShellCommandGroupTermHelper$")
+		child.Env = append(os.Environ(),
+			"NM_SHELLENV_TERM_HELPER=grandchild",
+			"NM_SHELLENV_TERM_PID="+os.Getenv("NM_SHELLENV_TERM_PID"),
+			"NM_SHELLENV_TERM_READY="+os.Getenv("NM_SHELLENV_TERM_READY"),
+			"NM_SHELLENV_TERM_FILE="+os.Getenv("NM_SHELLENV_TERM_FILE"),
+		)
+		if err := child.Start(); err != nil {
+			os.Exit(2)
+		}
+		if !waitForHelperReady(os.Getenv("NM_SHELLENV_TERM_READY"), 5*time.Second) {
+			_ = child.Process.Kill()
+			os.Exit(3)
+		}
+		os.Exit(0)
+	case "grandchild":
+		term := make(chan os.Signal, 1)
+		signal.Notify(term, syscall.SIGTERM)
+		if err := os.WriteFile(os.Getenv("NM_SHELLENV_TERM_PID"), []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
+			os.Exit(4)
+		}
+		if err := os.WriteFile(os.Getenv("NM_SHELLENV_TERM_READY"), []byte("ready"), 0o644); err != nil {
+			os.Exit(5)
+		}
+		<-term
+		if err := os.WriteFile(os.Getenv("NM_SHELLENV_TERM_FILE"), []byte("terminated"), 0o644); err != nil {
+			os.Exit(6)
+		}
+		os.Exit(0)
+	default:
+		t.Skip("helper invoked by TestTerminateShellCommandGroup_AsksBeforeKilling")
+	}
+}
+
+func TestTerminateShellCommandGroup_EscalatesWhenSIGTERMIsIgnored(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
+
+	script := "( trap '' TERM; while :; do sleep 0.1; done ) >/dev/null 2>&1 & echo $! > " + pidFile + "; exit 0"
+	cmd := exec.CommandContext(context.Background(), "/bin/sh", "-c", script)
+	ConfigureShellCommand(cmd)
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("leader Run: %v", err)
+	}
+	grandchild := readPID(t, pidFile, 5*time.Second)
+
+	TerminateShellCommandGroup(cmd)
+
+	if !pidGoneWithin(grandchild, 5*time.Second) {
+		_ = syscall.Kill(grandchild, syscall.SIGKILL)
+		t.Fatalf("grandchild %d ignored SIGTERM and was never escalated to SIGKILL", grandchild)
+	}
+}
+
+func TestConfigureShellCommand_CancelEscalatesWithoutBlockingWait(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	script := "( trap '' TERM; while :; do sleep 0.1; done ) >/dev/null 2>&1 & echo $! > " + pidFile + "; " +
+		"trap '' TERM; while :; do sleep 0.1; done"
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", script)
+	ConfigureShellCommand(cmd)
+	if err := StartShellCommand(cmd); err != nil {
+		t.Fatalf("StartShellCommand: %v", err)
+	}
+	grandchild := readPID(t, pidFile, 5*time.Second)
+	t.Cleanup(func() { _ = syscall.Kill(grandchild, syscall.SIGKILL) })
+
+	cancel()
+	_ = cmd.Wait()
+
+	if !pidGoneWithin(grandchild, 10*time.Second) {
+		t.Fatalf("grandchild %d survived cancellation", grandchild)
 	}
 }
 

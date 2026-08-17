@@ -32,6 +32,8 @@ demo_raw.gif
 # Environment
 .env
 .env.local
+.no-mistakes/evidence/
+.no-slop/evidence/
 
 # Local NoSlop identity data
 .noslop-blocklist

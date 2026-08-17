@@ -16,7 +16,7 @@ The daemon also reads `document.instructions`, the `review` section (`review.pat
 If the default branch cannot be fetched and resolved to a readable commit, or its present repo config (`.no-slop.yaml` or the `.no-mistakes.yaml` compatibility filename) cannot be read and parsed, the run aborts before launching an agent.
 A readable default-branch tree with neither config file is valid and uses defaults.
 Commit the gate-control settings you want to your default branch.
-Non-executing fields (`ignore_patterns`, `auto_fix`, `commit`, `intent`, `test`) are still read from the pushed branch.
+Non-executing fields (`ignore_patterns`, `auto_fix`, `commit`, `intent`, `test`) are still read from the pushed branch, except `test.evidence.branch`, which names a git ref the daemon pushes to.
 
 If you genuinely want per-branch `commands` and `agent` (for example, a single-developer repo where you trust your own feature branches), opt in with [`allow_repo_commands: true`](#allow_repo_commands) in this same file on your default branch. This re-enables the previous behavior with eyes open. The switch is read only from the trusted default-branch copy, so a contributor cannot self-enable it from a pushed branch.
 :::
@@ -510,7 +510,7 @@ Valid `disabled_readers` values are `claude`, `codex`, `opencode`, `rovodev`, `p
 
 ### test.evidence
 
-Override where evidence artifacts from the test step are stored.
+Configure repository publication of evidence artifacts from the test step.
 Fields not set here inherit from global config and then the built-in defaults.
 
 | Field | Type | Default |

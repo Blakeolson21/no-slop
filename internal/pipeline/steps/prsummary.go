@@ -2,12 +2,14 @@ package steps
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"html"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -17,10 +19,22 @@ import (
 )
 
 const (
-	maxEmbeddedArtifactBytes       = 16 * 1024
-	maxEmbeddedArtifactsTotalBytes = 32 * 1024
-	noMistakesPRSignature          = "Updates from [git push no-slop](https://github.com/Blakeolson21/no-slop)"
+	maxEmbeddedArtifactBytes               = 16 * 1024
+	maxEmbeddedArtifactsTotalBytes         = 32 * 1024
+	noMistakesPRSignature                  = "Updates from [git push no-slop](https://github.com/Blakeolson21/no-slop)"
+	pipelineAttestationCommentPrefix       = "<!-- no-slop-pipeline-attestation:v1 "
+	pipelineAttestationCommentClosingToken = " -->"
 )
+
+type pipelineAttestation struct {
+	HeadSHA string                    `json:"head_sha"`
+	Steps   []pipelineAttestationStep `json:"steps"`
+}
+
+type pipelineAttestationStep struct {
+	Step   types.StepName   `json:"step"`
+	Status types.StepStatus `json:"status"`
+}
 
 type testingArtifactRenderState struct {
 	remainingEmbeddedBytes int
@@ -34,10 +48,19 @@ type testingSummaryOptions struct {
 	summaryParagraph     bool
 	omitOutcome          bool
 	repoRoot             string
+	// evidenceRoot is the run's evidence directory. Together with repoRoot it
+	// is the allowlist for absolute artifact paths an agent reported: a path
+	// under neither is dropped rather than rendered into the PR body. Empty
+	// disables the evidence half of the allowlist, which fails closed.
+	evidenceRoot string
+	// evidence links artifacts published to the repository's orphan evidence
+	// branch. It is nil when nothing was published, and the artifacts then
+	// render as local paths rather than as links that would not resolve.
+	evidence *evidenceLinks
 }
 
 // BuildPipelineSummary produces a deterministic markdown section from step results and rounds.
-func BuildPipelineSummary(steps []*db.StepResult, rounds map[string][]*db.StepRound) (string, string) {
+func BuildPipelineSummary(steps []*db.StepResult, rounds map[string][]*db.StepRound, headSHA string) (string, string) {
 	if len(steps) == 0 {
 		return "", ""
 	}
@@ -63,6 +86,8 @@ func BuildPipelineSummary(steps []*db.StepResult, rounds map[string][]*db.StepRo
 	b.WriteString("## Pipeline\n\n")
 	b.WriteString(noMistakesPRSignature)
 	b.WriteString("\n\n")
+	b.WriteString(buildPipelineAttestation(steps, headSHA))
+	b.WriteString("\n\n")
 	for i, detail := range detailBlocks {
 		if i > 0 {
 			b.WriteString("\n")
@@ -74,36 +99,35 @@ func BuildPipelineSummary(steps []*db.StepResult, rounds map[string][]*db.StepRo
 	return b.String(), riskLine
 }
 
-func BuildPipelineStatusSummary(steps []*db.StepResult, rounds map[string][]*db.StepRound) string {
-	var statusLines []string
+// buildPipelineAttestation records the exact step lifecycle snapshot available
+// when no-mistakes writes the PR body. Its compact JSON is deliberately data
+// only: consumers decide their own policy from the step names and statuses.
+func buildPipelineAttestation(steps []*db.StepResult, headSHA string) string {
+	attestation := pipelineAttestation{
+		HeadSHA: headSHA,
+		Steps:   make([]pipelineAttestationStep, 0, len(steps)),
+	}
 	for _, sr := range steps {
-		if shouldOmitPipelineStep(sr) {
+		if sr == nil {
 			continue
 		}
-		var line string
-		if sr.StepName == types.StepReview && sr.Status == types.StepStatusCompleted {
-			line = "✅ **Review** - completed"
-		} else {
-			line, _ = buildStepEntry(sr, rounds[sr.ID])
-		}
-		if line != "" {
-			statusLines = append(statusLines, line)
-		}
+		attestation.Steps = append(attestation.Steps, pipelineAttestationStep{
+			Step:   sr.StepName,
+			Status: sr.Status,
+		})
 	}
-	if len(statusLines) == 0 {
+	sort.SliceStable(attestation.Steps, func(i, j int) bool {
+		left, right := attestation.Steps[i].Step, attestation.Steps[j].Step
+		if left.Order() != right.Order() {
+			return left.Order() < right.Order()
+		}
+		return left < right
+	})
+	payload, err := json.Marshal(attestation)
+	if err != nil {
 		return ""
 	}
-
-	var b strings.Builder
-	b.WriteString("## Pipeline\n\n")
-	b.WriteString(noMistakesPRSignature)
-	b.WriteString("\n\n")
-	for _, line := range statusLines {
-		b.WriteString("<details>\n<summary>")
-		b.WriteString(line)
-		b.WriteString("</summary>\n</details>\n")
-	}
-	return b.String()
+	return pipelineAttestationCommentPrefix + string(payload) + pipelineAttestationCommentClosingToken
 }
 
 // BuildTestingSummary extracts a deterministic Testing section from the test step.
@@ -111,12 +135,14 @@ func BuildTestingSummary(steps []*db.StepResult, rounds map[string][]*db.StepRou
 	return buildTestingSummary(steps, rounds, testingSummaryOptions{includeTestedDetails: true})
 }
 
-func BuildTestingSummaryForPR(steps []*db.StepResult, rounds map[string][]*db.StepRound, upstreamURL, ref, repoRoot string) string {
+func BuildTestingSummaryForPR(steps []*db.StepResult, rounds map[string][]*db.StepRound, upstreamURL, ref, repoRoot, evidenceRoot string, links *evidenceLinks) string {
 	opts := testingSummaryOptionsForGitHub(upstreamURL, ref)
 	opts.compactArtifacts = true
 	opts.summaryParagraph = true
 	opts.omitOutcome = true
 	opts.repoRoot = repoRoot
+	opts.evidenceRoot = evidenceRoot
+	opts.evidence = links
 	return buildTestingSummary(steps, rounds, opts)
 }
 
@@ -523,7 +549,10 @@ func artifactFilesystemPath(p string, opts testingSummaryOptions) string {
 	if !filepath.IsAbs(p) {
 		return ""
 	}
-	if _, ok := artifactPathRelativeToRoot(p, testEvidenceRoot()); !ok {
+	if opts.evidenceRoot == "" {
+		return ""
+	}
+	if _, ok := artifactPathRelativeToRoot(p, opts.evidenceRoot); !ok {
 		return ""
 	}
 	return p
@@ -596,6 +625,10 @@ func trimUTF8Start(data []byte) []byte {
 }
 
 func artifactTargetForPath(artifact types.TestArtifact, opts testingSummaryOptions) string {
+	raw := isImageArtifact(artifact.Kind, artifact.Path) || isVideoArtifact(artifact.Kind, artifact.Path)
+	if target := opts.evidence.target(artifact.Path, raw); target != "" {
+		return target
+	}
 	repoPath := repoRelativeArtifactPath(artifact.Path, opts)
 	if repoPath == "" {
 		return ""
@@ -610,6 +643,9 @@ func artifactTargetForPath(artifact types.TestArtifact, opts testingSummaryOptio
 }
 
 func artifactLinkTargetForPath(artifact types.TestArtifact, opts testingSummaryOptions) string {
+	if target := opts.evidence.target(artifact.Path, false); target != "" {
+		return target
+	}
 	repoPath := repoRelativeArtifactPath(artifact.Path, opts)
 	if repoPath == "" {
 		return ""
@@ -646,8 +682,10 @@ func sanitizeAbsoluteArtifactPath(clean string, opts testingSummaryOptions) stri
 	if _, ok := artifactPathRelativeToRoot(cleanedPath, opts.repoRoot); ok {
 		return cleanedPath
 	}
-	if _, ok := artifactPathRelativeToRoot(cleanedPath, testEvidenceRoot()); ok {
-		return cleanedPath
+	if opts.evidenceRoot != "" {
+		if _, ok := artifactPathRelativeToRoot(cleanedPath, opts.evidenceRoot); ok {
+			return cleanedPath
+		}
 	}
 	return ""
 }
@@ -1112,6 +1150,7 @@ func buildStepDetails(summaryLine string, sr *db.StepResult, rounds []*db.StepRo
 			} else {
 				b.WriteString("✅ No issues found.\n")
 			}
+			writeTestedDetails(&b, sr, &findings)
 			b.WriteString("\n")
 			continue
 		}
@@ -1142,7 +1181,8 @@ func fixRoundLine(r *db.StepRound) string {
 	return fmt.Sprintf("🔧 Fix: %s", html.EscapeString(summary))
 }
 
-// writeFindingItems renders each finding as a `file:line - description` bullet.
+// writeFindingItems renders each finding as a `file:line - description` bullet,
+// followed by any test command details for the test step.
 func writeFindingItems(b *strings.Builder, sr *db.StepResult, findings *types.Findings) {
 	for _, f := range findings.Items {
 		emoji := severityEmoji(f.Severity)
@@ -1155,6 +1195,22 @@ func writeFindingItems(b *strings.Builder, sr *db.StepResult, findings *types.Fi
 			loc += "` - "
 		}
 		b.WriteString(fmt.Sprintf("- %s %s%s\n", emoji, loc, html.EscapeString(f.Description)))
+	}
+	writeTestedDetails(b, sr, findings)
+}
+
+// writeTestedDetails lists the commands the test step exercised. It is a no-op
+// for non-test steps.
+func writeTestedDetails(b *strings.Builder, sr *db.StepResult, findings *types.Findings) {
+	if sr.StepName != types.StepTest {
+		return
+	}
+	for _, detail := range findings.Tested {
+		rendered := renderTestedDetail(detail)
+		if rendered == "" {
+			continue
+		}
+		b.WriteString(fmt.Sprintf("- %s\n", rendered))
 	}
 }
 

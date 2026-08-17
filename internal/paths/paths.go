@@ -119,6 +119,39 @@ func (p *Paths) TelemetryGateFile() string {
 	return filepath.Join(p.root, "telemetry-gate.json")
 }
 
+// EvalDir holds automatically collected local evaluation cases, shared object
+// pools, and their separate registry. EnsureDirs leaves creation to collection
+// and eval commands so disabling provenance and auto-capture creates no state.
+func (p *Paths) EvalDir() string { return filepath.Join(p.root, "eval") }
+
+// EvidenceDir is the default root for test-evidence artifacts, keyed by run ID.
+func (p *Paths) EvidenceDir() string { return filepath.Join(p.root, "evidence") }
+
+// EvidenceRoot resolves where run evidence is written, honoring an absolute
+// test.evidence.local_root override.
+func (p *Paths) EvidenceRoot(configured string) string {
+	if c := strings.TrimSpace(configured); c != "" && filepath.IsAbs(c) {
+		return filepath.Clean(c)
+	}
+	return p.EvidenceDir()
+}
+
+// ValidateEvidenceRoot rejects configured evidence roots inside managed worktrees.
+func (p *Paths) ValidateEvidenceRoot(configured string) error {
+	root := p.EvidenceRoot(configured)
+	worktrees := filepath.Clean(p.WorktreesDir())
+	rel, err := filepath.Rel(worktrees, root)
+	if err == nil && (rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))) {
+		return fmt.Errorf("test.evidence.local_root %q must not be inside managed worktrees %q", root, worktrees)
+	}
+	return nil
+}
+
+// RunEvidenceDir is the evidence directory for a single run.
+func (p *Paths) RunEvidenceDir(configured, runID string) string {
+	return filepath.Join(p.EvidenceRoot(configured), runID)
+}
+
 // LaneHealthFile persists which configured agent lanes are quota-exhausted and
 // when each recovers, so concurrent runs and later runs skip a dead lane
 // instead of each paying an agent spawn to rediscover it.

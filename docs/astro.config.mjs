@@ -48,6 +48,7 @@ export default defineConfig({
           label: "Reference",
           items: [
             { label: "CLI Commands", slug: "reference/cli" },
+            { label: "Evaluation toolkit", slug: "reference/eval" },
             { label: "Pipeline Steps", slug: "reference/pipeline-steps" },
             { label: "NoSlop Taxonomy", slug: "reference/slop-taxonomy" },
             { label: "NoSlop Evaluation Corpus", slug: "reference/evaluation-corpus" },

@@ -23,10 +23,18 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/ipc"
 	"github.com/Blakeolson21/no-slop/internal/logstore"
 	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/procreap"
 	"github.com/Blakeolson21/no-slop/internal/shellenv"
 	"github.com/Blakeolson21/no-slop/internal/telemetry"
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
+
+// orphanProcessMinAge is the age floor for the startup orphan-process sweep.
+// Startup is the one moment where the daemon has no way to tell a leaked
+// process from one belonging to a run that is starting concurrently, so
+// anything young is left alone; run cleanup sweeps its own worktree with no
+// age floor because it owns that run.
+var orphanProcessMinAge = procreap.DefaultMinAge
 
 var applyShellEnvToProcess = shellenv.ApplyToProcess
 var createDaemonPIDTempFile = os.CreateTemp
@@ -76,6 +84,10 @@ func Run() (retErr error) {
 	config.EnsureDefaultGlobalConfig(p.ConfigFile())
 	globalCfg, err := config.LoadGlobal(p.ConfigFile())
 	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	resolvedCfg := config.Merge(globalCfg, &config.RepoConfig{})
+	if err := p.ValidateEvidenceRoot(resolvedCfg.Test.Evidence.LocalRoot); err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 	initLogger(lifecycleLog, globalCfg.LogLevel)
@@ -414,10 +426,49 @@ func recoverOnStartup(d *db.DB, p *paths.Paths, mgr *RunManager) {
 	}
 	logStartupPhase("stale_runs", staleStarted, "recovered", count)
 
+	orphanProcStarted := time.Now()
+	sweepOrphanRunProcesses(d, p)
+	logStartupPhase("orphan_processes", orphanProcStarted)
+
 	worktreeStarted := time.Now()
 	cleanupOrphanWorktrees(d, p)
 	logStartupPhase("worktree_cleanup", worktreeStarted)
+
+	// Evidence is reaped after stale-run recovery for the same reason worktrees
+	// are: every run's status is settled by now, so the active-run guard can
+	// tell a crashed run's leftovers from work still in flight.
+	evidenceStarted := time.Now()
+	global, cfgErr := config.LoadGlobal(p.ConfigFile())
+	if cfgErr != nil {
+		slog.Warn("failed to load global config for evidence reaping, using defaults", "error", cfgErr)
+		global = nil
+	}
+	policy := evidenceReapPolicyFor(global)
+	root := evidenceRootFor(p, global)
+	now := time.Now()
+	reapEvidence(d, root, policy, now)
+	reapLegacyEvidence(d, root, policy, now)
+	logStartupPhase("evidence_cleanup", evidenceStarted)
+
 	mgr.resumeRecoveredRuns(plans)
+}
+
+// sweepOrphanRunProcesses terminates processes still standing in a run
+// worktree that no run owns any more. A predecessor daemon's group teardown
+// cannot reach a child that left its process group (see internal/procreap),
+// and once that child reparents to init nothing lineage-based can name it
+// again - it just keeps burning CPU and holding a deleted worktree open. This
+// runs after stale-run recovery so every run's status is settled, and before
+// worktree cleanup so the directories are freed of their holders first.
+func sweepOrphanRunProcesses(d *db.DB, p *paths.Paths) {
+	procreap.SweepAndLog(procreap.Options{
+		WorktreesRoot: p.WorktreesDir(),
+		MinAge:        orphanProcessMinAge,
+		RunActive: func(_, runID string) bool {
+			skip, _ := skipWorktreeCleanup(d, runID)
+			return skip
+		},
+	}, "daemon_startup")
 }
 
 // cleanupOrphanWorktrees removes worktree directories left behind by runs

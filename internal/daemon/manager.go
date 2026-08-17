@@ -15,6 +15,7 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/agent"
 	"github.com/Blakeolson21/no-slop/internal/config"
 	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/eval"
 	"github.com/Blakeolson21/no-slop/internal/gate"
 	"github.com/Blakeolson21/no-slop/internal/git"
 	"github.com/Blakeolson21/no-slop/internal/identity"
@@ -23,6 +24,7 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/paths"
 	"github.com/Blakeolson21/no-slop/internal/pipeline"
 	"github.com/Blakeolson21/no-slop/internal/pipeline/steps"
+	"github.com/Blakeolson21/no-slop/internal/procreap"
 	"github.com/Blakeolson21/no-slop/internal/safeurl"
 	"github.com/Blakeolson21/no-slop/internal/telemetry"
 	"github.com/Blakeolson21/no-slop/internal/types"
@@ -48,6 +50,11 @@ type RunManager struct {
 	steps        StepFactory
 
 	branchLocks sync.Map // repoID+"/"+branch → *sync.Mutex
+
+	// evalCaptureMu serializes automatic eval collection. Concurrent runs
+	// finishing together would otherwise write the same per-repository object
+	// pool and the same registry file at once.
+	evalCaptureMu sync.Mutex
 
 	// subMu guards the subscriber set and the per-run state revisions. It is
 	// a plain Mutex, not an RWMutex, because revision assignment and fan-out
@@ -158,7 +165,7 @@ func (m *RunManager) prepareRecoveredRun(ctx context.Context, run *db.Run) (*rec
 	if err != nil {
 		return nil, err
 	}
-	ag, err := newPipelineAgent(ctx, cfg, exec.LookPath, m.laneHealth())
+	ag, err := newPipelineAgent(ctx, cfg, exec.LookPath, m.laneHealth(), m.paths.EvidenceRoot(cfg.Test.Evidence.LocalRoot))
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +233,18 @@ func (m *RunManager) loadRecoveredConfig(ctx context.Context, run *db.Run, repo 
 	}
 	trustedRepoCfg := loadTrustedRepoConfig(ctx, workDir, trustedSHA, run.ID)
 	allowRepoCommands := trustedRepoCfg != nil && trustedRepoCfg.AllowRepoCommands
-	return config.Merge(globalCfg, config.EffectiveRepoConfig(repoCfg, trustedRepoCfg, allowRepoCommands)), nil
+	effectiveRepoCfg := config.EffectiveRepoConfig(repoCfg, trustedRepoCfg, allowRepoCommands)
+	cfg := config.Merge(globalCfg, effectiveRepoCfg)
+	if err := m.paths.ValidateEvidenceRoot(cfg.Test.Evidence.LocalRoot); err != nil {
+		return nil, err
+	}
+	cfg.TrustedConfigSHA = trustedSHA
+	if globalCfg.Eval.CaptureProvenance {
+		if err := cfg.EnableEvalProvenance(globalCfg, effectiveRepoCfg); err != nil {
+			return nil, err
+		}
+	}
+	return cfg, nil
 }
 
 // laneHealth returns the agent lane-health store for this daemon root. The
@@ -244,7 +262,11 @@ func (m *RunManager) laneHealth() *lanehealth.Store {
 // order. cfg must already be resolved. Both pipeline-agent construction sites
 // share this so a lane decorator can never be wired into one path and missed
 // in the other.
-func newLaneAgents(cfg *config.Config, health *lanehealth.Store) ([]agent.Agent, error) {
+func newLaneAgents(cfg *config.Config, health *lanehealth.Store, evidenceRoots ...string) ([]agent.Agent, error) {
+	evidenceRoot := ""
+	if len(evidenceRoots) > 0 {
+		evidenceRoot = evidenceRoots[0]
+	}
 	agents := cfg.Agents
 	if len(agents) == 0 {
 		agents = []types.AgentName{cfg.Agent}
@@ -265,7 +287,7 @@ func newLaneAgents(cfg *config.Config, health *lanehealth.Store) ([]agent.Agent,
 		// mutating system state (e.g. brew/Homebrew touching /Applications), which
 		// triggers macOS App Management prompts. Lane health wraps the steered
 		// agent so an exhausted lane is skipped before anything is launched.
-		created = append(created, agent.WithLaneHealth(agent.WithSteering(next), laneHealthStore(health), nil))
+		created = append(created, agent.WithLaneHealth(agent.WithSteering(next, evidenceRoot), laneHealthStore(health), nil))
 	}
 	return created, nil
 }
@@ -281,7 +303,7 @@ func laneHealthStore(health *lanehealth.Store) agent.LaneHealthStore {
 	return health
 }
 
-func newPipelineAgent(ctx context.Context, cfg *config.Config, lookPath func(string) (string, error), health *lanehealth.Store) (agent.Agent, error) {
+func newPipelineAgent(ctx context.Context, cfg *config.Config, lookPath func(string) (string, error), health *lanehealth.Store, evidenceRoots ...string) (agent.Agent, error) {
 	demoMode, err := steps.DemoMode()
 	if err != nil {
 		return nil, err
@@ -292,7 +314,7 @@ func newPipelineAgent(ctx context.Context, cfg *config.Config, lookPath func(str
 	if err := cfg.ResolveAgent(ctx, lookPath); err != nil {
 		return nil, err
 	}
-	created, err := newLaneAgents(cfg, health)
+	created, err := newLaneAgents(cfg, health, evidenceRoots...)
 	if err != nil {
 		return nil, err
 	}
@@ -342,6 +364,13 @@ func (m *RunManager) resumeRecoveredRun(plan recoveredRunPlan) {
 	}
 	runCtx, cancel := context.WithCancelCause(context.Background())
 	executor := pipeline.NewExecutor(m.db, m.paths, plan.cfg, plan.agent, plan.steps, m.broadcast)
+	executor.SetOnPRMerged(func(_ context.Context, runID string) {
+		m.wg.Add(1)
+		go func() {
+			defer m.wg.Done()
+			m.relabelEvalRun(context.Background(), plan.cfg, runID)
+		}()
+	})
 	done := make(chan struct{})
 	m.mu.Lock()
 	m.executors[plan.run.ID] = executor
@@ -369,6 +398,11 @@ func (m *RunManager) resumeRecoveredRun(plan recoveredRunPlan) {
 			if err := git.WorktreeRemove(context.Background(), plan.gateDir, plan.workDir); err != nil {
 				slog.Warn("failed to remove recovered worktree", "path", plan.workDir, "error", err)
 			}
+			// A recovered run is a finished run too. This is the second of the
+			// two completion boundaries, and leaving it out is what let a run
+			// resumed after a daemon restart keep its empty evidence directory
+			// until some later run or restart happened to sweep it.
+			m.cleanupRunEvidence(plan.cfg, plan.run.ID)
 			m.mu.Lock()
 			delete(m.executors, plan.run.ID)
 			delete(m.cancels, plan.run.ID)
@@ -499,6 +533,58 @@ func (m *RunManager) broadcast(event ipc.Event) {
 	for _, mb := range m.subscribers[event.RunID] {
 		mb.publish(event)
 	}
+}
+
+// sweepRunWorktreeProcesses terminates whatever is still standing in a
+// finished run's worktree. Cancelling the run context tears down each step's
+// process group, but a descendant that called setsid(2) is no longer in any
+// group the pipeline can name - only the worktree it is standing in still
+// identifies it (see internal/procreap).
+//
+// It runs before the worktree directory is removed, because a process that
+// outlives its worktree holds the deleted directory open through its cwd and
+// can no longer be attributed to any run. No age floor applies: the caller
+// owns this run and has already observed its execution return, so nothing
+// standing in it can still be legitimate work.
+func (m *RunManager) sweepRunWorktreeProcesses(wtDir string) {
+	procreap.SweepAndLog(procreap.Options{
+		WorktreesRoot: m.paths.WorktreesDir(),
+		Scope:         wtDir,
+	}, "run_cleanup")
+}
+
+// cleanupRunEvidence tidies up after one finished run, then bounds the whole
+// evidence directory.
+//
+// The per-run half is deliberately os.Remove and not os.RemoveAll: it succeeds
+// only when the directory is empty, so a run that produced no artifact leaves
+// nothing behind while a run that did keeps every file. The test step creates
+// the directory before the agent decides whether it has evidence to write, so
+// without this nearly every run left a permanent empty directory - that alone
+// was the overwhelming majority of the accumulation this reaper exists to stop.
+//
+// The sweep that follows keeps a long-lived daemon converging on the retention
+// budget instead of waiting for a restart. Both halves are best effort: losing
+// a cleanup pass costs disk, while failing a finished run over it would cost
+// the user their result.
+func (m *RunManager) cleanupRunEvidence(cfg *config.Config, runID string) {
+	configured := ""
+	policy := evidenceReapPolicy{
+		Retention: config.DefaultEvidenceRetention,
+		MaxRuns:   config.DefaultEvidenceMaxRuns,
+	}
+	if cfg != nil {
+		configured = cfg.Test.Evidence.LocalRoot
+		policy = evidenceReapPolicy{
+			Retention: cfg.Test.Evidence.Retention,
+			MaxRuns:   cfg.Test.Evidence.MaxRuns,
+		}
+	}
+	root := m.paths.EvidenceRoot(configured)
+	if err := os.Remove(filepath.Join(root, runID)); err != nil && !os.IsNotExist(err) {
+		slog.Debug("run evidence kept", "run_id", runID, "reason", err)
+	}
+	reapEvidence(m.db, root, policy, time.Now())
 }
 
 // closeSubscribers soft-closes every subscriber for a run and marks the run
@@ -950,6 +1036,19 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 		slog.Info("repo commands/agent loaded from default branch, not pushed branch", "run_id", run.ID, "branch", branch, "default_branch", repo.DefaultBranch)
 	}
 	cfg := config.Merge(globalCfg, effectiveRepoCfg)
+	if err := m.paths.ValidateEvidenceRoot(cfg.Test.Evidence.LocalRoot); err != nil {
+		m.db.UpdateRunError(run.ID, err.Error())
+		trackStartFailure("evidence_root")
+		return "", err
+	}
+	cfg.TrustedConfigSHA = trustedSHA
+	if globalCfg.Eval.CaptureProvenance {
+		if err := cfg.EnableEvalProvenance(globalCfg, effectiveRepoCfg); err != nil {
+			m.db.UpdateRunError(run.ID, err.Error())
+			trackStartFailure("eval_provenance")
+			return "", err
+		}
+	}
 
 	// Create agent. In demo mode, skip resolution and use a no-op agent.
 	var ag agent.Agent
@@ -967,7 +1066,7 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 			trackStartFailure("resolve_agent")
 			return "", err
 		}
-		created, agErr := newLaneAgents(cfg, m.laneHealth())
+		created, agErr := newLaneAgents(cfg, m.laneHealth(), m.paths.EvidenceRoot(cfg.Test.Evidence.LocalRoot))
 		if agErr != nil {
 			m.db.UpdateRunError(run.ID, agErr.Error())
 			trackStartFailure("create_agent")
@@ -1002,6 +1101,13 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 	runCtx, cancel := context.WithCancelCause(context.Background())
 	executor := pipeline.NewExecutor(m.db, m.paths, cfg, ag, execSteps, m.broadcast)
 	executor.SetSkippedSteps(skipSteps)
+	executor.SetOnPRMerged(func(_ context.Context, runID string) {
+		m.wg.Add(1)
+		go func() {
+			defer m.wg.Done()
+			m.relabelEvalRun(context.Background(), cfg, runID)
+		}()
+	})
 
 	// Track executor.
 	done := make(chan struct{})
@@ -1049,10 +1155,12 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 			ag.Close()
 			// Close subscriber channels for this run.
 			m.closeSubscribers(run.ID)
+			m.sweepRunWorktreeProcesses(wtDir)
 			// Clean up worktree.
 			if rmErr := git.WorktreeRemove(context.Background(), gateDir, wtDir); rmErr != nil {
 				slog.Warn("failed to remove worktree", "path", wtDir, "error", rmErr)
 			}
+			m.cleanupRunEvidence(cfg, run.ID)
 			// Remove tracking.
 			m.mu.Lock()
 			delete(m.executors, run.ID)
@@ -1093,9 +1201,105 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 			telemetry.Track("run", fields)
 			slog.Info("pipeline completed", "run_id", run.ID)
 		}
+		// Collection runs here, on the finished run, because a case is only
+		// honest once the human gate decision it labels is recorded - which is
+		// exactly what reaching this point means. It is last on purpose: the
+		// pipeline's own outcome is already decided and reported above, so
+		// nothing below can change it.
+		m.autoCaptureEvalCase(runCtx, cfg, run.ID)
 	}()
 
 	return run.ID, nil
+}
+
+// evalAutoCaptureTimeout bounds one automatic collection pass. Collection is
+// local Git and SQLite work whose slowest step is seeding a repository's object
+// pool the first time it is seen, so this is generous rather than tight; the
+// pass also stops early with the run context, which Shutdown cancels.
+const evalAutoCaptureTimeout = 3 * time.Minute
+
+// autoCaptureEvalCase freezes a finished run's review passes into the local
+// eval corpus.
+//
+// Everything here is subordinate to the run: collection can be slow, can fail,
+// can find nothing, and none of that may reach the pipeline. So it swallows its
+// own panic rather than letting the run goroutine's recover mark a completed
+// run as failed, it bounds its own time, and it reports failure only to the
+// log. Runs are serialized against each other because they share one object
+// pool and one registry file; the wait is harmless, since every run holding
+// this lock has already finished its pipeline.
+//
+// A run with nothing to collect is the common case (no review step, a skipped
+// gate, rounds recorded before provenance was on), so that outcome is DEBUG.
+// Only a genuine capture fault is worth a warning.
+func (m *RunManager) autoCaptureEvalCase(ctx context.Context, cfg *config.Config, runID string) {
+	if cfg == nil || !cfg.Eval.AutoCapture || !cfg.Eval.CaptureProvenance {
+		return
+	}
+	// A cancelled or aborted run has nothing worth freezing and every Git call
+	// below would fail on the dead context anyway. Leaving early keeps that
+	// ordinary outcome out of the warning log.
+	if ctx.Err() != nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("panic while collecting eval case", "run_id", runID, "panic", r)
+		}
+	}()
+	m.evalCaptureMu.Lock()
+	defer m.evalCaptureMu.Unlock()
+
+	if ctx.Err() != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, evalAutoCaptureTimeout)
+	defer cancel()
+
+	result, err := eval.AutoCapture(ctx, m.paths, m.db, runID, cfg.Eval.MaxCases)
+	switch {
+	case err != nil:
+		slog.Warn("failed to collect eval case", "run_id", runID, "error", err)
+	case result.Skipped:
+		slog.Debug("run has no eval case to collect", "run_id", runID, "reason", result.Reason)
+	default:
+		slog.Info("collected eval case", "run_id", runID, "cases", result.Captured, "pruned", result.Pruned)
+	}
+}
+
+func (m *RunManager) relabelEvalRun(ctx context.Context, cfg *config.Config, runID string) {
+	// Best-effort and off the CI step's call stack: a merge must not stall
+	// the pipeline for eval I/O. The caller holds m.wg for daemon drain.
+	if m == nil || m.paths == nil || m.db == nil {
+		return
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("panic while relabeling eval case", "run_id", runID, "panic", r)
+		}
+	}()
+	m.evalCaptureMu.Lock()
+	defer m.evalCaptureMu.Unlock()
+	if ctx.Err() != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, evalAutoCaptureTimeout)
+	defer cancel()
+	store, err := eval.Open(m.paths.EvalDir())
+	if err != nil {
+		slog.Warn("failed to open eval store for relabel", "run_id", runID, "error", err)
+		return
+	}
+	defer store.Close()
+	if cfg != nil {
+		store.SetDiversifiedSize(cfg.Eval.DiversifiedSize)
+	}
+	if _, err := eval.RelabelRun(ctx, store, m.paths, m.db, runID); err != nil {
+		slog.Warn("failed to relabel eval case after merge", "run_id", runID, "error", err)
+	}
 }
 
 // addRunPerformanceSummary attaches the bounded per-run performance rollup

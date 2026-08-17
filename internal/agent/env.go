@@ -31,6 +31,10 @@ const (
 //
 // dir must be the value assigned to cmd.Dir so PWD stays coupled to the working
 // directory; see git.NonInteractiveEnv for why this matters.
-func gitSafeEnv(dir string) []string {
-	return append(git.NonInteractiveEnv(dir), GateRoleEnvVar+"=1", LegacyGateRoleEnvVar+"=1")
+func gitSafeEnv(dir string, extra ...[]string) []string {
+	env := git.NonInteractiveEnv(dir)
+	if len(extra) > 0 {
+		env = append(env, extra[0]...)
+	}
+	return append(env, GateRoleEnvVar+"=1", LegacyGateRoleEnvVar+"=1")
 }

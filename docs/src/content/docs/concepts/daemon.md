@@ -95,6 +95,9 @@ Pipeline agents are prompted to keep intentional writes inside that detached wor
 That reduces surprising machine-level side effects and macOS App Management prompts, but it is prompt steering rather than a true sandbox.
 While executing steps, the daemon also owns child-process cleanup.
 Configured commands and one-shot agent subprocesses are terminated as a process tree on completion, failure, or cancellation so leaked test workers, build watchers, or dev servers cannot accumulate across runs.
+Each process is asked to exit first and only forcibly killed if it is still running a few seconds later.
+A process can still escape that tree by detaching itself into its own session, so when a run finishes the daemon also terminates anything still standing in that run's worktree before removing the directory.
+That sweep is scoped by working directory: it never touches a worktree whose run is still active, and it can never reach a process working outside `~/.no-mistakes/worktrees/`.
 
 ## Concurrent push handling
 

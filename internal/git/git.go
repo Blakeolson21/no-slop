@@ -49,6 +49,26 @@ func Output(ctx context.Context, dir string, args ...string) (string, error) {
 	return runInDir(ctx, dir, args...)
 }
 
+// RunRaw executes a git command and returns stdout without modifying its bytes.
+func RunRaw(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	out, err := Output(ctx, dir, args...)
+	return []byte(out), err
+}
+
+// RunWithEnv is Run with extra KEY=VALUE entries appended to the git
+// environment. Later entries win, and the command keeps the same bounds and
+// bare-repository handling as Run.
+func RunWithEnv(ctx context.Context, dir string, extraEnv []string, args ...string) (string, error) {
+	if isBareGitDir(dir) {
+		if dir == "" {
+			return "", fmt.Errorf("bare git directory is empty")
+		}
+		return runInDirWithEnv(ctx, dir, extraEnv, append([]string{"--git-dir=" + dir}, args...)...)
+	}
+	out, err := runInDirWithEnv(ctx, dir, extraEnv, args...)
+	return strings.TrimSpace(out), err
+}
+
 // RunBare executes Git against exactly bareDir. Unlike Run, it never falls
 // back to cwd-based repository discovery when bareDir is malformed. Gate
 // recovery uses this after structural validation so an invalid directory under
@@ -339,10 +359,14 @@ func (c *boundedCommand) combinedOutput() ([]byte, error) {
 
 // runInDir executes git and returns stdout.
 func runInDir(ctx context.Context, dir string, args ...string) (string, error) {
+	return runInDirWithEnv(ctx, dir, nil, args...)
+}
+
+func runInDirWithEnv(ctx context.Context, dir string, extraEnv []string, args ...string) (string, error) {
 	cmd := newCommand(ctx, args...)
 	defer cmd.close()
 	cmd.setDir(dir)
-	cmd.setEnv(NonInteractiveEnv(dir))
+	cmd.setEnv(append(NonInteractiveEnv(dir), extraEnv...))
 	out, err := cmd.output()
 	if err != nil {
 		stderr := ""

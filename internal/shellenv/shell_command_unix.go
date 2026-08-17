@@ -21,6 +21,15 @@ import (
 // the pipes close immediately and Wait returns without waiting.
 const defaultWaitDelay = 5 * time.Second
 
+// terminateGrace is how long a process group may take to exit after SIGTERM
+// before it is SIGKILLed. SIGTERM first is not politeness: a test runner, a
+// build watcher, or a worker script given the chance to exit flushes its
+// output and removes its own temporary state, which SIGKILL denies it. The
+// grace is short because the escalation must still land well inside
+// defaultWaitDelay, so a group that ignores SIGTERM cannot hold an inherited
+// pipe past the exec package's own backstop.
+const terminateGrace = 3 * time.Second
+
 // ConfigureShellCommand isolates cmd in its own process group (Setpgid) and
 // installs a cmd.Cancel that reaps the resulting process tree when cmd's context
 // is cancelled. exec.CommandContext otherwise only kills the direct child PID,
@@ -32,7 +41,7 @@ const defaultWaitDelay = 5 * time.Second
 // kill(-leaderPID) provably cannot reach it - and setsid() is what Node's
 // `detached: true` does, which is how Claude Code's CLI Bash tool spawns its
 // shell. Reaching those descendants needs the ppid walk in internal/proctree,
-// which reapProcessTree performs alongside the group kill.
+// which terminateProcessTree performs alongside the group kill.
 //
 // Cancellation is only half the lifecycle: cmd.Cancel never fires when the
 // command exits on its own (success or failure). Use RunShellCommand,
@@ -56,16 +65,21 @@ func ConfigureShellCommand(cmd *exec.Cmd) {
 		if cmd.Process == nil {
 			return os.ErrProcessDone
 		}
-		err := reapProcessTree(cmd.Process.Pid)
+		err := terminateProcessTree(cmd.Process.Pid, true)
 		if errors.Is(err, syscall.ESRCH) {
 			return os.ErrProcessDone
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		return nil
 	}
 }
 
-// reapProcessTree kills the process group led by pid and every descendant that
-// has left it, returning the error from signalling the group.
+// terminateProcessTree asks the process group led by pid to exit, then kills
+// any survivors and every tracked descendant that left the group. Cancellation
+// escalates asynchronously so cmd.Cancel never blocks through the grace period;
+// normal teardown waits so callers know the tree is gone before returning.
 //
 // Order matters. The snapshot is taken BEFORE the leader is signalled: the
 // instant the leader dies the kernel rewrites its children's ppid to 1 and
@@ -82,11 +96,29 @@ func ConfigureShellCommand(cmd *exec.Cmd) {
 // - and would be too late to help anyway once the leader has exited. When
 // nothing escaped, which is the overwhelmingly common case, this is a single
 // syscall.
-func reapProcessTree(pid int) error {
+func terminateProcessTree(pid int, async bool) error {
 	descendants, trackedGroups := takeTrackedLeader(pid)
+	err := syscall.Kill(-pid, syscall.SIGTERM)
+	if err != nil {
+		killTrackedProcessTree(pid, descendants, trackedGroups)
+		return err
+	}
 
-	err := syscall.Kill(-pid, syscall.SIGKILL)
+	escalate := func() {
+		if !groupGoneWithin(pid, terminateGrace) {
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
+		}
+		killTrackedProcessTree(pid, descendants, trackedGroups)
+	}
+	if async {
+		go escalate()
+	} else {
+		escalate()
+	}
+	return nil
+}
 
+func killTrackedProcessTree(pid int, descendants []proctree.Proc, trackedGroups []int) {
 	// Kill each distinct group the descendants occupy. A setsid() escapee leads
 	// its own group, so this also reaches children it spawned since the last
 	// sample, which no pid list can cover.
@@ -111,7 +143,21 @@ func reapProcessTree(pid int) error {
 	}
 	proctree.KillGroups(pgids, descendants)
 	proctree.Kill(descendants)
-	return err
+}
+
+// groupGoneWithin reports whether the process group emptied out before the
+// window elapsed.
+func groupGoneWithin(pgid int, window time.Duration) bool {
+	deadline := time.Now().Add(window)
+	for {
+		if errors.Is(syscall.Kill(-pgid, 0), syscall.ESRCH) {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 }
 
 // StartShellCommand starts cmd after ConfigureShellCommand has prepared its
@@ -128,8 +174,8 @@ func StartShellCommand(cmd *exec.Cmd) error {
 	return nil
 }
 
-// TerminateShellCommandGroup SIGKILLs the whole process group led by a command
-// configured with ConfigureShellCommand. It is the success/failure-path
+// TerminateShellCommandGroup terminates the whole process group led by a
+// command configured with ConfigureShellCommand. It is the success/failure-path
 // counterpart to cmd.Cancel: callers defer it right after a successful Start so
 // the group is reaped however Run returns - clean exit, parse error, or
 // wait error - not only on context cancellation.
@@ -157,5 +203,5 @@ func TerminateShellCommandGroup(cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	_ = reapProcessTree(cmd.Process.Pid)
+	_ = terminateProcessTree(cmd.Process.Pid, false)
 }
