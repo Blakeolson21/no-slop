@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Blakeolson21/no-slop/internal/buildinfo"
 	"github.com/Blakeolson21/no-slop/internal/db"
 	"github.com/Blakeolson21/no-slop/internal/identity"
 	"github.com/Blakeolson21/no-slop/internal/ipc"
@@ -22,6 +23,8 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	buildinfo.Version = "v0.0.0-test"
+	buildinfo.Commit = strings.Repeat("a", 40)
 	helperMode, helperErr := identity.LookupEnv(daemonHelperProcessEnv, legacyDaemonHelperProcessEnv)
 	if helperErr != nil {
 		_, _ = os.Stderr.WriteString(helperErr.Error() + "\n")
