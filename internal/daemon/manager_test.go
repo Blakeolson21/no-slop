@@ -12,9 +12,11 @@ import (
 	"time"
 
 	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/config"
 	"github.com/Blakeolson21/no-slop/internal/db"
 	"github.com/Blakeolson21/no-slop/internal/git"
 	"github.com/Blakeolson21/no-slop/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 	"github.com/Blakeolson21/no-slop/internal/pipeline"
 	"github.com/Blakeolson21/no-slop/internal/telemetry"
 	"github.com/Blakeolson21/no-slop/internal/types"
@@ -178,7 +180,12 @@ func TestFailRecoveredRunKeepsActiveMemoryWhenTerminalizationFails(t *testing.T)
 }
 
 func TestRecoveredCleanupRejectsExecutorTerminalStateWhenDurableReadFails(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	root := t.TempDir()
+	p := paths.WithRoot(root)
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	database, err := db.Open(p.DB())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,16 +198,37 @@ func TestRecoveredCleanupRejectsExecutorTerminalStateWhenDurableReadFails(t *tes
 		t.Fatal(err)
 	}
 	run.Status = types.RunFailed
+	workDir := p.WorktreeDir(repo.ID, run.ID)
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	workMarker := filepath.Join(workDir, "recovery-worktree")
+	if err := os.WriteFile(workMarker, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{}
+	evidenceDir := p.RunEvidenceDir(cfg.Test.Evidence.LocalRoot, run.ID)
+	if err := os.MkdirAll(evidenceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	evidenceMarker := filepath.Join(evidenceDir, "recovery-evidence")
+	if err := os.WriteFile(evidenceMarker, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
 	}
-	manager := NewRunManager(database, nil, nil)
-	plan := recoveredRunPlan{run: run, resumeDelivery: true}
+	manager := NewRunManager(database, p, nil)
+	plan := recoveredRunPlan{run: run, cfg: cfg, workDir: workDir, gateDir: p.RepoDir(repo.ID), resumeDelivery: true}
 	if err := manager.terminalizeRecoveredRunAfterError(plan, errors.New("executor database update failed")); err == nil {
 		t.Fatal("terminalizeRecoveredRunAfterError() unexpectedly succeeded")
 	}
-	if manager.recoveredRunCleanupAllowed(run.ID) {
-		t.Fatal("recovery cleanup allowed without durable terminal state")
+	manager.cleanupRecoveredRunMaterial(plan)
+	if _, err := os.Stat(workMarker); err != nil {
+		t.Fatalf("recovery worktree material removed: %v", err)
+	}
+	if _, err := os.Stat(evidenceMarker); err != nil {
+		t.Fatalf("recovery evidence removed: %v", err)
 	}
 }
 
