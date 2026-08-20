@@ -64,6 +64,14 @@ type StepContext struct {
 	UncertifiedPriorRounds   []*db.StepRound
 	UncertifiedPriorFindings string
 	UncertifiedPriorLineages string
+	// PriorBranchDecisions are rounds from EARLIER runs on this branch that
+	// recorded a human decision about their findings. Unlike the uncertified
+	// range above, nothing clears them when a review completes: a decision the
+	// user made about this branch keeps standing until the branch's run history
+	// ages out of the loader's bound. Nil when none apply. Advisory prompt
+	// context only.
+	PriorBranchDecisions          []*db.BranchDecisionRound
+	PriorBranchDecisionsTruncated bool
 	// Sessions manages the run's durable review-fixer session. The session
 	// machinery remains role-generic for legacy recovery; nil runs every
 	// invocation cold.

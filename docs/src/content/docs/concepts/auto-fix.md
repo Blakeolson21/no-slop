@@ -87,8 +87,8 @@ When the pipeline pauses for approval, you can manually trigger a fix from the T
 3. Optionally press `e` to attach a note to the current finding, or `+` to add your own finding to the fix request
 4. Press `f` to fix the selected findings
 
-The agent receives the merged fix payload for that round: the selected agent findings, any per-finding user notes, any selected user-authored findings added from the TUI or AXI interface, and a sanitized history of previous rounds for that step.
-That history includes which finding IDs were selected for a prior fix attempt, which findings were left unselected by the user, and any one-line summaries from earlier fix commits.
+The agent receives the merged fix payload for that round: the selected agent findings, any per-finding user notes, any selected user-authored findings added from the TUI or AXI interface, and the shared [finding decision history](/no-slop/reference/pipeline-steps/#finding-decision-history).
+The current step's part of that history also includes one-line summaries from earlier fix commits.
 Review adds continuity rules to this generic history. The [Review step reference](/no-slop/reference/pipeline-steps/#review) owns how unresolved findings survive rereviews and how a later selection supersedes an earlier non-selection.
 
 After a user-triggered fix, the step re-runs and pauses again to show you the results (`fix_review` status). You can then approve, fix again, skip, or abort.
