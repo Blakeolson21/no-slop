@@ -39,6 +39,9 @@ const (
 	// DefaultStepQuietWarning is how long a running/fixing step can go without
 	// a new log or lifecycle activity before AXI status marks it quiet.
 	DefaultStepQuietWarning = 10 * time.Minute
+	// DefaultReviewAgentTimeout bounds one review round, including its optional
+	// review-fix and rereview turns, so a stalled agent cannot leave a run active forever.
+	DefaultReviewAgentTimeout = 30 * time.Minute
 	// DefaultDaemonConnectTimeout bounds client IPC connection attempts to a
 	// daemon socket that exists but is not accepting connections.
 	DefaultDaemonConnectTimeout = 3 * time.Second
@@ -93,6 +96,7 @@ type GlobalConfig struct {
 	AgentArgsOverride    map[string][]string `yaml:"agent_args_override"`
 	CITimeout            time.Duration       `yaml:"-"`
 	StepQuietWarning     time.Duration       `yaml:"-"`
+	ReviewAgentTimeout   time.Duration       `yaml:"-"`
 	DaemonConnectTimeout time.Duration       `yaml:"-"`
 	LogLevel             string              `yaml:"log_level"`
 	// SessionReuse controls per-run agent session reuse in the review loop:
@@ -128,6 +132,7 @@ type globalConfigRaw struct {
 	DaemonConnectTimeout string              `yaml:"daemon_connect_timeout"`
 	BabysitTimeout       string              `yaml:"babysit_timeout"`
 	StepQuietWarning     string              `yaml:"step_quiet_warning"`
+	ReviewAgentTimeout   string              `yaml:"review_agent_timeout"`
 	LogLevel             string              `yaml:"log_level"`
 	SessionReuse         *bool               `yaml:"session_reuse"`
 	AutoFix              AutoFixRaw          `yaml:"auto_fix"`
@@ -473,6 +478,7 @@ type Config struct {
 	AgentArgsOverride     map[string][]string
 	CITimeout             time.Duration
 	StepQuietWarning      time.Duration
+	ReviewAgentTimeout    time.Duration
 	LogLevel              string
 	SessionReuse          bool
 	Eval                  Eval
@@ -765,6 +771,11 @@ ci_timeout: "168h"
 # agent lifecycle activity has appeared for this long. This is observability
 # only; it never cancels work.
 step_quiet_warning: "10m"
+
+# Maximum wall-clock time for one review round, including its optional
+# review-fix and rereview turns. A stalled review agent fails the run instead
+# of leaving it active.
+review_agent_timeout: "30m"
 
 # Maximum time a CLI client waits for an existing daemon socket to accept a
 # connection before failing instead of hanging.
@@ -1322,6 +1333,7 @@ func DefaultGlobalConfig() *GlobalConfig {
 		Agents:               []types.AgentName{types.AgentAuto},
 		CITimeout:            DefaultCITimeout,
 		StepQuietWarning:     DefaultStepQuietWarning,
+		ReviewAgentTimeout:   DefaultReviewAgentTimeout,
 		DaemonConnectTimeout: DefaultDaemonConnectTimeout,
 		LogLevel:             "info",
 		SessionReuse:         true,
@@ -1400,6 +1412,13 @@ func LoadGlobalFromBytes(data []byte) (*GlobalConfig, error) {
 		if d > 0 {
 			cfg.StepQuietWarning = d
 		}
+	}
+	if raw.ReviewAgentTimeout != "" {
+		d, err := parsePositiveDuration("review_agent_timeout", raw.ReviewAgentTimeout)
+		if err != nil {
+			return nil, err
+		}
+		cfg.ReviewAgentTimeout = d
 	}
 	if raw.DaemonConnectTimeout != "" {
 		d, err := parsePositiveDuration("daemon_connect_timeout", raw.DaemonConnectTimeout)
@@ -2161,6 +2180,7 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		AgentArgsOverride:    global.AgentArgsOverride,
 		CITimeout:            global.CITimeout,
 		StepQuietWarning:     global.StepQuietWarning,
+		ReviewAgentTimeout:   global.ReviewAgentTimeout,
 		LogLevel:             global.LogLevel,
 		SessionReuse:         global.SessionReuse,
 		Eval:                 global.Eval,
