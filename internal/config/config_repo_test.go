@@ -168,6 +168,27 @@ func TestLoadRepo_RejectsAliasPairParseFailure(t *testing.T) {
 	}
 }
 
+// TestLoadRepo_BranchSyncRemoteTimeoutIsNotARepoSetting proves
+// branch_sync_remote_timeout is inert in either repo config alias: RepoConfig
+// has no matching field, so a pushed branch cannot change the operator's
+// global remote-operation deadline.
+func TestLoadRepo_BranchSyncRemoteTimeoutIsNotARepoSetting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".no-slop.yaml")
+	data := `branch_sync_remote_timeout: "999s"`
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadRepo(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Agent != "" || cfg.Commands.Test != "" || cfg.Commands.Lint != "" || cfg.Commands.Format != "" {
+		t.Fatalf("unrelated repo config fields changed: %#v", cfg)
+	}
+}
+
 func TestLoadRepo_AgentAcceptsList(t *testing.T) {
 	dir := t.TempDir()
 	data := `agent: [codex, claude]

@@ -42,6 +42,8 @@ const (
 	// DefaultDaemonConnectTimeout bounds client IPC connection attempts to a
 	// daemon socket that exists but is not accepting connections.
 	DefaultDaemonConnectTimeout = 3 * time.Second
+	// DefaultBranchSyncRemoteTimeout bounds each remote Git operation (ls-remote, fetch) in internal/branchsync. Global-config-only; a pushed branch cannot change it. Timeout still fails closed.
+	DefaultBranchSyncRemoteTimeout = 60 * time.Second
 	// CITimeoutUnlimited is the sentinel meaning "monitor until the PR is
 	// merged, closed, or the run is aborted - never self-terminate".
 	// Any non-positive ci_timeout, or the keywords "unlimited", "none",
@@ -84,17 +86,18 @@ const (
 
 // GlobalConfig represents ~/.no-mistakes/config.yaml.
 type GlobalConfig struct {
-	SourceYAML           []byte              `yaml:"-"`
-	Agent                types.AgentName     `yaml:"agent"`
-	Agents               []types.AgentName   `yaml:"-"`
-	ACPXPath             string              `yaml:"acpx_path"`
-	ACPRegistryOverrides map[string]string   `yaml:"acp_registry_overrides"`
-	AgentPathOverride    map[string]string   `yaml:"agent_path_override"`
-	AgentArgsOverride    map[string][]string `yaml:"agent_args_override"`
-	CITimeout            time.Duration       `yaml:"-"`
-	StepQuietWarning     time.Duration       `yaml:"-"`
-	DaemonConnectTimeout time.Duration       `yaml:"-"`
-	LogLevel             string              `yaml:"log_level"`
+	SourceYAML              []byte              `yaml:"-"`
+	Agent                   types.AgentName     `yaml:"agent"`
+	Agents                  []types.AgentName   `yaml:"-"`
+	ACPXPath                string              `yaml:"acpx_path"`
+	ACPRegistryOverrides    map[string]string   `yaml:"acp_registry_overrides"`
+	AgentPathOverride       map[string]string   `yaml:"agent_path_override"`
+	AgentArgsOverride       map[string][]string `yaml:"agent_args_override"`
+	CITimeout               time.Duration       `yaml:"-"`
+	StepQuietWarning        time.Duration       `yaml:"-"`
+	DaemonConnectTimeout    time.Duration       `yaml:"-"`
+	BranchSyncRemoteTimeout time.Duration       `yaml:"-"`
+	LogLevel                string              `yaml:"log_level"`
 	// SessionReuse controls per-run agent session reuse in the review loop:
 	// one durable fixer session across review-fix turns. Review turns always
 	// run session-free so the rereview never resumes the session whose
@@ -119,23 +122,24 @@ type GlobalConfig struct {
 
 // globalConfigRaw is the on-disk YAML representation with duration as string.
 type globalConfigRaw struct {
-	Agent                agentList           `yaml:"agent"`
-	ACPXPath             string              `yaml:"acpx_path"`
-	ACPRegistryOverrides map[string]string   `yaml:"acp_registry_overrides"`
-	AgentPathOverride    map[string]string   `yaml:"agent_path_override"`
-	AgentArgsOverride    map[string][]string `yaml:"agent_args_override"`
-	CITimeout            string              `yaml:"ci_timeout"`
-	DaemonConnectTimeout string              `yaml:"daemon_connect_timeout"`
-	BabysitTimeout       string              `yaml:"babysit_timeout"`
-	StepQuietWarning     string              `yaml:"step_quiet_warning"`
-	LogLevel             string              `yaml:"log_level"`
-	SessionReuse         *bool               `yaml:"session_reuse"`
-	AutoFix              AutoFixRaw          `yaml:"auto_fix"`
-	CI                   CIRaw               `yaml:"ci"`
-	Commit               CommitRaw           `yaml:"commit"`
-	Intent               IntentRaw           `yaml:"intent"`
-	Test                 TestRaw             `yaml:"test"`
-	Eval                 EvalRaw             `yaml:"eval"`
+	Agent                   agentList           `yaml:"agent"`
+	ACPXPath                string              `yaml:"acpx_path"`
+	ACPRegistryOverrides    map[string]string   `yaml:"acp_registry_overrides"`
+	AgentPathOverride       map[string]string   `yaml:"agent_path_override"`
+	AgentArgsOverride       map[string][]string `yaml:"agent_args_override"`
+	CITimeout               string              `yaml:"ci_timeout"`
+	DaemonConnectTimeout    string              `yaml:"daemon_connect_timeout"`
+	BranchSyncRemoteTimeout string              `yaml:"branch_sync_remote_timeout"`
+	BabysitTimeout          string              `yaml:"babysit_timeout"`
+	StepQuietWarning        string              `yaml:"step_quiet_warning"`
+	LogLevel                string              `yaml:"log_level"`
+	SessionReuse            *bool               `yaml:"session_reuse"`
+	AutoFix                 AutoFixRaw          `yaml:"auto_fix"`
+	CI                      CIRaw               `yaml:"ci"`
+	Commit                  CommitRaw           `yaml:"commit"`
+	Intent                  IntentRaw           `yaml:"intent"`
+	Test                    TestRaw             `yaml:"test"`
+	Eval                    EvalRaw             `yaml:"eval"`
 }
 
 // RepoConfig represents .no-slop.yaml in a repo root.
@@ -770,6 +774,10 @@ step_quiet_warning: "10m"
 # connection before failing instead of hanging.
 daemon_connect_timeout: "3s"
 
+# Maximum time guarded branch synchronization waits for one remote Git operation
+# (ls-remote or fetch) before treating the target as offline. Global-only.
+branch_sync_remote_timeout: "60s"
+
 # Reuse one durable fixer session per run across review-fix turns. Review turns
 # always run session-free so a rereview never resumes the session that prescribed
 # its fixes. Supported for claude and codex; other agents run cold. Set false to
@@ -1318,14 +1326,15 @@ func EnsureDefaultGlobalConfig(path string) {
 // DefaultGlobalConfig returns the built-in global defaults.
 func DefaultGlobalConfig() *GlobalConfig {
 	return &GlobalConfig{
-		Agent:                types.AgentAuto,
-		Agents:               []types.AgentName{types.AgentAuto},
-		CITimeout:            DefaultCITimeout,
-		StepQuietWarning:     DefaultStepQuietWarning,
-		DaemonConnectTimeout: DefaultDaemonConnectTimeout,
-		LogLevel:             "info",
-		SessionReuse:         true,
-		Eval:                 evalDefaults(),
+		Agent:                   types.AgentAuto,
+		Agents:                  []types.AgentName{types.AgentAuto},
+		CITimeout:               DefaultCITimeout,
+		StepQuietWarning:        DefaultStepQuietWarning,
+		DaemonConnectTimeout:    DefaultDaemonConnectTimeout,
+		BranchSyncRemoteTimeout: DefaultBranchSyncRemoteTimeout,
+		LogLevel:                "info",
+		SessionReuse:            true,
+		Eval:                    evalDefaults(),
 	}
 }
 
@@ -1407,6 +1416,13 @@ func LoadGlobalFromBytes(data []byte) (*GlobalConfig, error) {
 			return nil, err
 		}
 		cfg.DaemonConnectTimeout = d
+	}
+	if raw.BranchSyncRemoteTimeout != "" {
+		d, err := parsePositiveDuration("branch_sync_remote_timeout", raw.BranchSyncRemoteTimeout)
+		if err != nil {
+			return nil, err
+		}
+		cfg.BranchSyncRemoteTimeout = d
 	}
 	if raw.LogLevel != "" {
 		cfg.LogLevel = raw.LogLevel
