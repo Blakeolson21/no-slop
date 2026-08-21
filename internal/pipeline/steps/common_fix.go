@@ -1,6 +1,7 @@
 package steps
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -293,16 +294,7 @@ func executeFixMode(sctx *pipeline.StepContext, stepName types.StepName, opts fi
 	if opts.AgentContext != nil {
 		agentCtx = opts.AgentContext
 	}
-	var result *agent.Result
-	var err error
-	if opts.SessionRole != "" && sctx.Sessions != nil {
-		result, err = sctx.Sessions.Run(agentCtx, sctx.Agent, opts.SessionRole, runOpts, sctx.Log)
-	} else {
-		result, err = sctx.Agent.Run(agentCtx, runOpts)
-	}
-	if cause := context.Cause(agentCtx); cause != nil {
-		return "", fmt.Errorf("%s: %w", opts.ErrorPrefix, cause)
-	}
+	result, err := sctx.RunAgentSessionContext(agentCtx, opts.SessionRole, runOpts)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", opts.ErrorPrefix, err)
 	}

@@ -39,6 +39,9 @@ const (
 	// DefaultStepQuietWarning is how long a running/fixing step can go without
 	// a new log or lifecycle activity before AXI status marks it quiet.
 	DefaultStepQuietWarning = 10 * time.Minute
+	// DefaultAgentTimeout bounds one pipeline agent invocation that has no
+	// step-specific deadline, so future agent call sites fail closed on stalls.
+	DefaultAgentTimeout = 30 * time.Minute
 	// DefaultReviewAgentTimeout bounds one review round, including its optional
 	// review-fix and rereview turns, so a stalled agent cannot leave a run active forever.
 	DefaultReviewAgentTimeout = 30 * time.Minute
@@ -99,6 +102,7 @@ type GlobalConfig struct {
 	AgentArgsOverride    map[string][]string `yaml:"agent_args_override"`
 	CITimeout            time.Duration       `yaml:"-"`
 	StepQuietWarning     time.Duration       `yaml:"-"`
+	AgentTimeout         time.Duration       `yaml:"-"`
 	ReviewAgentTimeout   time.Duration       `yaml:"-"`
 	TestAgentTimeout     time.Duration       `yaml:"-"`
 	DaemonConnectTimeout time.Duration       `yaml:"-"`
@@ -136,6 +140,7 @@ type globalConfigRaw struct {
 	DaemonConnectTimeout string              `yaml:"daemon_connect_timeout"`
 	BabysitTimeout       string              `yaml:"babysit_timeout"`
 	StepQuietWarning     string              `yaml:"step_quiet_warning"`
+	AgentTimeout         string              `yaml:"agent_timeout"`
 	ReviewAgentTimeout   string              `yaml:"review_agent_timeout"`
 	TestAgentTimeout     string              `yaml:"test_agent_timeout"`
 	LogLevel             string              `yaml:"log_level"`
@@ -483,6 +488,7 @@ type Config struct {
 	AgentArgsOverride     map[string][]string
 	CITimeout             time.Duration
 	StepQuietWarning      time.Duration
+	AgentTimeout          time.Duration
 	ReviewAgentTimeout    time.Duration
 	TestAgentTimeout      time.Duration
 	LogLevel              string
@@ -777,6 +783,10 @@ ci_timeout: "168h"
 # agent lifecycle activity has appeared for this long. This is observability
 # only; it never cancels work.
 step_quiet_warning: "10m"
+
+# Maximum wall-clock time for one pipeline agent invocation that does not
+# install a more specific deadline.
+agent_timeout: "30m"
 
 # Maximum wall-clock time for one review round, including its optional
 # review-fix and rereview turns. A stalled review agent fails the run instead
@@ -1343,6 +1353,7 @@ func DefaultGlobalConfig() *GlobalConfig {
 		Agents:               []types.AgentName{types.AgentAuto},
 		CITimeout:            DefaultCITimeout,
 		StepQuietWarning:     DefaultStepQuietWarning,
+		AgentTimeout:         DefaultAgentTimeout,
 		ReviewAgentTimeout:   DefaultReviewAgentTimeout,
 		TestAgentTimeout:     DefaultTestAgentTimeout,
 		DaemonConnectTimeout: DefaultDaemonConnectTimeout,
@@ -1423,6 +1434,13 @@ func LoadGlobalFromBytes(data []byte) (*GlobalConfig, error) {
 		if d > 0 {
 			cfg.StepQuietWarning = d
 		}
+	}
+	if raw.AgentTimeout != "" {
+		d, err := parsePositiveDuration("agent_timeout", raw.AgentTimeout)
+		if err != nil {
+			return nil, err
+		}
+		cfg.AgentTimeout = d
 	}
 	if raw.ReviewAgentTimeout != "" {
 		d, err := parsePositiveDuration("review_agent_timeout", raw.ReviewAgentTimeout)
@@ -2198,6 +2216,7 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		AgentArgsOverride:    global.AgentArgsOverride,
 		CITimeout:            global.CITimeout,
 		StepQuietWarning:     global.StepQuietWarning,
+		AgentTimeout:         global.AgentTimeout,
 		ReviewAgentTimeout:   global.ReviewAgentTimeout,
 		TestAgentTimeout:     global.TestAgentTimeout,
 		LogLevel:             global.LogLevel,

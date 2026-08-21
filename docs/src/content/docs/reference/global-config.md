@@ -36,6 +36,8 @@ ci_timeout: "168h"
 
 step_quiet_warning: "10m"
 
+agent_timeout: "30m"
+
 review_agent_timeout: "30m"
 
 test_agent_timeout: "30m"
@@ -266,6 +268,24 @@ This is observability only.
 It does not cancel the step, change auto-fix behavior, or mark the run failed.
 AXI renders the quiet signal in the `active_steps` table as part of `last_activity`, for example `quiet 12m3s ago: codex started pid=4242`.
 For older active runs that do not yet have activity rows, AXI falls back to the step log file's modification time.
+
+### agent_timeout
+
+Maximum wall-clock time for one pipeline agent invocation that does not already have a more specific deadline.
+This is the default-by-construction budget: Document, Lint, Rebase conflict repair, PR drafting, CI auto-fix, and any future agent-spawning step are bounded even if they forget to install their own timer.
+Review still uses [`review_agent_timeout`](#review_agent_timeout) as a per-round budget, Test still uses [`test_agent_timeout`](#test_agent_timeout) per invocation, and Intent keeps its five-minute extraction cap; any existing deadline is honored rather than capped.
+When this deadline expires, the agent is cancelled and the invocation returns a timeout diagnostic instead of remaining active indefinitely. Agent-driven mutation steps fail the run, while PR drafting follows its existing agent-error fallback and continues with deterministic content.
+A late successful return after the deadline is rejected, so post-agent commits and PR content cannot use work from a timed-out turn.
+
+|         |                        |
+| ------- | ---------------------- |
+| Type    | `string` (Go duration) |
+| Default | `30m`                  |
+
+Accepts any positive Go `time.ParseDuration` string: `5m`, `30m`, `1h`, etc.
+Non-positive values are rejected when loading the global config.
+Raise it for repositories whose document, lint, rebase, PR, or CI-fix agent turns legitimately run long.
+It is global-only: repository config and environment variables cannot override it.
 
 ### review_agent_timeout
 
