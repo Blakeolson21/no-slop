@@ -285,11 +285,55 @@ func newLaneAgents(cfg *config.Config, health *lanehealth.Store, evidenceRoots .
 		}
 		// Steer every pipeline agent to keep writes inside the worktree and avoid
 		// mutating system state (e.g. brew/Homebrew touching /Applications), which
-		// triggers macOS App Management prompts. Lane health wraps the steered
-		// agent so an exhausted lane is skipped before anything is launched.
-		created = append(created, agent.WithLaneHealth(agent.WithSteering(next, evidenceRoot), laneHealthStore(health), nil))
+		// triggers macOS App Management prompts. When Quartermaster is enabled it
+		// owns account admission for claude/codex lanes; otherwise lane health
+		// preserves the standalone quota cooldown behavior.
+		decorated := agent.WithSteering(next, evidenceRoot)
+		if qm, ok := quartermasterOptionsForLane(cfg, agent.LaneName(name)); ok {
+			decorated = agent.WithQuartermasterLease(decorated, qm)
+		} else {
+			decorated = agent.WithLaneHealth(decorated, laneHealthStore(health), nil)
+		}
+		created = append(created, decorated)
 	}
 	return created, nil
+}
+
+func quartermasterOptionsForLane(cfg *config.Config, lane string) (agent.QuartermasterOptions, bool) {
+	if cfg == nil || !cfg.Quartermaster.Enabled {
+		return agent.QuartermasterOptions{}, false
+	}
+	pool, ok := agent.QuartermasterPoolForLane(lane)
+	if !ok {
+		return agent.QuartermasterOptions{}, false
+	}
+	return agent.QuartermasterOptions{
+		Client: agent.NewCommandQuartermasterClient(expandUserPath(cfg.Quartermaster.Bin)),
+		Pool:   pool,
+		TTL:    cfg.Quartermaster.TTL,
+		Weight: cfg.Quartermaster.Weight,
+	}, true
+}
+
+func expandUserPath(path string) string {
+	if path == "" || path == "~" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
+		if path == "~" {
+			return home
+		}
+		return ""
+	}
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
+		return filepath.Join(home, strings.TrimPrefix(path, "~/"))
+	}
+	return path
 }
 
 // laneHealthStore converts a possibly-nil *lanehealth.Store into an interface

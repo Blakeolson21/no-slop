@@ -106,10 +106,11 @@ type GlobalConfig struct {
 	// budget can be set for a repository whose default branch this machine's
 	// user does not control (the common case when contributing to someone
 	// else's project), and a trusted repo value still wins over it.
-	CI     CIRaw
-	Commit CommitRaw
-	Intent IntentRaw
-	Test   TestRaw
+	CI            CIRaw
+	Commit        CommitRaw
+	Intent        IntentRaw
+	Test          TestRaw
+	Quartermaster Quartermaster
 	// Eval is resolved at load time because it is global-only: it describes
 	// this machine's local eval corpus (disk, retention, whether review rounds
 	// record replay provenance), never a repository policy. Keeping it out of
@@ -135,6 +136,7 @@ type globalConfigRaw struct {
 	Commit               CommitRaw           `yaml:"commit"`
 	Intent               IntentRaw           `yaml:"intent"`
 	Test                 TestRaw             `yaml:"test"`
+	Quartermaster        QuartermasterRaw    `yaml:"quartermaster"`
 	Eval                 EvalRaw             `yaml:"eval"`
 }
 
@@ -483,6 +485,7 @@ type Config struct {
 	Commit                Commit
 	Intent                Intent
 	Test                  Test
+	Quartermaster         Quartermaster
 	Document              Document
 	Review                Review
 	Slop                  Slop
@@ -495,6 +498,20 @@ type Config struct {
 	// intentionally has no CI (see the RepoConfig field). When true and the
 	// forge reports zero checks, the CI monitor treats that as all-checks-passed.
 	NoCI bool
+}
+
+type Quartermaster struct {
+	Enabled bool
+	Bin     string
+	TTL     time.Duration
+	Weight  int
+}
+
+type QuartermasterRaw struct {
+	Enabled *bool  `yaml:"enabled"`
+	Bin     string `yaml:"bin"`
+	TTL     string `yaml:"ttl"`
+	Weight  int    `yaml:"weight"`
 }
 
 // Slop is the resolved NoSlop front-stage configuration.
@@ -744,6 +761,15 @@ const defaultConfigYAML = `# no-slop global configuration
 # "acp:cursor" also uses that Cursor default command
 # Use acp:<target> to run an optional user-installed acpx target, for example acp:gemini
 agent: auto
+
+# Quartermaster is the fleet account-lease authority. When enabled, no-slop
+# asks it for a provider lease before launching claude/codex and fails closed
+# on refusal instead of probing or substituting another account.
+quartermaster:
+  enabled: false
+  bin: ~/.fleet/scripts/quartermaster.py
+  ttl: 30m
+  weight: 1
 
 # Optional path to the user-installed acpx binary for acp:<target> agents and ACP aliases
 # acpx_path: acpx
@@ -1422,9 +1448,42 @@ func LoadGlobalFromBytes(data []byte) (*GlobalConfig, error) {
 	cfg.Commit = raw.Commit
 	cfg.Intent = raw.Intent
 	cfg.Test = raw.Test
+	qm, err := resolveQuartermaster(raw.Quartermaster)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Quartermaster = qm
 	applyEvalOverrides(&cfg.Eval, &raw.Eval)
 
 	return cfg, nil
+}
+
+func resolveQuartermaster(raw QuartermasterRaw) (Quartermaster, error) {
+	enabled := false
+	if raw.Enabled != nil {
+		enabled = *raw.Enabled
+	}
+	ttl := 30 * time.Minute
+	if raw.TTL != "" {
+		d, err := parsePositiveDuration("quartermaster.ttl", raw.TTL)
+		if err != nil {
+			return Quartermaster{}, err
+		}
+		ttl = d
+	}
+	weight := raw.Weight
+	if weight == 0 {
+		weight = 1
+	}
+	if weight < 0 {
+		return Quartermaster{}, fmt.Errorf("parse quartermaster.weight %d: weight must be positive", raw.Weight)
+	}
+	return Quartermaster{
+		Enabled: enabled,
+		Bin:     strings.TrimSpace(raw.Bin),
+		TTL:     ttl,
+		Weight:  weight,
+	}, nil
 }
 
 // parseCITimeout interprets the ci_timeout config value. The keyword
@@ -2171,6 +2230,7 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		Commit:               commit,
 		Intent:               intent,
 		Test:                 test,
+		Quartermaster:        global.Quartermaster,
 		Document:             Document{Instructions: strings.TrimSpace(repo.Document.Instructions)},
 		Review: Review{
 			PathInstructions: resolvePathInstructions(repo.Review.PathInstructions),

@@ -14,11 +14,9 @@ import (
 )
 
 // The pipeline agent must consume persisted lane health, otherwise every run
-// rediscovers an exhausted lane by spawning it - the 2026-08-04 incident, where
-// a dozen consecutive runs each failed on the same dead Codex quota. Marking
-// every lane also proves the terminal message names each lane's reset time
-// instead of failing bare.
-func TestNewPipelineAgentSkipsQuotaExhaustedLanesAndNamesEveryResetTime(t *testing.T) {
+// rediscovers an exhausted lane by spawning it. A quota-marked lane is now a
+// fail-closed refusal: the gate may not substitute the next configured lane.
+func TestNewPipelineAgentFailsClosedOnQuotaExhaustedLane(t *testing.T) {
 	now := time.Now()
 	store := lanehealth.NewStore(
 		filepath.Join(t.TempDir(), "lane-health.json"),
@@ -60,13 +58,12 @@ func TestNewPipelineAgentSkipsQuotaExhaustedLanesAndNamesEveryResetTime(t *testi
 	if !strings.Contains(msg, "every configured agent lane is quota-exhausted") {
 		t.Fatalf("error %q must report that no lane can run", msg)
 	}
-	for _, want := range []string{
-		"codex until " + codexUntil.Local().Format("2006-01-02 15:04 MST"),
-		"claude until " + claudeUntil.Local().Format("2006-01-02 15:04 MST"),
-	} {
-		if !strings.Contains(msg, want) {
-			t.Fatalf("error %q must contain %q", msg, want)
-		}
+	want := "codex until " + codexUntil.Local().Format("2006-01-02 15:04 MST")
+	if !strings.Contains(msg, want) {
+		t.Fatalf("error %q must contain %q", msg, want)
+	}
+	if strings.Contains(msg, "claude until "+claudeUntil.Local().Format("2006-01-02 15:04 MST")) {
+		t.Fatalf("error %q must not inspect the fallback lane after quota refusal", msg)
 	}
 	if strings.Contains(msg, missing) {
 		t.Fatalf("no marked lane may be spawned, but the error names the binary: %q", msg)
