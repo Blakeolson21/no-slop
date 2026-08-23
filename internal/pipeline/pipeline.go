@@ -125,6 +125,18 @@ type Step interface {
 	Execute(sctx *StepContext) (*StepOutcome, error)
 }
 
+// ScopeLimitedFindingsStep marks a step whose later rounds may reassess only
+// the work selected for that round. For such a step, silence in a later round
+// cannot retract an unresolved finding that the operator was already shown.
+type ScopeLimitedFindingsStep interface {
+	FindingsMayBeScopeLimited() bool
+}
+
+func findingsMayBeScopeLimited(step Step) bool {
+	scopeLimited, ok := step.(ScopeLimitedFindingsStep)
+	return ok && scopeLimited.FindingsMayBeScopeLimited()
+}
+
 // ApprovalGateReconciler is implemented by a step whose parked approval gate
 // can become obsolete when an external source of truth changes. The executor
 // invokes it with a bounded context while also waiting for an approval. A true

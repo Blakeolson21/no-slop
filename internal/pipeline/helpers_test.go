@@ -162,6 +162,15 @@ func (a *adaptiveCallStep) Execute(sctx *StepContext) (*StepOutcome, error) {
 	return a.fn(sctx)
 }
 
+// scopeLimitedAdaptiveCallStep models a step whose later rounds may report
+// only what they reassessed. The executor must therefore retain unresolved
+// findings that a later round does not mention.
+type scopeLimitedAdaptiveCallStep struct {
+	adaptiveCallStep
+}
+
+func (s *scopeLimitedAdaptiveCallStep) FindingsMayBeScopeLimited() bool { return true }
+
 // waitForStepEvent polls the event collector until an event with the given type and step name appears.
 func waitForStepEvent(t *testing.T, ec *eventCollector, eventType ipc.EventType, stepName types.StepName) *ipc.Event {
 	t.Helper()

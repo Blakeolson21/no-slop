@@ -297,6 +297,7 @@ type stepExecutionState struct {
 	autoFixAttempts  int
 	executionMS      int64
 	currentRoundID   string
+	carriedFindings  string
 }
 
 func (e *Executor) durableExecutionState(stepResultID string) (stepExecutionState, error) {
@@ -512,6 +513,10 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 			return e.failRun(run, repo, fmt.Errorf("mark recovered step %s fixing: %w", gate.step.Name(), dbErr), ctx)
 		}
 		e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, gate.step.Name(), string(types.StepStatusFixing), "", "", nil)
+		carried := ""
+		if findingsMayBeScopeLimited(gate.step) {
+			carried = excludeFindingsJSON(gate.findings, response.findingIDs)
+		}
 		skipRemaining, restartFrom, err := e.executeStep(ctx, gate.step, gate.stepResult, run, repo, workDir, logDir, stepExecutionState{
 			fixing:           true,
 			previousFindings: merged,
@@ -519,6 +524,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 			autoFixAttempts:  gate.autoFixes,
 			executionMS:      duration,
 			currentRoundID:   gate.lastRoundID,
+			carriedFindings:  carried,
 		})
 		if err != nil {
 			return e.failRun(run, repo, err, ctx)
@@ -799,6 +805,11 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 	// invocation during execution of round N+1 sees roundNum still at N.
 	autoFixAttempts := state.autoFixAttempts
 	roundNum := state.roundNum
+	carryFindings := findingsMayBeScopeLimited(step)
+	carriedFindings := state.carriedFindings
+	if !carryFindings {
+		carriedFindings = ""
+	}
 
 	stepAgent := e.agent
 	if stepAgent != nil {
@@ -894,9 +905,13 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		outcome.Findings = normalizeFindingsJSON(outcome.Findings, string(stepName))
 		finalExitCode = outcome.ExitCode
 		durationOverrideMS += outcome.DurationOverrideMS
+		effectiveFindings := outcome.Findings
+		if carryFindings {
+			effectiveFindings = mergeCarriedFindingsJSON(outcome.Findings, carriedFindings, string(stepName))
+		}
 
-		if outcome.Findings != "" {
-			if dbErr := e.db.SetStepFindings(sr.ID, outcome.Findings); dbErr != nil {
+		if effectiveFindings != "" {
+			if dbErr := e.db.SetStepFindings(sr.ID, effectiveFindings); dbErr != nil {
 				slog.Warn("failed to set step findings in db", "step", stepName, "error", dbErr)
 			}
 		} else {
@@ -907,8 +922,8 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 
 		// Persist this execution round.
 		var findingsPtr *string
-		if outcome.Findings != "" {
-			findingsPtr = &outcome.Findings
+		if effectiveFindings != "" {
+			findingsPtr = &effectiveFindings
 		}
 		var fixSummaryPtr *string
 		if outcome.FixSummary != "" {
@@ -963,7 +978,11 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		// This runs before the NeedsApproval check so that all severity
 		// levels (including "info") get a chance at automatic fixing.
 		if outcome.AutoFixable && autoFixLimit > 0 && autoFixAttempts < autoFixLimit && !convergenceTripped {
-			fixableFindings := autoFixableFindingsJSON(outcome.Findings)
+			roundOwnFindings := effectiveFindings
+			if carryFindings {
+				roundOwnFindings = retainMatchingFindingsJSON(effectiveFindings, outcome.Findings)
+			}
+			fixableFindings := autoFixableFindingsJSON(roundOwnFindings)
 			if fixableFindings != "" {
 				autoFixAttempts++
 				telemetry.Track("fix", e.fixTelemetryFields("auto", stepName, findingsCount(fixableFindings), autoFixAttempts))
@@ -986,12 +1005,16 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 				sctx.Fixing = true
 				sctx.PreviousFindings = fixableFindings
 				nextTrigger = "auto_fix"
+				if carryFindings {
+					carriedFindings = excludeFindingsJSON(effectiveFindings, findingIDList(fixableFindings))
+				}
 				continue
 			}
 		}
 
-		if !outcome.NeedsApproval && !hasAskUserFindingsJSON(outcome.Findings) &&
-			!(convergenceTripped && actionableFindingsCountJSON(outcome.Findings) > 0) {
+		carryRequiresApproval := carryFindings && carriedFindings != "" && actionableFindingsCountJSON(effectiveFindings) > 0
+		if !outcome.NeedsApproval && !hasAskUserFindingsJSON(effectiveFindings) && !carryRequiresApproval &&
+			!(convergenceTripped && actionableFindingsCountJSON(effectiveFindings) > 0) {
 			// Step completed without needing approval.
 			// Any remaining info-only or non-blocking findings
 			// are acceptable and don't block the pipeline.
@@ -1042,7 +1065,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			e.mu.Unlock()
 			return false, "", fmt.Errorf("persist %s approval gate: %w", stepName, dbErr)
 		}
-		e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(approvalStatus), outcome.Findings, "", &executionMS)
+		e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(approvalStatus), effectiveFindings, "", &executionMS)
 
 		response, reconciled, err := e.waitForApprovalOrReconcile(ctx, step, sctx, true)
 		if dbErr := e.db.CompleteRunAwaitingAgent(run.ID, time.Since(parkStart).Milliseconds()); dbErr != nil {
@@ -1068,7 +1091,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		if agentName := e.telemetryAgentName(); agentName != "" {
 			approvalFields["agent"] = agentName
 		}
-		if selectedCount := selectedFindingCount(outcome.Findings, response.findingIDs); selectedCount > 0 {
+		if selectedCount := selectedFindingCount(effectiveFindings, response.findingIDs); selectedCount > 0 {
 			approvalFields["selected_findings_count"] = selectedCount
 		}
 		telemetry.Track("approval", approvalFields)
@@ -1081,7 +1104,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			// adjudication by the approver; record it durably in the step log so
 			// a "passed" run carrying unapplied findings is always attributable
 			// to an explicit decision, never a silent default.
-			if n := actionableFindingsCountJSON(outcome.Findings); n > 0 {
+			if n := actionableFindingsCountJSON(effectiveFindings); n > 0 {
 				writeLog(fmt.Sprintf("gate approved with %d unresolved actionable %s; approval recorded as explicit adjudication", n, pluralize(n, "finding", "findings")))
 			}
 			phaseStart = time.Now()
@@ -1103,18 +1126,21 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			return false, "", fmt.Errorf("step %s: aborted by user", stepName)
 
 		case types.ActionFix:
-			telemetry.Track("fix", e.fixTelemetryFields("user", stepName, selectedFindingCount(outcome.Findings, response.findingIDs), 0))
+			telemetry.Track("fix", e.fixTelemetryFields("user", stepName, selectedFindingCount(effectiveFindings, response.findingIDs), 0))
 			// Fix - mark step as fixing, resume execution timer, re-execute.
 			phaseStart = time.Now()
-			selectedCount := selectedFindingCount(outcome.Findings, response.findingIDs)
+			selectedCount := selectedFindingCount(effectiveFindings, response.findingIDs)
 			writeLog(fmt.Sprintf("user-fix round starting after round %d (%d %s selected)", roundNum, selectedCount, pluralize(selectedCount, "finding", "findings")))
 			if dbErr := e.db.UpdateStepStatus(sr.ID, types.StepStatusFixing); dbErr != nil {
 				slog.Warn("failed to update step status in db", "step", stepName, "status", "fixing", "error", dbErr)
 			}
 			sctx.Fixing = true
-			selectedFindings := filterFindingsJSON(outcome.Findings, response.findingIDs)
+			selectedFindings := filterFindingsJSON(effectiveFindings, response.findingIDs)
 			mergedFindings := mergeUserOverridesJSON(selectedFindings, response.instructions, response.addedFindings)
 			sctx.PreviousFindings = mergedFindings
+			if carryFindings {
+				carriedFindings = excludeFindingsJSON(effectiveFindings, response.findingIDs)
+			}
 			nextTrigger = "auto_fix"
 			if currentRoundID != "" {
 				allSelectedIDs := combineSelectedFindingIDs(response.findingIDs, mergedFindings)

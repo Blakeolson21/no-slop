@@ -123,6 +123,38 @@ func TestRoundHistoryPromptSection_DoesNotTreatAutoFixFilteringAsUserIgnore(t *t
 	}
 }
 
+func TestRoundHistoryPromptSection_LaterSelectionSupersedesEarlierIgnore(t *testing.T) {
+	sctx, stepID := newRoundHistoryContext(t)
+
+	initial := `{"findings":[{"id":"review-1","severity":"error","description":"unsafe loader","action":"ask-user"},{"id":"review-2","severity":"warning","description":"hardcoded timeout","action":"ask-user"}],"summary":"2"}`
+	r1, err := sctx.DB.InsertStepRound(stepID, 1, "initial", &initial, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectedFirst := `["review-1"]`
+	if err := sctx.DB.SetStepRoundSelection(r1.ID, &selectedFirst, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	carried := `{"findings":[{"id":"review-2","severity":"warning","description":"hardcoded timeout","action":"ask-user"}],"summary":"1 outstanding finding"}`
+	r2, err := sctx.DB.InsertStepRound(stepID, 2, "auto_fix", &carried, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectedLater := `["review-2"]`
+	if err := sctx.DB.SetStepRoundSelection(r2.ID, &selectedLater, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	got := roundHistoryPromptSection(sctx)
+	if strings.Contains(got, "user_chose_to_ignore:") {
+		t.Fatalf("a later-selected finding is still labeled ignored:\n%s", got)
+	}
+	if strings.Count(got, `user_chose_to_fix:`) != 2 {
+		t.Fatalf("both selections must be visible to the verifier:\n%s", got)
+	}
+}
+
 func TestRoundHistoryPromptSection_IncludesSourceAndUserInstructions(t *testing.T) {
 	sctx, stepID := newRoundHistoryContext(t)
 	round1 := `{"findings":[{"id":"review-1","severity":"error","description":"panic risk","action":"auto-fix"},{"id":"review-2","severity":"warning","description":"secondary","action":"auto-fix"}],"summary":"2"}`

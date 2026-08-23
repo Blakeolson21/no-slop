@@ -18,6 +18,10 @@ type ReviewStep struct{}
 
 func (s *ReviewStep) Name() types.StepName { return types.StepReview }
 
+// FindingsMayBeScopeLimited tells the executor that a later review round's
+// silence is not authority to discard findings that were shown but not fixed.
+func (s *ReviewStep) FindingsMayBeScopeLimited() bool { return true }
+
 func (s *ReviewStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
 	ctx := sctx.Ctx
 	baseSHA := resolveBranchBaseSHA(ctx, sctx.WorkDir, sctx.Run.BaseSHA, sctx.Repo.DefaultBranch)

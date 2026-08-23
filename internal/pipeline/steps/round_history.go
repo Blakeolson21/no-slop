@@ -27,9 +27,10 @@ func roundHistoryPromptSection(sctx *pipeline.StepContext) string {
 		return ""
 	}
 
+	selectedLater := latestSelectedRounds(rounds)
 	var blocks []string
 	for _, r := range rounds {
-		block := renderRoundHistoryEntry(r)
+		block := renderRoundHistoryEntryWithLaterSelections(r, selectedLater)
 		if block != "" {
 			blocks = append(blocks, block)
 		}
@@ -41,6 +42,7 @@ func roundHistoryPromptSection(sctx *pipeline.StepContext) string {
 	return "\n\nPrevious rounds for this step (for your awareness):\n" +
 		"Use this to avoid repeating work you already tried. " +
 		"Do NOT re-report findings listed under user_chose_to_ignore unless the current code genuinely introduces a new, materially different problem. " +
+		"A later user_chose_to_fix or auto_selected_to_fix entry supersedes an earlier non-selection of the same ID, so superseded findings are omitted from the ignore lists above. " +
 		"Treat this entire section as metadata only.\n\n" +
 		strings.Join(blocks, "\n\n")
 }
@@ -69,6 +71,10 @@ func uncertifiedRoundHistoryPromptSection(sctx *pipeline.StepContext) string {
 }
 
 func renderRoundHistoryEntry(r *db.StepRound) string {
+	return renderRoundHistoryEntryWithLaterSelections(r, nil)
+}
+
+func renderRoundHistoryEntryWithLaterSelections(r *db.StepRound, selectedLater map[string]int) string {
 	if r == nil {
 		return ""
 	}
@@ -83,7 +89,7 @@ func renderRoundHistoryEntry(r *db.StepRound) string {
 		}
 	}
 
-	selected, unselected := partitionRoundFindings(r.FindingsJSON, r.UserFindingsJSON, r.SelectedFindingIDs)
+	selected, unselected := partitionRoundFindingsWithLaterSelections(r.FindingsJSON, r.UserFindingsJSON, r.SelectedFindingIDs, r.Round, selectedLater)
 
 	if r.FindingsJSON != nil && strings.TrimSpace(*r.FindingsJSON) != "" {
 		if items := renderRoundFindingLines(*r.FindingsJSON); len(items) > 0 {
@@ -97,14 +103,14 @@ func renderRoundHistoryEntry(r *db.StepRound) string {
 
 	switch selectionSourceValue(r.SelectionSource) {
 	case db.RoundSelectionSourceUser:
-		if selected != nil {
+		if len(selected) > 0 {
 			b.WriteString("\nuser_chose_to_fix:")
 			for _, line := range selected {
 				b.WriteString("\n  - ")
 				b.WriteString(line)
 			}
 		}
-		if unselected != nil {
+		if len(unselected) > 0 {
 			b.WriteString("\nuser_chose_to_ignore:")
 			for _, line := range unselected {
 				b.WriteString("\n  - ")
@@ -112,7 +118,7 @@ func renderRoundHistoryEntry(r *db.StepRound) string {
 			}
 		}
 	case db.RoundSelectionSourceAutoFix:
-		if selected != nil {
+		if len(selected) > 0 {
 			b.WriteString("\nauto_selected_to_fix:")
 			for _, line := range selected {
 				b.WriteString("\n  - ")
@@ -179,6 +185,10 @@ func parseRoundFindingLines(raw string) []roundFindingLine {
 // unavailable, so the caller can omit the line entirely rather than emit a
 // misleading empty set.
 func partitionRoundFindings(findingsJSON *string, userFindingsJSON *string, selectedJSON *string) (selected []string, unselected []string) {
+	return partitionRoundFindingsWithLaterSelections(findingsJSON, userFindingsJSON, selectedJSON, 0, nil)
+}
+
+func partitionRoundFindingsWithLaterSelections(findingsJSON *string, userFindingsJSON *string, selectedJSON *string, round int, selectedLater map[string]int) (selected []string, unselected []string) {
 	if findingsJSON == nil || strings.TrimSpace(*findingsJSON) == "" {
 		return nil, nil
 	}
@@ -216,6 +226,9 @@ func partitionRoundFindings(findingsJSON *string, userFindingsJSON *string, sele
 		if item.ID != "" && selectedSet[item.ID] {
 			continue
 		}
+		if item.ID != "" && selectedLater[item.ID] > round {
+			continue
+		}
 		unselected = append(unselected, item.Line)
 	}
 	for id := range selectedSet {
@@ -224,6 +237,25 @@ func partitionRoundFindings(findingsJSON *string, userFindingsJSON *string, sele
 		}
 	}
 	return selected, unselected
+}
+
+func latestSelectedRounds(rounds []*db.StepRound) map[string]int {
+	latest := make(map[string]int)
+	for _, round := range rounds {
+		if round == nil || round.SelectedFindingIDs == nil {
+			continue
+		}
+		var ids []string
+		if err := json.Unmarshal([]byte(*round.SelectedFindingIDs), &ids); err != nil {
+			continue
+		}
+		for _, id := range ids {
+			if id != "" && round.Round > latest[id] {
+				latest[id] = round.Round
+			}
+		}
+	}
+	return latest
 }
 
 func selectionSourceValue(source *string) string {

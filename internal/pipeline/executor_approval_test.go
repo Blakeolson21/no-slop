@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -223,6 +224,75 @@ func TestExecutor_ResumeRestoresParkedGateAndReviewSessions(t *testing.T) {
 	}
 	if resumed.ReviewApprovedHeadSHA == nil || *resumed.ReviewApprovedHeadSHA != "2222222222222222222222222222222222222222" {
 		t.Fatalf("recovered rereview approval = %#v", resumed.ReviewApprovedHeadSHA)
+	}
+}
+
+func TestExecutor_ResumeCarriesUnselectedReviewFinding(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	if err := database.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+	stepResult, err := database.InsertStepResult(run.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.StartStep(stepResult.ID); err != nil {
+		t.Fatal(err)
+	}
+	findings := `{"findings":[{"id":"review-1","severity":"error","description":"selected","action":"ask-user"},{"id":"review-2","severity":"warning","description":"must survive","action":"ask-user"}],"summary":"2"}`
+	if err := database.SetStepFindings(stepResult.ID, findings); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.InsertReviewStepRound(stepResult.ID, 1, "initial", &findings, nil, "1111111111111111111111111111111111111111", 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpdateStepStatusWithDuration(stepResult.ID, types.StepStatusAwaitingApproval, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetRunAwaitingAgent(run.ID); err != nil {
+		t.Fatal(err)
+	}
+	run, err = database.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	step := &scopeLimitedAdaptiveCallStep{adaptiveCallStep: adaptiveCallStep{
+		name: types.StepReview,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			return &StepOutcome{
+				Findings:              `{"findings":[],"summary":"clean rereview","risk_level":"low"}`,
+				ReviewApprovedHeadSHA: "2222222222222222222222222222222222222222",
+			}, nil
+		},
+	}}
+	exec := NewExecutor(database, p, &config.Config{}, nil, []Step{step}, nil)
+	done := make(chan error, 1)
+	go func() { done <- exec.Resume(context.Background(), run, repo, t.TempDir()) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if err := exec.Respond(types.StepReview, types.ActionFix, []string{"review-1"}); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("recovered gate never accepted a fix response")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusFixReview)
+	steps, err := database.GetStepsByRun(run.ID)
+	if err != nil || steps[0].FindingsJSON == nil || !strings.Contains(*steps[0].FindingsJSON, "review-2") {
+		t.Fatalf("recovered fix-review did not retain review-2: %v %#v", err, steps[0].FindingsJSON)
+	}
+	if strings.Contains(*steps[0].FindingsJSON, "review-1") {
+		t.Fatalf("selected review-1 remained outstanding: %s", *steps[0].FindingsJSON)
+	}
+	if err := exec.Respond(types.StepReview, types.ActionApprove, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 

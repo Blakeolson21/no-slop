@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -80,6 +81,183 @@ func TestExecutor_FixEmitsFixReviewStatusWithoutStreamingTheDiff(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("executor timed out")
+	}
+}
+
+func TestExecutor_UnselectedReviewFindingSurvivesSilentRereview(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+
+	initial := `{"findings":[{"id":"review-1","severity":"error","description":"unsafe loader","action":"ask-user"},{"id":"review-2","severity":"warning","description":"hardcoded timeout","action":"ask-user"}],"summary":"2 findings","tested":["initial review evidence"]}`
+	empty := `{"findings":[],"summary":"no new findings","risk_level":"low","tested":["rereview evidence"]}`
+	calls := 0
+	step := &scopeLimitedAdaptiveCallStep{adaptiveCallStep: adaptiveCallStep{
+		name: types.StepReview,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			calls++
+			if calls == 1 {
+				return &StepOutcome{NeedsApproval: true, Findings: initial}, nil
+			}
+			return &StepOutcome{Findings: empty}, nil
+		},
+	}}
+
+	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
+	done := make(chan error, 1)
+	go func() { done <- exec.Execute(context.Background(), run, repo, workDir) }()
+
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	if err := exec.Respond(types.StepReview, types.ActionFix, []string{"review-1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-done:
+			t.Fatalf("run completed after a silent rereview dropped an unresolved finding: %v", err)
+		default:
+		}
+		steps, err := database.GetStepsByRun(run.ID)
+		if err == nil && len(steps) == 1 && steps[0].Status == types.StepStatusFixReview {
+			if steps[0].FindingsJSON == nil {
+				t.Fatal("fix-review gate has no findings")
+			}
+			parsed, err := types.ParseFindingsJSON(*steps[0].FindingsJSON)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(parsed.Items) != 1 || parsed.Items[0].ID != "review-2" {
+				t.Fatalf("outstanding findings = %#v, want only review-2", parsed.Items)
+			}
+			if len(parsed.Tested) != 2 || !slices.Contains(parsed.Tested, "initial review evidence") || !slices.Contains(parsed.Tested, "rereview evidence") {
+				t.Fatalf("merged review evidence = %#v, want both rounds", parsed.Tested)
+			}
+			stats, err := database.StepFindingStats(steps[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stats.ReportedFindings != 2 || stats.FixedFindings != 1 {
+				t.Fatalf("finding stats = reported %d, fixed %d; want 2 and 1", stats.ReportedFindings, stats.FixedFindings)
+			}
+			if err := exec.Respond(types.StepReview, types.ActionApprove, nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("review did not park again on the unresolved carried finding")
+}
+
+func TestExecutor_LaterSelectedCarriedFindingClearsAfterVerification(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+
+	initial := `{"findings":[{"id":"review-1","severity":"error","description":"unsafe loader","action":"ask-user"},{"id":"review-2","severity":"warning","description":"hardcoded timeout","action":"ask-user"}],"summary":"2 findings"}`
+	empty := `{"findings":[],"summary":"no new findings","risk_level":"low"}`
+	calls := 0
+	step := &scopeLimitedAdaptiveCallStep{adaptiveCallStep: adaptiveCallStep{
+		name: types.StepReview,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			calls++
+			if calls == 1 {
+				return &StepOutcome{NeedsApproval: true, Findings: initial}, nil
+			}
+			return &StepOutcome{Findings: empty}, nil
+		},
+	}}
+
+	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
+	done := make(chan error, 1)
+	go func() { done <- exec.Execute(context.Background(), run, repo, workDir) }()
+
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	if err := exec.Respond(types.StepReview, types.ActionFix, []string{"review-1"}); err != nil {
+		t.Fatal(err)
+	}
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusFixReview)
+	if err := exec.Respond(types.StepReview, types.ActionFix, []string{"review-2"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not complete after the later-selected finding passed verification")
+	}
+
+	steps, err := database.GetStepsByRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rounds, err := database.GetRoundsByStep(steps[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rounds) != 3 || rounds[1].SelectedFindingIDs == nil || !strings.Contains(*rounds[1].SelectedFindingIDs, "review-2") {
+		t.Fatalf("later selection was not durably attached to the carried gate: %#v", rounds)
+	}
+}
+
+func TestExecutor_CarriedFindingKeepsIdentityAndStricterAction(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+
+	initial := `{"findings":[{"id":"review-1","severity":"error","file":"loader.go","line":8,"description":"unsafe loader","action":"ask-user"},{"id":"review-2","severity":"warning","description":"selected first","action":"ask-user"}],"summary":"2 findings"}`
+	rereview := `{"findings":[{"severity":"error","file":"loader.go","line":9,"description":"unsafe loader","action":"no-op"},{"severity":"warning","description":"new concern","action":"ask-user"}],"summary":"2 findings"}`
+	calls := 0
+	step := &scopeLimitedAdaptiveCallStep{adaptiveCallStep: adaptiveCallStep{
+		name: types.StepReview,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			calls++
+			if calls == 1 {
+				return &StepOutcome{NeedsApproval: true, Findings: initial}, nil
+			}
+			return &StepOutcome{NeedsApproval: true, Findings: rereview}, nil
+		},
+	}}
+
+	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
+	done := make(chan error, 1)
+	go func() { done <- exec.Execute(context.Background(), run, repo, workDir) }()
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	if err := exec.Respond(types.StepReview, types.ActionFix, []string{"review-2"}); err != nil {
+		t.Fatal(err)
+	}
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusFixReview)
+
+	steps, err := database.GetStepsByRun(run.ID)
+	if err != nil || steps[0].FindingsJSON == nil {
+		t.Fatalf("read parked findings: %v", err)
+	}
+	findings, err := types.ParseFindingsJSON(*steps[0].FindingsJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make(map[string]bool)
+	for _, finding := range findings.Items {
+		if ids[finding.ID] {
+			t.Fatalf("duplicate published finding id %q: %#v", finding.ID, findings.Items)
+		}
+		ids[finding.ID] = true
+		if finding.Description == "unsafe loader" && (finding.ID != "review-1" || finding.Action != "ask-user") {
+			t.Fatalf("restated carried finding lost identity or was relaxed: %#v", finding)
+		}
+	}
+	if len(findings.Items) != 2 || !ids["review-1"] || !ids["review-2"] {
+		t.Fatalf("effective findings = %#v, want two stable unique ids", findings.Items)
+	}
+	if err := exec.Respond(types.StepReview, types.ActionApprove, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 

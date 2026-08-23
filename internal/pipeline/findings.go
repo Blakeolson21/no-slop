@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
@@ -10,21 +11,24 @@ import (
 // returns them as a JSON array string. Empty result means there were no
 // findings or parsing failed.
 func findingIDsJSON(raw string) string {
+	return marshalFindingIDs(findingIDList(raw))
+}
+
+func findingIDList(raw string) []string {
 	if raw == "" {
-		return ""
+		return nil
 	}
 	findings, err := types.ParseFindingsJSON(raw)
 	if err != nil {
-		return ""
+		return nil
 	}
 	ids := make([]string, 0, len(findings.Items))
 	for _, item := range findings.Items {
-		if item.ID == "" {
-			continue
+		if item.ID != "" {
+			ids = append(ids, item.ID)
 		}
-		ids = append(ids, item.ID)
 	}
-	return marshalFindingIDs(ids)
+	return ids
 }
 
 // marshalFindingIDs encodes a list of finding IDs as a JSON array. Empty
@@ -87,8 +91,11 @@ func normalizeFindingsJSON(raw string, prefix string) string {
 }
 
 func excludeFindingsJSON(raw string, ids []string) string {
-	if raw == "" || len(ids) == 0 {
+	if raw == "" {
 		return ""
+	}
+	if len(ids) == 0 {
+		return raw
 	}
 	findings, err := types.ParseFindingsJSON(raw)
 	if err != nil {
@@ -103,6 +110,138 @@ func excludeFindingsJSON(raw string, ids []string) string {
 		return ""
 	}
 	return excludedRaw
+}
+
+// mergeCarriedFindingsJSON forms the effective gate truth for a scope-limited
+// round. Fresh output owns the current assessment prose, while already-shown
+// findings keep their stable IDs and cannot have their action relaxed by a
+// later restatement. New-ID collisions are reassigned before publication.
+func mergeCarriedFindingsJSON(freshRaw, carriedRaw, prefix string) string {
+	if carriedRaw == "" {
+		return freshRaw
+	}
+	if freshRaw == "" {
+		return carriedRaw
+	}
+	fresh, err := types.ParseFindingsJSON(freshRaw)
+	if err != nil {
+		return carriedRaw
+	}
+	carried, err := types.ParseFindingsJSON(carriedRaw)
+	if err != nil {
+		return freshRaw
+	}
+	merged := fresh
+	merged.Tested = mergeComparable(merged.Tested, carried.Tested)
+	merged.Artifacts = mergeComparable(merged.Artifacts, carried.Artifacts)
+	if merged.TestingSummary == "" {
+		merged.TestingSummary = carried.TestingSummary
+	}
+	freshCounts := countFindingFingerprints(fresh.Items)
+	carriedCounts := countFindingFingerprints(carried.Items)
+	carriedIdentity := make(map[int]bool, len(carried.Items))
+	for _, old := range carried.Items {
+		match := -1
+		for i, current := range merged.Items {
+			if findingKey(current) == findingKey(old) ||
+				(findingFingerprint(current) == findingFingerprint(old) && freshCounts[findingFingerprint(current)] == 1 && carriedCounts[findingFingerprint(old)] == 1) {
+				match = i
+				break
+			}
+		}
+		if match >= 0 {
+			merged.Items[match].ID = old.ID
+			merged.Items[match].Action = stricterFindingAction(old.Action, merged.Items[match].Action)
+			carriedIdentity[match] = true
+			continue
+		}
+		merged.Items = append(merged.Items, old)
+		carriedIdentity[len(merged.Items)-1] = true
+	}
+
+	reserved := make(map[string]bool, len(merged.Items))
+	for i, item := range merged.Items {
+		if carriedIdentity[i] && item.ID != "" {
+			reserved[item.ID] = true
+		}
+	}
+	nextID := 1
+	for i := range merged.Items {
+		id := merged.Items[i].ID
+		if carriedIdentity[i] {
+			continue
+		}
+		if id != "" && !reserved[id] {
+			reserved[id] = true
+			continue
+		}
+		for {
+			candidate := fmt.Sprintf("%s-%d", prefix, nextID)
+			nextID++
+			if !reserved[candidate] {
+				merged.Items[i].ID = candidate
+				reserved[candidate] = true
+				break
+			}
+		}
+	}
+
+	merged.Summary = fmt.Sprintf("%d outstanding %s", len(merged.Items), pluralize(len(merged.Items), "finding", "findings"))
+	if riskRank(carried.RiskLevel) > riskRank(merged.RiskLevel) {
+		merged.RiskLevel = carried.RiskLevel
+		merged.RiskRationale = carried.RiskRationale
+		merged.RiskScope = carried.RiskScope
+	}
+	encoded, err := types.MarshalFindingsJSON(merged)
+	if err != nil {
+		return carriedRaw
+	}
+	return encoded
+}
+
+func mergeComparable[T comparable](fresh, carried []T) []T {
+	seen := make(map[T]bool, len(fresh)+len(carried))
+	merged := make([]T, 0, len(fresh)+len(carried))
+	for _, values := range [][]T{fresh, carried} {
+		for _, value := range values {
+			if !seen[value] {
+				seen[value] = true
+				merged = append(merged, value)
+			}
+		}
+	}
+	return merged
+}
+
+func stricterFindingAction(carried, fresh string) string {
+	if findingActionRank(fresh) > findingActionRank(carried) {
+		return fresh
+	}
+	return carried
+}
+
+func findingActionRank(action string) int {
+	switch action {
+	case types.ActionNoOp:
+		return 1
+	case types.ActionAutoFix:
+		return 2
+	default:
+		return 3
+	}
+}
+
+func riskRank(level string) int {
+	switch level {
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	default:
+		return 0
+	}
 }
 
 func mergeFindingsJSON(existingRaw, additionalRaw string) string {
