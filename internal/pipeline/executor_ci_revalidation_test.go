@@ -140,6 +140,65 @@ func equalStepNames(got, want []types.StepName) bool {
 	return true
 }
 
+func TestExecutor_InProcessRevalidationPreservesSkippedSteps(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+
+	review := newPassStep(types.StepReview)
+	testCalls := 0
+	testStep := &adaptiveCallStep{name: types.StepTest, fn: func(*StepContext) (*StepOutcome, error) {
+		testCalls++
+		if testCalls == 1 {
+			return &StepOutcome{NeedsApproval: true}, nil
+		}
+		return &StepOutcome{}, nil
+	}}
+	ciCalls := 0
+	ci := &adaptiveCallStep{name: types.StepCI, fn: func(*StepContext) (*StepOutcome, error) {
+		ciCalls++
+		if ciCalls == 1 {
+			return &StepOutcome{RestartFrom: types.StepReview}, nil
+		}
+		return &StepOutcome{}, nil
+	}}
+
+	exec := NewExecutor(database, p, nil, nil, []Step{review, testStep, ci}, nil)
+	workDir := t.TempDir()
+	done := make(chan error, 1)
+	go func() { done <- exec.Execute(context.Background(), run, repo, workDir) }()
+
+	waitForStepStatus(t, database, run.ID, types.StepTest, types.StepStatusAwaitingApproval)
+	if err := exec.Respond(types.StepTest, types.ActionSkip, nil); err != nil {
+		t.Fatalf("skip test step: %v", err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("executor did not complete")
+	}
+
+	if got := review.callCount(); got != 2 {
+		t.Fatalf("review executed %d times, want 2", got)
+	}
+	if testCalls != 1 {
+		t.Fatalf("explicitly skipped test executed %d times, want 1", testCalls)
+	}
+	if ciCalls != 2 {
+		t.Fatalf("CI executed %d times, want 2", ciCalls)
+	}
+	results, err := database.GetStepsByRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, result := range results {
+		if result.StepName == types.StepTest && result.Status != types.StepStatusSkipped {
+			t.Fatalf("test status = %s, want %s", result.Status, types.StepStatusSkipped)
+		}
+	}
+}
+
 func TestExecutor_RecoveredRevalidationPreservesSkippedStepsAndRoundNumbers(t *testing.T) {
 	database, p, run, repo := setupTest(t)
 	const repairedHead = "2222222222222222222222222222222222222222"
