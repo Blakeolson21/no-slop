@@ -105,14 +105,19 @@ func TestCIStep_RepairCommitStaysLocalAndInvalidatesReviewAuthority(t *testing.T
 	if run.ReviewApprovedHeadSHA != nil {
 		t.Fatalf("stale review authority survived CI repair: %s", *run.ReviewApprovedHeadSHA)
 	}
+	if run.LastPushedSHA == nil || *run.LastPushedSHA != approvedHead || run.PushGeneration == nil || *run.PushGeneration != 1 {
+		t.Fatalf("prior push binding changed before Push republished: %#v", run)
+	}
 
 	_, err = (&PushStep{}).Execute(sctx)
 	if err == nil || !strings.Contains(err.Error(), "no durably recorded review-approved head") {
 		t.Fatalf("PushStep.Execute error = %v, want refusal for invalidated review authority", err)
 	}
-	if remoteHead := gitCmd(t, remote, "rev-parse", "refs/heads/feature"); remoteHead != approvedHead {
+	remoteHead := gitCmd(t, remote, "rev-parse", "refs/heads/feature")
+	if remoteHead != approvedHead {
 		t.Fatalf("push after stale approval changed remote to %s, want %s", remoteHead, approvedHead)
 	}
+	t.Logf("CI repair safety evidence:\n  local repaired head: %s\n  remote feature head: %s\n  durable run head: %s\n  durable review authority: absent\n  retained prior push binding: %s (generation %d)\n  stale-authority push: refused (%v)", repairedHead, remoteHead, run.HeadSHA, *run.LastPushedSHA, *run.PushGeneration, err)
 }
 
 func TestCIStep_SuccessfulAutoRepairRestartsFromReview(t *testing.T) {

@@ -3,10 +3,11 @@ package cli
 // staleMonitorGuidance is the canonical, point-of-use guidance an agent reads
 // when `axi run` returns `checks-passed`: what to do if that PR later falls
 // behind the default branch or hits a merge conflict (commonly because another
-// PR merged first). The live CI monitor keeps running after checks pass and
-// auto-rebases onto the base, resolves the conflict, and re-pushes the branch
-// itself, so the agent runs no command and never hand-rebases. `no-slop
-// rerun` is only the recovery for a monitor that is no longer running.
+// PR merged first). The live CI monitor keeps running after checks pass,
+// auto-rebases onto the base, resolves the conflict, restarts validation at
+// Review, and publishes through Push, so the agent runs no command and never
+// hand-rebases. `no-slop rerun` is only the recovery for a monitor that is no
+// longer running.
 //
 // This same guidance is mirrored in the skill body (internal/skill/skill.go)
 // and the published agents guide (docs/.../guides/agents.md); the repo treats

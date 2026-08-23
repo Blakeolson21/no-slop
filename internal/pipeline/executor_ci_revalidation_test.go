@@ -155,6 +155,9 @@ func TestExecutor_CIRepairMustPassReviewBeforeAnotherPush(t *testing.T) {
 			if got, want := roundNumbersForRevalidation(rounds), []int{1, 2}; !equalInts(got, want) {
 				t.Fatalf("review rounds = %v, want %v", got, want)
 			}
+			if result.ConvergenceJSON == nil {
+				t.Fatal("review convergence state was not reconstructed after revalidation reset")
+			}
 		}
 		if result.StepName == types.StepCI {
 			if len(rounds) != 1 || rounds[0].Trigger != "auto_fix" {
@@ -165,6 +168,7 @@ func TestExecutor_CIRepairMustPassReviewBeforeAnotherPush(t *testing.T) {
 			t.Fatalf("reset %s status = %s, want %s", result.StepName, result.Status, types.StepStatusPending)
 		}
 	}
+	t.Logf("revalidation sequence evidence: %v; push calls before fresh repaired-head approval: %d; repaired durable head: %s; stale review authority: absent; review convergence state: reconstructed", gotOrder, pushCalls, gotRun.HeadSHA)
 }
 
 func equalStepNames(got, want []types.StepName) bool {
@@ -369,6 +373,7 @@ func TestExecutor_RecoveredRevalidationPreservesSkippedStepsAndRoundNumbers(t *t
 	if gotPush.Status != types.StepStatusSkipped {
 		t.Fatalf("push status = %s, want %s", gotPush.Status, types.StepStatusSkipped)
 	}
+	t.Logf("daemon-recovery evidence: durable repaired review resumed without rerun; test rounds: %v; explicitly skipped push remained %s", roundNumbersForRevalidation(testRounds), gotPush.Status)
 }
 
 func roundNumbersForRevalidation(rounds []*db.StepRound) []int {

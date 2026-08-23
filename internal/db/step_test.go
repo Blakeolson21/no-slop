@@ -326,6 +326,9 @@ func TestResetStepsFromPreservesSkippedSteps(t *testing.T) {
 	if err := d.CompleteStep(review.ID, 0, 15, "review.log"); err != nil {
 		t.Fatal(err)
 	}
+	if err := d.SetStepConvergence(review.ID, `{"round_findings":[1]}`); err != nil {
+		t.Fatal(err)
+	}
 	if err := d.CompleteStepWithStatus(push.ID, types.StepStatusSkipped, 0, 0, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +341,7 @@ func TestResetStepsFromPreservesSkippedSteps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotReview.Status != types.StepStatusPending || gotReview.CompletedAt != nil || gotReview.LogPath != nil {
+	if gotReview.Status != types.StepStatusPending || gotReview.CompletedAt != nil || gotReview.LogPath != nil || gotReview.ConvergenceJSON != nil {
 		t.Fatalf("review after reset = %#v, want clean pending step", gotReview)
 	}
 	gotPush, err := d.GetStepResult(push.ID)
@@ -348,6 +351,7 @@ func TestResetStepsFromPreservesSkippedSteps(t *testing.T) {
 	if gotPush.Status != types.StepStatusSkipped {
 		t.Fatalf("push status = %s, want durable skip preserved", gotPush.Status)
 	}
+	t.Logf("revalidation reset evidence: review status=%s, convergence state=cleared, push status=%s", gotReview.Status, gotPush.Status)
 }
 
 func TestUpdateStepStatusWithDuration(t *testing.T) {
