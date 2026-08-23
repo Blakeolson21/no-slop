@@ -9,7 +9,7 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/buildinfo"
 )
 
-func TestDefaultUsesDotEnvInDevBuildWhenEnvMissing(t *testing.T) {
+func TestCollectorConfigUsesDotEnvInDevBuildWhenEnvMissing(t *testing.T) {
 	prevSink := defaultSink
 	defaultSink = nil
 	defer func() { defaultSink = prevSink }()
@@ -46,23 +46,15 @@ func TestDefaultUsesDotEnvInDevBuildWhenEnvMissing(t *testing.T) {
 	}
 	defer os.Chdir(prevWD)
 
-	sink, err := Default()
-	if err != nil {
-		t.Fatalf("Default() error = %v", err)
+	if host, err := defaultHostValue(); err != nil || host != "https://dotenv.example" {
+		t.Fatalf("defaultHostValue() = %q, %v", host, err)
 	}
-	client, ok := sink.(*Client)
-	if !ok {
-		t.Fatalf("Default() type = %T, want *Client", sink)
-	}
-	if client.endpoint != "https://dotenv.example/api/send" {
-		t.Fatalf("endpoint = %q, want %q", client.endpoint, "https://dotenv.example/api/send")
-	}
-	if client.websiteID != "website-from-dotenv" {
-		t.Fatalf("websiteID = %q, want %q", client.websiteID, "website-from-dotenv")
+	if websiteID, err := defaultWebsiteID(); err != nil || websiteID != "website-from-dotenv" {
+		t.Fatalf("defaultWebsiteID() = %q, %v", websiteID, err)
 	}
 }
 
-func TestDefaultUsesLegacyDotEnvAliasesInDevBuildWhenEnvMissing(t *testing.T) {
+func TestCollectorConfigUsesLegacyDotEnvAliasesInDevBuildWhenEnvMissing(t *testing.T) {
 	prevSink := defaultSink
 	defaultSink = nil
 	defer func() { defaultSink = prevSink }()
@@ -99,23 +91,15 @@ func TestDefaultUsesLegacyDotEnvAliasesInDevBuildWhenEnvMissing(t *testing.T) {
 	}
 	defer os.Chdir(prevWD)
 
-	sink, err := Default()
-	if err != nil {
-		t.Fatalf("Default() error = %v", err)
+	if host, err := defaultHostValue(); err != nil || host != "https://legacy-dotenv.example" {
+		t.Fatalf("defaultHostValue() = %q, %v", host, err)
 	}
-	client, ok := sink.(*Client)
-	if !ok {
-		t.Fatalf("Default() type = %T, want *Client", sink)
-	}
-	if client.endpoint != "https://legacy-dotenv.example/api/send" {
-		t.Fatalf("endpoint = %q, want %q", client.endpoint, "https://legacy-dotenv.example/api/send")
-	}
-	if client.websiteID != "legacy-website" {
-		t.Fatalf("websiteID = %q, want %q", client.websiteID, "legacy-website")
+	if websiteID, err := defaultWebsiteID(); err != nil || websiteID != "legacy-website" {
+		t.Fatalf("defaultWebsiteID() = %q, %v", websiteID, err)
 	}
 }
 
-func TestDefaultPrefersEnvVarsOverDotEnvAndEmbeddedConfig(t *testing.T) {
+func TestCollectorConfigPrefersEnvVarsOverDotEnvAndEmbeddedConfig(t *testing.T) {
 	prevSink := defaultSink
 	defaultSink = nil
 	defer func() { defaultSink = prevSink }()
@@ -155,23 +139,15 @@ func TestDefaultPrefersEnvVarsOverDotEnvAndEmbeddedConfig(t *testing.T) {
 	}
 	defer os.Chdir(prevWD)
 
-	sink, err := Default()
-	if err != nil {
-		t.Fatalf("Default() error = %v", err)
+	if host, err := defaultHostValue(); err != nil || host != "https://env.example" {
+		t.Fatalf("defaultHostValue() = %q, %v", host, err)
 	}
-	client, ok := sink.(*Client)
-	if !ok {
-		t.Fatalf("Default() type = %T, want *Client", sink)
-	}
-	if client.endpoint != "https://env.example/api/send" {
-		t.Fatalf("endpoint = %q, want %q", client.endpoint, "https://env.example/api/send")
-	}
-	if client.websiteID != "website-from-env" {
-		t.Fatalf("websiteID = %q, want %q", client.websiteID, "website-from-env")
+	if websiteID, err := defaultWebsiteID(); err != nil || websiteID != "website-from-env" {
+		t.Fatalf("defaultWebsiteID() = %q, %v", websiteID, err)
 	}
 }
 
-func TestDefaultUsesEmbeddedTelemetryHostAndWebsiteID(t *testing.T) {
+func TestCollectorConfigUsesEmbeddedTelemetryHostAndWebsiteID(t *testing.T) {
 	prevSink := defaultSink
 	defaultSink = nil
 	defer func() { defaultSink = prevSink }()
@@ -195,23 +171,15 @@ func TestDefaultUsesEmbeddedTelemetryHostAndWebsiteID(t *testing.T) {
 	t.Setenv(umamiWebsiteIDEnv, "")
 	t.Setenv(legacyUmamiWebsiteIDEnv, "")
 
-	sink, err := Default()
-	if err != nil {
-		t.Fatalf("Default() error = %v", err)
+	if host, err := defaultHostValue(); err != nil || host != "https://embedded.example" {
+		t.Fatalf("defaultHostValue() = %q, %v", host, err)
 	}
-	client, ok := sink.(*Client)
-	if !ok {
-		t.Fatalf("Default() type = %T, want *Client", sink)
-	}
-	if client.endpoint != "https://embedded.example/api/send" {
-		t.Fatalf("endpoint = %q, want %q", client.endpoint, "https://embedded.example/api/send")
-	}
-	if client.websiteID != "embedded-website" {
-		t.Fatalf("websiteID = %q, want %q", client.websiteID, "embedded-website")
+	if websiteID, err := defaultWebsiteID(); err != nil || websiteID != "embedded-website" {
+		t.Fatalf("defaultWebsiteID() = %q, %v", websiteID, err)
 	}
 }
 
-func TestDefaultUsesSelfHostedHostWhenHostConfigMissing(t *testing.T) {
+func TestCollectorConfigUsesSelfHostedHostWhenHostConfigMissing(t *testing.T) {
 	prevSink := defaultSink
 	defaultSink = nil
 	defer func() { defaultSink = prevSink }()
@@ -235,16 +203,8 @@ func TestDefaultUsesSelfHostedHostWhenHostConfigMissing(t *testing.T) {
 	t.Setenv(umamiWebsiteIDEnv, "")
 	t.Setenv(legacyUmamiWebsiteIDEnv, "")
 
-	sink, err := Default()
-	if err != nil {
-		t.Fatalf("Default() error = %v", err)
-	}
-	client, ok := sink.(*Client)
-	if !ok {
-		t.Fatalf("Default() type = %T, want *Client", sink)
-	}
-	if client.endpoint != defaultHost+"/api/send" {
-		t.Fatalf("endpoint = %q, want %q", client.endpoint, defaultHost+"/api/send")
+	if host, err := defaultHostValue(); err != nil || host != defaultHost {
+		t.Fatalf("defaultHostValue() = %q, %v; want %q", host, err, defaultHost)
 	}
 }
 

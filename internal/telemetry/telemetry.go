@@ -131,42 +131,13 @@ func Default() (Sink, error) {
 	if defaultSink != nil {
 		return defaultSink, nil
 	}
-	disabled, err := telemetryDisabled()
-	if err != nil {
-		return nil, err
-	}
-	if disabled {
-		defaultSink = noopSink{}
-		return defaultSink, nil
-	}
 
-	websiteID, err := defaultWebsiteID()
-	if err != nil {
-		return nil, err
-	}
-	if websiteID == "" {
-		defaultSink = noopSink{}
-		return defaultSink, nil
-	}
-
-	host, err := defaultHostValue()
-	if err != nil {
-		return nil, err
-	}
-	client, err := NewClient(Config{
-		Host:      host,
-		WebsiteID: websiteID,
-		App:       "no-slop",
-		Version:   buildinfo.CurrentVersion(),
-		GOOS:      runtime.GOOS,
-		GOARCH:    runtime.GOARCH,
-	})
-	if err != nil {
-		defaultSink = noopSink{}
-		return defaultSink, nil
-	}
-
-	defaultSink = client
+	// This fork is a local gate over private source. Keep the privacy decision
+	// at the sink every production call site shares: runtime variables,
+	// repository dotenv files, and build-time collector IDs may still be parsed
+	// for compatibility, but none can construct a sender. Tests can explicitly
+	// inject a recorder with SetDefaultForTesting.
+	defaultSink = noopSink{}
 	return defaultSink, nil
 }
 

@@ -215,6 +215,12 @@ Config directory used to locate glab's `config.yml` for self-hosted GitLab detec
 When `GLAB_CONFIG_DIR` is unset, no-slop looks for glab's configured hosts at `$XDG_CONFIG_HOME/glab-cli/config.yml`, falling back to `~/.config/glab-cli/config.yml` when `XDG_CONFIG_HOME` is unset.
 When `GH_CONFIG_DIR` is unset, no-slop looks for gh's configured hosts at `$XDG_CONFIG_HOME/gh/hosts.yml`, falling back to `~/.config/gh/hosts.yml` when `XDG_CONFIG_HOME` is unset.
 
+## Telemetry in no-slop
+
+No-slop keeps remote telemetry disabled at the shared sink. `Default()` always returns a no-op sink, so environment variables, repository dotenv files, and build-time collector values cannot make a production call site send data. Local pipeline performance records remain available through `no-slop stats`; tests may inject an in-memory sink explicitly.
+
+The telemetry variables below remain accepted for configuration compatibility with upstream, but they do not enable remote delivery in this fork.
+
 ## `NS_UMAMI_HOST`
 
 Override the telemetry collection host.
@@ -224,7 +230,7 @@ Override the telemetry collection host.
 | Type    | `URL`                       |
 | Default | `https://a.kunchenguid.com` |
 
-When set, telemetry sends events to this host's `/api/send` endpoint. `NO_MISTAKES_UMAMI_HOST` is the compatibility alias; if both names are set, their values must match, including empty values. If it is unset in a dev build, `no-slop` also checks a repo-local `.env` file for either spelling. If no runtime value is found, it falls back to any host embedded at build time and then the default self-hosted Umami instance.
+When set, this value resolves as the collector host configuration. `NO_MISTAKES_UMAMI_HOST` is the compatibility alias; if both names are set, their values must match, including empty values. If it is unset in a dev build, `no-slop` also checks a repo-local `.env` file for either spelling. If no runtime value is found, it falls back to any host embedded at build time and then the default self-hosted Umami instance. The no-op sink does not send to the resolved host.
 
 ## `NS_UMAMI_WEBSITE_ID`
 
@@ -235,22 +241,14 @@ Override or enable the telemetry website ID.
 | Type    | `string`                                                                |
 | Default | embedded in Makefile and release builds; unset in unembedded dev builds |
 
-When set, telemetry uses this website ID at runtime. `NO_MISTAKES_UMAMI_WEBSITE_ID` is the compatibility alias; if both names are set, their values must match, including empty values. If it is unset in a dev build, `no-slop` also checks a repo-local `.env` file for either spelling. If no runtime value is found, it falls back to any website ID embedded at build time.
+When set, this value resolves as the collector website ID configuration. `NO_MISTAKES_UMAMI_WEBSITE_ID` is the compatibility alias; if both names are set, their values must match, including empty values. If it is unset in a dev build, `no-slop` also checks a repo-local `.env` file for either spelling. If no runtime value is found, it falls back to any website ID embedded at build time. The no-op sink does not use the resolved ID for delivery.
 
-When telemetry is enabled, `no-slop` sends command, run, approval, fix, and wizard events, completed step events with `awaiting_approval`, `fix_review`, or `failed` status, and pageviews for the human surfaces `/wizard` and `/tui` and the state-changing agent surfaces `/axi/run`, `/axi/respond`, and `/axi/abort` to Umami.
-Mutation pageviews are sent alongside command events, so command status and duration remain available.
-They include only flag-derived context: `/axi/run` records whether `--yes`, `--intent`, or `--skip` was present, and `/axi/respond` records the sanitized action and whether `--yes` was present.
-
-Read-only surfaces (`axi` home, `axi status`, `axi logs`, `status`, `runs`) emit no pageview and rate-limit their command event: it is sent when the observed run state changed since the last emit, and otherwise at most once per 10 minutes, with the dedupe state persisted at `<NS_HOME>/telemetry-gate.json` so agent polling loops stay bounded across processes.
-The `axi logs` command event records the sanitized step, whether `--full` was present, and whether `--run` was present; `axi status` records whether `--run` was present.
-Each explicit human CLI, AXI, or TUI branch-sync check/apply attempt emits one command event and no additional pageview.
-Its fields are bounded enums and booleans only: surface, mode, state, relation, target kind, pipeline phase, PR state, result, refusal reason, dirty state, and duration.
-It never sends a SHA, run ID, path, branch name, URL, remote name, or command argument.
+These event shapes remain available for compatibility and test instrumentation, but the production sink does not send them remotely.
+Call sites continue to build bounded event shapes and the read-surface gate still limits repeated instrumentation. Those paths support compatibility and injected test recorders; the production no-op sink discards every event and pageview.
 
 ### What stays local and what leaves the machine
 
-Everything sent remotely is low-cardinality: command names, statuses, durations, counts, flag booleans, agent and step names, and - on the single terminal `run finished` event - the bounded performance rollup `agent_invocations`, `resumed_invocations`, and `fallback_invocations` (small counts only).
-Run IDs, repository paths, branch names, session identities, prompts, model outputs, diffs, and per-invocation performance records are never sent.
+Nothing leaves the machine through telemetry.
 
 Detailed performance evidence stays on the machine in the local state database (`<NS_HOME>/state.sqlite`): one `agent_invocations` row per agent invocation, plus each run's accumulated parked-at-gate time.
 Each row records run and step identity, purpose (such as review/review-fix/housekeeping), the reported model and its provider, the cold/started/resumed/fallback session mode, a truncated session-identity hash, timestamps, duration, exit status, and failure category (`quota` when provider quota exhaustion is what failed the invocation, whether the lane was skipped while recorded as exhausted or hit the banner live), alongside the session-fidelity metrics below.
@@ -269,14 +267,14 @@ Inspect the evidence with `no-slop stats --agents` (per-purpose aggregates, incl
 
 ## `NS_TELEMETRY`
 
-Disable telemetry collection.
+Compatibility switch for telemetry collection.
 
 |         |                                                                   |
 | ------- | ----------------------------------------------------------------- |
-| Type    | `0`, `false`, or `off` to disable; anything else to leave enabled |
+| Type    | `0`, `false`, or `off` to disable; other values are accepted       |
 | Default | unset                                                             |
 
-When set to a disabling value, telemetry stays off even if a runtime or embedded website ID is available. `NO_MISTAKES_TELEMETRY` is the compatibility alias; if both names are set, their values must match, including empty values.
+`NO_MISTAKES_TELEMETRY` is the compatibility alias; if both names are set, their values must match, including empty values. A disabling value keeps its upstream meaning, while any other value still cannot enable delivery because the production sink is always a no-op.
 
 ## Environment the daemon sees
 
