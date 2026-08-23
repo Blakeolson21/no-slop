@@ -236,3 +236,19 @@ type CheckRerunner interface {
 type PreRunFailureDetector interface {
 	PreRunFailures(ctx context.Context, checks []Check) ([]bool, error)
 }
+
+// CIConfiguration distinguishes an empty rollup that may still receive a
+// check from one for which no configured CI trigger can run.
+type CIConfiguration string
+
+const (
+	CIConfigurationUnknown CIConfiguration = "unknown"
+	CIConfigurationPresent CIConfiguration = "present"
+	CIConfigurationAbsent  CIConfiguration = "absent"
+)
+
+// CIConfigurationProbe is optional. Only a positive absent determination may
+// stop waiting, and callers must park rather than treat absence as green.
+type CIConfigurationProbe interface {
+	ProbeCIConfiguration(ctx context.Context, pr *PR, branch, baseBranch, headSHA string) (CIConfiguration, error)
+}

@@ -328,6 +328,19 @@ func ciMergeabilityOutcome(summary, description string) *pipeline.StepOutcome {
 	}
 }
 
+func ciNoChecksConfiguredOutcome() *pipeline.StepOutcome {
+	findings := Findings{
+		Summary: "no CI trigger can report on this pull-request head",
+		Items: []Finding{{
+			Severity:    "warning",
+			Description: "GitHub reports no automatic workflow trigger capable of running for this pull-request head, so waiting cannot produce a check and nothing has tested this commit. This is not a passing verdict. Review and merge on your own judgment, or, if the repository intentionally has no CI, declare `no_ci: true` in .no-mistakes.yaml on the trusted default branch.",
+			Action:      types.ActionAskUser,
+		}},
+	}
+	findingsJSON, _ := json.Marshal(findings)
+	return &pipeline.StepOutcome{NeedsApproval: true, Findings: string(findingsJSON)}
+}
+
 func ciMonitoringTimeoutOutcome() *pipeline.StepOutcome {
 	findings := Findings{
 		Summary: "CI monitoring timed out before PR was merged or closed",

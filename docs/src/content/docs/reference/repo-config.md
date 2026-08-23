@@ -232,7 +232,7 @@ Declare that this repository intentionally has no CI.
 
 When `true` and the forge reports **zero** checks on the PR head, the CI monitor treats that empty result as all-checks-passed and `axi run` may return `outcome: checks-passed`. The monitor log names the declaration (`no_ci: true`) so the positive evidence stays inspectable rather than silently equating every empty forge response with green.
 
-Absence of this field means CI is expected. A zero-length check result then stays not-ready for as long as the forge reports no checks - elapsed time, grace periods, workflow-file presence or absence, prior check history, and branch names are not evidence.
+Absence of this field never makes an empty check list green. On GitHub, the monitor inspects the exact commit's workflow definitions and their `pull_request`/matching `push` branch filters. If no automatic trigger can report on this PR head, it parks with an ask-user finding instead of waiting forever or claiming a pass. Unreadable definitions and providers without that probe remain on the fail-closed waiting path.
 
 If checks still appear on a declared no-CI repository, their actual states are processed normally. The declaration never waives a registered pending or failing check.
 

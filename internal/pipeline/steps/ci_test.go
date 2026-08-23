@@ -2684,3 +2684,42 @@ func TestCIStep_PersistentCheckReadFailureParksAtAskUser(t *testing.T) {
 		t.Fatalf("expected one parking log line, got %d: %v", parked, logs)
 	}
 }
+
+func TestCIStepRepositoryWithoutCI_ParksRatherThanPassesOrWaits(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	prURL := "https://github.com/test/repo/pull/42"
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Env = fakeCIGHWithoutCI(t, "OPEN")
+	sctx.Run.PRURL = &prURL
+	sctx.Config.CITimeout = 30 * time.Minute
+	sctx.Config.NoCI = false
+	var logs []string
+	sctx.Log = func(line string) { logs = append(logs, line) }
+	sctx.Ctx = context.Background()
+
+	step := &CIStep{
+		baseBranchTip: func(context.Context) (string, bool) { return baseSHA, true },
+		waitForNextPoll: func(context.Context, time.Duration) error {
+			t.Fatalf("monitor waited although no configured trigger can produce a check: %v", logs)
+			return nil
+		},
+	}
+	outcome, err := step.Execute(sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome == nil || !outcome.NeedsApproval {
+		t.Fatalf("outcome = %#v, want parked decision", outcome)
+	}
+	var findings Findings
+	if err := json.Unmarshal([]byte(outcome.Findings), &findings); err != nil {
+		t.Fatal(err)
+	}
+	if len(findings.Items) != 1 || findings.Items[0].Action != types.ActionAskUser || !strings.Contains(findings.Items[0].Description, "no_ci: true") {
+		t.Fatalf("findings = %+v, want durable trusted no_ci guidance", findings.Items)
+	}
+	if cimonitor.ChecksPassed(logs) {
+		t.Fatalf("unconfigured CI must not be reported ready: %v", logs)
+	}
+}

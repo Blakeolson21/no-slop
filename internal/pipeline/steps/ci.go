@@ -24,9 +24,10 @@ const (
 // checks that are still running. The canonical strings live in cimonitor so all
 // producers and consumers agree on them.
 const (
-	ciChecksPassedMsg   = cimonitor.ChecksPassedMsg
-	ciNoChecksPassedMsg = cimonitor.NoChecksPassedMsg
-	ciChecksRunningMsg  = cimonitor.ChecksRunningMsg
+	ciChecksPassedMsg       = cimonitor.ChecksPassedMsg
+	ciNoChecksPassedMsg     = cimonitor.NoChecksPassedMsg
+	ciChecksRunningMsg      = cimonitor.ChecksRunningMsg
+	ciNoChecksConfiguredMsg = cimonitor.NoChecksConfiguredMsg
 )
 
 // CIStep monitors an open PR until it is merged, closed, or its configured idle
@@ -49,7 +50,9 @@ type CIStep struct {
 	// branch. The bool is false when the SHA is a fallback/unknown value and
 	// must not re-arm the timeout. Overridable for testing; defaults to
 	// fetching the upstream default branch.
-	baseBranchTip func(context.Context) (string, bool)
+	baseBranchTip          func(context.Context) (string, bool)
+	ciConfigurationPresent bool
+	ciConfigurationWarned  bool
 }
 
 func (s *CIStep) Name() types.StepName { return types.StepCI }
@@ -550,6 +553,11 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 					// evidence; there is no grace-period promotion path.
 					if sctx.Config != nil && sctx.Config.NoCI {
 						lastMonitorLog = logCIMonitorStatus(sctx, ciNoChecksPassedMsg, lastMonitorLog)
+					} else if s.determineCIConfiguration(sctx, host, pr) == scm.CIConfigurationAbsent {
+						clearCIMonitorReady(sctx)
+						lastMonitorLog = ""
+						sctx.Log(ciNoChecksConfiguredMsg)
+						return ciNoChecksConfiguredOutcome(), nil
 					} else {
 						clearCIMonitorReady(sctx)
 						lastMonitorLog = ""
@@ -608,6 +616,28 @@ func (s *CIStep) handleCIRepairError(sctx *pipeline.StepContext, previousHeadSHA
 	}
 	sctx.Log(fmt.Sprintf("warning: CI %s failed: %v", label, repairErr))
 	return nil
+}
+
+func (s *CIStep) determineCIConfiguration(sctx *pipeline.StepContext, host scm.Host, pr *scm.PR) scm.CIConfiguration {
+	if s.ciConfigurationPresent {
+		return scm.CIConfigurationPresent
+	}
+	probe, ok := host.(scm.CIConfigurationProbe)
+	if !ok {
+		return scm.CIConfigurationUnknown
+	}
+	configuration, err := probe.ProbeCIConfiguration(sctx.Ctx, pr, sctx.Run.Branch, sctx.Repo.DefaultBranch, sctx.Run.HeadSHA)
+	if err != nil {
+		if !s.ciConfigurationWarned {
+			s.ciConfigurationWarned = true
+			sctx.Log(fmt.Sprintf("warning: could not determine whether CI is configured, continuing to wait for checks: %v", err))
+		}
+		return scm.CIConfigurationUnknown
+	}
+	if configuration == scm.CIConfigurationPresent {
+		s.ciConfigurationPresent = true
+	}
+	return configuration
 }
 
 func logCIMonitorStatus(sctx *pipeline.StepContext, message, previous string) string {

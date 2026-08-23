@@ -31,6 +31,8 @@ const (
 	// ChecksRunningMsg is logged when checks are (re-)running with no failures
 	// yet, which clears any previous passed-checks state.
 	ChecksRunningMsg = "CI checks running, waiting for results..."
+	// NoChecksConfiguredMsg is a parked unresolved state, never readiness.
+	NoChecksConfiguredMsg = "no CI trigger can report on this PR head - this is not a pass"
 )
 
 // Activity summarizes what the CI step has been doing, derived from its logs.
@@ -86,6 +88,11 @@ func ParseActivity(logs []string) Activity {
 			a.AutoFixing = false
 			a.Ready = true
 			a.DeclaredNoCI = true
+			a.LastEvent = line
+		case line == NoChecksConfiguredMsg:
+			a.AutoFixing = false
+			a.Ready = false
+			a.DeclaredNoCI = false
 			a.LastEvent = line
 		case strings.Contains(line, "issues detected"),
 			strings.Contains(line, "CI checks running"),

@@ -408,6 +408,10 @@ func fakeCIGHHandler(args []string) {
 	mergeable := os.Getenv("FAKE_CLI_MERGEABLE")
 	mergeableErr := os.Getenv("FAKE_CLI_MERGEABLE_ERR")
 	joined := strings.Join(args, " ")
+	if len(args) > 0 && args[0] == "api" && os.Getenv("FAKE_CLI_NO_CI") == "1" {
+		fmt.Fprintln(os.Stderr, "gh: Not Found (HTTP 404)")
+		os.Exit(1)
+	}
 
 	if len(args) >= 2 && args[0] == "auth" && args[1] == "status" {
 		os.Exit(0)

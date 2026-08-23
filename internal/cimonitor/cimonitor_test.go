@@ -86,6 +86,12 @@ func TestChecksPassed(t *testing.T) {
 			wantDeclared: false,
 		},
 		{
+			name:         "no matching CI trigger parks and is never ready",
+			logs:         []string{ChecksPassedMsg, NoChecksConfiguredMsg},
+			wantReady:    false,
+			wantDeclared: false,
+		},
+		{
 			name:         "still monitoring before checks pass",
 			logs:         []string{"monitoring CI for PR #42 (timeout: 4h)..."},
 			wantReady:    false,
