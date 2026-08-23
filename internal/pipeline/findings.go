@@ -57,20 +57,31 @@ func hasFindingMatch(item types.Finding, stableIDs map[string][]types.Finding, e
 	return types.FindingMatches(item, stableIDs, exact, itemCounts, candidateCounts)
 }
 
-func normalizeFindingsJSON(raw string, prefix string) string {
+func normalizeFindingsJSON(raw string, prefix string, existingRaw string) (string, error) {
 	if raw == "" {
-		return ""
+		return "", nil
 	}
 	findings, err := types.ParseFindingsJSON(raw)
 	if err != nil {
-		return raw
+		return raw, nil
 	}
-	normalized := types.NormalizeFindings(findings, prefix)
+	var existing []types.Finding
+	if existingRaw != "" {
+		parsed, parseErr := types.ParseFindingsJSON(existingRaw)
+		if parseErr != nil {
+			return "", parseErr
+		}
+		existing = parsed.Items
+	}
+	normalized, err := types.NormalizeFindings(findings, prefix, existing)
+	if err != nil {
+		return "", err
+	}
 	normalizedRaw, err := types.MarshalFindingsJSON(normalized)
 	if err != nil {
-		return raw
+		return raw, nil
 	}
-	return normalizedRaw
+	return normalizedRaw, nil
 }
 
 func excludeFindingsJSON(raw string, ids []string) string {
@@ -130,9 +141,9 @@ func mergeCarriedFindingsJSON(freshRaw, carriedRaw, prefix string) string {
 	for _, old := range carried.Items {
 		match := -1
 		for i, current := range merged.Items {
-			if types.FindingIDCorroborates(current, old) ||
-				findingKey(current) == findingKey(old) ||
-				(findingFingerprint(current) == findingFingerprint(old) && freshCounts[findingFingerprint(current)] == 1 && carriedCounts[findingFingerprint(old)] == 1) {
+			legacyMatch := (!current.IDGenerated || !old.IDGenerated) && (findingKey(current) == findingKey(old) ||
+				(findingFingerprint(current) == findingFingerprint(old) && freshCounts[findingFingerprint(current)] == 1 && carriedCounts[findingFingerprint(old)] == 1))
+			if types.FindingIDCorroborates(current, old) || legacyMatch {
 				match = i
 				break
 			}
@@ -323,9 +334,6 @@ func mergeFindingsJSON(existingRaw, additionalRaw string) string {
 			continue
 		}
 		key := findingKey(item)
-		if seen[key] {
-			continue
-		}
 		merged.Items = append(merged.Items, item)
 		seen[key] = true
 	}

@@ -65,6 +65,76 @@ func TestExecutor_SuccessfulStepsDoNotEmitTelemetry(t *testing.T) {
 	}
 }
 
+func TestExecutor_HeadMutationsInvalidateRequiredGateCertifications(t *testing.T) {
+	for _, mutationStep := range []types.StepName{types.StepDocument, types.StepLint, types.StepPush, types.StepCI} {
+		t.Run(string(mutationStep), func(t *testing.T) {
+			database, p, run, _ := setupTest(t)
+			const oldHead = "old-head"
+			const newHead = "new-head"
+			run.HeadSHA = newHead
+			if err := database.UpdateRunHeadSHA(run.ID, newHead); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.UpdateRunReviewApprovedHeadSHA(run.ID, oldHead); err != nil {
+				t.Fatal(err)
+			}
+
+			names := []types.StepName{types.StepReview, types.StepTest, types.StepDocument, types.StepLint, types.StepPush, types.StepPR, types.StepCI}
+			pipelineSteps := make([]Step, 0, len(names))
+			for _, name := range names {
+				pipelineSteps = append(pipelineSteps, newPassStep(name))
+				record, err := database.InsertStepResult(run.ID, name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if name.Order() > mutationStep.Order() {
+					continue
+				}
+				certifiedHead := oldHead
+				if name == mutationStep {
+					certifiedHead = newHead
+				}
+				if err := database.CompleteStepWithStatusAtHead(record.ID, types.StepStatusCompleted, certifiedHead, 0, 1, ""); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			exec := NewExecutor(database, p, nil, nil, pipelineSteps, nil)
+			restart, err := exec.restartIndexForStaleRequiredGates(run)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if restart != 0 {
+				t.Fatalf("restart index = %d, want review index 0", restart)
+			}
+			records, err := database.GetStepsByRun(run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, record := range records {
+				if record.Status != types.StepStatusPending || record.CertifiedHeadSHA != nil {
+					t.Fatalf("step %s was not invalidated: %#v", record.StepName, record)
+				}
+				if record.StepName == types.StepReview || record.StepName == types.StepTest || record.StepName == types.StepDocument {
+					if err := database.CompleteStepWithStatusAtHead(record.ID, types.StepStatusCompleted, newHead, 0, 1, ""); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			freshRun, err := database.GetRun(run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if freshRun.ReviewApprovedHeadSHA != nil || freshRun.CIReadyAt != nil || freshRun.CIReadyNoCI {
+				t.Fatalf("stale run gate evidence survived reset: %#v", freshRun)
+			}
+			if restart, err := exec.restartIndexForStaleRequiredGates(run); err != nil || restart != -1 {
+				t.Fatalf("current certifications restart = %d, err = %v", restart, err)
+			}
+		})
+	}
+}
+
 func TestExecutor_SkippedStepsDoNotEmitTelemetry(t *testing.T) {
 	database, p, run, repo := setupTest(t)
 	workDir := t.TempDir()

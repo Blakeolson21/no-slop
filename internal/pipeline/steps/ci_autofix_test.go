@@ -68,7 +68,7 @@ func TestCIStep_CIFailureAutoFix(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := sctx.DB.UpdateStepStatus(result.ID, types.StepStatusCompleted); err != nil {
+		if err := sctx.DB.CompleteStepWithStatusAtHead(result.ID, types.StepStatusCompleted, headSHA, 0, 1, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -101,6 +101,33 @@ func TestCIStep_CIFailureAutoFix(t *testing.T) {
 	}
 	if !foundAutoFix {
 		t.Errorf("expected issue detection in logs, got: %v", logs)
+	}
+}
+
+func TestCIStep_ManualFixWithStaleRequiredGatesReturnsForRerun(t *testing.T) {
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	ag := &mockAgent{name: "test"}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Fixing = true
+	for _, name := range []types.StepName{types.StepReview, types.StepTest, types.StepDocument} {
+		result, err := sctx.DB.InsertStepResult(sctx.Run.ID, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sctx.DB.CompleteStepWithStatusAtHead(result.ID, types.StepStatusCompleted, baseSHA, 0, 1, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	outcome, err := (&CIStep{}).Execute(sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome == nil || outcome.NeedsApproval || outcome.Findings != "" {
+		t.Fatalf("stale manual-fix outcome = %#v", outcome)
+	}
+	if len(ag.calls) != 0 {
+		t.Fatalf("stale required gates reached generic CI repair: %d agent calls", len(ag.calls))
 	}
 }
 

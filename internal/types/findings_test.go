@@ -518,15 +518,18 @@ func TestFinding_Action_Values(t *testing.T) {
 }
 
 func TestNormalizeFindingsPersistsGeneratedIDProvenance(t *testing.T) {
-	findings := NormalizeFindings(Findings{Items: []Finding{
+	findings, err := NormalizeFindings(Findings{Items: []Finding{
 		{Severity: "error", Description: "generated"},
 		{ID: "stable-defect", Severity: "warning", Description: "explicit"},
-	}}, "review")
-	if findings.Items[0].ID != "review-1" || !findings.Items[0].IDGenerated {
-		t.Fatalf("generated finding = %#v", findings.Items[0])
+	}}, "review", nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if findings.Items[1].IDGenerated {
-		t.Fatalf("explicit finding marked generated: %#v", findings.Items[1])
+	if !findings.Items[0].IDGenerated || !strings.HasPrefix(findings.Items[0].ID, "review-") {
+		t.Fatalf("first lineage = %#v", findings.Items[0])
+	}
+	if !findings.Items[1].IDGenerated || !strings.HasPrefix(findings.Items[1].ID, "review-") || findings.Items[1].ID == "stable-defect" || findings.Items[1].ID == findings.Items[0].ID {
+		t.Fatalf("second lineage = %#v", findings.Items[1])
 	}
 	raw, err := MarshalFindingsJSON(findings)
 	if err != nil {
@@ -536,20 +539,28 @@ func TestNormalizeFindingsPersistsGeneratedIDProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !parsed.Items[0].IDGenerated || parsed.Items[1].IDGenerated {
+	if !parsed.Items[0].IDGenerated || !parsed.Items[1].IDGenerated {
 		t.Fatalf("round-trip provenance = %#v", parsed.Items)
 	}
 }
 
-func TestFindingIDCorroboratesUsesSemanticContinuity(t *testing.T) {
-	prior := Finding{ID: "loader-race", File: "loader.go", Line: 12, Description: "unsafe loader"}
-	moved := Finding{ID: "loader-race", File: "manager.go", Line: 88, Description: "loader races concurrent shutdown"}
-	unrelated := Finding{ID: "loader-race", File: "loader.go", Line: 12, Description: "cache write can deadlock"}
-
-	if !FindingIDCorroborates(moved, prior) {
-		t.Fatal("rephrased and relocated finding lost its stable identity")
+func TestNormalizeFindingsPreservesOnlyOneExistingPipelineLineage(t *testing.T) {
+	prior, err := NormalizeFindings(Findings{Items: []Finding{{ID: "review-1", Description: "authentication token expires too early"}}}, "review", nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if FindingIDCorroborates(unrelated, prior) {
-		t.Fatal("unrelated finding with the same ID and location reused stable identity")
+	lineage := prior.Items[0].ID
+	fresh, err := NormalizeFindings(Findings{Items: []Finding{
+		{ID: lineage, File: "manager.go", Line: 88, Description: "credentials are invalidated prematurely"},
+		{ID: lineage, File: "auth.go", Line: 12, Description: "authentication token leaks in logs"},
+	}}, "review", prior.Items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Items[0].ID != lineage || !FindingIDCorroborates(fresh.Items[0], prior.Items[0]) {
+		t.Fatalf("continued lineage = %#v, want %q", fresh.Items[0], lineage)
+	}
+	if fresh.Items[1].ID == lineage || fresh.Items[1].ID == fresh.Items[0].ID {
+		t.Fatalf("duplicate lineage claim was accepted: %#v", fresh.Items)
 	}
 }

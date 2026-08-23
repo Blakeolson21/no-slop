@@ -290,6 +290,67 @@ func (e *Executor) initializeRunScopes(runID string) {
 	e.shared = &RunShared{}
 }
 
+func (e *Executor) executionStateForStep(step Step, sr *db.StepResult) (stepExecutionState, *db.StepResult, error) {
+	fresh, err := e.db.GetStepResult(sr.ID)
+	if err != nil {
+		return stepExecutionState{}, nil, err
+	}
+	if fresh == nil {
+		return stepExecutionState{}, nil, fmt.Errorf("step result %s not found", sr.ID)
+	}
+	rounds, err := e.db.GetRoundsByStep(sr.ID)
+	if err != nil {
+		return stepExecutionState{}, nil, err
+	}
+	state := stepExecutionState{}
+	if len(rounds) > 0 {
+		latest := rounds[len(rounds)-1]
+		state.roundNum = latest.Round
+		state.currentRoundID = latest.ID
+		for _, round := range rounds {
+			if round.SelectionSource != nil && *round.SelectionSource == db.RoundSelectionSourceAutoFix {
+				state.autoFixAttempts++
+			}
+		}
+	}
+	if findingsMayBeScopeLimited(step) && fresh.FindingsJSON != nil {
+		state.carriedFindings = *fresh.FindingsJSON
+	}
+	return state, fresh, nil
+}
+
+func (e *Executor) restartIndexForStaleRequiredGates(run *db.Run) (int, error) {
+	steps, err := e.db.GetStepsByRun(run.ID)
+	if err != nil {
+		return -1, fmt.Errorf("load required gate certifications: %w", err)
+	}
+	required := map[types.StepName]bool{
+		types.StepReview:   true,
+		types.StepTest:     true,
+		types.StepDocument: true,
+	}
+	earliest := -1
+	for index, step := range steps {
+		if !required[step.StepName] || step.Status != types.StepStatusCompleted {
+			continue
+		}
+		if step.CertifiedHeadSHA != nil && *step.CertifiedHeadSHA == run.HeadSHA {
+			continue
+		}
+		if earliest < 0 || index < earliest {
+			earliest = index
+		}
+	}
+	if earliest < 0 {
+		return -1, nil
+	}
+	if err := e.db.ResetStepsFromOrder(run.ID, e.steps[earliest].Name().Order()); err != nil {
+		return -1, fmt.Errorf("invalidate stale required gates: %w", err)
+	}
+	slog.Info("pipeline head changed; rerunning required gates", "run", run.ID, "head", run.HeadSHA, "from", e.steps[earliest].Name())
+	return earliest, nil
+}
+
 type stepExecutionState struct {
 	fixing           bool
 	previousFindings string
@@ -387,7 +448,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 			ClearUncertifiedPipelineRangeIfCertified(ctx, e.db, repo.ID, run.Branch, reviewedHead, workDir)
 			return nil
 		}
-		return e.db.CompleteStepWithStatus(gate.stepResult.ID, types.StepStatusCompleted, recoveredExitCode(gate.stepResult), duration, recoveredLogPath(gate.stepResult))
+		return e.db.CompleteStepWithStatusAtHead(gate.stepResult.ID, types.StepStatusCompleted, run.HeadSHA, recoveredExitCode(gate.stepResult), duration, recoveredLogPath(gate.stepResult))
 	}
 	completeReconciledGate := func() error {
 		if err := completeRecoveredGate(); err != nil {
@@ -804,6 +865,10 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 	if !carryFindings {
 		carriedFindings = ""
 	}
+	knownLineages := ""
+	if sr.FindingsJSON != nil {
+		knownLineages = *sr.FindingsJSON
+	}
 
 	stepAgent := e.agent
 	if stepAgent != nil {
@@ -896,12 +961,18 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		if stepName == types.StepReview {
 			reviewApprovedHeadSHA = outcome.ReviewApprovedHeadSHA
 		}
-		outcome.Findings = normalizeFindingsJSON(outcome.Findings, string(stepName))
+		outcome.Findings, err = normalizeFindingsJSON(outcome.Findings, string(stepName), knownLineages)
+		if err != nil {
+			return false, "", fmt.Errorf("normalize %s findings: %w", stepName, err)
+		}
 		finalExitCode = outcome.ExitCode
 		durationOverrideMS += outcome.DurationOverrideMS
 		effectiveFindings := outcome.Findings
 		if carryFindings {
 			effectiveFindings = mergeCarriedFindingsJSON(outcome.Findings, carriedFindings, string(stepName))
+		}
+		if effectiveFindings != "" {
+			knownLineages = effectiveFindings
 		}
 
 		if !carryFindings {
@@ -953,7 +1024,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		if dbErr != nil {
 			currentRoundID = roundInsertID(currentRoundID, inserted, dbErr)
 			if carryFindings {
-				return false, fmt.Errorf("persist %s round %d: %w", stepName, roundNum, dbErr)
+				return false, "", fmt.Errorf("persist %s round %d: %w", stepName, roundNum, dbErr)
 			}
 			slog.Warn("failed to insert step round", "step", stepName, "round", roundNum, "error", dbErr)
 		} else {
@@ -1000,7 +1071,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 				writeLog(fmt.Sprintf("auto-fix round %d/%d starting after round %d (%d %s)", autoFixAttempts, autoFixLimit, roundNum, fixCount, pluralize(fixCount, "finding", "findings")))
 				if err := e.persistAutoFixSelection(currentRoundID, fixableFindings); err != nil {
 					if carryFindings {
-						return false, fmt.Errorf("record %s auto-fix selection: %w", stepName, err)
+						return false, "", fmt.Errorf("record %s auto-fix selection: %w", stepName, err)
 					}
 					slog.Warn("failed to record selected finding ids", "step", stepName, "round", roundNum, "error", err)
 				}
@@ -1142,7 +1213,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			mergedFindings := mergeUserOverridesJSON(selectedFindings, response.instructions, response.addedFindings)
 			if err := e.persistUserFixDecision(currentRoundID, response.findingIDs, selectedFindings, mergedFindings); err != nil {
 				if carryFindings {
-					return false, fmt.Errorf("record %s user decision: %w", stepName, err)
+					return false, "", fmt.Errorf("record %s user decision: %w", stepName, err)
 				}
 				slog.Warn("failed to record user decision", "step", stepName, "round", roundNum, "error", err)
 			}
@@ -1182,7 +1253,7 @@ done:
 		reviewedHead := reviewApprovedHeadSHA
 		run.ReviewApprovedHeadSHA = &reviewedHead
 		ClearUncertifiedPipelineRangeIfCertified(ctx, e.db, repo.ID, run.Branch, reviewedHead, workDir)
-	} else if err := e.db.CompleteStepWithStatus(sr.ID, status, finalExitCode, durationMS, logPath); err != nil {
+	} else if err := e.db.CompleteStepWithStatusAtHead(sr.ID, status, run.HeadSHA, finalExitCode, durationMS, logPath); err != nil {
 		return false, "", fmt.Errorf("complete step %s: %w", stepName, err)
 	}
 	e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(status), "", "", &durationMS)

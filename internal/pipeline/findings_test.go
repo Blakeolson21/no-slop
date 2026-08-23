@@ -7,7 +7,7 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
-func TestMergeFindingsJSON_KeepsDistinctFindingsWithSameAutoID(t *testing.T) {
+func TestMergeFindingsJSON_UsesPipelineLineageAcrossRewording(t *testing.T) {
 	existingRaw := `{"findings":[{"id":"review-1","id_generated":true,"severity":"warning","description":"first"}],"summary":"1 finding"}`
 	additionalRaw := `{"findings":[{"id":"review-1","id_generated":true,"severity":"error","description":"second"}],"summary":"1 finding"}`
 
@@ -16,17 +16,37 @@ func TestMergeFindingsJSON_KeepsDistinctFindingsWithSameAutoID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse merged findings: %v", err)
 	}
-	if len(merged.Items) != 2 {
-		t.Fatalf("expected 2 findings, got %d", len(merged.Items))
+	if len(merged.Items) != 1 {
+		t.Fatalf("expected one lineage, got %d", len(merged.Items))
 	}
-	if merged.Items[0].Description != "first" || merged.Items[1].Description != "second" {
+	if merged.Items[0].Description != "first" {
 		t.Fatalf("unexpected merged findings: %#v", merged.Items)
 	}
 }
 
+func TestMergeFindingsJSON_DistinctPipelineLineagesDoNotCollapse(t *testing.T) {
+	existingRaw := `{"findings":[{"id":"review-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","id_generated":true,"severity":"warning","file":"auth.go","line":12,"description":"authentication token fails"}]}`
+	additionalRaw := `{"findings":[{"id":"review-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","id_generated":true,"severity":"warning","file":"auth.go","line":12,"description":"authentication token fails"}]}`
+
+	merged, err := types.ParseFindingsJSON(mergeFindingsJSON(existingRaw, additionalRaw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged.Items) != 2 {
+		t.Fatalf("distinct pipeline lineages collapsed: %#v", merged.Items)
+	}
+	carried, err := types.ParseFindingsJSON(mergeCarriedFindingsJSON(additionalRaw, existingRaw, "review"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(carried.Items) != 2 {
+		t.Fatalf("distinct carried pipeline lineages collapsed: %#v", carried.Items)
+	}
+}
+
 func TestMergeCarriedFindingsJSON_PreservesExplicitIDAcrossRephrasing(t *testing.T) {
-	carriedRaw := `{"findings":[{"id":"loader-race","severity":"warning","file":"loader.go","line":12,"description":"unsafe loader","action":"ask-user"}],"risk_level":"medium","risk_rationale":"Needs review."}`
-	freshRaw := `{"findings":[{"id":"loader-race","severity":"error","file":"manager.go","line":88,"description":"loader races concurrent shutdown","action":"auto-fix"}],"risk_level":"high","risk_rationale":"Reproduced."}`
+	carriedRaw := `{"findings":[{"id":"review-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","id_generated":true,"severity":"warning","file":"loader.go","line":12,"description":"unsafe loader","action":"ask-user"}],"risk_level":"medium","risk_rationale":"Needs review."}`
+	freshRaw := `{"findings":[{"id":"review-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","id_generated":true,"severity":"error","file":"manager.go","line":88,"description":"credentials are invalidated prematurely","action":"auto-fix"}],"risk_level":"high","risk_rationale":"Reproduced."}`
 
 	mergedRaw := mergeCarriedFindingsJSON(freshRaw, carriedRaw, "review")
 	merged, err := types.ParseFindingsJSON(mergedRaw)
@@ -36,7 +56,7 @@ func TestMergeCarriedFindingsJSON_PreservesExplicitIDAcrossRephrasing(t *testing
 	if len(merged.Items) != 1 {
 		t.Fatalf("findings = %#v, want one stable defect", merged.Items)
 	}
-	if merged.Items[0].ID != "loader-race" || merged.Items[0].Description != "loader races concurrent shutdown" || merged.Items[0].Action != "ask-user" {
+	if merged.Items[0].ID != "review-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" || merged.Items[0].Description != "credentials are invalidated prematurely" || merged.Items[0].Action != "ask-user" {
 		t.Fatalf("merged finding = %#v", merged.Items[0])
 	}
 }
@@ -65,9 +85,9 @@ func TestMergeCarriedFindingsJSON_DoesNotTrustUncorroboratedExplicitID(t *testin
 	}
 }
 
-func TestMergeCarriedFindingsJSON_DoesNotTrustGeneratedIDCollision(t *testing.T) {
-	carriedRaw := `{"findings":[{"id":"review-1","id_generated":true,"severity":"warning","description":"first defect","action":"ask-user"}]}`
-	freshRaw := `{"findings":[{"id":"review-1","id_generated":true,"severity":"error","description":"second defect","action":"auto-fix"}]}`
+func TestMergeCarriedFindingsJSON_DoesNotTrustReviewerIDCollision(t *testing.T) {
+	carriedRaw := `{"findings":[{"id":"review-1","severity":"warning","description":"first defect","action":"ask-user"}]}`
+	freshRaw := `{"findings":[{"id":"review-1","severity":"error","description":"second defect","action":"auto-fix"}]}`
 
 	mergedRaw := mergeCarriedFindingsJSON(freshRaw, carriedRaw, "review")
 	merged, err := types.ParseFindingsJSON(mergedRaw)

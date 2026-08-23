@@ -105,10 +105,6 @@ func BuildPipelineSummary(steps []*db.StepResult, rounds map[string][]*db.StepRo
 // when no-mistakes writes the PR body. Its compact JSON is deliberately data
 // only: consumers decide their own policy from the step names and statuses.
 func buildPipelineAttestation(steps []*db.StepResult, headSHA string) string {
-	return buildPipelineAttestationWithCertifiedHead(steps, headSHA, headSHA)
-}
-
-func buildPipelineAttestationWithCertifiedHead(steps []*db.StepResult, headSHA, certifiedHeadSHA string) string {
 	attestation := pipelineAttestation{
 		HeadSHA: headSHA,
 		Steps:   make([]pipelineAttestationStep, 0, len(steps)),
@@ -116,6 +112,10 @@ func buildPipelineAttestationWithCertifiedHead(steps []*db.StepResult, headSHA, 
 	for _, sr := range steps {
 		if sr == nil {
 			continue
+		}
+		certifiedHeadSHA := ""
+		if sr.CertifiedHeadSHA != nil {
+			certifiedHeadSHA = *sr.CertifiedHeadSHA
 		}
 		attestation.Steps = append(attestation.Steps, pipelineAttestationStep{
 			Step:    sr.StepName,

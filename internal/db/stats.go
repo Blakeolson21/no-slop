@@ -151,7 +151,7 @@ func stepFindingStats(step *StepResult, rounds []*StepRound) StepStats {
 		itemCounts := types.CountFindingFingerprints(items)
 		for _, item := range items {
 			matched := types.FindingMatches(item, reportedIDs, reported, itemCounts, reportedCounts)
-			if item.ID != "" && !item.IDGenerated {
+			if item.ID != "" && item.IDGenerated {
 				reportedIDs[item.ID] = append(reportedIDs[item.ID], item)
 			}
 			if matched {

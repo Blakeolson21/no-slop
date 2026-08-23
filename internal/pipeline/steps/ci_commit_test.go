@@ -68,10 +68,11 @@ func TestCIStep_RefreshPRAttestationBindsCurrentHead(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := sctx.DB.UpdateStepStatus(step.ID, types.StepStatusCompleted); err != nil {
+		if err := sctx.DB.CompleteStepWithStatusAtHead(step.ID, types.StepStatusCompleted, baseSHA, 0, 1, ""); err != nil {
 			t.Fatal(err)
 		}
 		step.Status = types.StepStatusCompleted
+		step.CertifiedHeadSHA = &baseSHA
 		steps = append(steps, step)
 	}
 	oldAttestation := buildPipelineAttestation(steps, baseSHA)
@@ -80,12 +81,8 @@ func TestCIStep_RefreshPRAttestationBindsCurrentHead(t *testing.T) {
 		Body:  "## Pipeline\n\n" + noMistakesPRSignature + "\n\n" + oldAttestation,
 	}}
 
-	stale, err := (&CIStep{}).refreshPRAttestation(sctx, host, &scm.PR{Number: "42"}, baseSHA)
-	if err != nil {
+	if err := (&CIStep{}).refreshPRAttestation(sctx, host, &scm.PR{Number: "42"}); err != nil {
 		t.Fatal(err)
-	}
-	if !stale {
-		t.Fatal("completed required gates were not identified as stale")
 	}
 	if len(host.updates) != 1 {
 		t.Fatalf("PR updates = %d, want 1", len(host.updates))
@@ -112,7 +109,7 @@ func TestCIStep_AutoFixWithoutPushDoesNotRefreshPRAttestation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Pushed || result.HeadChanged() {
+	if result.HeadChanged() {
 		t.Fatal("no-change CI fix reported a push")
 	}
 	if host.getCalls != 0 || len(host.updates) != 0 {
@@ -143,10 +140,11 @@ func TestCIStep_AutoFixRefreshesAttestationAfterAdoptingRemoteHead(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := sctx.DB.UpdateStepStatus(step.ID, types.StepStatusCompleted); err != nil {
+		if err := sctx.DB.CompleteStepWithStatusAtHead(step.ID, types.StepStatusCompleted, headSHA, 0, 1, ""); err != nil {
 			t.Fatal(err)
 		}
 		step.Status = types.StepStatusCompleted
+		step.CertifiedHeadSHA = &headSHA
 		completed = append(completed, step)
 	}
 	host := &recordingPRContentHost{content: scm.PRContent{
@@ -158,7 +156,7 @@ func TestCIStep_AutoFixRefreshesAttestationAfterAdoptingRemoteHead(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Pushed || !result.HeadChanged() || !result.RequiredGatesStale {
+	if !result.HeadChanged() {
 		t.Fatalf("adopted-head result = %#v", result)
 	}
 	if result.HeadSHA != newHeadSHA || sctx.Run.HeadSHA != newHeadSHA {
@@ -170,6 +168,11 @@ func TestCIStep_AutoFixRefreshesAttestationAfterAdoptingRemoteHead(t *testing.T)
 	attestation := parsePipelineAttestationForTest(t, host.updates[0].Body)
 	if attestation.HeadSHA != newHeadSHA {
 		t.Fatalf("attestation head = %q, want %q", attestation.HeadSHA, newHeadSHA)
+	}
+	for _, step := range attestation.Steps {
+		if step.HeadSHA != headSHA {
+			t.Fatalf("step %s certified head = %q, want %q", step.Step, step.HeadSHA, headSHA)
+		}
 	}
 }
 
@@ -194,11 +197,8 @@ func TestCIStep_AutoFixPushFailsClosedWhenAttestationRefreshFails(t *testing.T) 
 	if err == nil || !strings.Contains(err.Error(), "refresh PR pipeline attestation") {
 		t.Fatalf("autoFixCI error = %v", err)
 	}
-	if !result.Pushed || !result.HeadChanged() {
+	if !result.HeadChanged() {
 		t.Fatalf("failed refresh lost the published head change: %#v", result)
-	}
-	if result.RequiredGatesStale {
-		t.Fatal("failed attestation refresh reported successful CI fix")
 	}
 	if host.getCalls != 1 || len(host.updates) != 0 {
 		t.Fatalf("attestation refresh calls: reads=%d updates=%d", host.getCalls, len(host.updates))

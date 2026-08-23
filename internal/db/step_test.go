@@ -354,6 +354,34 @@ func TestResetStepsFromPreservesSkippedSteps(t *testing.T) {
 	t.Logf("revalidation reset evidence: review status=%s, convergence state=cleared, push status=%s", gotReview.Status, gotPush.Status)
 }
 
+func TestCompleteStepWithStatusPersistsCertifiedHead(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/certified", "git@github.com:user/certified.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feature", "head", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepTest)
+
+	if err := d.CompleteStepWithStatusAtHead(step.ID, types.StepStatusCompleted, "certified-head", 0, 10, "test.log"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.GetStepResult(step.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CertifiedHeadSHA == nil || *got.CertifiedHeadSHA != "certified-head" {
+		t.Fatalf("certified head = %v", got.CertifiedHeadSHA)
+	}
+	if err := d.ResetStepsFrom(run.ID, types.StepReview.Order()); err != nil {
+		t.Fatal(err)
+	}
+	got, err = d.GetStepResult(step.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != types.StepStatusPending || got.CertifiedHeadSHA != nil {
+		t.Fatalf("reset step = %#v", got)
+	}
+}
+
 func TestUpdateStepStatusWithDuration(t *testing.T) {
 	d := openTestDB(t)
 	repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")

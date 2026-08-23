@@ -391,10 +391,11 @@ func TestExecutor_AutoFixMixedFindings(t *testing.T) {
 				t.Errorf("expected fixable finding 'bug', got %q", parsed.Items[0].Description)
 			}
 			// Return only the ask-user finding remaining
+			designID := findingIDByDescription(t, database, run.ID, types.StepReview, "design choice")
 			return &StepOutcome{
 				NeedsApproval: true,
 				AutoFixable:   true,
-				Findings:      `{"findings":[{"id":"review-2","severity":"warning","description":"design choice","action":"ask-user"}],"summary":"1 issue"}`,
+				Findings:      `{"findings":[{"id":"` + designID + `","severity":"warning","description":"design choice","action":"ask-user"}],"summary":"1 issue"}`,
 			}, nil
 		},
 	}

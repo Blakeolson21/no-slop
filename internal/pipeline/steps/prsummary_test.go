@@ -15,6 +15,8 @@ import (
 
 const testPipelineHeadSHA = "0123456789abcdef0123456789abcdef01234567"
 
+func testCertifiedHead(sha string) *string { return &sha }
+
 func TestNoSlopRequiredWorkflowChecksPipelineSignature(t *testing.T) {
 	t.Parallel()
 
@@ -70,14 +72,14 @@ func TestBuildPipelineSummary_EmitsStructuredStepAttestation(t *testing.T) {
 
 	steps := []*db.StepResult{
 		{ID: "ci", StepName: types.StepCI, Status: types.StepStatusPending},
-		{ID: "document", StepName: types.StepDocument, Status: types.StepStatusSkipped},
-		{ID: "review", StepName: types.StepReview, Status: types.StepStatusCompleted},
-		{ID: "test", StepName: types.StepTest, Status: types.StepStatusFailed},
-		{ID: "rebase", StepName: types.StepRebase, Status: types.StepStatusCompleted},
+		{ID: "document", StepName: types.StepDocument, Status: types.StepStatusSkipped, CertifiedHeadSHA: testCertifiedHead("document-head")},
+		{ID: "review", StepName: types.StepReview, Status: types.StepStatusCompleted, CertifiedHeadSHA: testCertifiedHead("review-head")},
+		{ID: "test", StepName: types.StepTest, Status: types.StepStatusFailed, CertifiedHeadSHA: testCertifiedHead("test-head")},
+		{ID: "rebase", StepName: types.StepRebase, Status: types.StepStatusCompleted, CertifiedHeadSHA: testCertifiedHead("rebase-head")},
 		{ID: "lint", StepName: types.StepLint, Status: types.StepStatusAwaitingApproval},
-		{ID: "push", StepName: types.StepPush, Status: types.StepStatusCompleted},
+		{ID: "push", StepName: types.StepPush, Status: types.StepStatusCompleted, CertifiedHeadSHA: testCertifiedHead("push-head")},
 		{ID: "pr", StepName: types.StepPR, Status: types.StepStatusRunning},
-		{ID: "intent", StepName: types.StepIntent, Status: types.StepStatusSkipped},
+		{ID: "intent", StepName: types.StepIntent, Status: types.StepStatusSkipped, CertifiedHeadSHA: testCertifiedHead("intent-head")},
 	}
 
 	got, _ := BuildPipelineSummary(steps, nil, testPipelineHeadSHA)
@@ -114,23 +116,24 @@ func TestBuildPipelineSummary_EmitsStructuredStepAttestation(t *testing.T) {
 	want := []struct {
 		step   types.StepName
 		status types.StepStatus
+		head   string
 	}{
-		{types.StepIntent, types.StepStatusSkipped},
-		{types.StepRebase, types.StepStatusCompleted},
-		{types.StepReview, types.StepStatusCompleted},
-		{types.StepTest, types.StepStatusFailed},
-		{types.StepDocument, types.StepStatusSkipped},
-		{types.StepLint, types.StepStatusAwaitingApproval},
-		{types.StepPush, types.StepStatusCompleted},
-		{types.StepPR, types.StepStatusRunning},
-		{types.StepCI, types.StepStatusPending},
+		{types.StepIntent, types.StepStatusSkipped, "intent-head"},
+		{types.StepRebase, types.StepStatusCompleted, "rebase-head"},
+		{types.StepReview, types.StepStatusCompleted, "review-head"},
+		{types.StepTest, types.StepStatusFailed, "test-head"},
+		{types.StepDocument, types.StepStatusSkipped, "document-head"},
+		{types.StepLint, types.StepStatusAwaitingApproval, ""},
+		{types.StepPush, types.StepStatusCompleted, "push-head"},
+		{types.StepPR, types.StepStatusRunning, ""},
+		{types.StepCI, types.StepStatusPending, ""},
 	}
 	if len(attestation.Steps) != len(want) {
 		t.Fatalf("attested %d steps, want %d: %+v", len(attestation.Steps), len(want), attestation.Steps)
 	}
 	for i, wantStep := range want {
-		if gotStep := attestation.Steps[i]; gotStep.Step != wantStep.step || gotStep.Status != wantStep.status || gotStep.HeadSHA != testPipelineHeadSHA {
-			t.Errorf("attested step %d = (%q, %q), want (%q, %q)", i, gotStep.Step, gotStep.Status, wantStep.step, wantStep.status)
+		if gotStep := attestation.Steps[i]; gotStep.Step != wantStep.step || gotStep.Status != wantStep.status || gotStep.HeadSHA != wantStep.head {
+			t.Errorf("attested step %d = (%q, %q, %q), want (%q, %q, %q)", i, gotStep.Step, gotStep.Status, gotStep.HeadSHA, wantStep.step, wantStep.status, wantStep.head)
 		}
 	}
 

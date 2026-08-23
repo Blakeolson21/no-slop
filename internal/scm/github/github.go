@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Blakeolson21/no-slop/internal/scm"
+	"github.com/Blakeolson21/no-slop/internal/shellenv"
 )
 
 // CmdFactory builds an exec.Cmd in the caller's workdir with the caller's env.
@@ -284,7 +285,7 @@ func (h *Host) GetPRContent(ctx context.Context, pr *scm.PR) (scm.PRContent, err
 	}
 	args := append([]string{"pr", "view", selector}, h.repoArgs()...)
 	args = append(args, "--json", "title,body")
-	out, err := h.cmd(ctx, "gh", args...).Output()
+	out, err := shellenv.OutputShellCommand(h.cmd(ctx, "gh", args...))
 	if err != nil {
 		return scm.PRContent{}, fmt.Errorf("gh pr view content: %w", err)
 	}

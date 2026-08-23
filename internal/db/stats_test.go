@@ -218,8 +218,8 @@ func TestStepFindingStatsTreatsRephrasedStableIDAsSameFinding(t *testing.T) {
 	repo, _ := d.InsertRepo("/repo/rephrased", "git@example.com:rephrased.git", "main")
 	run, _ := d.InsertRun(repo.ID, "rephrased", "head", "base")
 	step, _ := d.InsertStepResult(run.ID, types.StepReview)
-	initial := `{"findings":[{"id":"loader-race","severity":"warning","file":"loader.go","line":8,"description":"unsafe loader"}]}`
-	final := `{"findings":[{"id":"loader-race","severity":"error","file":"manager.go","line":88,"description":"loader races concurrent shutdown"}]}`
+	initial := `{"findings":[{"id":"review-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","id_generated":true,"severity":"warning","file":"loader.go","line":8,"description":"unsafe loader"}]}`
+	final := `{"findings":[{"id":"review-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","id_generated":true,"severity":"error","file":"manager.go","line":88,"description":"credentials are invalidated prematurely"}]}`
 	if _, err := d.InsertStepRound(step.ID, 1, "initial", &initial, nil, 100); err != nil {
 		t.Fatal(err)
 	}

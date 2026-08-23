@@ -1,6 +1,7 @@
 package types
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -82,7 +83,7 @@ func CountFindingFingerprints(items []Finding) map[FindingIdentity]int {
 func StableFindingIDs(items []Finding) map[string][]Finding {
 	ids := make(map[string][]Finding, len(items))
 	for _, item := range items {
-		if item.ID != "" && !item.IDGenerated {
+		if item.ID != "" && item.IDGenerated {
 			ids[item.ID] = append(ids[item.ID], item)
 		}
 	}
@@ -90,12 +91,13 @@ func StableFindingIDs(items []Finding) map[string][]Finding {
 }
 
 func FindingMatches(item Finding, stableIDs map[string][]Finding, exact map[FindingIdentity]bool, itemCounts, candidateCounts map[FindingIdentity]int) bool {
-	if item.ID != "" && !item.IDGenerated {
+	if item.ID != "" && item.IDGenerated {
 		for _, candidate := range stableIDs[item.ID] {
 			if FindingIDCorroborates(item, candidate) {
 				return true
 			}
 		}
+		return false
 	}
 	if exact[item.Identity()] {
 		return true
@@ -105,48 +107,7 @@ func FindingMatches(item Finding, stableIDs map[string][]Finding, exact map[Find
 }
 
 func FindingIDCorroborates(item, candidate Finding) bool {
-	if item.ID == "" || item.IDGenerated || item.ID != candidate.ID || candidate.IDGenerated {
-		return false
-	}
-	itemTerms := findingSemanticTerms(item.Description)
-	candidateTerms := findingSemanticTerms(candidate.Description)
-	shared := 0
-	for term := range itemTerms {
-		if candidateTerms[term] {
-			shared++
-		}
-	}
-	return shared >= 2 || shared == 1 && (len(itemTerms) <= 2 || len(candidateTerms) <= 2)
-}
-
-func findingSemanticTerms(description string) map[string]bool {
-	terms := make(map[string]bool)
-	for _, term := range strings.FieldsFunc(strings.ToLower(description), func(r rune) bool {
-		return r < 'a' || r > 'z'
-	}) {
-		if len(term) < 4 || findingSemanticStopWords[term] {
-			continue
-		}
-		switch {
-		case len(term) > 5 && strings.HasSuffix(term, "ies"):
-			term = strings.TrimSuffix(term, "ies") + "y"
-		case len(term) > 5 && strings.HasSuffix(term, "ing"):
-			term = strings.TrimSuffix(term, "ing")
-		case len(term) > 4 && strings.HasSuffix(term, "s"):
-			term = strings.TrimSuffix(term, "s")
-		}
-		terms[term] = true
-	}
-	return terms
-}
-
-var findingSemanticStopWords = map[string]bool{
-	"after": true, "before": true, "being": true, "could": true,
-	"does": true, "from": true, "have": true, "into": true,
-	"same": true, "still": true, "than": true, "that": true,
-	"their": true, "there": true, "these": true, "this": true,
-	"through": true, "when": true, "where": true, "which": true,
-	"while": true, "with": true, "would": true,
+	return item.ID != "" && item.IDGenerated && item.ID == candidate.ID && candidate.IDGenerated
 }
 
 // TestArtifact describes evidence produced by the test step for human review.
@@ -211,16 +172,47 @@ func ParseFindingsJSON(raw string) (Findings, error) {
 	return Findings{Items: items, Summary: wire.Summary, Tested: wire.Tested, TestingSummary: wire.TestingSummary, Artifacts: wire.Artifacts, RiskLevel: wire.RiskLevel, RiskRationale: wire.RiskRationale, RiskScope: wire.RiskScope}, nil
 }
 
-// NormalizeFindings assigns deterministic IDs to findings that do not have one yet.
-func NormalizeFindings(findings Findings, prefix string) Findings {
+// NormalizeFindings replaces reviewer-local IDs with pipeline-owned lineage IDs.
+func NormalizeFindings(findings Findings, prefix string, existing []Finding) (Findings, error) {
+	allowed := make(map[string]bool, len(existing))
+	used := make(map[string]bool, len(existing)+len(findings.Items))
+	for _, item := range existing {
+		if item.ID != "" && item.IDGenerated {
+			allowed[item.ID] = true
+			used[item.ID] = true
+		}
+	}
+	claimed := make(map[string]bool, len(findings.Items))
 	for i := range findings.Items {
-		if findings.Items[i].ID != "" {
+		claim := findings.Items[i].ID
+		if allowed[claim] && !claimed[claim] {
+			findings.Items[i].IDGenerated = true
+			claimed[claim] = true
 			continue
 		}
-		findings.Items[i].ID = prefix + "-" + itoa(i+1)
+		id, err := newFindingLineageID(prefix, used)
+		if err != nil {
+			return Findings{}, err
+		}
+		findings.Items[i].ID = id
 		findings.Items[i].IDGenerated = true
 	}
-	return findings
+	return findings, nil
+}
+
+func newFindingLineageID(prefix string, used map[string]bool) (string, error) {
+	for {
+		var random [16]byte
+		if _, err := rand.Read(random[:]); err != nil {
+			return "", fmt.Errorf("generate finding lineage: %w", err)
+		}
+		id := fmt.Sprintf("%s-%x", prefix, random)
+		if used[id] {
+			continue
+		}
+		used[id] = true
+		return id, nil
+	}
 }
 
 // FilterFindings keeps only findings whose IDs are included in ids.

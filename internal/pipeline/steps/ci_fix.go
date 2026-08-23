@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/Blakeolson21/no-slop/internal/agent"
-	"github.com/Blakeolson21/no-slop/internal/db"
 	"github.com/Blakeolson21/no-slop/internal/pipeline"
 	"github.com/Blakeolson21/no-slop/internal/scm"
 	"github.com/Blakeolson21/no-slop/internal/testguidance"
@@ -14,10 +13,8 @@ import (
 )
 
 type ciFixResult struct {
-	Pushed             bool
-	PreviousHeadSHA    string
-	HeadSHA            string
-	RequiredGatesStale bool
+	PreviousHeadSHA string
+	HeadSHA         string
 }
 
 func (r ciFixResult) HeadChanged() bool {
@@ -136,42 +133,26 @@ CI logs:
 	return fixResult, nil
 }
 
-func (s *CIStep) refreshPRAttestation(sctx *pipeline.StepContext, host scm.Host, pr *scm.PR, certifiedHeadSHA string) (bool, error) {
+func (s *CIStep) refreshPRAttestation(sctx *pipeline.StepContext, host scm.Host, pr *scm.PR) error {
 	reader, ok := host.(scm.PRContentReader)
 	if !ok {
-		return false, nil
+		return nil
 	}
 	content, err := reader.GetPRContent(sctx.Ctx, pr)
 	if err != nil {
-		return false, err
+		return err
 	}
 	steps, err := sctx.DB.GetStepsByRun(sctx.Run.ID)
 	if err != nil {
-		return false, err
+		return err
 	}
-	requiredGatesStale := completedRequiredGateCount(steps) == 3
-	body, changed, err := replacePipelineAttestation(content.Body, buildPipelineAttestationWithCertifiedHead(steps, sctx.Run.HeadSHA, certifiedHeadSHA))
+	body, changed, err := replacePipelineAttestation(content.Body, buildPipelineAttestation(steps, sctx.Run.HeadSHA))
 	if err != nil || !changed {
-		return requiredGatesStale, err
+		return err
 	}
 	content.Body = body
 	_, err = host.UpdatePR(sctx.Ctx, pr, content)
-	return requiredGatesStale, err
-}
-
-func completedRequiredGateCount(steps []*db.StepResult) int {
-	required := map[types.StepName]bool{
-		types.StepReview:   true,
-		types.StepTest:     true,
-		types.StepDocument: true,
-	}
-	completed := make(map[types.StepName]bool, len(required))
-	for _, step := range steps {
-		if required[step.StepName] && step.Status == types.StepStatusCompleted {
-			completed[step.StepName] = true
-		}
-	}
-	return len(completed)
+	return err
 }
 
 func replacePipelineAttestation(body, attestation string) (string, bool, error) {

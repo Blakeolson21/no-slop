@@ -59,7 +59,8 @@ CREATE TABLE IF NOT EXISTS step_results (
     agent_pid        INTEGER,
     auto_fix_limit   INTEGER,
     ci_fix_attempts  INTEGER NOT NULL DEFAULT 0,
-    convergence_json TEXT
+    convergence_json TEXT,
+    certified_head_sha TEXT
 );
 
 CREATE TABLE IF NOT EXISTS step_rounds (
@@ -219,6 +220,7 @@ var migrationStatements = []string{
 	// The review step's convergence report is nullable: legacy rows and
 	// non-review steps read back as "no report", never a fabricated one.
 	`ALTER TABLE step_results ADD COLUMN convergence_json TEXT`,
+	`ALTER TABLE step_results ADD COLUMN certified_head_sha TEXT`,
 	// Session-fidelity telemetry columns (all nullable so pre-existing rows read
 	// back as unknown, never a fabricated zero).
 	`ALTER TABLE agent_invocations ADD COLUMN model_provider TEXT`,

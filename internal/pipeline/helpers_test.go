@@ -225,6 +225,30 @@ func waitForStepStatus(t *testing.T, database *db.DB, runID string, stepName typ
 	t.Fatalf("step %s did not reach status %q within timeout; last seen %v", stepName, expected, last)
 }
 
+func findingIDByDescription(t *testing.T, database *db.DB, runID string, stepName types.StepName, description string) string {
+	t.Helper()
+	steps, err := database.GetStepsByRun(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range steps {
+		if step.StepName != stepName || step.FindingsJSON == nil {
+			continue
+		}
+		findings, err := types.ParseFindingsJSON(*step.FindingsJSON)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, finding := range findings.Items {
+			if finding.Description == description {
+				return finding.ID
+			}
+		}
+	}
+	t.Fatalf("finding %q not found for %s", description, stepName)
+	return ""
+}
+
 // startExecutor runs Execute in a goroutine and cancels it during cleanup so a
 // parked step closes its log file before t.TempDir removes the tree. Windows
 // refuses unlinkat on a still-open handle; leaving Execute running after a
@@ -285,6 +309,7 @@ func dirExists(path string) bool {
 
 type findingJSON struct {
 	ID               string `json:"id"`
+	IDGenerated      bool   `json:"id_generated"`
 	Severity         string `json:"severity"`
 	Description      string `json:"description"`
 	Source           string `json:"source"`
