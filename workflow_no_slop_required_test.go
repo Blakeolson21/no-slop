@@ -19,6 +19,7 @@ import (
 )
 
 const requiredWorkflowStepTimeout = 10 * time.Second
+const requiredWorkflowTestHeadSHA = "0123456789abcdef0123456789abcdef01234567"
 
 // TestNoSlopRequiredWorkflowExemptsReleaseAutomation pins the exemption
 // logic so the release pipeline (release-please via GITHUB_TOKEN) and
@@ -50,9 +51,9 @@ func TestNoSlopRequiredWorkflowChecksSignatureMarker(t *testing.T) {
 		t.Fatal("generated pipeline body fixture did not contain canonical signature")
 	}
 	got := executeRequiredWorkflowFixture(t, workflow, []requiredWorkflowEvent{
-		{Action: "opened", Body: pipelineBody, HeadSHA: "head", PRNumber: 1, RunID: 1, RunNumber: 1},
-		{Action: "edited", Body: legacyPipelineBody, HeadSHA: "head", PRNumber: 1, RunID: 2, RunNumber: 2},
-		{Action: "edited", Body: "body without a generated pipeline section", HeadSHA: "head", PRNumber: 1, RunID: 3, RunNumber: 3},
+		{Action: "opened", Body: pipelineBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 1, RunID: 1, RunNumber: 1},
+		{Action: "edited", Body: legacyPipelineBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 1, RunID: 2, RunNumber: 2},
+		{Action: "edited", Body: "body without a generated pipeline section", HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 1, RunID: 3, RunNumber: 3},
 	})
 	want := []requiredWorkflowResult{
 		{RunID: 1, RunNumber: 1, Action: "opened", Executed: true, Conclusion: "success"},
@@ -61,6 +62,44 @@ func TestNoSlopRequiredWorkflowChecksSignatureMarker(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("workflow check results =\n  %v\nwant\n  %v", got, want)
+	}
+}
+
+// TestNoSlopRequiredWorkflowEnforcesCompletedPipelineAttestation executes the
+// repository's required-check script as GitHub would. A signature proves only
+// which tool wrote the body; merge authority additionally requires a v1
+// attestation bound to this head with every required pre-publication gate done.
+func TestNoSlopRequiredWorkflowEnforcesCompletedPipelineAttestation(t *testing.T) {
+	workflow := loadRequiredWorkflow(t)
+	signatureOnly := "## Pipeline\n\nUpdates from [git push no-slop](https://github.com/Blakeolson21/no-slop)\n"
+
+	tests := []struct {
+		name    string
+		body    string
+		headSHA string
+		want    string
+	}{
+		{name: "signature only", body: signatureOnly, want: "failure"},
+		{name: "review missing", body: generatedPipelineBodyWithStatuses(t, "", types.StepStatusCompleted, types.StepStatusCompleted), want: "failure"},
+		{name: "test failed", body: generatedPipelineBodyWithStatuses(t, types.StepStatusCompleted, types.StepStatusFailed, types.StepStatusCompleted), want: "failure"},
+		{name: "document skipped", body: generatedPipelineBodyWithStatuses(t, types.StepStatusCompleted, types.StepStatusCompleted, types.StepStatusSkipped), want: "failure"},
+		{name: "stale head", body: generatedPipelineBody(t), headSHA: "ffffffffffffffffffffffffffffffffffffffff", want: "failure"},
+		{name: "all required steps completed", body: generatedPipelineBody(t), want: "success"},
+	}
+
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			headSHA := tc.headSHA
+			if headSHA == "" {
+				headSHA = requiredWorkflowTestHeadSHA
+			}
+			got := executeRequiredWorkflowFixture(t, workflow, []requiredWorkflowEvent{{
+				Action: "opened", Body: tc.body, HeadSHA: headSHA, PRNumber: 797, RunID: int64(100 + i), RunNumber: int64(100 + i),
+			}})
+			if got[0].Conclusion != tc.want {
+				t.Fatalf("conclusion = %q, want %q", got[0].Conclusion, tc.want)
+			}
+		})
 	}
 }
 
@@ -73,12 +112,15 @@ func TestNoSlopRequiredWorkflowReadsPRBodyViaEnv(t *testing.T) {
 	if got := step.Env["PR_BODY"]; got != "${{ github.event.pull_request.body }}" {
 		t.Fatalf("PR_BODY env expression = %q, want pull request body expression", got)
 	}
+	if got := step.Env["PR_HEAD_SHA"]; got != "${{ github.event.pull_request.head.sha }}" {
+		t.Fatalf("PR_HEAD_SHA env expression = %q, want pull request head expression", got)
+	}
 	if strings.Contains(step.Run, "github.event.pull_request.body") {
 		t.Fatalf("workflow must not interpolate the PR body expression directly into run script")
 	}
 
 	got := executeRequiredWorkflowFixture(t, workflow, []requiredWorkflowEvent{
-		{Action: "opened", Body: generatedPipelineBody(t) + "\n$(exit 42)\n`exit 42`", HeadSHA: "head", PRNumber: 1, RunID: 10, RunNumber: 10},
+		{Action: "opened", Body: generatedPipelineBody(t) + "\n$(exit 42)\n`exit 42`", HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 1, RunID: 10, RunNumber: 10},
 	})
 	if got[0].Conclusion != "success" {
 		t.Fatalf("env-carried PR body with shell metacharacters concluded %q, want success", got[0].Conclusion)
@@ -113,9 +155,9 @@ func TestNoSlopRequiredWorkflowExecutesEveryBodyEvent(t *testing.T) {
 	workflow := loadRequiredWorkflow(t)
 	pipelineBody := generatedPipelineBody(t)
 	events := []requiredWorkflowEvent{
-		{Action: "opened", Body: pipelineBody, HeadSHA: "same-head", PRNumber: 549, RunID: 29962844999, RunNumber: 586},
-		{Action: "edited", Body: "signature removed", HeadSHA: "same-head", PRNumber: 549, RunID: 29962943078, RunNumber: 587},
-		{Action: "edited", Body: pipelineBody, HeadSHA: "same-head", PRNumber: 549, RunID: 29965243268, RunNumber: 588},
+		{Action: "opened", Body: pipelineBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 549, RunID: 29962844999, RunNumber: 586},
+		{Action: "edited", Body: "signature removed", HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 549, RunID: 29962943078, RunNumber: 587},
+		{Action: "edited", Body: pipelineBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 549, RunID: 29965243268, RunNumber: 588},
 	}
 
 	got := executeRequiredWorkflowFixture(t, workflow, events)
@@ -270,12 +312,24 @@ func loadRequiredWorkflow(t *testing.T) requiredWorkflow {
 }
 
 func generatedPipelineBody(t *testing.T) string {
+	return generatedPipelineBodyWithStatuses(t, types.StepStatusCompleted, types.StepStatusCompleted, types.StepStatusCompleted)
+}
+
+func generatedPipelineBodyWithStatuses(t *testing.T, review, testStep, document types.StepStatus) string {
 	t.Helper()
-	body, _ := pipelinesteps.BuildPipelineSummary([]*db.StepResult{
-		{ID: "review", StepName: types.StepReview, Status: types.StepStatusCompleted},
-	}, map[string][]*db.StepRound{
-		"review": []*db.StepRound{{Round: 1, Trigger: "initial"}},
-	}, "0123456789abcdef0123456789abcdef01234567")
+	results := []*db.StepResult{
+		{ID: "review", StepName: types.StepReview, Status: review},
+		{ID: "test", StepName: types.StepTest, Status: testStep},
+		{ID: "document", StepName: types.StepDocument, Status: document},
+	}
+	if review == "" {
+		results = results[1:]
+	}
+	rounds := make(map[string][]*db.StepRound, len(results))
+	for _, result := range results {
+		rounds[result.ID] = []*db.StepRound{{Round: 1, Trigger: "initial"}}
+	}
+	body, _ := pipelinesteps.BuildPipelineSummary(results, rounds, requiredWorkflowTestHeadSHA)
 	if strings.TrimSpace(body) == "" {
 		t.Fatal("pipeline summary builder returned an empty PR body")
 	}
@@ -403,6 +457,7 @@ func executeRequiredWorkflowFixture(t *testing.T, workflow requiredWorkflow, eve
 		shellenv.ConfigureShellCommand(cmd)
 		cmd.Env = append(os.Environ(),
 			"PR_BODY="+event.Body,
+			"PR_HEAD_SHA="+event.HeadSHA,
 			"PR_AUTHOR=first-time-fork-contributor",
 			"PR_NUMBER="+strconv.FormatInt(event.PRNumber, 10),
 		)

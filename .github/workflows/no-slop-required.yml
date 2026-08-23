@@ -40,29 +40,86 @@ jobs:
       - name: Verify no-slop signature in PR body
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -eu
           canonical_marker='Updates from [git push no-slop](https://github.com/Blakeolson21/no-slop)'
           legacy_marker='Updates from [git push no-mistakes](https://github.com/Blakeolson21/no-slop)'
-          if printf '%s' "${PR_BODY:-}" | grep -qF -- "$canonical_marker" ||
-             printf '%s' "${PR_BODY:-}" | grep -qF -- "$legacy_marker"; then
-            echo "Found no-slop signature in PR #${PR_NUMBER} body."
-            exit 0
+          if ! printf '%s' "${PR_BODY:-}" | grep -qF -- "$canonical_marker" &&
+             ! printf '%s' "${PR_BODY:-}" | grep -qF -- "$legacy_marker"; then
+            {
+              echo "::error::This PR was not raised through no-slop."
+              echo
+              echo "Contributions to this repository must be submitted via 'git push no-slop'."
+              echo "That pipeline runs the required review/test/lint/CI steps and writes a"
+              echo "deterministic '## Pipeline' section into the PR body containing one of:"
+              echo
+              echo "    $canonical_marker"
+              echo "    $legacy_marker"
+              echo
+              echo "See CONTRIBUTING.md for setup and the full workflow."
+              echo
+              echo "PR author: ${PR_AUTHOR}"
+            } >&2
+            exit 1
           fi
-          {
-            echo "::error::This PR was not raised through no-slop."
-            echo
-            echo "Contributions to this repository must be submitted via 'git push no-slop'."
-            echo "That pipeline runs the required review/test/lint/CI steps and writes a"
-            echo "deterministic '## Pipeline' section into the PR body containing one of:"
-            echo
-            echo "    $canonical_marker"
-            echo "    $legacy_marker"
-            echo
-            echo "See CONTRIBUTING.md for setup and the full workflow."
-            echo
-            echo "PR author: ${PR_AUTHOR}"
-          } >&2
-          exit 1
+          echo "Found no-slop signature in PR #${PR_NUMBER} body."
+          python3 <<'PY'
+          import json
+          import os
+          import sys
+
+          body = os.environ.get("PR_BODY") or ""
+          pr_head_sha = os.environ.get("PR_HEAD_SHA") or ""
+          prefix = "<!-- no-slop-pipeline-attestation:v1 "
+          closing = " -->"
+          required_steps = ("review", "test", "document")
+
+          def fail(message):
+              sys.stderr.write(f"::error::{message}\n")
+              raise SystemExit(1)
+
+          start = body.find(prefix)
+          if start < 0:
+              fail("This PR is missing the no-slop v1 pipeline attestation. Re-run 'git push no-slop'.")
+          start += len(prefix)
+          end = body.find(closing, start)
+          if end < 0:
+              fail("The no-slop v1 pipeline attestation is malformed. Re-run 'git push no-slop'.")
+
+          try:
+              attestation = json.loads(body[start:end])
+          except json.JSONDecodeError:
+              fail("The no-slop v1 pipeline attestation is malformed. Re-run 'git push no-slop'.")
+          if not isinstance(attestation, dict) or not isinstance(attestation.get("steps"), list):
+              fail("The no-slop v1 pipeline attestation is malformed. Re-run 'git push no-slop'.")
+
+          attested_head = attestation.get("head_sha")
+          if not isinstance(attested_head, str) or not attested_head or attested_head != pr_head_sha:
+              fail(
+                  "Pipeline attestation head_sha does not match the current PR head "
+                  f"(attested {attested_head or '(missing)'}, current {pr_head_sha or '(missing)'}). "
+                  "Re-run 'git push no-slop'."
+              )
+
+          statuses = {}
+          for item in attestation["steps"]:
+              if not isinstance(item, dict):
+                  fail("The no-slop v1 pipeline attestation contains a malformed step.")
+              name, status = item.get("step"), item.get("status")
+              if not isinstance(name, str) or not isinstance(status, str):
+                  fail("The no-slop v1 pipeline attestation contains a malformed step.")
+              statuses[name] = status
+
+          incomplete = []
+          for name in required_steps:
+              status = statuses.get(name)
+              if status != "completed":
+                  incomplete.append(f"{name} (status={status})" if status else f"{name} (missing)")
+          if incomplete:
+              fail("Required no-slop pipeline steps are not completed: " + ", ".join(incomplete))
+
+          print("Found compliant no-slop pipeline attestation.")
+          PY
