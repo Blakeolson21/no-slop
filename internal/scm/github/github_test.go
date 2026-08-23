@@ -112,6 +112,24 @@ func TestGetChecksPassesRepoFlag(t *testing.T) {
 	}
 }
 
+func TestGetCheckAttemptIdentityReadsGitHubRunIdentity(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh run view 900 --repo test/repo --json databaseId,number,attempt,event,headSha": {
+			stdout: `{"databaseId":900,"number":42,"attempt":3,"event":"pull_request","headSha":"abc123"}` + "\n",
+		},
+	}), nil, "", "test/repo")
+
+	identity, err := host.GetCheckAttemptIdentity(context.Background(), scm.Check{Link: "https://github.com/test/repo/actions/runs/900/job/12"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.RunID != 900 || identity.RunNumber != 42 || identity.RunAttempt != 3 || identity.Event != "pull_request" || identity.HeadSHA != "abc123" {
+		t.Fatalf("identity = %#v", identity)
+	}
+}
+
 func TestGetPRStatePassesRepoFlag(t *testing.T) {
 	t.Parallel()
 

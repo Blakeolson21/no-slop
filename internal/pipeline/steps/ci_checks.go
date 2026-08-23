@@ -1,6 +1,7 @@
 package steps
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -9,6 +10,85 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/scm"
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
+
+const requiredAttestationCheckName = "PR must be raised via no-slop"
+
+func (s *CIStep) filterExpectedStaleAttestationChecks(sctx *pipeline.StepContext, host scm.Host, checks []scm.Check) ([]scm.Check, error) {
+	state := &s.transientReruns
+	if state.expectedAttestationHeadSHA == "" || state.expectedAttestationHeadSHA != sctx.Run.HeadSHA {
+		return checks, nil
+	}
+	reader, ok := host.(scm.CheckAttemptIdentityReader)
+	if !ok {
+		return nil, fmt.Errorf("provider cannot identify expected stale attestation check attempts")
+	}
+	identities := make(map[string]scm.CheckAttemptIdentity)
+	compliantRunNumber := state.compliantAttestationRunNumber
+	for _, check := range checks {
+		if check.Name != requiredAttestationCheckName {
+			continue
+		}
+		identity, err := readCheckAttemptIdentity(sctx.Ctx, reader, check, identities)
+		if err != nil {
+			return nil, err
+		}
+		if identity.HeadSHA != sctx.Run.HeadSHA {
+			continue
+		}
+		if check.Bucket == scm.CheckBucketPass && identity.RunNumber > compliantRunNumber {
+			compliantRunNumber = identity.RunNumber
+		}
+	}
+	if compliantRunNumber != state.compliantAttestationRunNumber {
+		candidate := *state
+		candidate.compliantAttestationRunNumber = compliantRunNumber
+		if err := s.persistRerunBudgetCandidate(sctx, &candidate); err != nil {
+			return nil, fmt.Errorf("persist compliant attestation check: %w", err)
+		}
+		state.compliantAttestationRunNumber = compliantRunNumber
+	}
+
+	filtered := make([]scm.Check, 0, len(checks)+1)
+	currentAttemptPresent := false
+	for _, check := range checks {
+		if check.Name != requiredAttestationCheckName {
+			filtered = append(filtered, check)
+			continue
+		}
+		identity := identities[check.Link]
+		if identity.HeadSHA != sctx.Run.HeadSHA {
+			continue
+		}
+		if compliantRunNumber == 0 {
+			if check.Bucket == scm.CheckBucketPending {
+				filtered = append(filtered, check)
+				currentAttemptPresent = true
+			}
+			continue
+		}
+		if identity.RunNumber < compliantRunNumber {
+			continue
+		}
+		filtered = append(filtered, check)
+		currentAttemptPresent = true
+	}
+	if !currentAttemptPresent {
+		filtered = append(filtered, scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketPending, State: "EXPECTED_ATTESTATION"})
+	}
+	return filtered, nil
+}
+
+func readCheckAttemptIdentity(ctx context.Context, reader scm.CheckAttemptIdentityReader, check scm.Check, cache map[string]scm.CheckAttemptIdentity) (scm.CheckAttemptIdentity, error) {
+	if identity, ok := cache[check.Link]; ok {
+		return identity, nil
+	}
+	identity, err := reader.GetCheckAttemptIdentity(ctx, check)
+	if err != nil {
+		return scm.CheckAttemptIdentity{}, fmt.Errorf("identify attestation check attempt: %w", err)
+	}
+	cache[check.Link] = identity
+	return identity, nil
+}
 
 type lastFixedIssues struct {
 	Checks        []string `json:"checks,omitempty"`

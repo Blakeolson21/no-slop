@@ -137,7 +137,7 @@ func mergeCarriedFindingsJSON(freshRaw, carriedRaw, prefix string) string {
 	freshCounts := types.CountFindingFingerprints(fresh.Items)
 	carriedCounts := types.CountFindingFingerprints(carried.Items)
 	carriedIdentity := make(map[int]bool, len(carried.Items))
-	carriedOnly := 0
+	carriedCount := 0
 	for _, old := range carried.Items {
 		match := -1
 		for i, current := range merged.Items {
@@ -154,11 +154,12 @@ func mergeCarriedFindingsJSON(freshRaw, carriedRaw, prefix string) string {
 			merged.Items[match].ContinuityToken = old.ContinuityToken
 			merged.Items[match].Action = stricterFindingAction(old.Action, merged.Items[match].Action)
 			carriedIdentity[match] = true
+			carriedCount++
 			continue
 		}
 		merged.Items = append(merged.Items, old)
 		carriedIdentity[len(merged.Items)-1] = true
-		carriedOnly++
+		carriedCount++
 	}
 
 	reserved := make(map[string]bool, len(merged.Items))
@@ -190,8 +191,8 @@ func mergeCarriedFindingsJSON(freshRaw, carriedRaw, prefix string) string {
 	}
 
 	merged.Summary = fmt.Sprintf("%d outstanding %s", len(merged.Items), pluralize(len(merged.Items), "finding", "findings"))
-	if carriedOnly > 0 {
-		merged.RiskLevel, merged.RiskRationale, merged.RiskScope = effectiveFindingsRisk(merged.Items, fresh.RiskLevel, fresh.RiskScope, carriedOnly)
+	if carriedCount > 0 {
+		merged.RiskLevel, merged.RiskRationale, merged.RiskScope = effectiveFindingsRisk(merged.Items, fresh, carried, carriedCount)
 	}
 	encoded, err := types.MarshalFindingsJSON(merged)
 	if err != nil {
@@ -213,9 +214,15 @@ func mergeEvidenceSummary(fresh, carried string) string {
 	}
 }
 
-func effectiveFindingsRisk(items []types.Finding, freshLevel, freshScope string, carriedCount int) (string, string, string) {
-	rank := riskRank(freshLevel)
-	scope := freshScope
+func effectiveFindingsRisk(items []types.Finding, fresh, carried types.Findings, carriedCount int) (string, string, string) {
+	rank := riskRank(fresh.RiskLevel)
+	if carriedRank := riskRank(carried.RiskLevel); carriedRank > rank {
+		rank = carriedRank
+	}
+	scope := fresh.RiskScope
+	if carried.RiskScope == types.FindingsRiskScopeSourceOrExternal || scope == "" {
+		scope = carried.RiskScope
+	}
 	for _, item := range items {
 		if severityRank(item.Severity) > rank {
 			rank = severityRank(item.Severity)

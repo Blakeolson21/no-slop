@@ -547,6 +547,24 @@ func TestNormalizeFindingsPersistsGeneratedIDProvenance(t *testing.T) {
 	}
 }
 
+func TestNormalizeFindingsKeepsNonReviewIdentitySemantics(t *testing.T) {
+	findings, err := NormalizeFindings(Findings{Items: []Finding{
+		{Severity: "error", Description: "generated"},
+		{ID: "stable-test", Severity: "warning", Description: "explicit"},
+	}}, "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if findings.Items[0].ID != "test-1" || findings.Items[1].ID != "stable-test" {
+		t.Fatalf("non-review IDs = %#v", findings.Items)
+	}
+	for _, item := range findings.Items {
+		if item.HasLineage() || item.ContinuityToken != "" || item.IDGenerated {
+			t.Fatalf("non-review finding acquired review lineage: %#v", item)
+		}
+	}
+}
+
 func TestNormalizeFindingsRequiresExactPriorLineageClaim(t *testing.T) {
 	prior, err := NormalizeFindings(Findings{Items: []Finding{{ID: "review-1", Description: "authentication token expires too early"}}}, "review", nil)
 	if err != nil {

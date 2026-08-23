@@ -61,6 +61,25 @@ func TestMergeCarriedFindingsJSON_PreservesExplicitIDAcrossRephrasing(t *testing
 	}
 }
 
+func TestMergeCarriedFindingsJSON_MatchedLineagePreservesEffectiveRisk(t *testing.T) {
+	carriedRaw := `{"findings":[{"id":"review-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","id_generated":true,"continuity_token":"token-a","severity":"error","file":"loader.go","line":12,"description":"unsafe loader","action":"ask-user","review_scope":"source"}],"testing_summary":"Reproduced data loss.","risk_level":"high","risk_rationale":"Data can be lost.","risk_scope":"source-or-external"}`
+	freshRaw := `{"findings":[{"id":"review-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","id_generated":true,"continuity_token":"token-a","severity":"warning","file":"manager.go","line":88,"description":"loader still races","action":"auto-fix","review_scope":"source"}],"testing_summary":"Narrow retest passed.","risk_level":"low","risk_rationale":"Narrow path is safe.","risk_scope":"source-or-external"}`
+
+	merged, err := types.ParseFindingsJSON(mergeCarriedFindingsJSON(freshRaw, carriedRaw, "review"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged.Items) != 1 {
+		t.Fatalf("findings = %#v, want one continued lineage", merged.Items)
+	}
+	if merged.Items[0].Action != "ask-user" || merged.RiskLevel != "high" {
+		t.Fatalf("effective finding = %#v, risk = %q", merged.Items[0], merged.RiskLevel)
+	}
+	if !strings.Contains(merged.TestingSummary, "Reproduced data loss") || !strings.Contains(merged.TestingSummary, "Narrow retest passed") {
+		t.Fatalf("testing summary = %q", merged.TestingSummary)
+	}
+}
+
 func TestMergeCarriedFindingsJSON_DoesNotTrustUncorroboratedExplicitID(t *testing.T) {
 	carriedRaw := `{"findings":[{"id":"review-1","severity":"warning","file":"loader.go","line":12,"description":"unsafe loader","action":"ask-user"}]}`
 	freshRaw := `{"findings":[{"id":"review-1","severity":"error","file":"loader.go","line":12,"description":"cache write can deadlock","action":"auto-fix"}]}`

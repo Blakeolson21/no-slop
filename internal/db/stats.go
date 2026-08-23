@@ -145,12 +145,13 @@ func stepFindingStats(step *StepResult, rounds []*StepRound) StepStats {
 	reportedLineages := make(map[string]bool)
 	reportedLegacy := make(map[types.FindingIdentity]bool)
 	reportedLegacyCounts := make(map[types.FindingIdentity]int)
+	lineageStats := step.StepName == types.StepReview
 	var current []types.Finding
 	for _, round := range rounds {
 		items := findingItems(round.FindingsJSON)
 		itemCounts := types.CountFindingFingerprints(items)
 		for _, item := range items {
-			if item.ID != "" && item.IDGenerated {
+			if lineageStats && item.ID != "" && item.IDGenerated {
 				reportedLineages[item.ID] = true
 				continue
 			}

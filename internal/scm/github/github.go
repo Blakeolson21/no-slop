@@ -355,6 +355,39 @@ func (h *Host) GetChecks(ctx context.Context, pr *scm.PR) ([]scm.Check, error) {
 	return checks, nil
 }
 
+func (h *Host) GetCheckAttemptIdentity(ctx context.Context, check scm.Check) (scm.CheckAttemptIdentity, error) {
+	runID, _, ok := actionsRerunTarget(check.Link)
+	if !ok {
+		return scm.CheckAttemptIdentity{}, fmt.Errorf("check link does not identify a GitHub Actions run: %s", check.Link)
+	}
+	args := append([]string{"run", "view", runID}, h.repoArgs()...)
+	args = append(args, "--json", "databaseId,number,attempt,event,headSha")
+	out, err := shellenv.OutputShellCommand(h.cmd(ctx, "gh", args...))
+	if err != nil {
+		return scm.CheckAttemptIdentity{}, fmt.Errorf("gh run view: %w", err)
+	}
+	var raw struct {
+		RunID      int64  `json:"databaseId"`
+		RunNumber  int64  `json:"number"`
+		RunAttempt int    `json:"attempt"`
+		Event      string `json:"event"`
+		HeadSHA    string `json:"headSha"`
+	}
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return scm.CheckAttemptIdentity{}, fmt.Errorf("parse GitHub Actions run identity: %w", err)
+	}
+	if raw.RunID == 0 || raw.RunNumber == 0 {
+		return scm.CheckAttemptIdentity{}, fmt.Errorf("GitHub Actions run identity is incomplete for %s", check.Link)
+	}
+	return scm.CheckAttemptIdentity{
+		RunID:      raw.RunID,
+		RunNumber:  raw.RunNumber,
+		RunAttempt: raw.RunAttempt,
+		Event:      strings.TrimSpace(raw.Event),
+		HeadSHA:    strings.TrimSpace(raw.HeadSHA),
+	}, nil
+}
+
 // RerunCheck re-runs the Actions job behind check for the same commit, so a
 // check the provider cancelled rather than failed can be retried without a new
 // push. The job is identified from the check's details link, which is the only

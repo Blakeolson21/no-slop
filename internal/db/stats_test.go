@@ -281,6 +281,33 @@ func TestStepFindingStatsCountsDistinctGeneratedLineagesWithIdenticalContent(t *
 	}
 }
 
+func TestStepFindingStatsUsesStructuralContinuityForNonReviewSteps(t *testing.T) {
+	for _, stepName := range []types.StepName{types.StepTest, types.StepDocument, types.StepLint} {
+		t.Run(string(stepName), func(t *testing.T) {
+			d := openTestDB(t)
+			repo, _ := d.InsertRepo("/repo/non-review-"+string(stepName), "git@example.com:non-review.git", "main")
+			run, _ := d.InsertRun(repo.ID, "non-review", "head", "base")
+			step, _ := d.InsertStepResult(run.ID, stepName)
+			initial := `{"findings":[{"id":"first-generated-id","id_generated":true,"continuity_token":"token-a","severity":"warning","file":"loader.go","line":8,"description":"unsafe loader"}]}`
+			final := `{"findings":[{"id":"second-generated-id","id_generated":true,"continuity_token":"token-b","severity":"warning","file":"loader.go","line":8,"description":"unsafe loader"}]}`
+			if _, err := d.InsertStepRound(step.ID, 1, "initial", &initial, nil, 100); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := d.InsertStepRound(step.ID, 2, "auto_fix", &final, nil, 100); err != nil {
+				t.Fatal(err)
+			}
+
+			stats, err := d.StepFindingStats(step)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stats.ReportedFindings != 1 || stats.FixedFindings != 0 {
+				t.Fatalf("stats = reported %d fixed %d", stats.ReportedFindings, stats.FixedFindings)
+			}
+		})
+	}
+}
+
 func assertStepStat(t *testing.T, stats []StepStats, step types.StepName, reported int, fixes int) {
 	t.Helper()
 	for _, got := range stats {

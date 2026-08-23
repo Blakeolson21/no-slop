@@ -13,9 +13,10 @@ import (
 )
 
 type ciFixResult struct {
-	PreviousHeadSHA string
-	HeadSHA         string
-	HeadPersisted   bool
+	PreviousHeadSHA            string
+	HeadSHA                    string
+	HeadPersisted              bool
+	ExpectedAttestationTracked bool
 }
 
 func (r ciFixResult) HeadChanged() bool {

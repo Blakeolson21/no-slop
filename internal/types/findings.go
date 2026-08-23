@@ -184,6 +184,9 @@ func ParseFindingsJSON(raw string) (Findings, error) {
 
 // NormalizeFindings replaces reviewer-local IDs with pipeline-owned lineage IDs.
 func NormalizeFindings(findings Findings, prefix string, existing []Finding) (Findings, error) {
+	if prefix != "review" {
+		return normalizeNonReviewFindings(findings, prefix, existing)
+	}
 	type lineageClaim struct {
 		id    string
 		token string
@@ -235,6 +238,19 @@ func NormalizeFindings(findings Findings, prefix string, existing []Finding) (Fi
 		item.ContinuityToken = token
 		item.PriorID = ""
 		item.PriorContinuityToken = ""
+	}
+	return findings, nil
+}
+
+func normalizeNonReviewFindings(findings Findings, prefix string, _ []Finding) (Findings, error) {
+	for i := range findings.Items {
+		if findings.Items[i].ID == "" {
+			findings.Items[i].ID = prefix + "-" + itoa(i+1)
+		}
+		findings.Items[i].IDGenerated = false
+		findings.Items[i].ContinuityToken = ""
+		findings.Items[i].PriorID = ""
+		findings.Items[i].PriorContinuityToken = ""
 	}
 	return findings, nil
 }

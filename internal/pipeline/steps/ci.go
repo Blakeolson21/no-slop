@@ -315,6 +315,10 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 			lastMonitorLog = ""
 			sctx.Log(fmt.Sprintf("warning: could not check CI: %v", err))
 		} else {
+			checks, err = s.filterExpectedStaleAttestationChecks(sctx, host, checks)
+			if err != nil {
+				return nil, err
+			}
 			// checksPending is the narrow execution state: only checks that are
 			// actively running or queued block a rerun or issue escalation. A
 			// provider-cancelled check is terminal enough to enter the transient
