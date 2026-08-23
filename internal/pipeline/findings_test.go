@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Blakeolson21/no-slop/internal/types"
@@ -148,17 +149,20 @@ func TestMergeCarriedFindingsJSON_PreservesIdentityAcrossReclassification(t *tes
 	}
 }
 
-func TestMergeCarriedFindingsJSON_UsesFreshAggregateRisk(t *testing.T) {
-	carriedRaw := `{"findings":[{"id":"review-2","severity":"warning","description":"remaining concern","action":"ask-user"}],"risk_level":"high","risk_rationale":"Selected finding can corrupt data.","risk_scope":"source-or-external"}`
-	freshRaw := `{"findings":[],"risk_level":"low","risk_rationale":"The selected defect is fixed.","risk_scope":"source-or-external"}`
+func TestMergeCarriedFindingsJSON_RecomputesEffectiveRiskAndPreservesEvidence(t *testing.T) {
+	carriedRaw := `{"findings":[{"id":"review-2","severity":"error","description":"remaining concern","action":"ask-user","review_scope":"source"}],"testing_summary":"Reproduced the remaining race under load.","risk_level":"high","risk_rationale":"Selected finding can corrupt data.","risk_scope":"source-or-external"}`
+	freshRaw := `{"findings":[],"testing_summary":"Verified the selected defect is fixed.","risk_level":"low","risk_rationale":"The selected defect is fixed.","risk_scope":"source-or-external"}`
 
 	mergedRaw := mergeCarriedFindingsJSON(freshRaw, carriedRaw, "review")
 	merged, err := types.ParseFindingsJSON(mergedRaw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if merged.RiskLevel != "low" || merged.RiskRationale != "The selected defect is fixed." {
+	if merged.RiskLevel != "high" || strings.Contains(merged.RiskRationale, "Selected finding") || strings.Contains(merged.RiskRationale, "selected defect") {
 		t.Fatalf("aggregate risk = %q %q", merged.RiskLevel, merged.RiskRationale)
+	}
+	if !strings.Contains(merged.TestingSummary, "Reproduced the remaining race") || !strings.Contains(merged.TestingSummary, "Verified the selected defect") {
+		t.Fatalf("testing summary = %q", merged.TestingSummary)
 	}
 }
 

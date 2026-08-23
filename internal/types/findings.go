@@ -64,6 +64,28 @@ func (f Finding) Identity() FindingIdentity {
 	return FindingIdentity{File: f.File, Line: f.Line, Description: f.Description}
 }
 
+func (f Finding) Fingerprint() FindingIdentity {
+	identity := f.Identity()
+	identity.Line = 0
+	return identity
+}
+
+func CountFindingFingerprints(items []Finding) map[FindingIdentity]int {
+	counts := make(map[FindingIdentity]int, len(items))
+	for _, item := range items {
+		counts[item.Fingerprint()]++
+	}
+	return counts
+}
+
+func FindingMatches(item Finding, exact map[FindingIdentity]bool, itemCounts, candidateCounts map[FindingIdentity]int) bool {
+	if exact[item.Identity()] {
+		return true
+	}
+	fingerprint := item.Fingerprint()
+	return itemCounts[fingerprint] == 1 && candidateCounts[fingerprint] == 1
+}
+
 // TestArtifact describes evidence produced by the test step for human review.
 type TestArtifact struct {
 	Kind    string `json:"kind,omitempty"`

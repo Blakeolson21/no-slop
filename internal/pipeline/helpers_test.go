@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -232,24 +231,34 @@ func waitForStepStatus(t *testing.T, database *db.DB, runID string, stepName typ
 // failed wait was the lint.log leak in TestExecutor_AutoFixRespectsMaxAttempts.
 func startExecutor(t *testing.T, exec *Executor, run *db.Run, repo *db.Repo, workDir string) (<-chan error, context.CancelFunc) {
 	t.Helper()
+	return startExecutorOperation(t, func(ctx context.Context) error {
+		return exec.Execute(ctx, run, repo, workDir)
+	})
+}
+
+func startResumeExecutor(t *testing.T, exec *Executor, run *db.Run, repo *db.Repo, workDir string) (<-chan error, context.CancelFunc) {
+	t.Helper()
+	return startExecutorOperation(t, func(ctx context.Context) error {
+		return exec.Resume(ctx, run, repo, workDir)
+	})
+}
+
+func startExecutorOperation(t *testing.T, run func(context.Context) error) (<-chan error, context.CancelFunc) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	var finished atomic.Bool
+	exited := make(chan struct{})
 	t.Cleanup(func() {
 		cancel()
-		if finished.Load() {
-			return
-		}
 		select {
-		case <-done:
+		case <-exited:
 		case <-time.After(10 * time.Second):
 			t.Error("executor did not return after cancel")
 		}
 	})
 	go func() {
-		err := exec.Execute(ctx, run, repo, workDir)
-		finished.Store(true)
-		done <- err
+		defer close(exited)
+		done <- run(ctx)
 	}()
 	return done, cancel
 }

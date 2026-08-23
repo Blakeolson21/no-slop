@@ -314,3 +314,14 @@ func TestSetStepRoundUserDecision(t *testing.T) {
 		t.Errorf("expected nil user_findings_json after clear, got %v", rounds[0].UserFindingsJSON)
 	}
 }
+
+func TestStepRoundSelectionUpdatesRequireExistingRound(t *testing.T) {
+	d := openTestDB(t)
+	selected := `["review-1"]`
+	if err := d.SetStepRoundSelection("missing", &selected, RoundSelectionSourceAutoFix); err == nil {
+		t.Fatal("missing auto-fix round update succeeded")
+	}
+	if err := d.SetStepRoundUserDecision("missing", &selected, RoundSelectionSourceUser, nil); err == nil {
+		t.Fatal("missing user-decision round update succeeded")
+	}
+}

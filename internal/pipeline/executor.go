@@ -497,17 +497,11 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 		telemetry.Track("fix", e.fixTelemetryFields("user", gate.step.Name(), selectedFindingCount(gate.findings, response.findingIDs), 0))
 		selected := filterFindingsJSON(gate.findings, response.findingIDs)
 		merged := mergeUserOverridesJSON(selected, response.instructions, response.addedFindings)
-		if gate.lastRoundID != "" {
-			allSelectedIDs := combineSelectedFindingIDs(response.findingIDs, merged)
-			if idsJSON := marshalFindingIDs(allSelectedIDs); idsJSON != "" {
-				var userFindingsJSON *string
-				if merged != "" && merged != selected {
-					userFindingsJSON = &merged
-				}
-				if dbErr := e.db.SetStepRoundUserDecision(gate.lastRoundID, &idsJSON, db.RoundSelectionSourceUser, userFindingsJSON); dbErr != nil {
-					slog.Warn("failed to record recovered user decision", "step", gate.step.Name(), "round", gate.round, "error", dbErr)
-				}
+		if err := e.persistUserFixDecision(gate.lastRoundID, response.findingIDs, selected, merged); err != nil {
+			if findingsMayBeScopeLimited(gate.step) {
+				return e.failRun(run, repo, fmt.Errorf("record recovered %s user decision: %w", gate.step.Name(), err), ctx)
 			}
+			slog.Warn("failed to record recovered user decision", "step", gate.step.Name(), "round", gate.round, "error", err)
 		}
 		if dbErr := e.db.UpdateStepStatus(gate.stepResult.ID, types.StepStatusFixing); dbErr != nil {
 			return e.failRun(run, repo, fmt.Errorf("mark recovered step %s fixing: %w", gate.step.Name(), dbErr), ctx)
@@ -947,6 +941,9 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		}
 		if dbErr != nil {
 			currentRoundID = roundInsertID(currentRoundID, inserted, dbErr)
+			if carryFindings {
+				return false, fmt.Errorf("persist %s round %d: %w", stepName, roundNum, dbErr)
+			}
 			slog.Warn("failed to insert step round", "step", stepName, "round", roundNum, "error", dbErr)
 		} else {
 			currentRoundID = roundInsertID(currentRoundID, inserted, nil)
@@ -990,15 +987,14 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 				executionMS += time.Since(phaseStart).Milliseconds()
 				fixCount := findingsCount(fixableFindings)
 				writeLog(fmt.Sprintf("auto-fix round %d/%d starting after round %d (%d %s)", autoFixAttempts, autoFixLimit, roundNum, fixCount, pluralize(fixCount, "finding", "findings")))
+				if err := e.persistAutoFixSelection(currentRoundID, fixableFindings); err != nil {
+					if carryFindings {
+						return false, fmt.Errorf("record %s auto-fix selection: %w", stepName, err)
+					}
+					slog.Warn("failed to record selected finding ids", "step", stepName, "round", roundNum, "error", err)
+				}
 				if dbErr := e.db.UpdateStepStatus(sr.ID, types.StepStatusFixing); dbErr != nil {
 					slog.Warn("failed to update step status in db", "step", stepName, "status", "fixing", "error", dbErr)
-				}
-				if currentRoundID != "" {
-					if idsJSON := findingIDsJSON(fixableFindings); idsJSON != "" {
-						if dbErr := e.db.SetStepRoundSelection(currentRoundID, &idsJSON, db.RoundSelectionSourceAutoFix); dbErr != nil {
-							slog.Warn("failed to record selected finding ids", "step", stepName, "round", roundNum, "error", dbErr)
-						}
-					}
 				}
 				e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusFixing), "", "", nil)
 				phaseStart = time.Now()
@@ -1131,29 +1127,23 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			phaseStart = time.Now()
 			selectedCount := selectedFindingCount(effectiveFindings, response.findingIDs)
 			writeLog(fmt.Sprintf("user-fix round starting after round %d (%d %s selected)", roundNum, selectedCount, pluralize(selectedCount, "finding", "findings")))
+			selectedFindings := filterFindingsJSON(effectiveFindings, response.findingIDs)
+			mergedFindings := mergeUserOverridesJSON(selectedFindings, response.instructions, response.addedFindings)
+			if err := e.persistUserFixDecision(currentRoundID, response.findingIDs, selectedFindings, mergedFindings); err != nil {
+				if carryFindings {
+					return false, fmt.Errorf("record %s user decision: %w", stepName, err)
+				}
+				slog.Warn("failed to record user decision", "step", stepName, "round", roundNum, "error", err)
+			}
 			if dbErr := e.db.UpdateStepStatus(sr.ID, types.StepStatusFixing); dbErr != nil {
 				slog.Warn("failed to update step status in db", "step", stepName, "status", "fixing", "error", dbErr)
 			}
 			sctx.Fixing = true
-			selectedFindings := filterFindingsJSON(effectiveFindings, response.findingIDs)
-			mergedFindings := mergeUserOverridesJSON(selectedFindings, response.instructions, response.addedFindings)
 			sctx.PreviousFindings = mergedFindings
 			if carryFindings {
 				carriedFindings = excludeFindingsJSON(effectiveFindings, response.findingIDs)
 			}
 			nextTrigger = "auto_fix"
-			if currentRoundID != "" {
-				allSelectedIDs := combineSelectedFindingIDs(response.findingIDs, mergedFindings)
-				if idsJSON := marshalFindingIDs(allSelectedIDs); idsJSON != "" {
-					var userFindingsJSON *string
-					if mergedFindings != "" && mergedFindings != selectedFindings {
-						userFindingsJSON = &mergedFindings
-					}
-					if dbErr := e.db.SetStepRoundUserDecision(currentRoundID, &idsJSON, db.RoundSelectionSourceUser, userFindingsJSON); dbErr != nil {
-						slog.Warn("failed to record user decision", "step", stepName, "round", roundNum, "error", dbErr)
-					}
-				}
-			}
 			e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusFixing), "", "", nil)
 			slog.Info("step fix requested, re-executing", "step", stepName)
 			continue // loop back to step.Execute
@@ -1186,6 +1176,32 @@ done:
 	}
 	e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(status), "", "", &durationMS)
 	return skipRemaining, restartFrom, nil
+}
+
+func (e *Executor) persistAutoFixSelection(roundID, findings string) error {
+	idsJSON := findingIDsJSON(findings)
+	if idsJSON == "" {
+		return nil
+	}
+	if roundID == "" {
+		return errors.New("step round is not durable")
+	}
+	return e.db.SetStepRoundSelection(roundID, &idsJSON, db.RoundSelectionSourceAutoFix)
+}
+
+func (e *Executor) persistUserFixDecision(roundID string, selectedIDs []string, selected, merged string) error {
+	idsJSON := marshalFindingIDs(combineSelectedFindingIDs(selectedIDs, merged))
+	if idsJSON == "" {
+		return nil
+	}
+	if roundID == "" {
+		return errors.New("step round is not durable")
+	}
+	var userFindingsJSON *string
+	if merged != "" && merged != selected {
+		userFindingsJSON = &merged
+	}
+	return e.db.SetStepRoundUserDecision(roundID, &idsJSON, db.RoundSelectionSourceUser, userFindingsJSON)
 }
 
 func roundInsertID(_ string, inserted *db.StepRound, err error) string {

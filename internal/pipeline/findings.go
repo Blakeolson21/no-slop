@@ -3,6 +3,7 @@ package pipeline
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
@@ -49,25 +50,11 @@ func findingKey(item types.Finding) types.FindingIdentity {
 }
 
 func findingFingerprint(item types.Finding) types.FindingIdentity {
-	identity := item.Identity()
-	identity.Line = 0
-	return identity
-}
-
-func countFindingFingerprints(items []types.Finding) map[types.FindingIdentity]int {
-	counts := make(map[types.FindingIdentity]int, len(items))
-	for _, item := range items {
-		counts[findingFingerprint(item)]++
-	}
-	return counts
+	return item.Fingerprint()
 }
 
 func hasFindingMatch(item types.Finding, exact map[types.FindingIdentity]bool, itemCounts, candidateCounts map[types.FindingIdentity]int) bool {
-	if exact[findingKey(item)] {
-		return true
-	}
-	fingerprint := findingFingerprint(item)
-	return itemCounts[fingerprint] == 1 && candidateCounts[fingerprint] == 1
+	return types.FindingMatches(item, exact, itemCounts, candidateCounts)
 }
 
 func normalizeFindingsJSON(raw string, prefix string) string {
@@ -114,9 +101,9 @@ func excludeFindingsJSON(raw string, ids []string) string {
 }
 
 // mergeCarriedFindingsJSON forms the effective gate truth for a scope-limited
-// round. Fresh output owns the current assessment prose, while already-shown
-// findings keep their stable IDs and cannot have their action relaxed by a
-// later restatement. New-ID collisions are reassigned before publication.
+// round. Already-shown findings keep their stable IDs and cannot have their
+// action relaxed by a later restatement. New-ID collisions are reassigned
+// before publication.
 func mergeCarriedFindingsJSON(freshRaw, carriedRaw, prefix string) string {
 	if carriedRaw == "" {
 		return freshRaw
@@ -135,12 +122,11 @@ func mergeCarriedFindingsJSON(freshRaw, carriedRaw, prefix string) string {
 	merged := fresh
 	merged.Tested = mergeComparable(merged.Tested, carried.Tested)
 	merged.Artifacts = mergeComparable(merged.Artifacts, carried.Artifacts)
-	if merged.TestingSummary == "" {
-		merged.TestingSummary = carried.TestingSummary
-	}
-	freshCounts := countFindingFingerprints(fresh.Items)
-	carriedCounts := countFindingFingerprints(carried.Items)
+	merged.TestingSummary = mergeEvidenceSummary(fresh.TestingSummary, carried.TestingSummary)
+	freshCounts := types.CountFindingFingerprints(fresh.Items)
+	carriedCounts := types.CountFindingFingerprints(carried.Items)
 	carriedIdentity := make(map[int]bool, len(carried.Items))
+	carriedOnly := 0
 	for _, old := range carried.Items {
 		match := -1
 		for i, current := range merged.Items {
@@ -158,6 +144,7 @@ func mergeCarriedFindingsJSON(freshRaw, carriedRaw, prefix string) string {
 		}
 		merged.Items = append(merged.Items, old)
 		carriedIdentity[len(merged.Items)-1] = true
+		carriedOnly++
 	}
 
 	reserved := make(map[string]bool, len(merged.Items))
@@ -188,11 +175,88 @@ func mergeCarriedFindingsJSON(freshRaw, carriedRaw, prefix string) string {
 	}
 
 	merged.Summary = fmt.Sprintf("%d outstanding %s", len(merged.Items), pluralize(len(merged.Items), "finding", "findings"))
+	if carriedOnly > 0 {
+		merged.RiskLevel, merged.RiskRationale, merged.RiskScope = effectiveFindingsRisk(merged.Items, fresh.RiskLevel, fresh.RiskScope, carriedOnly)
+	}
 	encoded, err := types.MarshalFindingsJSON(merged)
 	if err != nil {
 		return carriedRaw
 	}
 	return encoded
+}
+
+func mergeEvidenceSummary(fresh, carried string) string {
+	fresh = strings.TrimSpace(fresh)
+	carried = strings.TrimSpace(carried)
+	switch {
+	case fresh == "":
+		return carried
+	case carried == "", carried == fresh:
+		return fresh
+	default:
+		return fresh + "\n\n" + carried
+	}
+}
+
+func effectiveFindingsRisk(items []types.Finding, freshLevel, freshScope string, carriedCount int) (string, string, string) {
+	rank := riskRank(freshLevel)
+	scope := freshScope
+	for _, item := range items {
+		if severityRank(item.Severity) > rank {
+			rank = severityRank(item.Severity)
+		}
+		switch item.ReviewScope {
+		case types.FindingReviewScopeSource, types.FindingReviewScopeExternalDelivery:
+			scope = types.FindingsRiskScopeSourceOrExternal
+		case types.FindingReviewScopePipelineOwnedDelivery:
+			if scope == "" {
+				scope = types.FindingsRiskScopePipelineOwnedDelivery
+			}
+		}
+	}
+	if scope == "" {
+		scope = types.FindingsRiskScopeSourceOrExternal
+	}
+	return riskLevel(rank), fmt.Sprintf("Effective review contains %d unresolved %s, including %d carried from earlier review rounds.", len(items), pluralize(len(items), "finding", "findings"), carriedCount), scope
+}
+
+func severityRank(severity string) int {
+	switch severity {
+	case "error":
+		return 3
+	case "warning":
+		return 2
+	case "info":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func riskRank(level string) int {
+	switch level {
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func riskLevel(rank int) string {
+	switch rank {
+	case 3:
+		return "high"
+	case 2:
+		return "medium"
+	case 1:
+		return "low"
+	default:
+		return ""
+	}
 }
 
 func mergeComparable[T comparable](fresh, carried []T) []T {
@@ -243,8 +307,8 @@ func mergeFindingsJSON(existingRaw, additionalRaw string) string {
 		return existingRaw
 	}
 	seen := make(map[types.FindingIdentity]bool, len(existing.Items)+len(additional.Items))
-	existingCounts := countFindingFingerprints(existing.Items)
-	additionalCounts := countFindingFingerprints(additional.Items)
+	existingCounts := types.CountFindingFingerprints(existing.Items)
+	additionalCounts := types.CountFindingFingerprints(additional.Items)
 	merged := types.Findings{Summary: existing.Summary, Tested: existing.Tested, TestingSummary: existing.TestingSummary, RiskLevel: existing.RiskLevel, RiskRationale: existing.RiskRationale, RiskScope: existing.RiskScope}
 	for _, item := range existing.Items {
 		merged.Items = append(merged.Items, item)
@@ -284,8 +348,8 @@ func removeMatchingFindingsJSON(existingRaw, removeRaw string) string {
 		return existingRaw
 	}
 	toRemove := make(map[types.FindingIdentity]bool, len(remove.Items))
-	existingCounts := countFindingFingerprints(existing.Items)
-	removeCounts := countFindingFingerprints(remove.Items)
+	existingCounts := types.CountFindingFingerprints(existing.Items)
+	removeCounts := types.CountFindingFingerprints(remove.Items)
 	for _, item := range remove.Items {
 		toRemove[findingKey(item)] = true
 	}
@@ -319,8 +383,8 @@ func retainMatchingFindingsJSON(existingRaw, keepRaw string) string {
 		return ""
 	}
 	allowed := make(map[types.FindingIdentity]bool, len(keep.Items))
-	existingCounts := countFindingFingerprints(existing.Items)
-	keepCounts := countFindingFingerprints(keep.Items)
+	existingCounts := types.CountFindingFingerprints(existing.Items)
+	keepCounts := types.CountFindingFingerprints(keep.Items)
 	for _, item := range keep.Items {
 		allowed[findingKey(item)] = true
 	}

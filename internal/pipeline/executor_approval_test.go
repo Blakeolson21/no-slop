@@ -267,8 +267,7 @@ func TestExecutor_ResumeCarriesUnselectedReviewFinding(t *testing.T) {
 		},
 	}}
 	exec := NewExecutor(database, p, &config.Config{}, nil, []Step{step}, nil)
-	done := make(chan error, 1)
-	go func() { done <- exec.Resume(context.Background(), run, repo, t.TempDir()) }()
+	done, _ := startResumeExecutor(t, exec, run, repo, t.TempDir())
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {

@@ -143,11 +143,17 @@ func stepFindingStats(step *StepResult, rounds []*StepRound) StepStats {
 	}
 
 	reported := make(map[types.FindingIdentity]bool)
+	reportedCounts := make(map[types.FindingIdentity]int)
 	var current []types.Finding
 	for _, round := range rounds {
 		items := findingItems(round.FindingsJSON)
+		itemCounts := types.CountFindingFingerprints(items)
 		for _, item := range items {
+			if types.FindingMatches(item, reported, itemCounts, reportedCounts) {
+				continue
+			}
 			reported[findingStatsKey(item)] = true
+			reportedCounts[item.Fingerprint()]++
 		}
 		current = items
 	}

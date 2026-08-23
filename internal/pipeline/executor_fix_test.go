@@ -103,8 +103,7 @@ func TestExecutor_UnselectedReviewFindingSurvivesSilentRereview(t *testing.T) {
 	}}
 
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
-	done := make(chan error, 1)
-	go func() { done <- exec.Execute(context.Background(), run, repo, workDir) }()
+	done, _ := startExecutor(t, exec, run, repo, workDir)
 
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
 	if err := exec.Respond(types.StepReview, types.ActionFix, []string{"review-1"}); err != nil {
@@ -172,8 +171,7 @@ func TestExecutor_LaterSelectedCarriedFindingClearsAfterVerification(t *testing.
 	}}
 
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
-	done := make(chan error, 1)
-	go func() { done <- exec.Execute(context.Background(), run, repo, workDir) }()
+	done, _ := startExecutor(t, exec, run, repo, workDir)
 
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
 	if err := exec.Respond(types.StepReview, types.ActionFix, []string{"review-1"}); err != nil {
@@ -224,8 +222,7 @@ func TestExecutor_CarriedFindingKeepsIdentityAndStricterAction(t *testing.T) {
 	}}
 
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
-	done := make(chan error, 1)
-	go func() { done <- exec.Execute(context.Background(), run, repo, workDir) }()
+	done, _ := startExecutor(t, exec, run, repo, workDir)
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
 	if err := exec.Respond(types.StepReview, types.ActionFix, []string{"review-2"}); err != nil {
 		t.Fatal(err)
@@ -278,8 +275,7 @@ func TestExecutor_NonActionableCarryDoesNotGateFreshNonblockingFinding(t *testin
 	}}
 
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
-	done := make(chan error, 1)
-	go func() { done <- exec.Execute(context.Background(), run, repo, t.TempDir()) }()
+	done, _ := startExecutor(t, exec, run, repo, t.TempDir())
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
 	if err := exec.Respond(types.StepReview, types.ActionFix, []string{"review-1"}); err != nil {
 		t.Fatal(err)
@@ -291,6 +287,39 @@ func TestExecutor_NonActionableCarryDoesNotGateFreshNonblockingFinding(t *testin
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("non-actionable carry created an approval gate")
+	}
+}
+
+func TestExecutor_DoesNotDispatchCarriedFixWhenSelectionPersistenceFails(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	calls := 0
+	step := &scopeLimitedAdaptiveCallStep{adaptiveCallStep: adaptiveCallStep{
+		name: types.StepReview,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			calls++
+			return &StepOutcome{NeedsApproval: true, Findings: `{"findings":[{"id":"review-1","severity":"error","description":"must persist","action":"ask-user"}]}`}, nil
+		},
+	}}
+
+	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
+	done, _ := startExecutor(t, exec, run, repo, t.TempDir())
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := exec.Respond(types.StepReview, types.ActionFix, []string{"review-1"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "record review user decision") {
+			t.Fatalf("executor error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("executor did not fail after selection persistence failed")
+	}
+	if calls != 1 {
+		t.Fatalf("review calls = %d, want no verification dispatch", calls)
 	}
 }
 

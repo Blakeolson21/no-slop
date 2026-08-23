@@ -1,6 +1,9 @@
 package db
 
-import "fmt"
+import (
+	"database/sql"
+	"fmt"
+)
 
 const (
 	RoundSelectionSourceUser    = "user"
@@ -181,13 +184,14 @@ func (d *DB) SetStepRoundSelection(id string, selectedFindingIDs *string, source
 	if selectedFindingIDs != nil && *selectedFindingIDs != "" && source != "" {
 		selectionSource = &source
 	}
-	if _, err := d.sql.Exec(
+	result, err := d.sql.Exec(
 		`UPDATE step_rounds SET selected_finding_ids = ?, selection_source = ? WHERE id = ?`,
 		selectedFindingIDs, selectionSource, id,
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("set step round selection: %w", err)
 	}
-	return nil
+	return requireStepRoundUpdated(result, id)
 }
 
 func (d *DB) SetStepRoundUserDecision(id string, selectedFindingIDs *string, source string, userFindingsJSON *string) error {
@@ -195,11 +199,23 @@ func (d *DB) SetStepRoundUserDecision(id string, selectedFindingIDs *string, sou
 	if selectedFindingIDs != nil && *selectedFindingIDs != "" && source != "" {
 		selectionSource = &source
 	}
-	if _, err := d.sql.Exec(
+	result, err := d.sql.Exec(
 		`UPDATE step_rounds SET selected_finding_ids = ?, selection_source = ?, user_findings_json = ? WHERE id = ?`,
 		selectedFindingIDs, selectionSource, userFindingsJSON, id,
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("set step round user decision: %w", err)
+	}
+	return requireStepRoundUpdated(result, id)
+}
+
+func requireStepRoundUpdated(result sql.Result, id string) error {
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read step round update result: %w", err)
+	}
+	if rows != 1 {
+		return fmt.Errorf("step round %s not found", id)
 	}
 	return nil
 }
