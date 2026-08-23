@@ -234,7 +234,7 @@ The `v1` payload is compact JSON with these required fields:
 
 - `step`: the raw pipeline step name, such as `intent`, `rebase`, `review`, `test`, `document`, `lint`, `push`, `pr`, or `ci`
 - `status`: the raw [step status](#step-statuses) recorded for that step, such as `completed`, `skipped`, or `failed`
-- `head_sha`: the commit SHA that the recorded step status certifies
+- `head_sha`: the commit SHA that the recorded step status certifies, or an empty string while the step has not certified a commit
 
 Items are ordered by the fixed pipeline order and represent the exact database snapshot when no-slop creates or updates the PR body. The attestation includes `pr` and `ci` records even though their human-readable details are not shown in `## Pipeline`; at the normal PR write point those records are commonly `running` and `pending`. The top-level `head_sha` identifies the current published PR head, while each item's `head_sha` identifies the commit that step actually certified. If document, lint, push, or CI creates or adopts a different head, no-slop invalidates stale required-step results and automatically reruns review, test, and document before publishing a compliant attestation for the new commit. A CI head change may first refresh the comment with the new top-level head and the prior per-step certifications, which keeps the required workflow fail closed until those reruns complete; refresh failure does not route the expected stale check into generic CI code repair.
 

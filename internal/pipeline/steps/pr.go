@@ -91,16 +91,19 @@ func (s *PRStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 		sctx.Log(fmt.Sprintf("pull request already exists: %s, updating...", describePR(existing)))
 		updated, err := host.UpdatePR(ctx, existing, scm.PRContent(content))
 		if err != nil {
-			sctx.Log(fmt.Sprintf("warning: failed to update PR: %v", err))
-			updated = existing
+			return nil, fmt.Errorf("update pull request: %w", err)
 		}
+		prURL := existing.URL
 		if updated != nil && updated.URL != "" {
-			if err := sctx.DB.UpdateRunPRURL(sctx.Run.ID, updated.URL); err != nil {
-				slog.Warn("failed to persist PR URL", "run", sctx.Run.ID, "url", updated.URL, "err", err)
-			}
-			return &pipeline.StepOutcome{PRURL: updated.URL}, nil
+			prURL = updated.URL
 		}
-		return &pipeline.StepOutcome{}, nil
+		if strings.TrimSpace(prURL) == "" {
+			return nil, fmt.Errorf("updated pull request has no URL")
+		}
+		if err := sctx.DB.UpdateRunPRURL(sctx.Run.ID, prURL); err != nil {
+			return nil, fmt.Errorf("persist updated pull request: %w", err)
+		}
+		return &pipeline.StepOutcome{PRURL: prURL}, nil
 	}
 
 	sctx.Log("creating pull request...")
@@ -109,11 +112,11 @@ func (s *PRStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 		return nil, err
 	}
 	if created == nil || strings.TrimSpace(created.URL) == "" {
-		return &pipeline.StepOutcome{}, nil
+		return nil, fmt.Errorf("created pull request has no URL")
 	}
 	sctx.Log(fmt.Sprintf("created pull request: %s", created.URL))
 	if err := sctx.DB.UpdateRunPRURL(sctx.Run.ID, created.URL); err != nil {
-		slog.Warn("failed to persist PR URL", "run", sctx.Run.ID, "url", created.URL, "err", err)
+		return nil, fmt.Errorf("persist created pull request: %w", err)
 	}
 	return &pipeline.StepOutcome{PRURL: created.URL}, nil
 }
@@ -138,7 +141,10 @@ func (s *PRStep) buildPRContent(sctx *pipeline.StepContext, branch, baseSHA stri
 	if err != nil {
 		return prContent{}, fmt.Errorf("read final branch diff: %w", err)
 	}
-	pipelineMD, riskLine, testingMD := s.buildPipelineSection(sctx)
+	pipelineMD, riskLine, testingMD, err := s.buildPipelineSection(sctx)
+	if err != nil {
+		return prContent{}, err
+	}
 
 	prompt := fmt.Sprintf(`Draft a pull request title and summary for the full branch delta.
 
@@ -207,11 +213,10 @@ Final diff paths and statuses:
 // produces the deterministic pipeline, risk, and testing sections. These are
 // scoped to this run's own steps and rounds, so they already describe only
 // the final terminal state each step reached in this run.
-func (s *PRStep) buildPipelineSection(sctx *pipeline.StepContext) (pipelineMD, riskLine, testingMD string) {
+func (s *PRStep) buildPipelineSection(sctx *pipeline.StepContext) (pipelineMD, riskLine, testingMD string, err error) {
 	steps, err := sctx.DB.GetStepsByRun(sctx.Run.ID)
 	if err != nil {
-		slog.Warn("failed to query step results for pipeline summary", "error", err)
-		return "", "", ""
+		return "", "", "", fmt.Errorf("query step results for pipeline summary: %w", err)
 	}
 
 	rounds := make(map[string][]*db.StepRound, len(steps))
@@ -226,7 +231,7 @@ func (s *PRStep) buildPipelineSection(sctx *pipeline.StepContext) (pipelineMD, r
 
 	pipelineMD, riskLine = BuildPipelineSummary(steps, rounds, sctx.Run.HeadSHA)
 	testingMD = BuildTestingSummaryForPR(steps, rounds, sctx.Repo.UpstreamURL, sctx.Run.HeadSHA, sctx.WorkDir, testEvidenceDir(sctx), publishRunEvidence(sctx))
-	return pipelineMD, riskLine, testingMD
+	return pipelineMD, riskLine, testingMD, nil
 }
 
 // unwrapNestedPRBody detects when the agent returned the body as a

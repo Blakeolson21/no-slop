@@ -141,7 +141,7 @@ func mergeCarriedFindingsJSON(freshRaw, carriedRaw, prefix string) string {
 	for _, old := range carried.Items {
 		match := -1
 		for i, current := range merged.Items {
-			legacyMatch := (!current.IDGenerated || !old.IDGenerated) && (findingKey(current) == findingKey(old) ||
+			legacyMatch := (!current.HasLineage() || !old.HasLineage()) && (findingKey(current) == findingKey(old) ||
 				(findingFingerprint(current) == findingFingerprint(old) && freshCounts[findingFingerprint(current)] == 1 && carriedCounts[findingFingerprint(old)] == 1))
 			if types.FindingIDCorroborates(current, old) || legacyMatch {
 				match = i
@@ -151,6 +151,7 @@ func mergeCarriedFindingsJSON(freshRaw, carriedRaw, prefix string) string {
 		if match >= 0 {
 			merged.Items[match].ID = old.ID
 			merged.Items[match].IDGenerated = old.IDGenerated
+			merged.Items[match].ContinuityToken = old.ContinuityToken
 			merged.Items[match].Action = stricterFindingAction(old.Action, merged.Items[match].Action)
 			carriedIdentity[match] = true
 			continue

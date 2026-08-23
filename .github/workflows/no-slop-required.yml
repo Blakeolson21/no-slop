@@ -108,8 +108,8 @@ jobs:
           for item in attestation["steps"]:
               if not isinstance(item, dict):
                   fail("The no-slop v1 pipeline attestation contains a malformed step.")
-              name, status, certified_head = item.get("step"), item.get("status"), item.get("head_sha")
-              if not isinstance(name, str) or not isinstance(status, str) or not isinstance(certified_head, str) or not certified_head:
+              name, status, certified_head = item.get("step"), item.get("status"), item.get("head_sha", "")
+              if not isinstance(name, str) or not isinstance(status, str) or not isinstance(certified_head, str):
                   fail("The no-slop v1 pipeline attestation contains a malformed step.")
               statuses[name] = (status, certified_head)
 

@@ -259,6 +259,28 @@ func TestStepFindingStatsDoesNotCollapseUncorroboratedExplicitID(t *testing.T) {
 	}
 }
 
+func TestStepFindingStatsCountsDistinctGeneratedLineagesWithIdenticalContent(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/repo/distinct-lineages", "git@example.com:distinct.git", "main")
+	run, _ := d.InsertRun(repo.ID, "distinct", "head", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepReview)
+	initial := `{"findings":[{"id":"review-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","id_generated":true,"continuity_token":"token-a","severity":"warning","file":"loader.go","line":8,"description":"unsafe loader"},{"id":"review-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","id_generated":true,"continuity_token":"token-b","severity":"warning","file":"loader.go","line":8,"description":"unsafe loader"}]}`
+	if _, err := d.InsertStepRound(step.ID, 1, "initial", &initial, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.InsertStepRound(step.ID, 2, "auto_fix", &initial, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := d.StepFindingStats(step)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ReportedFindings != 2 || stats.FixedFindings != 0 {
+		t.Fatalf("stats = reported %d fixed %d", stats.ReportedFindings, stats.FixedFindings)
+	}
+}
+
 func assertStepStat(t *testing.T, stats []StepStats, step types.StepName, reported int, fixes int) {
 	t.Helper()
 	for _, got := range stats {

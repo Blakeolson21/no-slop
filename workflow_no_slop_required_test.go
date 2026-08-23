@@ -320,9 +320,11 @@ func generatedPipelineBody(t *testing.T) string {
 func generatedPipelineBodyWithStatuses(t *testing.T, review, testStep, document types.StepStatus) string {
 	t.Helper()
 	results := []*db.StepResult{
-		{ID: "review", StepName: types.StepReview, Status: review},
-		{ID: "test", StepName: types.StepTest, Status: testStep},
-		{ID: "document", StepName: types.StepDocument, Status: document},
+		{ID: "review", StepName: types.StepReview, Status: review, CertifiedHeadSHA: testCertifiedWorkflowHead(review)},
+		{ID: "test", StepName: types.StepTest, Status: testStep, CertifiedHeadSHA: testCertifiedWorkflowHead(testStep)},
+		{ID: "document", StepName: types.StepDocument, Status: document, CertifiedHeadSHA: testCertifiedWorkflowHead(document)},
+		{ID: "pr", StepName: types.StepPR, Status: types.StepStatusRunning},
+		{ID: "ci", StepName: types.StepCI, Status: types.StepStatusPending},
 	}
 	if review == "" {
 		results = results[1:]
@@ -336,6 +338,14 @@ func generatedPipelineBodyWithStatuses(t *testing.T, review, testStep, document 
 		t.Fatal("pipeline summary builder returned an empty PR body")
 	}
 	return body
+}
+
+func testCertifiedWorkflowHead(status types.StepStatus) *string {
+	if status != types.StepStatusCompleted {
+		return nil
+	}
+	head := requiredWorkflowTestHeadSHA
+	return &head
 }
 
 func generatedPipelineBodyWithStaleReviewCertification(t *testing.T) string {

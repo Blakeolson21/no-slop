@@ -208,6 +208,47 @@ func TestCIStep_AutoFixPushFailsClosedWhenAttestationRefreshFails(t *testing.T) 
 	}
 }
 
+func TestCIStep_AutoFixPreservesPublishedHeadWhenRefAdoptionFails(t *testing.T) {
+	upstream := t.TempDir()
+	gitCmd(t, upstream, "init", "--bare")
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "remote", "add", "origin", upstream)
+	gitCmd(t, dir, "push", "origin", "feature")
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+	tree := gitCmd(t, dir, "rev-parse", headSHA+"^{tree}")
+	unrelated := gitCmd(t, dir, "commit-tree", tree, "-m", "unrelated branch head")
+	gitCmd(t, dir, "update-ref", "refs/heads/feature", unrelated)
+	agent := &mockAgent{name: "test", runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
+		if err := os.WriteFile(filepath.Join(opts.CWD, "ci-fix.txt"), []byte("fixed"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return &agent.Result{}, nil
+	}}
+	sctx := newTestContextWithDBRecords(t, agent, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Repo.UpstreamURL = upstream
+	sctx.Run.Branch = "refs/heads/feature"
+	host := &recordingPRContentHost{}
+
+	result, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)
+	if err == nil || !strings.Contains(err.Error(), "refusing to move branch ref") {
+		t.Fatalf("autoFixCI error = %v", err)
+	}
+	if !result.HeadChanged() || !result.HeadPersisted {
+		t.Fatalf("published head result = %#v", result)
+	}
+	remoteHead := gitCmd(t, upstream, "rev-parse", "refs/heads/feature")
+	if result.HeadSHA != remoteHead || remoteHead == headSHA {
+		t.Fatalf("published head = result %q remote %q old %q", result.HeadSHA, remoteHead, headSHA)
+	}
+	persisted, getErr := sctx.DB.GetRun(sctx.Run.ID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if persisted.HeadSHA != remoteHead {
+		t.Fatalf("persisted head = %q, want %q", persisted.HeadSHA, remoteHead)
+	}
+}
+
 func TestCIStep_CommitAndPush(t *testing.T) {
 	t.Parallel()
 	// Set up upstream bare repo

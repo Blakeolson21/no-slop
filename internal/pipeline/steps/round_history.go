@@ -153,6 +153,7 @@ func parseRoundFindingLines(raw string) []roundFindingLine {
 	for _, item := range findings.Items {
 		payload := struct {
 			ID               string `json:"id,omitempty"`
+			ContinuityToken  string `json:"continuity_token,omitempty"`
 			Severity         string `json:"severity,omitempty"`
 			File             string `json:"file,omitempty"`
 			Line             int    `json:"line,omitempty"`
@@ -162,6 +163,7 @@ func parseRoundFindingLines(raw string) []roundFindingLine {
 			UserInstructions string `json:"user_instructions,omitempty"`
 		}{
 			ID:               sanitizePromptText(item.ID),
+			ContinuityToken:  sanitizePromptText(item.ContinuityToken),
 			Severity:         sanitizePromptText(item.Severity),
 			File:             sanitizePromptText(item.File),
 			Line:             item.Line,

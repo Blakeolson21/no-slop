@@ -8,8 +8,8 @@ import (
 )
 
 func TestMergeFindingsJSON_UsesPipelineLineageAcrossRewording(t *testing.T) {
-	existingRaw := `{"findings":[{"id":"review-1","id_generated":true,"severity":"warning","description":"first"}],"summary":"1 finding"}`
-	additionalRaw := `{"findings":[{"id":"review-1","id_generated":true,"severity":"error","description":"second"}],"summary":"1 finding"}`
+	existingRaw := `{"findings":[{"id":"review-1","id_generated":true,"continuity_token":"token-1","severity":"warning","description":"first"}],"summary":"1 finding"}`
+	additionalRaw := `{"findings":[{"id":"review-1","id_generated":true,"continuity_token":"token-1","severity":"error","description":"second"}],"summary":"1 finding"}`
 
 	mergedRaw := mergeFindingsJSON(existingRaw, additionalRaw)
 	merged, err := types.ParseFindingsJSON(mergedRaw)
@@ -25,8 +25,8 @@ func TestMergeFindingsJSON_UsesPipelineLineageAcrossRewording(t *testing.T) {
 }
 
 func TestMergeFindingsJSON_DistinctPipelineLineagesDoNotCollapse(t *testing.T) {
-	existingRaw := `{"findings":[{"id":"review-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","id_generated":true,"severity":"warning","file":"auth.go","line":12,"description":"authentication token fails"}]}`
-	additionalRaw := `{"findings":[{"id":"review-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","id_generated":true,"severity":"warning","file":"auth.go","line":12,"description":"authentication token fails"}]}`
+	existingRaw := `{"findings":[{"id":"review-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","id_generated":true,"continuity_token":"token-a","severity":"warning","file":"auth.go","line":12,"description":"authentication token fails"}]}`
+	additionalRaw := `{"findings":[{"id":"review-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","id_generated":true,"continuity_token":"token-b","severity":"warning","file":"auth.go","line":12,"description":"authentication token fails"}]}`
 
 	merged, err := types.ParseFindingsJSON(mergeFindingsJSON(existingRaw, additionalRaw))
 	if err != nil {
@@ -45,8 +45,8 @@ func TestMergeFindingsJSON_DistinctPipelineLineagesDoNotCollapse(t *testing.T) {
 }
 
 func TestMergeCarriedFindingsJSON_PreservesExplicitIDAcrossRephrasing(t *testing.T) {
-	carriedRaw := `{"findings":[{"id":"review-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","id_generated":true,"severity":"warning","file":"loader.go","line":12,"description":"unsafe loader","action":"ask-user"}],"risk_level":"medium","risk_rationale":"Needs review."}`
-	freshRaw := `{"findings":[{"id":"review-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","id_generated":true,"severity":"error","file":"manager.go","line":88,"description":"credentials are invalidated prematurely","action":"auto-fix"}],"risk_level":"high","risk_rationale":"Reproduced."}`
+	carriedRaw := `{"findings":[{"id":"review-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","id_generated":true,"continuity_token":"token-a","severity":"warning","file":"loader.go","line":12,"description":"unsafe loader","action":"ask-user"}],"risk_level":"medium","risk_rationale":"Needs review."}`
+	freshRaw := `{"findings":[{"id":"review-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","id_generated":true,"continuity_token":"token-a","severity":"error","file":"manager.go","line":88,"description":"credentials are invalidated prematurely","action":"auto-fix"}],"risk_level":"high","risk_rationale":"Reproduced."}`
 
 	mergedRaw := mergeCarriedFindingsJSON(freshRaw, carriedRaw, "review")
 	merged, err := types.ParseFindingsJSON(mergedRaw)

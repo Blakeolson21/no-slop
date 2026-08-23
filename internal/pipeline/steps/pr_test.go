@@ -98,6 +98,19 @@ func TestPRStep_UpdatesExistingPR(t *testing.T) {
 	}
 }
 
+func TestPRStep_FailsWhenExistingPRAttestationCannotBePublished(t *testing.T) {
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	env, _ := fakeGH(t, "https://github.com/test/repo/pull/42")
+	env = append(env, "FAKE_CLI_GH_EDIT_ERROR=1")
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Env = env
+
+	_, err := (&PRStep{}).Execute(sctx)
+	if err == nil || !strings.Contains(err.Error(), "update pull request") {
+		t.Fatalf("PR update error = %v", err)
+	}
+}
+
 func TestPRStep_BitbucketUpdatesExistingPR(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)

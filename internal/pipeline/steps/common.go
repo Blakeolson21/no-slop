@@ -98,7 +98,8 @@ var reviewFindingsSchema = json.RawMessage(`{
 			"items": {
 				"type": "object",
 				"properties": {
-					"id": {"type": "string"},
+					"prior_id": {"type": "string"},
+					"prior_continuity_token": {"type": "string"},
 					"severity": {"type": "string", "enum": ["error", "warning", "info"]},
 					"file": {"type": "string"},
 					"line": {"type": "integer"},

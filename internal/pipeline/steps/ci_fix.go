@@ -15,6 +15,7 @@ import (
 type ciFixResult struct {
 	PreviousHeadSHA string
 	HeadSHA         string
+	HeadPersisted   bool
 }
 
 func (r ciFixResult) HeadChanged() bool {
@@ -127,6 +128,10 @@ CI logs:
 	}
 	_, err = s.commitRepair(sctx, summary)
 	fixResult := ciFixResult{PreviousHeadSHA: previousHeadSHA, HeadSHA: sctx.Run.HeadSHA}
+	if fixResult.HeadChanged() {
+		persisted, getErr := sctx.DB.GetRun(sctx.Run.ID)
+		fixResult.HeadPersisted = getErr == nil && persisted != nil && persisted.HeadSHA == fixResult.HeadSHA
+	}
 	if err != nil {
 		return fixResult, err
 	}

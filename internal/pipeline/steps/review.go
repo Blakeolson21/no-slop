@@ -217,7 +217,7 @@ Rules:
 - Only comment on things that genuinely matter.
 - Do NOT report styling, formatting, linting, compilation, or type-checking issues.
 - If the change is clean, return an empty findings array.
-- Reuse an existing finding ID from previous rounds only when it is the same underlying finding; omit the ID for every new finding.
+- For the same underlying finding from a previous round, copy both its ID and continuity token into prior_id and prior_continuity_token. Omit both fields for every new finding.
 - For each finding, set the action field to one of:
   - "ask-user": the finding is about functional requirements or product behavior, or otherwise challenges the author's deliberate intent. Even if it seems obviously wrong, we should ask the user for review. Examples: "this feature seems unnecessary", "this hardcoded value should be configurable", "this deletion looks wrong". When in doubt, default to "ask-user".
   - "auto-fix": the finding is a non-functional, non user-visible issue (correctness, error handling, security, performance, mechanical code quality) that can be safely fixed without any discussion about the author's intent.

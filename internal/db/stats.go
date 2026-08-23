@@ -142,28 +142,28 @@ func stepFindingStats(step *StepResult, rounds []*StepRound) StepStats {
 		return stats
 	}
 
-	reported := make(map[types.FindingIdentity]bool)
-	reportedIDs := make(map[string][]types.Finding)
-	reportedCounts := make(map[types.FindingIdentity]int)
+	reportedLineages := make(map[string]bool)
+	reportedLegacy := make(map[types.FindingIdentity]bool)
+	reportedLegacyCounts := make(map[types.FindingIdentity]int)
 	var current []types.Finding
 	for _, round := range rounds {
 		items := findingItems(round.FindingsJSON)
 		itemCounts := types.CountFindingFingerprints(items)
 		for _, item := range items {
-			matched := types.FindingMatches(item, reportedIDs, reported, itemCounts, reportedCounts)
 			if item.ID != "" && item.IDGenerated {
-				reportedIDs[item.ID] = append(reportedIDs[item.ID], item)
-			}
-			if matched {
+				reportedLineages[item.ID] = true
 				continue
 			}
-			reported[findingStatsKey(item)] = true
-			reportedCounts[item.Fingerprint()]++
+			if reportedLegacy[item.Identity()] || (itemCounts[item.Fingerprint()] == 1 && reportedLegacyCounts[item.Fingerprint()] == 1) {
+				continue
+			}
+			reportedLegacy[findingStatsKey(item)] = true
+			reportedLegacyCounts[item.Fingerprint()]++
 		}
 		current = items
 	}
 
-	stats.ReportedFindings = len(reported)
+	stats.ReportedFindings = len(reportedLineages) + len(reportedLegacy)
 	currentCount := len(current)
 	stats.FixedFindings = stats.ReportedFindings - currentCount
 	if stats.FixedFindings < 0 {

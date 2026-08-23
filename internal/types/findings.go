@@ -41,16 +41,19 @@ const (
 
 // Finding represents a single review, test, lint, or PR comment finding.
 type Finding struct {
-	ID               string `json:"id,omitempty"`
-	IDGenerated      bool   `json:"id_generated,omitempty"`
-	Severity         string `json:"severity"`
-	File             string `json:"file,omitempty"`
-	Line             int    `json:"line,omitempty"`
-	Description      string `json:"description"`
-	Action           string `json:"action"`
-	Source           string `json:"source,omitempty"`
-	UserInstructions string `json:"user_instructions,omitempty"`
-	ReviewScope      string `json:"review_scope,omitempty"`
+	ID                   string `json:"id,omitempty"`
+	IDGenerated          bool   `json:"id_generated,omitempty"`
+	ContinuityToken      string `json:"continuity_token,omitempty"`
+	PriorID              string `json:"prior_id,omitempty"`
+	PriorContinuityToken string `json:"prior_continuity_token,omitempty"`
+	Severity             string `json:"severity"`
+	File                 string `json:"file,omitempty"`
+	Line                 int    `json:"line,omitempty"`
+	Description          string `json:"description"`
+	Action               string `json:"action"`
+	Source               string `json:"source,omitempty"`
+	UserInstructions     string `json:"user_instructions,omitempty"`
+	ReviewScope          string `json:"review_scope,omitempty"`
 	// Category separates the combined document+lint housekeeping pass's
 	// findings into their owning gates. Empty everywhere else.
 	Category string `json:"category,omitempty"`
@@ -83,7 +86,7 @@ func CountFindingFingerprints(items []Finding) map[FindingIdentity]int {
 func StableFindingIDs(items []Finding) map[string][]Finding {
 	ids := make(map[string][]Finding, len(items))
 	for _, item := range items {
-		if item.ID != "" && item.IDGenerated {
+		if item.HasLineage() {
 			ids[item.ID] = append(ids[item.ID], item)
 		}
 	}
@@ -91,7 +94,7 @@ func StableFindingIDs(items []Finding) map[string][]Finding {
 }
 
 func FindingMatches(item Finding, stableIDs map[string][]Finding, exact map[FindingIdentity]bool, itemCounts, candidateCounts map[FindingIdentity]int) bool {
-	if item.ID != "" && item.IDGenerated {
+	if item.HasLineage() {
 		for _, candidate := range stableIDs[item.ID] {
 			if FindingIDCorroborates(item, candidate) {
 				return true
@@ -107,7 +110,11 @@ func FindingMatches(item Finding, stableIDs map[string][]Finding, exact map[Find
 }
 
 func FindingIDCorroborates(item, candidate Finding) bool {
-	return item.ID != "" && item.IDGenerated && item.ID == candidate.ID && candidate.IDGenerated
+	return item.HasLineage() && candidate.HasLineage() && item.ID == candidate.ID && item.ContinuityToken == candidate.ContinuityToken
+}
+
+func (f Finding) HasLineage() bool {
+	return f.IDGenerated && f.ID != "" && f.ContinuityToken != ""
 }
 
 // TestArtifact describes evidence produced by the test step for human review.
@@ -120,18 +127,21 @@ type TestArtifact struct {
 }
 
 type findingWire struct {
-	ID                  string `json:"id,omitempty"`
-	IDGenerated         bool   `json:"id_generated,omitempty"`
-	Severity            string `json:"severity"`
-	File                string `json:"file,omitempty"`
-	Line                int    `json:"line,omitempty"`
-	Description         string `json:"description"`
-	Action              string `json:"action"`
-	Source              string `json:"source,omitempty"`
-	UserInstructions    string `json:"user_instructions,omitempty"`
-	ReviewScope         string `json:"review_scope,omitempty"`
-	Category            string `json:"category,omitempty"`
-	RequiresHumanReview *bool  `json:"requires_human_review,omitempty"`
+	ID                   string `json:"id,omitempty"`
+	IDGenerated          bool   `json:"id_generated,omitempty"`
+	ContinuityToken      string `json:"continuity_token,omitempty"`
+	PriorID              string `json:"prior_id,omitempty"`
+	PriorContinuityToken string `json:"prior_continuity_token,omitempty"`
+	Severity             string `json:"severity"`
+	File                 string `json:"file,omitempty"`
+	Line                 int    `json:"line,omitempty"`
+	Description          string `json:"description"`
+	Action               string `json:"action"`
+	Source               string `json:"source,omitempty"`
+	UserInstructions     string `json:"user_instructions,omitempty"`
+	ReviewScope          string `json:"review_scope,omitempty"`
+	Category             string `json:"category,omitempty"`
+	RequiresHumanReview  *bool  `json:"requires_human_review,omitempty"`
 }
 
 // Findings is the structured findings payload exchanged across pipeline, IPC, and TUI.
@@ -174,30 +184,74 @@ func ParseFindingsJSON(raw string) (Findings, error) {
 
 // NormalizeFindings replaces reviewer-local IDs with pipeline-owned lineage IDs.
 func NormalizeFindings(findings Findings, prefix string, existing []Finding) (Findings, error) {
-	allowed := make(map[string]bool, len(existing))
+	type lineageClaim struct {
+		id    string
+		token string
+	}
+	allowed := make(map[lineageClaim][]Finding, len(existing))
 	used := make(map[string]bool, len(existing)+len(findings.Items))
+	usedTokens := make(map[string]bool, len(existing)+len(findings.Items))
 	for _, item := range existing {
-		if item.ID != "" && item.IDGenerated {
-			allowed[item.ID] = true
+		if item.ID != "" {
 			used[item.ID] = true
 		}
+		if item.ContinuityToken != "" {
+			usedTokens[item.ContinuityToken] = true
+		}
+		if item.HasLineage() {
+			claim := lineageClaim{id: item.ID, token: item.ContinuityToken}
+			allowed[claim] = append(allowed[claim], item)
+		}
 	}
-	claimed := make(map[string]bool, len(findings.Items))
+	claimed := make(map[lineageClaim]bool, len(findings.Items))
 	for i := range findings.Items {
-		claim := findings.Items[i].ID
-		if allowed[claim] && !claimed[claim] {
-			findings.Items[i].IDGenerated = true
+		item := &findings.Items[i]
+		claim := lineageClaim{id: item.PriorID, token: item.PriorContinuityToken}
+		matches := allowed[claim]
+		if claim.id != "" && claim.token != "" {
+			if claimed[claim] {
+				return Findings{}, fmt.Errorf("finding lineage %q claimed more than once", claim.id)
+			}
 			claimed[claim] = true
+		}
+		if claim.id != "" && claim.token != "" && len(matches) == 1 {
+			item.ID = matches[0].ID
+			item.IDGenerated = true
+			item.ContinuityToken = matches[0].ContinuityToken
+			item.PriorID = ""
+			item.PriorContinuityToken = ""
 			continue
 		}
 		id, err := newFindingLineageID(prefix, used)
 		if err != nil {
 			return Findings{}, err
 		}
-		findings.Items[i].ID = id
-		findings.Items[i].IDGenerated = true
+		token, err := newFindingContinuityToken(usedTokens)
+		if err != nil {
+			return Findings{}, err
+		}
+		item.ID = id
+		item.IDGenerated = true
+		item.ContinuityToken = token
+		item.PriorID = ""
+		item.PriorContinuityToken = ""
 	}
 	return findings, nil
+}
+
+func newFindingContinuityToken(used map[string]bool) (string, error) {
+	for {
+		var random [16]byte
+		if _, err := rand.Read(random[:]); err != nil {
+			return "", fmt.Errorf("generate finding continuity token: %w", err)
+		}
+		token := fmt.Sprintf("%x", random)
+		if used[token] {
+			continue
+		}
+		used[token] = true
+		return token, nil
+	}
 }
 
 func newFindingLineageID(prefix string, used map[string]bool) (string, error) {
@@ -425,6 +479,9 @@ func (f *Finding) UnmarshalJSON(data []byte) error {
 	}
 	f.ID = wire.ID
 	f.IDGenerated = wire.IDGenerated
+	f.ContinuityToken = wire.ContinuityToken
+	f.PriorID = wire.PriorID
+	f.PriorContinuityToken = wire.PriorContinuityToken
 	f.Severity = wire.Severity
 	f.File = wire.File
 	f.Line = wire.Line

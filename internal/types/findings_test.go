@@ -531,6 +531,9 @@ func TestNormalizeFindingsPersistsGeneratedIDProvenance(t *testing.T) {
 	if !findings.Items[1].IDGenerated || !strings.HasPrefix(findings.Items[1].ID, "review-") || findings.Items[1].ID == "stable-defect" || findings.Items[1].ID == findings.Items[0].ID {
 		t.Fatalf("second lineage = %#v", findings.Items[1])
 	}
+	if findings.Items[0].ContinuityToken == "" || findings.Items[1].ContinuityToken == "" || findings.Items[0].ContinuityToken == findings.Items[1].ContinuityToken {
+		t.Fatalf("continuity tokens = %#v", findings.Items)
+	}
 	raw, err := MarshalFindingsJSON(findings)
 	if err != nil {
 		t.Fatal(err)
@@ -539,20 +542,21 @@ func TestNormalizeFindingsPersistsGeneratedIDProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !parsed.Items[0].IDGenerated || !parsed.Items[1].IDGenerated {
+	if !parsed.Items[0].HasLineage() || !parsed.Items[1].HasLineage() {
 		t.Fatalf("round-trip provenance = %#v", parsed.Items)
 	}
 }
 
-func TestNormalizeFindingsPreservesOnlyOneExistingPipelineLineage(t *testing.T) {
+func TestNormalizeFindingsRequiresExactPriorLineageClaim(t *testing.T) {
 	prior, err := NormalizeFindings(Findings{Items: []Finding{{ID: "review-1", Description: "authentication token expires too early"}}}, "review", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	lineage := prior.Items[0].ID
+	token := prior.Items[0].ContinuityToken
 	fresh, err := NormalizeFindings(Findings{Items: []Finding{
-		{ID: lineage, File: "manager.go", Line: 88, Description: "credentials are invalidated prematurely"},
-		{ID: lineage, File: "auth.go", Line: 12, Description: "authentication token leaks in logs"},
+		{PriorID: lineage, PriorContinuityToken: token, File: "manager.go", Line: 88, Description: "credentials are invalidated prematurely"},
+		{ID: lineage, PriorID: lineage, PriorContinuityToken: "wrong", File: "auth.go", Line: 12, Description: "authentication token leaks in logs"},
 	}}, "review", prior.Items)
 	if err != nil {
 		t.Fatal(err)
@@ -561,6 +565,18 @@ func TestNormalizeFindingsPreservesOnlyOneExistingPipelineLineage(t *testing.T) 
 		t.Fatalf("continued lineage = %#v, want %q", fresh.Items[0], lineage)
 	}
 	if fresh.Items[1].ID == lineage || fresh.Items[1].ID == fresh.Items[0].ID {
-		t.Fatalf("duplicate lineage claim was accepted: %#v", fresh.Items)
+		t.Fatalf("uncorroborated lineage claim was accepted: %#v", fresh.Items)
+	}
+}
+
+func TestNormalizeFindingsRejectsDuplicatePriorLineageClaim(t *testing.T) {
+	prior, err := NormalizeFindings(Findings{Items: []Finding{{Description: "unsafe loader"}}}, "review", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := Finding{PriorID: prior.Items[0].ID, PriorContinuityToken: prior.Items[0].ContinuityToken, Description: "same defect"}
+	_, err = NormalizeFindings(Findings{Items: []Finding{claim, claim}}, "review", prior.Items)
+	if err == nil || !strings.Contains(err.Error(), "claimed more than once") {
+		t.Fatalf("duplicate claim error = %v", err)
 	}
 }

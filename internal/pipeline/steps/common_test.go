@@ -1391,6 +1391,24 @@ func TestReviewFindingsSchema_ActionAtItemLevel(t *testing.T) {
 	}
 }
 
+func TestReviewFindingsSchema_UsesExplicitPriorLineageClaims(t *testing.T) {
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(reviewFindingsSchema, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	props := parsed["properties"].(map[string]interface{})
+	items := props["findings"].(map[string]interface{})["items"].(map[string]interface{})
+	itemProps := items["properties"].(map[string]interface{})
+	for _, name := range []string{"prior_id", "prior_continuity_token"} {
+		if _, ok := itemProps[name]; !ok {
+			t.Fatalf("review finding schema missing %s", name)
+		}
+	}
+	if _, ok := itemProps["id"]; ok {
+		t.Fatal("review finding schema accepts current pipeline IDs as fresh claims")
+	}
+}
+
 func TestReviewFindingsSchema_AllowsTestingMetadata(t *testing.T) {
 	t.Parallel()
 	var parsed map[string]interface{}
