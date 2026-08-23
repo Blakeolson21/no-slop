@@ -249,6 +249,68 @@ func TestCIStep_AutoFixPreservesPublishedHeadWhenRefAdoptionFails(t *testing.T) 
 	}
 }
 
+func TestCIStep_AutoFixPreservesPublishedHeadWhenVerificationFails(t *testing.T) {
+	upstream := t.TempDir()
+	gitCmd(t, upstream, "init", "--bare")
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "remote", "add", "origin", upstream)
+	gitCmd(t, dir, "push", "origin", "feature")
+
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binDir := fakeCLIBinDir(t)
+	linkTestBinary(t, binDir, "git")
+	marker := filepath.Join(t.TempDir(), "pushed")
+	env := fakeCLIEnv(binDir, map[string]string{
+		"FAKE_CLI_MODE":        "git-fail-verify-after-push",
+		"FAKE_CLI_REAL_GIT":    realGit,
+		"FAKE_CLI_PUSH_MARKER": marker,
+	})
+	agent := &mockAgent{name: "test", runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
+		if err := os.WriteFile(filepath.Join(opts.CWD, "ci-fix.txt"), []byte("fixed"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return &agent.Result{}, nil
+	}}
+	sctx := newTestContextWithDBRecords(t, agent, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Env = env
+	sctx.Repo.UpstreamURL = upstream
+	sctx.Run.Branch = "refs/heads/feature"
+	host := &recordingPRContentHost{}
+
+	result, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)
+	if err == nil || !strings.Contains(err.Error(), "verify successful push") {
+		t.Fatalf("autoFixCI error = %v", err)
+	}
+	if !result.HeadChanged() || !result.HeadPersisted || !result.ExpectedAttestationTracked {
+		t.Fatalf("published head result = %#v", result)
+	}
+	remoteHead := gitCmd(t, upstream, "rev-parse", "refs/heads/feature")
+	if result.HeadSHA != remoteHead || remoteHead == headSHA {
+		t.Fatalf("published head = result %q remote %q old %q", result.HeadSHA, remoteHead, headSHA)
+	}
+	persisted, getErr := sctx.DB.GetRun(sctx.Run.ID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if persisted.HeadSHA != remoteHead {
+		t.Fatalf("persisted head = %q, want %q", persisted.HeadSHA, remoteHead)
+	}
+	encoded, getErr := sctx.DB.GetRunCIRerunState(sctx.Run.ID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	var tracking checkRerunBudget
+	if err := tracking.unmarshal(encoded); err != nil {
+		t.Fatal(err)
+	}
+	if tracking.expectedAttestationHeadSHA != remoteHead {
+		t.Fatalf("tracked attestation head = %q, want %q", tracking.expectedAttestationHeadSHA, remoteHead)
+	}
+}
+
 func TestCIStep_CommitAndPush(t *testing.T) {
 	t.Parallel()
 	// Set up upstream bare repo

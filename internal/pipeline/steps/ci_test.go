@@ -230,8 +230,8 @@ func TestCIStep_Execute_FixMode_RemoteAlreadyUpdatedDoesNotReturnManualIntervent
 
 	step := &CIStep{
 		waitForNextPoll: func(ctx context.Context, interval time.Duration) error {
-			cancel()
-			return ctx.Err()
+			t.Fatal("CI monitor polled after adopting a new published head")
+			return nil
 		},
 	}
 	outcome, err := step.Execute(sctx)

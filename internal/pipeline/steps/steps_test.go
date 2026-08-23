@@ -56,6 +56,8 @@ func handleFakeCLI(mode string) {
 		fakeGitStatusErrorHandler(args)
 	case "git-remote-error":
 		fakeGitRemoteErrorHandler(args)
+	case "git-fail-verify-after-push":
+		fakeGitFailVerifyAfterPushHandler(args)
 	case "ci-gh":
 		fakeCIGHHandler(args)
 	case "ci-gh-seq":
@@ -210,6 +212,36 @@ func fakeGitRemoteErrorHandler(args []string) {
 		os.Exit(1)
 	}
 	fakeGitForward(args, realGit)
+}
+
+func fakeGitFailVerifyAfterPushHandler(args []string) {
+	realGit := os.Getenv("FAKE_CLI_REAL_GIT")
+	marker := os.Getenv("FAKE_CLI_PUSH_MARKER")
+	if len(args) > 0 && args[0] == "ls-remote" {
+		if _, err := os.Stat(marker); err == nil {
+			fmt.Fprintln(os.Stderr, "post-push verification unavailable")
+			os.Exit(1)
+		}
+	}
+	cmd := exec.Command(realGit, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() >= 0 {
+			os.Exit(exitErr.ExitCode())
+		}
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if len(args) > 0 && args[0] == "push" {
+		if err := os.WriteFile(marker, []byte("pushed"), 0o644); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
+	os.Exit(0)
 }
 
 func fakeGitForward(args []string, realGit string) {

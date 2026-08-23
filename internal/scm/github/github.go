@@ -272,7 +272,8 @@ func (h *Host) UpdatePR(ctx context.Context, pr *scm.PR, content scm.PRContent) 
 	args = append(args, "--title", content.Title, "--body-file", "-")
 	cmd := h.cmd(ctx, "gh", args...)
 	cmd.Stdin = strings.NewReader(content.Body)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	shellenv.ConfigureShellCommand(cmd)
+	if out, err := shellenv.CombinedOutputShellCommand(cmd); err != nil {
 		return nil, fmt.Errorf("gh pr edit: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return pr, nil
@@ -285,7 +286,9 @@ func (h *Host) GetPRContent(ctx context.Context, pr *scm.PR) (scm.PRContent, err
 	}
 	args := append([]string{"pr", "view", selector}, h.repoArgs()...)
 	args = append(args, "--json", "title,body")
-	out, err := shellenv.OutputShellCommand(h.cmd(ctx, "gh", args...))
+	cmd := h.cmd(ctx, "gh", args...)
+	shellenv.ConfigureShellCommand(cmd)
+	out, err := shellenv.OutputShellCommand(cmd)
 	if err != nil {
 		return scm.PRContent{}, fmt.Errorf("gh pr view content: %w", err)
 	}
@@ -362,7 +365,9 @@ func (h *Host) GetCheckAttemptIdentity(ctx context.Context, check scm.Check) (sc
 	}
 	args := append([]string{"run", "view", runID}, h.repoArgs()...)
 	args = append(args, "--json", "databaseId,number,attempt,event,headSha")
-	out, err := shellenv.OutputShellCommand(h.cmd(ctx, "gh", args...))
+	cmd := h.cmd(ctx, "gh", args...)
+	shellenv.ConfigureShellCommand(cmd)
+	out, err := shellenv.OutputShellCommand(cmd)
 	if err != nil {
 		return scm.CheckAttemptIdentity{}, fmt.Errorf("gh run view: %w", err)
 	}

@@ -791,7 +791,7 @@ func TestCIStep_FixMode_ManualInterventionRunsCIFix(t *testing.T) {
 	}
 
 	prURL := "https://github.com/test/repo/pull/42"
-	sctx := newTestContext(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Env = env
 	sctx.Run.PRURL = &prURL
 	sctx.Repo.UpstreamURL = upstream
@@ -801,18 +801,10 @@ func TestCIStep_FixMode_ManualInterventionRunsCIFix(t *testing.T) {
 	sctx.Fixing = true
 	sctx.PreviousFindings = string(findingsJSON)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	sctx.Ctx = ctx
-
-	pollCount := 0
 	step := &CIStep{
 		waitForNextPoll: func(ctx context.Context, interval time.Duration) error {
-			pollCount++
-			if pollCount == 2 {
-				cancel()
-			}
-			return ctx.Err()
+			t.Fatal("CI monitor polled after publishing a manual-fix head")
+			return nil
 		},
 	}
 	outcome, err := step.Execute(sctx)
