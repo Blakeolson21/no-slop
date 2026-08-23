@@ -79,25 +79,34 @@ func CountFindingFingerprints(items []Finding) map[FindingIdentity]int {
 	return counts
 }
 
-func StableFindingIDs(items []Finding) map[string]bool {
-	ids := make(map[string]bool, len(items))
+func StableFindingIDs(items []Finding) map[string][]Finding {
+	ids := make(map[string][]Finding, len(items))
 	for _, item := range items {
 		if item.ID != "" && !item.IDGenerated {
-			ids[item.ID] = true
+			ids[item.ID] = append(ids[item.ID], item)
 		}
 	}
 	return ids
 }
 
-func FindingMatches(item Finding, stableIDs map[string]bool, exact map[FindingIdentity]bool, itemCounts, candidateCounts map[FindingIdentity]int) bool {
-	if item.ID != "" && !item.IDGenerated && stableIDs[item.ID] {
-		return true
+func FindingMatches(item Finding, stableIDs map[string][]Finding, exact map[FindingIdentity]bool, itemCounts, candidateCounts map[FindingIdentity]int) bool {
+	if item.ID != "" && !item.IDGenerated {
+		for _, candidate := range stableIDs[item.ID] {
+			if FindingIDCorroborates(item, candidate) {
+				return true
+			}
+		}
 	}
 	if exact[item.Identity()] {
 		return true
 	}
 	fingerprint := item.Fingerprint()
 	return itemCounts[fingerprint] == 1 && candidateCounts[fingerprint] == 1
+}
+
+func FindingIDCorroborates(item, candidate Finding) bool {
+	return item.ID != "" && !item.IDGenerated && item.ID == candidate.ID && !candidate.IDGenerated &&
+		item.File != "" && item.File == candidate.File && item.Line > 0 && item.Line == candidate.Line
 }
 
 // TestArtifact describes evidence produced by the test step for human review.

@@ -120,7 +120,7 @@ CI logs:
 	return s.commitRepair(sctx, summary)
 }
 
-func (s *CIStep) refreshPRAttestation(sctx *pipeline.StepContext, host scm.Host, pr *scm.PR) error {
+func (s *CIStep) refreshPRAttestation(sctx *pipeline.StepContext, host scm.Host, pr *scm.PR, certifiedHeadSHA string) error {
 	reader, ok := host.(scm.PRContentReader)
 	if !ok {
 		return nil
@@ -133,7 +133,7 @@ func (s *CIStep) refreshPRAttestation(sctx *pipeline.StepContext, host scm.Host,
 	if err != nil {
 		return err
 	}
-	body, changed, err := replacePipelineAttestation(content.Body, buildPipelineAttestation(steps, sctx.Run.HeadSHA))
+	body, changed, err := replacePipelineAttestation(content.Body, buildPipelineAttestationWithCertifiedHead(steps, sctx.Run.HeadSHA, certifiedHeadSHA))
 	if err != nil || !changed {
 		return err
 	}

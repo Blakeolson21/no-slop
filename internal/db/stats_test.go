@@ -219,7 +219,7 @@ func TestStepFindingStatsTreatsRephrasedStableIDAsSameFinding(t *testing.T) {
 	run, _ := d.InsertRun(repo.ID, "rephrased", "head", "base")
 	step, _ := d.InsertStepResult(run.ID, types.StepReview)
 	initial := `{"findings":[{"id":"loader-race","severity":"warning","file":"loader.go","line":8,"description":"unsafe loader"}]}`
-	final := `{"findings":[{"id":"loader-race","severity":"error","file":"loader.go","line":14,"description":"loader races concurrent shutdown"}]}`
+	final := `{"findings":[{"id":"loader-race","severity":"error","file":"loader.go","line":8,"description":"loader races concurrent shutdown"}]}`
 	if _, err := d.InsertStepRound(step.ID, 1, "initial", &initial, nil, 100); err != nil {
 		t.Fatal(err)
 	}
@@ -232,6 +232,29 @@ func TestStepFindingStatsTreatsRephrasedStableIDAsSameFinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	if stats.ReportedFindings != 1 || stats.FixedFindings != 0 {
+		t.Fatalf("stats = reported %d fixed %d", stats.ReportedFindings, stats.FixedFindings)
+	}
+}
+
+func TestStepFindingStatsDoesNotCollapseUncorroboratedExplicitID(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/repo/id-collision", "git@example.com:id-collision.git", "main")
+	run, _ := d.InsertRun(repo.ID, "id-collision", "head", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepReview)
+	initial := `{"findings":[{"id":"review-1","severity":"warning","file":"loader.go","line":8,"description":"unsafe loader"}]}`
+	final := `{"findings":[{"id":"review-1","severity":"error","file":"cache.go","line":20,"description":"cache write can deadlock"}]}`
+	if _, err := d.InsertStepRound(step.ID, 1, "initial", &initial, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.InsertStepRound(step.ID, 2, "auto_fix", &final, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := d.StepFindingStats(step)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ReportedFindings != 2 || stats.FixedFindings != 1 {
 		t.Fatalf("stats = reported %d fixed %d", stats.ReportedFindings, stats.FixedFindings)
 	}
 }

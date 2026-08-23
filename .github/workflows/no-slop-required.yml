@@ -108,18 +108,22 @@ jobs:
           for item in attestation["steps"]:
               if not isinstance(item, dict):
                   fail("The no-slop v1 pipeline attestation contains a malformed step.")
-              name, status = item.get("step"), item.get("status")
-              if not isinstance(name, str) or not isinstance(status, str):
+              name, status, certified_head = item.get("step"), item.get("status"), item.get("head_sha")
+              if not isinstance(name, str) or not isinstance(status, str) or not isinstance(certified_head, str) or not certified_head:
                   fail("The no-slop v1 pipeline attestation contains a malformed step.")
-              statuses[name] = status
+              statuses[name] = (status, certified_head)
 
           incomplete = []
           for name in required_steps:
-              status = statuses.get(name)
+              status, certified_head = statuses.get(name, (None, None))
               if status != "completed":
                   incomplete.append(f"{name} (status={status})" if status else f"{name} (missing)")
+              elif certified_head != pr_head_sha:
+                  incomplete.append(
+                      f"{name} (certified head={certified_head or '(missing)'}, current={pr_head_sha or '(missing)'})"
+                  )
           if incomplete:
-              fail("Required no-slop pipeline steps are not completed: " + ", ".join(incomplete))
+              fail("Required no-slop pipeline steps are not completed for the current PR head: " + ", ".join(incomplete))
 
           print("Found compliant no-slop pipeline attestation.")
           PY

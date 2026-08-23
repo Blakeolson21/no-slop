@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"slices"
@@ -84,6 +85,7 @@ func TestNoSlopRequiredWorkflowEnforcesCompletedPipelineAttestation(t *testing.T
 		{name: "test failed", body: generatedPipelineBodyWithStatuses(t, types.StepStatusCompleted, types.StepStatusFailed, types.StepStatusCompleted), want: "failure"},
 		{name: "document skipped", body: generatedPipelineBodyWithStatuses(t, types.StepStatusCompleted, types.StepStatusCompleted, types.StepStatusSkipped), want: "failure"},
 		{name: "stale head", body: generatedPipelineBody(t), headSHA: "ffffffffffffffffffffffffffffffffffffffff", want: "failure"},
+		{name: "review certified stale head", body: generatedPipelineBodyWithStaleReviewCertification(t), want: "failure"},
 		{name: "all required steps completed", body: generatedPipelineBody(t), want: "success"},
 	}
 
@@ -334,6 +336,43 @@ func generatedPipelineBodyWithStatuses(t *testing.T, review, testStep, document 
 		t.Fatal("pipeline summary builder returned an empty PR body")
 	}
 	return body
+}
+
+func generatedPipelineBodyWithStaleReviewCertification(t *testing.T) string {
+	t.Helper()
+	body := generatedPipelineBody(t)
+	const prefix = "<!-- no-slop-pipeline-attestation:v1 "
+	const closing = " -->"
+	start := strings.Index(body, prefix)
+	if start < 0 {
+		t.Fatal("generated body has no pipeline attestation")
+	}
+	start += len(prefix)
+	end := strings.Index(body[start:], closing)
+	if end < 0 {
+		t.Fatal("generated body has malformed pipeline attestation")
+	}
+	var attestation struct {
+		HeadSHA string `json:"head_sha"`
+		Steps   []struct {
+			Step    types.StepName   `json:"step"`
+			Status  types.StepStatus `json:"status"`
+			HeadSHA string           `json:"head_sha"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal([]byte(body[start:start+end]), &attestation); err != nil {
+		t.Fatal(err)
+	}
+	for i := range attestation.Steps {
+		if attestation.Steps[i].Step == types.StepReview {
+			attestation.Steps[i].HeadSHA = "ffffffffffffffffffffffffffffffffffffffff"
+		}
+	}
+	payload, err := json.Marshal(attestation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body[:start] + string(payload) + body[start+end:]
 }
 
 func requiredWorkflowCheckStep(t *testing.T, workflow requiredWorkflow) requiredWorkflowStep {

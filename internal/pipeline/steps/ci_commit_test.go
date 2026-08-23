@@ -2,26 +2,31 @@ package steps
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/Blakeolson21/no-slop/internal/agent"
 	"github.com/Blakeolson21/no-slop/internal/branchsync"
 	"github.com/Blakeolson21/no-slop/internal/config"
 	"github.com/Blakeolson21/no-slop/internal/db"
 	"github.com/Blakeolson21/no-slop/internal/scm"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 type recordingPRContentHost struct {
-	scm.Host
-	content scm.PRContent
-	updates []scm.PRContent
+	content  scm.PRContent
+	updates  []scm.PRContent
+	getCalls int
+	getErr   error
 }
 
 func (h *recordingPRContentHost) GetPRContent(context.Context, *scm.PR) (scm.PRContent, error) {
-	return h.content, nil
+	h.getCalls++
+	return h.content, h.getErr
 }
 
 func (h *recordingPRContentHost) UpdatePR(_ context.Context, _ *scm.PR, content scm.PRContent) (*scm.PR, error) {
@@ -30,24 +35,116 @@ func (h *recordingPRContentHost) UpdatePR(_ context.Context, _ *scm.PR, content 
 	return &scm.PR{Number: "42"}, nil
 }
 
+func (h *recordingPRContentHost) Provider() scm.Provider { return scm.ProviderGitHub }
+func (h *recordingPRContentHost) Capabilities() scm.Capabilities {
+	return scm.Capabilities{}
+}
+func (h *recordingPRContentHost) Available(context.Context) error { return nil }
+func (h *recordingPRContentHost) FindPR(context.Context, string, string) (*scm.PR, error) {
+	return nil, nil
+}
+func (h *recordingPRContentHost) CreatePR(context.Context, string, string, scm.PRContent) (*scm.PR, error) {
+	return nil, nil
+}
+func (h *recordingPRContentHost) GetPRState(context.Context, *scm.PR) (scm.PRState, error) {
+	return scm.PRStateOpen, nil
+}
+func (h *recordingPRContentHost) GetChecks(context.Context, *scm.PR) ([]scm.Check, error) {
+	return nil, nil
+}
+func (h *recordingPRContentHost) GetMergeableState(context.Context, *scm.PR) (scm.MergeableState, error) {
+	return scm.MergeableUnknown, scm.ErrUnsupported
+}
+func (h *recordingPRContentHost) FetchFailedCheckLogs(context.Context, *scm.PR, string, string, []string) (string, error) {
+	return "", scm.ErrUnsupported
+}
+
 func TestCIStep_RefreshPRAttestationBindsCurrentHead(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
-	oldAttestation := buildPipelineAttestation(nil, baseSHA)
+	var steps []*db.StepResult
+	for _, name := range []types.StepName{types.StepReview, types.StepTest, types.StepDocument} {
+		step, err := sctx.DB.InsertStepResult(sctx.Run.ID, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sctx.DB.UpdateStepStatus(step.ID, types.StepStatusCompleted); err != nil {
+			t.Fatal(err)
+		}
+		step.Status = types.StepStatusCompleted
+		steps = append(steps, step)
+	}
+	oldAttestation := buildPipelineAttestation(steps, baseSHA)
 	host := &recordingPRContentHost{content: scm.PRContent{
 		Title: "fix: preserve CI fixes",
 		Body:  "## Pipeline\n\n" + noMistakesPRSignature + "\n\n" + oldAttestation,
 	}}
 
-	if err := (&CIStep{}).refreshPRAttestation(sctx, host, &scm.PR{Number: "42"}); err != nil {
+	if err := (&CIStep{}).refreshPRAttestation(sctx, host, &scm.PR{Number: "42"}, baseSHA); err != nil {
 		t.Fatal(err)
 	}
 	if len(host.updates) != 1 {
 		t.Fatalf("PR updates = %d, want 1", len(host.updates))
 	}
-	want := buildPipelineAttestation(nil, headSHA)
-	if !strings.Contains(host.updates[0].Body, want) || strings.Contains(host.updates[0].Body, oldAttestation) {
-		t.Fatalf("updated PR body = %q", host.updates[0].Body)
+	attestation := parsePipelineAttestationForTest(t, host.updates[0].Body)
+	if attestation.HeadSHA != headSHA {
+		t.Fatalf("attestation head = %q, want %q", attestation.HeadSHA, headSHA)
+	}
+	for _, step := range attestation.Steps {
+		if step.Step == types.StepReview || step.Step == types.StepTest || step.Step == types.StepDocument {
+			if step.HeadSHA != baseSHA {
+				t.Fatalf("step %s certified head = %q, want prior head %q", step.Step, step.HeadSHA, baseSHA)
+			}
+		}
+	}
+}
+
+func TestCIStep_AutoFixWithoutPushDoesNotRefreshPRAttestation(t *testing.T) {
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	host := &recordingPRContentHost{getErr: errors.New("PR content unavailable")}
+
+	pushed, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pushed {
+		t.Fatal("no-change CI fix reported a push")
+	}
+	if host.getCalls != 0 || len(host.updates) != 0 {
+		t.Fatalf("no-change CI fix touched PR content: reads=%d updates=%d", host.getCalls, len(host.updates))
+	}
+}
+
+func TestCIStep_AutoFixPushFailsClosedWhenAttestationRefreshFails(t *testing.T) {
+	upstream := t.TempDir()
+	gitCmd(t, upstream, "init", "--bare")
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "remote", "add", "origin", upstream)
+	gitCmd(t, dir, "push", "origin", "feature")
+	agent := &mockAgent{name: "test", runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
+		if err := os.WriteFile(filepath.Join(opts.CWD, "ci-fix.txt"), []byte("fixed"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return &agent.Result{}, nil
+	}}
+	sctx := newTestContextWithDBRecords(t, agent, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Repo.UpstreamURL = upstream
+	sctx.Run.Branch = "refs/heads/feature"
+	host := &recordingPRContentHost{getErr: errors.New("PR content unavailable")}
+
+	pushed, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)
+	if err == nil || !strings.Contains(err.Error(), "refresh PR pipeline attestation") {
+		t.Fatalf("autoFixCI error = %v", err)
+	}
+	if pushed {
+		t.Fatal("failed attestation refresh reported successful CI fix")
+	}
+	if host.getCalls != 1 || len(host.updates) != 0 {
+		t.Fatalf("attestation refresh calls: reads=%d updates=%d", host.getCalls, len(host.updates))
+	}
+	if got := gitCmd(t, upstream, "rev-parse", "refs/heads/feature"); got == headSHA {
+		t.Fatal("CI fix did not reach remote before refresh failure")
 	}
 }
 

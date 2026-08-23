@@ -98,8 +98,9 @@ func TestBuildPipelineSummary_EmitsStructuredStepAttestation(t *testing.T) {
 	var attestation struct {
 		HeadSHA string `json:"head_sha"`
 		Steps   []struct {
-			Step   types.StepName   `json:"step"`
-			Status types.StepStatus `json:"status"`
+			Step    types.StepName   `json:"step"`
+			Status  types.StepStatus `json:"status"`
+			HeadSHA string           `json:"head_sha"`
 		} `json:"steps"`
 	}
 	payload := got[start+len(prefix) : start+end]
@@ -128,7 +129,7 @@ func TestBuildPipelineSummary_EmitsStructuredStepAttestation(t *testing.T) {
 		t.Fatalf("attested %d steps, want %d: %+v", len(attestation.Steps), len(want), attestation.Steps)
 	}
 	for i, wantStep := range want {
-		if gotStep := attestation.Steps[i]; gotStep.Step != wantStep.step || gotStep.Status != wantStep.status {
+		if gotStep := attestation.Steps[i]; gotStep.Step != wantStep.step || gotStep.Status != wantStep.status || gotStep.HeadSHA != testPipelineHeadSHA {
 			t.Errorf("attested step %d = (%q, %q), want (%q, %q)", i, gotStep.Step, gotStep.Status, wantStep.step, wantStep.status)
 		}
 	}

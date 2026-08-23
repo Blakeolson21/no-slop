@@ -53,7 +53,7 @@ func findingFingerprint(item types.Finding) types.FindingIdentity {
 	return item.Fingerprint()
 }
 
-func hasFindingMatch(item types.Finding, stableIDs map[string]bool, exact map[types.FindingIdentity]bool, itemCounts, candidateCounts map[types.FindingIdentity]int) bool {
+func hasFindingMatch(item types.Finding, stableIDs map[string][]types.Finding, exact map[types.FindingIdentity]bool, itemCounts, candidateCounts map[types.FindingIdentity]int) bool {
 	return types.FindingMatches(item, stableIDs, exact, itemCounts, candidateCounts)
 }
 
@@ -130,7 +130,7 @@ func mergeCarriedFindingsJSON(freshRaw, carriedRaw, prefix string) string {
 	for _, old := range carried.Items {
 		match := -1
 		for i, current := range merged.Items {
-			if (current.ID != "" && !current.IDGenerated && current.ID == old.ID && !old.IDGenerated) ||
+			if types.FindingIDCorroborates(current, old) ||
 				findingKey(current) == findingKey(old) ||
 				(findingFingerprint(current) == findingFingerprint(old) && freshCounts[findingFingerprint(current)] == 1 && carriedCounts[findingFingerprint(old)] == 1) {
 				match = i

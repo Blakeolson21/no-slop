@@ -26,7 +26,7 @@ func TestMergeFindingsJSON_KeepsDistinctFindingsWithSameAutoID(t *testing.T) {
 
 func TestMergeCarriedFindingsJSON_PreservesExplicitIDAcrossRephrasing(t *testing.T) {
 	carriedRaw := `{"findings":[{"id":"loader-race","severity":"warning","file":"loader.go","line":12,"description":"unsafe loader","action":"ask-user"}],"risk_level":"medium","risk_rationale":"Needs review."}`
-	freshRaw := `{"findings":[{"id":"loader-race","severity":"error","file":"loader.go","line":18,"description":"loader races concurrent shutdown","action":"auto-fix"}],"risk_level":"high","risk_rationale":"Reproduced."}`
+	freshRaw := `{"findings":[{"id":"loader-race","severity":"error","file":"loader.go","line":12,"description":"loader races concurrent shutdown","action":"auto-fix"}],"risk_level":"high","risk_rationale":"Reproduced."}`
 
 	mergedRaw := mergeCarriedFindingsJSON(freshRaw, carriedRaw, "review")
 	merged, err := types.ParseFindingsJSON(mergedRaw)
@@ -38,6 +38,30 @@ func TestMergeCarriedFindingsJSON_PreservesExplicitIDAcrossRephrasing(t *testing
 	}
 	if merged.Items[0].ID != "loader-race" || merged.Items[0].Description != "loader races concurrent shutdown" || merged.Items[0].Action != "ask-user" {
 		t.Fatalf("merged finding = %#v", merged.Items[0])
+	}
+}
+
+func TestMergeCarriedFindingsJSON_DoesNotTrustUncorroboratedExplicitID(t *testing.T) {
+	carriedRaw := `{"findings":[{"id":"review-1","severity":"warning","file":"loader.go","line":12,"description":"unsafe loader","action":"ask-user"}]}`
+	freshRaw := `{"findings":[{"id":"review-1","severity":"error","file":"cache.go","line":30,"description":"cache write can deadlock","action":"auto-fix"}]}`
+
+	mergedRaw := mergeCarriedFindingsJSON(freshRaw, carriedRaw, "review")
+	merged, err := types.ParseFindingsJSON(mergedRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged.Items) != 2 {
+		t.Fatalf("findings = %#v, want both unrelated defects", merged.Items)
+	}
+	byDescription := make(map[string]types.Finding, len(merged.Items))
+	for _, item := range merged.Items {
+		byDescription[item.Description] = item
+	}
+	if byDescription["unsafe loader"].Action != "ask-user" || byDescription["cache write can deadlock"].Action != "auto-fix" {
+		t.Fatalf("explicit ID collision changed findings: %#v", merged.Items)
+	}
+	if merged.Items[0].ID == merged.Items[1].ID {
+		t.Fatalf("explicit ID collision survived merge: %#v", merged.Items)
 	}
 }
 

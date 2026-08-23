@@ -33,8 +33,9 @@ type pipelineAttestation struct {
 }
 
 type pipelineAttestationStep struct {
-	Step   types.StepName   `json:"step"`
-	Status types.StepStatus `json:"status"`
+	Step    types.StepName   `json:"step"`
+	Status  types.StepStatus `json:"status"`
+	HeadSHA string           `json:"head_sha"`
 }
 
 type testingArtifactRenderState struct {
@@ -104,6 +105,10 @@ func BuildPipelineSummary(steps []*db.StepResult, rounds map[string][]*db.StepRo
 // when no-mistakes writes the PR body. Its compact JSON is deliberately data
 // only: consumers decide their own policy from the step names and statuses.
 func buildPipelineAttestation(steps []*db.StepResult, headSHA string) string {
+	return buildPipelineAttestationWithCertifiedHead(steps, headSHA, headSHA)
+}
+
+func buildPipelineAttestationWithCertifiedHead(steps []*db.StepResult, headSHA, certifiedHeadSHA string) string {
 	attestation := pipelineAttestation{
 		HeadSHA: headSHA,
 		Steps:   make([]pipelineAttestationStep, 0, len(steps)),
@@ -113,8 +118,9 @@ func buildPipelineAttestation(steps []*db.StepResult, headSHA string) string {
 			continue
 		}
 		attestation.Steps = append(attestation.Steps, pipelineAttestationStep{
-			Step:   sr.StepName,
-			Status: sr.Status,
+			Step:    sr.StepName,
+			Status:  sr.Status,
+			HeadSHA: certifiedHeadSHA,
 		})
 	}
 	sort.SliceStable(attestation.Steps, func(i, j int) bool {
