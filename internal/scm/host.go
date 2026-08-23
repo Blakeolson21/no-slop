@@ -191,6 +191,10 @@ type Capabilities struct {
 // relying on this error, but implementations return it as a fallback.
 var ErrUnsupported = errors.New("operation not supported by this provider")
 
+// ErrChecksUnavailable marks a provider read that produced no trustworthy CI
+// evidence. Callers may bound retries without treating the absence as green.
+var ErrChecksUnavailable = errors.New("CI checks unavailable")
+
 // Host is the provider-agnostic interface to a PR-hosting service.
 // Transport (CLI vs HTTP API) is an implementation detail.
 type Host interface {

@@ -375,7 +375,21 @@ func (h *Host) GetChecks(ctx context.Context, pr *scm.PR) ([]scm.Check, error) {
 		checks, err = h.getPRChecks(ctx, selector)
 	}
 	if err != nil {
-		return nil, err
+		if headSHA == "" || !errors.Is(err, ErrRollupUnavailable) {
+			return nil, err
+		}
+		checks, err = h.getActionsFallbackChecks(ctx, pr, headSHA)
+		if err != nil {
+			return nil, err
+		}
+		currentHeadSHA, err := h.getPRHeadSHA(ctx, selector)
+		if err != nil {
+			return nil, err
+		}
+		if currentHeadSHA != headSHA {
+			return nil, fmt.Errorf("PR head changed during Actions fallback discovery from %s to %s: %w", headSHA, currentHeadSHA, ErrActionsHeadMismatch)
+		}
+		return checks, nil
 	}
 	if headSHA != "" {
 		runs, err := h.getWorkflowRunChecks(ctx, headSHA)
@@ -403,7 +417,7 @@ func (h *Host) getPRChecks(ctx context.Context, selector string) ([]scm.Check, e
 		if strings.Contains(string(out), "no checks reported") {
 			out = []byte("[]")
 		} else {
-			return nil, fmt.Errorf("gh pr checks: %w", err)
+			return nil, rollupReadError("gh pr checks", string(out), err)
 		}
 	}
 	var raw []struct {
@@ -553,9 +567,12 @@ func (h *Host) getCommitChecks(ctx context.Context, headSHA string) ([]scm.Check
 		}
 		out, err := h.cmd(ctx, "gh", args...).CombinedOutput()
 		if err != nil {
-			return nil, fmt.Errorf("gh api checks for head commit: %s: %w", strings.TrimSpace(string(out)), err)
+			return nil, rollupReadError("gh api checks for head commit", string(out), err)
 		}
 		var response struct {
+			Errors []struct {
+				Message string `json:"message"`
+			} `json:"errors"`
 			Data struct {
 				Repository *struct {
 					Object *struct {
@@ -584,6 +601,9 @@ func (h *Host) getCommitChecks(ctx context.Context, headSHA string) ([]scm.Check
 		}
 		if err := json.Unmarshal(out, &response); err != nil {
 			return nil, fmt.Errorf("parse checks for head commit: %w", err)
+		}
+		if len(response.Errors) > 0 {
+			return nil, rollupReadError("gh api checks for head commit", string(out), errors.New(response.Errors[0].Message))
 		}
 		if response.Data.Repository == nil || response.Data.Repository.Object == nil {
 			return nil, errors.New("head commit check discovery returned no commit")
@@ -676,67 +696,9 @@ func (h *Host) getPRHeadSHA(ctx context.Context, selector string) (string, error
 
 func (h *Host) getWorkflowRunChecks(ctx context.Context, headSHA string) ([]scm.Check, error) {
 	repo := h.repoSlug()
-	endpoint := "repos/{owner}/{repo}/actions/runs"
-	if repo != "" {
-		endpoint = "repos/" + repo + "/actions/runs"
-	}
-	args := []string{"api"}
-	if h.host != "" {
-		args = append(args, "--hostname", h.host)
-	}
-	args = append(args, "--method", "GET", endpoint,
-		"-f", "head_sha="+strings.TrimSpace(headSHA),
-		"-f", "per_page=100",
-		"--paginate", "--slurp",
-	)
-	out, err := h.cmd(ctx, "gh", args...).CombinedOutput()
+	raw, err := h.listFallbackWorkflowRuns(ctx, strings.TrimSpace(headSHA))
 	if err != nil {
-		return nil, fmt.Errorf("gh api workflow runs for head commit: %s: %w", strings.TrimSpace(string(out)), err)
-	}
-	type workflowRun struct {
-		ID          int64  `json:"id"`
-		Name        string `json:"name"`
-		DisplayName string `json:"display_title"`
-		Status      string `json:"status"`
-		Conclusion  string `json:"conclusion"`
-		UpdatedAt   string `json:"updated_at"`
-		HTMLURL     string `json:"html_url"`
-	}
-	var pages []struct {
-		TotalCount   *int          `json:"total_count"`
-		WorkflowRuns []workflowRun `json:"workflow_runs"`
-	}
-	if err := json.Unmarshal(out, &pages); err != nil {
-		return nil, fmt.Errorf("parse workflow runs for head commit: %w", err)
-	}
-	if len(pages) == 0 {
-		return nil, errors.New("workflow run discovery returned no pages")
-	}
-	var raw []workflowRun
-	totalCount := -1
-	runIDs := make(map[int64]struct{})
-	for pageIndex, page := range pages {
-		if page.TotalCount == nil || *page.TotalCount < 0 {
-			return nil, fmt.Errorf("workflow run page %d has no valid total_count", pageIndex+1)
-		}
-		if totalCount == -1 {
-			totalCount = *page.TotalCount
-		} else if *page.TotalCount != totalCount {
-			return nil, fmt.Errorf("workflow run page %d total_count is %d, want %d", pageIndex+1, *page.TotalCount, totalCount)
-		}
-		for _, run := range page.WorkflowRuns {
-			if run.ID == 0 {
-				return nil, fmt.Errorf("workflow run page %d contains a run without an id", pageIndex+1)
-			}
-			if _, exists := runIDs[run.ID]; exists {
-				return nil, fmt.Errorf("workflow run id %d appears more than once", run.ID)
-			}
-			runIDs[run.ID] = struct{}{}
-			raw = append(raw, run)
-		}
-	}
-	if len(runIDs) != totalCount {
-		return nil, fmt.Errorf("workflow run discovery returned %d unique runs, want %d", len(runIDs), totalCount)
+		return nil, err
 	}
 	checks := make([]scm.Check, 0, len(raw))
 	for _, run := range raw {
