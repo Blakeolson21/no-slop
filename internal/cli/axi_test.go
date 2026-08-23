@@ -326,6 +326,39 @@ func TestGateSummaryUsesBoundedDisclosure(t *testing.T) {
 	}
 }
 
+func TestGateFindingDescriptionRendersInFull(t *testing.T) {
+	long := strings.Repeat("finding detail. ", 200)
+	gate := stepView{
+		Name:   "review",
+		Status: "awaiting_approval",
+		FindingsJSON: findingsJSON(t, []types.Finding{
+			{ID: "review-1", Severity: "warning", File: "main.go", Action: types.ActionAskUser, Description: long},
+		}, "one blocking issue"),
+	}
+	out := axiDoc(gateFields(gate)...)
+	if !strings.Contains(out, long) {
+		t.Fatalf("gate output omitted part of the finding's full description:\n%s", out)
+	}
+	if strings.Contains(out, "truncated, 3200 chars total") {
+		t.Fatalf("gate output retained the old finding-description cap:\n%s", out)
+	}
+}
+
+func TestGateFindingDescriptionPreservesUnicodePastOldBoundary(t *testing.T) {
+	description := strings.Repeat("é", 600) + strings.Repeat("終", 50)
+	gate := stepView{
+		Name:   "test",
+		Status: "awaiting_approval",
+		FindingsJSON: findingsJSON(t, []types.Finding{
+			{ID: "test-1", Severity: "error", Action: types.ActionAskUser, Description: description},
+		}, "summary"),
+	}
+	out := axiDoc(gateFields(gate)...)
+	if !strings.Contains(out, description) {
+		t.Fatalf("gate output did not preserve unicode past the old boundary:\n%s", out)
+	}
+}
+
 func TestEscapeUnsupportedTOONControlsPreservesSupportedBytesAndUnicode(t *testing.T) {
 	input := "π\tline\r\n😀\x00\x07\x1f\x7f"
 	want := "π\tline\r\n😀\\x00\\x07\\x1F\x7f"

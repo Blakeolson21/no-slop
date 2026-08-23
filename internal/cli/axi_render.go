@@ -19,13 +19,11 @@ import (
 // can pin the clock when asserting how long a run has been parked.
 var nowUnix = func() int64 { return time.Now().Unix() }
 
-// maxFindingDesc caps a finding description rendered inline. Findings are the
-// decision content at a gate, so the limit is generous; only pathological
-// descriptions get truncated, with the full length disclosed.
-const (
-	maxFindingDesc = 600
-	maxGateSummary = 1200
-)
+// The synopsis remains bounded for scanning. Finding descriptions do not:
+// they are the decision content and the AXI contract requires an agent to
+// relay ask-user findings verbatim. They already arrive over IPC and are
+// persisted in full, so truncating only at display time loses authority.
+const maxGateSummary = 1200
 
 // Row types carry `toon` tags so the encoder renders a []row slice as a
 // tabular array (name[N]{cols}:) with one comma-delimited line per element.
@@ -479,7 +477,7 @@ func gateFields(gate stepView) []toon.Field {
 			Severity:    f.Severity,
 			File:        f.File,
 			Action:      f.Action,
-			Description: truncate(f.Description, maxFindingDesc),
+			Description: f.Description,
 		})
 	}
 	gfields = append(gfields, toon.Field{Key: "findings", Value: rows})
