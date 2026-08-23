@@ -332,6 +332,9 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 			if err != nil {
 				return nil, err
 			}
+			// Marked after the stale-attestation filter so the infra-failure probe
+			// only spends provider calls on checks that survive into the verdict.
+			markPreRunInfraFailures(sctx, host, checks)
 			// checksPending is the narrow execution state: only checks that are
 			// actively running or queued block a rerun or issue escalation. A
 			// provider-cancelled check is terminal enough to enter the transient
@@ -451,7 +454,7 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 					// CI step's outcomes are never auto-fixable, so sctx.Fixing
 					// here means the user answered that gate with "fix": that
 					// deliberate override is honored rather than re-parked.
-					return ciUnresolvedCancelledOutcome(unresolvedCancelled, s.transientReruns.used), nil
+					return ciUnresolvedCancelledOutcome(unresolvedCancelled, checks, s.transientReruns.used), nil
 				}
 				// All checks done, issues present - fix or report.
 				// The fix agent is asked to repair job failures; a check the

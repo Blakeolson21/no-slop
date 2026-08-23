@@ -434,7 +434,7 @@ Legacy alias: `auto_fix.babysit`.
 
 ### ci.rerun_transient
 
-How many times the CI step may re-run a single check the provider reported as cancelled before that check reaches an approval gate.
+How many times the CI step may re-run a single provider-attributed check before that check reaches an approval gate. This includes cancellations and, on GitHub, setup/action-resolution failures before repository steps run.
 
 | | |
 |---|---|
@@ -447,11 +447,12 @@ Every rerun this budget authorizes is another provider-side workflow run billed 
 A pushed branch cannot raise its own rerun budget.
 The default is `0` because a cancelled conclusion does not identify its cause: the same value covers the provider aborting its own infrastructure, a maintainer stopping a runaway or unsafe job, and repository concurrency with `cancel-in-progress`.
 Rerunning on that ambiguity can restart work someone deliberately stopped, so raise this only for a repository whose cancellations are known to be provider-side.
+At `0`, no-slop does not make the additional GitHub job read used to identify pre-run failures.
 
 With no trusted copy of this file, the operator's own [`ci.rerun_transient`](/no-slop/reference/global-config/#cirerun_transient) applies, then the built-in default.
 A value set here always wins over the global one, so the maintainer of the repository has the last word on how many workflow runs their project is billed for.
 
-A rerun is requested only when the provider itself reported the outcome as `cancelled`, which is the one terminal outcome it attributes to itself rather than to the job:
+A rerun is requested when the provider reports `cancelled` or GitHub structurally reports that the job failed during setup before any repository step ran. A setup failure is derived from step conclusions, never log text; unreadable jobs and failures after setup remain genuine code failures.
 
 - `failure`, `error`, `action_required`, and `startup_failure` are the job's own verdict on the commit, so they escalate on the first failure with no added latency.
 - `timed_out` means the job exceeded its own `timeout-minutes`, which is usually the branch's own code hanging. Re-running it burns another full timeout window reproducing the same failure, so it is treated as a genuine failure and is not opt-in.

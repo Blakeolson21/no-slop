@@ -1,7 +1,10 @@
 package steps
 
 import (
+	"context"
+	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,7 +12,62 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/db"
 	"github.com/Blakeolson21/no-slop/internal/pipeline"
 	"github.com/Blakeolson21/no-slop/internal/scm"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
+
+type fakePreRunHost struct {
+	scm.Host
+	flags []bool
+	calls int
+}
+
+func TestCIUnresolvedTransientOutcomePreservesPreRunFailureCause(t *testing.T) {
+	t.Parallel()
+	outcome := ciUnresolvedCancelledOutcome(
+		[]string{"build"},
+		[]scm.Check{{Name: "build", Bucket: scm.CheckBucketCancel, State: "FAILURE", PreRunFailure: true}},
+		func(string) int { return 1 },
+	)
+	var findings Findings
+	if err := json.Unmarshal([]byte(outcome.Findings), &findings); err != nil {
+		t.Fatal(err)
+	}
+	if len(findings.Items) != 1 || findings.Items[0].Action != types.ActionAskUser {
+		t.Fatalf("findings = %+v, want one ask-user finding", findings.Items)
+	}
+	if !strings.Contains(findings.Items[0].Description, "failed during setup again after its rerun") ||
+		strings.Contains(findings.Items[0].Description, "provider cancelled") {
+		t.Fatalf("description = %q, want setup-failure cause", findings.Items[0].Description)
+	}
+}
+
+func (h *fakePreRunHost) PreRunFailures(context.Context, []scm.Check) ([]bool, error) {
+	h.calls++
+	return h.flags, nil
+}
+
+func TestMarkPreRunInfraFailuresRetriesInfraButNotGenuine(t *testing.T) {
+	t.Parallel()
+	checks := []scm.Check{
+		{Name: "build", Bucket: scm.CheckBucketFail, State: "FAILURE", Link: "https://github.com/o/r/actions/runs/1/job/2"},
+		{Name: "unit", Bucket: scm.CheckBucketFail, State: "FAILURE", Link: "https://github.com/o/r/actions/runs/1/job/3"},
+	}
+	host := &fakePreRunHost{flags: []bool{true, false}}
+	sctx := &pipeline.StepContext{
+		Ctx:    context.Background(),
+		Config: &config.Config{CI: config.CI{RerunTransient: 1}},
+		Log:    func(string) {},
+	}
+
+	markPreRunInfraFailures(sctx, host, checks)
+
+	if !checks[0].PreRunFailure || checks[0].Bucket != scm.CheckBucketCancel || classifyCheckFailure(checks[0]) != classTransient {
+		t.Fatalf("infra check = %+v, want transient pre-run failure", checks[0])
+	}
+	if checks[1].PreRunFailure || checks[1].Bucket != scm.CheckBucketFail || classifyCheckFailure(checks[1]) != classGenuine {
+		t.Fatalf("genuine check = %+v, want unchanged genuine failure", checks[1])
+	}
+}
 
 func TestClassifyCheckFailure(t *testing.T) {
 	t.Parallel()

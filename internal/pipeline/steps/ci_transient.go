@@ -52,6 +52,9 @@ func classifyCheckFailure(check scm.Check) failureClass {
 	if !checkFailedTerminally(check) {
 		return classUnknown
 	}
+	if check.PreRunFailure {
+		return classTransient
+	}
 	switch strings.ToUpper(strings.TrimSpace(check.State)) {
 	case "CANCELLED", "CANCELED":
 		return classTransient
@@ -646,7 +649,7 @@ func (s *CIStep) rerunTransientChecks(sctx *pipeline.StepContext, host scm.Host,
 		issued = true
 		// used can never exceed limit: selection reserved this rerun against
 		// the same shared budget key before it was spent.
-		sctx.Log(fmt.Sprintf("re-running CI check %s (%d/%d): provider reported %s, not a job failure", check.Name, used, limit, transientStateLabel(check)))
+		sctx.Log(fmt.Sprintf("re-running CI check %s (%d/%d): %s, not a job failure", check.Name, used, limit, transientReason(check)))
 	}
 	return issued, nil
 }
@@ -685,6 +688,51 @@ func transientStateLabel(check scm.Check) string {
 	return string(check.Bucket)
 }
 
+func transientReason(check scm.Check) string {
+	if check.PreRunFailure {
+		return "it failed before the repository's own steps ran (setup/action resolution)"
+	}
+	return fmt.Sprintf("provider reported %s", transientStateLabel(check))
+}
+
+func markPreRunInfraFailures(sctx *pipeline.StepContext, host scm.Host, checks []scm.Check) {
+	if sctx.Config.CI.RerunTransient <= 0 {
+		return
+	}
+	detector, ok := host.(scm.PreRunFailureDetector)
+	if !ok {
+		return
+	}
+	var failedIdx []int
+	for i := range checks {
+		if checks[i].Failing() {
+			failedIdx = append(failedIdx, i)
+		}
+	}
+	if len(failedIdx) == 0 {
+		return
+	}
+	failed := make([]scm.Check, len(failedIdx))
+	for i, idx := range failedIdx {
+		failed[i] = checks[idx]
+	}
+	infra, err := detector.PreRunFailures(sctx.Ctx, failed)
+	if err != nil {
+		sctx.Log(fmt.Sprintf("warning: could not classify pre-run CI failures: %v", err))
+		return
+	}
+	if len(infra) != len(failed) {
+		sctx.Log(fmt.Sprintf("warning: pre-run CI classifier returned %d results for %d checks; ignoring", len(infra), len(failed)))
+		return
+	}
+	for i, idx := range failedIdx {
+		if infra[i] {
+			checks[idx].PreRunFailure = true
+			checks[idx].Bucket = scm.CheckBucketCancel
+		}
+	}
+}
+
 // ciUnresolvedCancelledOutcome parks the run for checks the provider cancelled
 // and will not resolve on their own: either the run already spent their rerun
 // budget and they came back cancelled, or no rerun was ever authorized for them.
@@ -699,12 +747,19 @@ func transientStateLabel(check scm.Check) string {
 // state which of the two it is: whether the cancellation survived a retry or
 // was never retried at all is the difference between a provider that keeps
 // cancelling and one that cancelled once and was believed.
-func ciUnresolvedCancelledOutcome(names []string, reruns func(string) int) *pipeline.StepOutcome {
-	findings := Findings{Summary: "CI checks were cancelled without reporting a verdict"}
-	for _, name := range names {
+func ciUnresolvedCancelledOutcome(names []string, checks []scm.Check, reruns func(string) int) *pipeline.StepOutcome {
+	unresolved := unresolvedTransientChecks(names, checks)
+	preRunCount := 0
+	for _, check := range unresolved {
+		if check.PreRunFailure {
+			preRunCount++
+		}
+	}
+	findings := Findings{Summary: unresolvedTransientSummary(len(unresolved), preRunCount)}
+	for _, check := range unresolved {
 		findings.Items = append(findings.Items, Finding{
 			Severity:    "warning",
-			Description: unresolvedCancelledDescription(name, reruns(name)),
+			Description: unresolvedTransientDescription(check.Name, reruns(check.Name), check.PreRunFailure),
 			Action:      types.ActionAskUser,
 		})
 	}
@@ -715,7 +770,42 @@ func ciUnresolvedCancelledOutcome(names []string, reruns func(string) int) *pipe
 	}
 }
 
-func unresolvedCancelledDescription(name string, reruns int) string {
+func unresolvedTransientChecks(names []string, checks []scm.Check) []scm.Check {
+	var unresolved []scm.Check
+	for _, name := range names {
+		matched := false
+		for _, check := range checks {
+			if check.Name != name || check.Bucket != scm.CheckBucketCancel {
+				continue
+			}
+			matched = true
+			unresolved = append(unresolved, check)
+		}
+		if !matched {
+			unresolved = append(unresolved, scm.Check{Name: name, Bucket: scm.CheckBucketCancel})
+		}
+	}
+	return unresolved
+}
+
+func unresolvedTransientSummary(total, preRun int) string {
+	switch {
+	case total > 0 && preRun == total:
+		return "CI checks failed before repository steps ran"
+	case preRun > 0:
+		return "CI checks ended without reporting a code verdict"
+	default:
+		return "CI checks were cancelled without reporting a verdict"
+	}
+}
+
+func unresolvedTransientDescription(name string, reruns int, preRunFailure bool) string {
+	if preRunFailure {
+		if reruns > 0 {
+			return fmt.Sprintf("CI check failed during setup again after its rerun: %s - repository steps never ran, so it needs a decision rather than a code fix", name)
+		}
+		return fmt.Sprintf("CI check failed during setup before repository steps ran: %s - no rerun is outstanding to replace that result, so it needs a decision rather than a code fix", name)
+	}
 	if reruns > 0 {
 		return fmt.Sprintf("CI check cancelled again after its rerun: %s - the provider cancelled it rather than reporting a job failure, so it needs a decision rather than a code fix", name)
 	}

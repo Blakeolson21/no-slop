@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -565,6 +566,72 @@ func actionsRerunTarget(link string) (runID, jobID string, ok bool) {
 	}
 }
 
+// PreRunFailures reports setup/action-resolution failures observed before any
+// repository step ran. Unreadable or unmatched jobs stay unflagged so a real
+// code failure can never be masked as infrastructure.
+func (h *Host) PreRunFailures(ctx context.Context, checks []scm.Check) ([]bool, error) {
+	result := make([]bool, len(checks))
+	runJobs := map[string][]githubRunJob{}
+	for i, check := range checks {
+		runID, jobID, ok := actionsRerunTarget(check.Link)
+		if !ok {
+			continue
+		}
+		jobs, seen := runJobs[runID]
+		if !seen {
+			jobs = h.fetchRunJobs(ctx, runID)
+			runJobs[runID] = jobs
+		}
+		job, found := matchRunJob(jobs, jobID, check.Name)
+		if found && jobFailedAtSetup(job) {
+			result[i] = true
+		}
+	}
+	return result, nil
+}
+
+func (h *Host) fetchRunJobs(ctx context.Context, runID string) []githubRunJob {
+	args := append([]string{"run", "view", runID}, h.repoArgs()...)
+	args = append(args, "--json", "jobs")
+	out, err := h.cmd(ctx, "gh", args...).Output()
+	if err != nil {
+		return nil
+	}
+	var payload githubRunView
+	if err := json.Unmarshal(out, &payload); err != nil {
+		return nil
+	}
+	return payload.Jobs
+}
+
+func matchRunJob(jobs []githubRunJob, jobID, checkName string) (githubRunJob, bool) {
+	if jobID != "" {
+		for _, job := range jobs {
+			if strconv.Itoa(job.DatabaseID) == jobID {
+				return job, true
+			}
+		}
+	}
+	for _, job := range jobs {
+		if normalizeRunName(job.Name) == normalizeRunName(checkName) {
+			return job, true
+		}
+	}
+	return githubRunJob{}, false
+}
+
+func jobFailedAtSetup(job githubRunJob) bool {
+	if !isFailedJob(job) {
+		return false
+	}
+	for _, step := range job.Steps {
+		if step.Number == 1 || strings.EqualFold(strings.TrimSpace(step.Name), "Set up job") {
+			return strings.EqualFold(strings.TrimSpace(step.Conclusion), "failure")
+		}
+	}
+	return false
+}
+
 func isNumericID(value string) bool {
 	if value == "" {
 		return false
@@ -657,9 +724,18 @@ type githubRunView struct {
 }
 
 type githubRunJob struct {
+	DatabaseID int             `json:"databaseId"`
+	Name       string          `json:"name"`
+	Conclusion string          `json:"conclusion"`
+	Status     string          `json:"status"`
+	Steps      []githubJobStep `json:"steps"`
+}
+
+type githubJobStep struct {
 	Name       string `json:"name"`
-	Conclusion string `json:"conclusion"`
+	Number     int    `json:"number"`
 	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
 }
 
 func runMatchesTargets(ctx context.Context, h *Host, run githubRun, targets map[string]struct{}) bool {

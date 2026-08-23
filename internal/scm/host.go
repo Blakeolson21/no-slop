@@ -150,6 +150,9 @@ type Check struct {
 	// behind the check, so a rerun can target that job instead of the whole PR.
 	// Empty when the provider reported no link.
 	Link string
+	// PreRunFailure marks a provider setup/action-resolution failure that
+	// happened before any repository step ran.
+	PreRunFailure bool
 }
 
 type CheckAttemptIdentity struct {
@@ -225,4 +228,11 @@ type CheckRerunner interface {
 	// returns an error when the request could not be made, including when the
 	// check names no job the provider can re-run.
 	RerunCheck(ctx context.Context, pr *PR, check Check) error
+}
+
+// PreRunFailureDetector identifies failed checks whose provider setup phase
+// failed before repository code ran. Results are positional so same-named jobs
+// cannot mask one another, and unknown evidence must remain false.
+type PreRunFailureDetector interface {
+	PreRunFailures(ctx context.Context, checks []Check) ([]bool, error)
 }

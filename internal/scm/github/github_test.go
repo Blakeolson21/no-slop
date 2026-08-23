@@ -222,6 +222,30 @@ func TestGetChecksSurfacesGHErrorStderr(t *testing.T) {
 	}
 }
 
+func TestPreRunFailuresFlagsSetupFailureButNotTestFailure(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh run view 1 --repo test/repo --json jobs": {
+			stdout: `{"jobs":[` +
+				`{"databaseId":2,"name":"build","conclusion":"failure","steps":[{"name":"Set up job","number":1,"conclusion":"failure"}]},` +
+				`{"databaseId":3,"name":"unit","conclusion":"failure","steps":[{"name":"Set up job","number":1,"conclusion":"success"},{"name":"Run tests","number":2,"conclusion":"failure"}]}` +
+				`]}` + "\n",
+		},
+	}), nil, "", "test/repo")
+
+	infra, err := host.PreRunFailures(context.Background(), []scm.Check{
+		{Name: "build", Bucket: scm.CheckBucketFail, State: "FAILURE", Link: "https://github.com/test/repo/actions/runs/1/job/2"},
+		{Name: "unit", Bucket: scm.CheckBucketFail, State: "FAILURE", Link: "https://github.com/test/repo/actions/runs/1/job/3"},
+	})
+	if err != nil {
+		t.Fatalf("PreRunFailures() error = %v", err)
+	}
+	if len(infra) != 2 || !infra[0] || infra[1] {
+		t.Fatalf("PreRunFailures() = %v, want [true false]", infra)
+	}
+}
+
 func TestGetPRStatePassesRepoFlag(t *testing.T) {
 	t.Parallel()
 
