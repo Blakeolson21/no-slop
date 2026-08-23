@@ -5,6 +5,19 @@ import (
 	"testing"
 )
 
+func TestRunStatusTerminalIncludesInterruptedCIMonitor(t *testing.T) {
+	for _, status := range []RunStatus{RunCompleted, RunFailed, RunCancelled, RunCIMonitorInterrupted} {
+		if !status.Terminal() {
+			t.Errorf("status %q should be terminal", status)
+		}
+	}
+	for _, status := range []RunStatus{RunPending, RunRunning, ""} {
+		if status.Terminal() {
+			t.Errorf("status %q should not be terminal", status)
+		}
+	}
+}
+
 func TestAllStepsOrder(t *testing.T) {
 	steps := AllSteps()
 	if len(steps) != 9 {

@@ -734,6 +734,42 @@ func TestRecoverCleansUpOrphanedWorktrees(t *testing.T) {
 	}
 }
 
+func TestSkipWorktreeCleanupPreservesInterruptedCIUnpushedCommit(t *testing.T) {
+	p := paths.WithRoot(t.TempDir())
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	d, err := db.Open(p.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	repo, pushedHead := setupTestGitRepo(t, p, d, "ci-interrupted")
+	run, err := d.InsertRun(repo.ID, "feature", pushedHead, pushedHead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.UpdateRunStatus(run.ID, types.RunCIMonitorInterrupted); err != nil {
+		t.Fatal(err)
+	}
+	wtPath := p.WorktreeDir(repo.ID, run.ID)
+	if err := gitpkg.WorktreeAdd(context.Background(), p.RepoDir(repo.ID), wtPath, pushedHead); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, wtPath, "config", "user.email", "test@test.com")
+	gitCmd(t, wtPath, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(wtPath, "fix.txt"), []byte("ci fix"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, wtPath, "add", "-A")
+	gitCmd(t, wtPath, "commit", "-m", "no-slop: apply CI fixes")
+
+	skip, reason := skipWorktreeCleanup(context.Background(), d, run.ID, wtPath)
+	if !skip || !strings.Contains(reason, "unpushed") {
+		t.Fatalf("skip=%v reason=%q, want preservation of unpushed CI fix", skip, reason)
+	}
+}
+
 // TestRecoverIsolatesGateRepoHooksPath covers issue #122 for existing
 // installs: bare repos created before the fix have no per-worktree
 // core.hookspath, so a husky pollution still disables their hook.

@@ -616,6 +616,65 @@ func (d *DB) RecoverStaleRunsExcept(errMsg string, preserved map[string]struct{}
 	defer tx.Rollback()
 
 	placeholders, args := recoveryExclusionClause(preserved)
+
+	// Preserve a run interrupted only while monitoring an already-created PR.
+	// It is terminal (the old monitor cannot be resumed safely) but is not a
+	// failed delivery: the published PR remains open for review and merging.
+	ciArgs := []any{
+		types.RunCIMonitorInterrupted, types.RunCIMonitorInterruptedReason, ts, ts, ts,
+		types.RunPending, types.RunRunning,
+		types.StepCI,
+		types.StepStatusRunning, types.StepStatusAwaitingApproval, types.StepStatusFixing, types.StepStatusFixReview,
+		types.StepCI,
+		types.StepStatusRunning, types.StepStatusAwaitingApproval, types.StepStatusFixing, types.StepStatusFixReview,
+	}
+	ciArgs = append(ciArgs, args...)
+	ciResult, err := tx.Exec(
+		`UPDATE runs
+		 SET status = ?, error = ?, push_active = 0,
+		     parked_ms = COALESCE(parked_ms, 0) + CASE
+		       WHEN awaiting_agent_since IS NOT NULL AND ? > awaiting_agent_since
+		       THEN (? - awaiting_agent_since) * 1000 ELSE 0 END,
+		     awaiting_agent_since = NULL, updated_at = ?
+		 WHERE status IN (?, ?)
+		   AND pr_url IS NOT NULL AND pr_url <> ''
+		   AND EXISTS (
+		     SELECT 1 FROM step_results ci
+		     WHERE ci.run_id = runs.id AND ci.step_name = ?
+		       AND ci.status IN (?, ?, ?, ?)
+		   )
+		   AND NOT EXISTS (
+		     SELECT 1 FROM step_results active
+		     WHERE active.run_id = runs.id AND active.step_name <> ?
+		       AND active.status IN (?, ?, ?, ?)
+		   )`+placeholders,
+		ciArgs...,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("recover interrupted ci monitor runs: %w", err)
+	}
+	ciCount, err := ciResult.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("ci rows affected: %w", err)
+	}
+
+	_, err = tx.Exec(
+		`UPDATE step_results
+		 SET status = ?, error = ?, completed_at = ?
+		 WHERE step_name = ? AND status IN (?, ?, ?, ?)
+		   AND run_id IN (
+		     SELECT id FROM runs
+		     WHERE status = ? AND error = ? AND updated_at = ?
+		   )`,
+		types.StepStatusSkipped, types.RunCIMonitorInterruptedReason, ts,
+		types.StepCI,
+		types.StepStatusRunning, types.StepStatusAwaitingApproval, types.StepStatusFixing, types.StepStatusFixReview,
+		types.RunCIMonitorInterrupted, types.RunCIMonitorInterruptedReason, ts,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("recover interrupted ci monitor steps: %w", err)
+	}
+
 	stepArgs := []any{
 		types.StepStatusFailed, errMsg, ts,
 		types.StepStatusRunning, types.StepStatusAwaitingApproval, types.StepStatusFixing, types.StepStatusFixReview,
@@ -659,7 +718,7 @@ func (d *DB) RecoverStaleRunsExcept(errMsg string, preserved map[string]struct{}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit transaction: %w", err)
 	}
-	return int(count), nil
+	return int(ciCount + count), nil
 }
 
 func recoveryExclusionClause(preserved map[string]struct{}) (string, []any) {

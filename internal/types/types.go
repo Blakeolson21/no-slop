@@ -16,12 +16,26 @@ const (
 	RunCompleted RunStatus = "completed"
 	RunFailed    RunStatus = "failed"
 	RunCancelled RunStatus = "cancelled"
+	// RunCIMonitorInterrupted means the daemon restarted while monitoring an
+	// already-created PR. The PR remains intact, so this is not a pipeline failure.
+	RunCIMonitorInterrupted RunStatus = "ci_monitor_interrupted"
 )
 
 const (
-	RunCancelReasonAbortedByUser = "cancelled: aborted by user"
-	RunCancelReasonSuperseded    = "cancelled: superseded by new push"
+	RunCancelReasonAbortedByUser  = "cancelled: aborted by user"
+	RunCancelReasonSuperseded     = "cancelled: superseded by new push"
+	RunCIMonitorInterruptedReason = "ci monitor interrupted by daemon restart; PR remains open"
 )
+
+// Terminal reports whether the daemon will never advance this run further.
+func (s RunStatus) Terminal() bool {
+	switch s {
+	case RunCompleted, RunFailed, RunCancelled, RunCIMonitorInterrupted:
+		return true
+	default:
+		return false
+	}
+}
 
 // StepName identifies a pipeline step.
 type StepName string

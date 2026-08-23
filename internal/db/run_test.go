@@ -193,6 +193,44 @@ func TestRecoverStaleRunsClearsAwaitingAgent(t *testing.T) {
 	}
 }
 
+func TestRecoverStaleRunsPreservesOpenPRMonitor(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feature", "abc", "def")
+	if err := d.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+	const prURL = "https://github.com/user/project/pull/42"
+	if err := d.UpdateRunPRURL(run.ID, prURL); err != nil {
+		t.Fatal(err)
+	}
+	ciStep, _ := d.InsertStepResult(run.ID, types.StepCI)
+	if err := d.StartStep(ciStep.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := d.RecoverStaleRuns("daemon crashed"); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := d.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Status != types.RunCIMonitorInterrupted {
+		t.Fatalf("status = %q, want %q", recovered.Status, types.RunCIMonitorInterrupted)
+	}
+	if recovered.PRURL == nil || *recovered.PRURL != prURL {
+		t.Fatalf("PR URL = %v, want preserved %q", recovered.PRURL, prURL)
+	}
+	step, err := d.GetStepResult(ciStep.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.Status != types.StepStatusSkipped {
+		t.Fatalf("CI step = %q, want skipped", step.Status)
+	}
+}
+
 func TestRunGetNotFound(t *testing.T) {
 	d := openTestDB(t)
 	got, err := d.GetRun("nonexistent")
