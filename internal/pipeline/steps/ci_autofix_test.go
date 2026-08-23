@@ -12,6 +12,7 @@ import (
 
 	"github.com/Blakeolson21/no-slop/internal/agent"
 	"github.com/Blakeolson21/no-slop/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestCIStep_CIFailureAutoFix(t *testing.T) {
@@ -54,7 +55,7 @@ func TestCIStep_CIFailureAutoFix(t *testing.T) {
 	}
 
 	prURL := "https://github.com/test/repo/pull/42"
-	sctx := newTestContext(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Env = env
 	sctx.Run.PRURL = &prURL
 	sctx.Repo.UpstreamURL = upstream
@@ -62,22 +63,23 @@ func TestCIStep_CIFailureAutoFix(t *testing.T) {
 	sctx.UserIntent = "user wanted CI autofix to preserve the extracted intent"
 	sctx.Config.CITimeout = 30 * time.Second
 	sctx.Config.AutoFix = config.AutoFix{CI: 3}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	sctx.Ctx = ctx
+	for _, name := range []types.StepName{types.StepReview, types.StepTest, types.StepDocument} {
+		result, err := sctx.DB.InsertStepResult(sctx.Run.ID, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sctx.DB.UpdateStepStatus(result.ID, types.StepStatusCompleted); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	pollCount := 0
 	step := &CIStep{
 		waitForNextPoll: func(ctx context.Context, interval time.Duration) error {
-			pollCount++
-			if pollCount == 2 {
-				cancel()
-			}
-			return ctx.Err()
+			t.Fatal("CI monitor polled again after making required gate evidence stale")
+			return nil
 		},
 	}
 	outcome, err := step.Execute(sctx)
@@ -86,8 +88,8 @@ func TestCIStep_CIFailureAutoFix(t *testing.T) {
 		t.Error("expected agent to be called for CI auto-fix")
 	}
 
-	if len(ag.calls) == 0 {
-		t.Fatal("expected agent call")
+	if len(ag.calls) != 1 {
+		t.Fatalf("agent calls = %d, want exactly one CI repair", len(ag.calls))
 	}
 
 	foundAutoFix := false

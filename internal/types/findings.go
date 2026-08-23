@@ -105,8 +105,48 @@ func FindingMatches(item Finding, stableIDs map[string][]Finding, exact map[Find
 }
 
 func FindingIDCorroborates(item, candidate Finding) bool {
-	return item.ID != "" && !item.IDGenerated && item.ID == candidate.ID && !candidate.IDGenerated &&
-		item.File != "" && item.File == candidate.File && item.Line > 0 && item.Line == candidate.Line
+	if item.ID == "" || item.IDGenerated || item.ID != candidate.ID || candidate.IDGenerated {
+		return false
+	}
+	itemTerms := findingSemanticTerms(item.Description)
+	candidateTerms := findingSemanticTerms(candidate.Description)
+	shared := 0
+	for term := range itemTerms {
+		if candidateTerms[term] {
+			shared++
+		}
+	}
+	return shared >= 2 || shared == 1 && (len(itemTerms) <= 2 || len(candidateTerms) <= 2)
+}
+
+func findingSemanticTerms(description string) map[string]bool {
+	terms := make(map[string]bool)
+	for _, term := range strings.FieldsFunc(strings.ToLower(description), func(r rune) bool {
+		return r < 'a' || r > 'z'
+	}) {
+		if len(term) < 4 || findingSemanticStopWords[term] {
+			continue
+		}
+		switch {
+		case len(term) > 5 && strings.HasSuffix(term, "ies"):
+			term = strings.TrimSuffix(term, "ies") + "y"
+		case len(term) > 5 && strings.HasSuffix(term, "ing"):
+			term = strings.TrimSuffix(term, "ing")
+		case len(term) > 4 && strings.HasSuffix(term, "s"):
+			term = strings.TrimSuffix(term, "s")
+		}
+		terms[term] = true
+	}
+	return terms
+}
+
+var findingSemanticStopWords = map[string]bool{
+	"after": true, "before": true, "being": true, "could": true,
+	"does": true, "from": true, "have": true, "into": true,
+	"same": true, "still": true, "than": true, "that": true,
+	"their": true, "there": true, "these": true, "this": true,
+	"through": true, "when": true, "where": true, "which": true,
+	"while": true, "with": true, "would": true,
 }
 
 // TestArtifact describes evidence produced by the test step for human review.

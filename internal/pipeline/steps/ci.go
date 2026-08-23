@@ -458,12 +458,12 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 					manualFixAttempted = true
 					sctx.Log(fmt.Sprintf("issues detected: %s - manual fix requested...", issueDesc))
 					previousHeadSHA := sctx.Run.HeadSHA
-					changed, err := s.autoFixCI(sctx, host, pr, fixTargets, mergeConflict)
+					result, err := s.autoFixCI(sctx, host, pr, fixTargets, mergeConflict)
 					if err != nil {
 						if fatalErr := s.handleCIRepairError(sctx, previousHeadSHA, "manual fix", err); fatalErr != nil {
 							return nil, fatalErr
 						}
-					} else if changed || sctx.Run.HeadSHA != previousHeadSHA {
+					} else if result.HeadChanged() {
 						s.lastFixedChecks = fixKey
 						s.lastFixedCompletedAt = fixCompletedAt
 						return s.restartValidationOutcome(), nil
@@ -491,12 +491,12 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 					s.ciFixAttempts = nextAttempt
 					sctx.Log(fmt.Sprintf("issues detected: %s - auto-fixing (attempt %d/%d)...", issueDesc, s.ciFixAttempts, ciFixLimit))
 					previousHeadSHA := sctx.Run.HeadSHA
-					changed, err := s.autoFixCI(sctx, host, pr, fixTargets, mergeConflict)
+					result, err := s.autoFixCI(sctx, host, pr, fixTargets, mergeConflict)
 					if err != nil {
 						if fatalErr := s.handleCIRepairError(sctx, previousHeadSHA, "auto-fix", err); fatalErr != nil {
 							return nil, fatalErr
 						}
-					} else if changed || sctx.Run.HeadSHA != previousHeadSHA {
+					} else if result.HeadChanged() {
 						s.lastFixedChecks = fixKey
 						s.lastFixedCompletedAt = fixCompletedAt
 						return s.restartValidationOutcome(), nil

@@ -201,6 +201,23 @@ func ciFailureOutcome(failing []string, mergeConflict bool, summary string) *pip
 	}
 }
 
+func ciRequiredGatesStaleOutcome(previousHeadSHA, headSHA string, refreshErr error) *pipeline.StepOutcome {
+	description := fmt.Sprintf("CI changed the published head from %s to %s; review, test, and document must run again for the new commit before it can be merged", previousHeadSHA, headSHA)
+	if refreshErr != nil {
+		description = fmt.Sprintf("CI changed the published head from %s to %s, but the PR attestation could not be refreshed; required gates must run again before merge", previousHeadSHA, headSHA)
+	}
+	findings := Findings{
+		Summary: "required pipeline gates are stale after the CI head changed",
+		Items: []Finding{{
+			Severity:    "warning",
+			Description: description,
+			Action:      types.ActionAskUser,
+		}},
+	}
+	findingsJSON, _ := json.Marshal(findings)
+	return &pipeline.StepOutcome{NeedsApproval: true, Findings: string(findingsJSON)}
+}
+
 func ciMergeabilityOutcome(summary, description string) *pipeline.StepOutcome {
 	findings := Findings{
 		Summary: summary,

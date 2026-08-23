@@ -80,8 +80,12 @@ func TestCIStep_RefreshPRAttestationBindsCurrentHead(t *testing.T) {
 		Body:  "## Pipeline\n\n" + noMistakesPRSignature + "\n\n" + oldAttestation,
 	}}
 
-	if err := (&CIStep{}).refreshPRAttestation(sctx, host, &scm.PR{Number: "42"}, baseSHA); err != nil {
+	stale, err := (&CIStep{}).refreshPRAttestation(sctx, host, &scm.PR{Number: "42"}, baseSHA)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !stale {
+		t.Fatal("completed required gates were not identified as stale")
 	}
 	if len(host.updates) != 1 {
 		t.Fatalf("PR updates = %d, want 1", len(host.updates))
@@ -104,15 +108,68 @@ func TestCIStep_AutoFixWithoutPushDoesNotRefreshPRAttestation(t *testing.T) {
 	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
 	host := &recordingPRContentHost{getErr: errors.New("PR content unavailable")}
 
-	pushed, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)
+	result, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pushed {
+	if result.Pushed || result.HeadChanged() {
 		t.Fatal("no-change CI fix reported a push")
 	}
 	if host.getCalls != 0 || len(host.updates) != 0 {
 		t.Fatalf("no-change CI fix touched PR content: reads=%d updates=%d", host.getCalls, len(host.updates))
+	}
+}
+
+func TestCIStep_AutoFixRefreshesAttestationAfterAdoptingRemoteHead(t *testing.T) {
+	upstream := t.TempDir()
+	gitCmd(t, upstream, "init", "--bare")
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "remote", "add", "origin", upstream)
+	gitCmd(t, dir, "push", "origin", "feature")
+	if err := os.WriteFile(filepath.Join(dir, "already-published.txt"), []byte("published"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, dir, "add", "-A")
+	gitCmd(t, dir, "commit", "-m", "already published")
+	newHeadSHA := gitCmd(t, dir, "rev-parse", "HEAD")
+	gitCmd(t, dir, "push", "origin", "feature")
+
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Repo.UpstreamURL = upstream
+	sctx.Run.Branch = "refs/heads/feature"
+	var completed []*db.StepResult
+	for _, name := range []types.StepName{types.StepReview, types.StepTest, types.StepDocument} {
+		step, err := sctx.DB.InsertStepResult(sctx.Run.ID, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sctx.DB.UpdateStepStatus(step.ID, types.StepStatusCompleted); err != nil {
+			t.Fatal(err)
+		}
+		step.Status = types.StepStatusCompleted
+		completed = append(completed, step)
+	}
+	host := &recordingPRContentHost{content: scm.PRContent{
+		Title: "fix: adopt published head",
+		Body:  "## Pipeline\n\n" + noMistakesPRSignature + "\n\n" + buildPipelineAttestation(completed, headSHA),
+	}}
+
+	result, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Pushed || !result.HeadChanged() || !result.RequiredGatesStale {
+		t.Fatalf("adopted-head result = %#v", result)
+	}
+	if result.HeadSHA != newHeadSHA || sctx.Run.HeadSHA != newHeadSHA {
+		t.Fatalf("adopted head = %q / %q, want %q", result.HeadSHA, sctx.Run.HeadSHA, newHeadSHA)
+	}
+	if host.getCalls != 1 || len(host.updates) != 1 {
+		t.Fatalf("attestation refresh calls: reads=%d updates=%d", host.getCalls, len(host.updates))
+	}
+	attestation := parsePipelineAttestationForTest(t, host.updates[0].Body)
+	if attestation.HeadSHA != newHeadSHA {
+		t.Fatalf("attestation head = %q, want %q", attestation.HeadSHA, newHeadSHA)
 	}
 }
 
@@ -133,11 +190,14 @@ func TestCIStep_AutoFixPushFailsClosedWhenAttestationRefreshFails(t *testing.T) 
 	sctx.Run.Branch = "refs/heads/feature"
 	host := &recordingPRContentHost{getErr: errors.New("PR content unavailable")}
 
-	pushed, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)
+	result, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)
 	if err == nil || !strings.Contains(err.Error(), "refresh PR pipeline attestation") {
 		t.Fatalf("autoFixCI error = %v", err)
 	}
-	if pushed {
+	if !result.Pushed || !result.HeadChanged() {
+		t.Fatalf("failed refresh lost the published head change: %#v", result)
+	}
+	if result.RequiredGatesStale {
 		t.Fatal("failed attestation refresh reported successful CI fix")
 	}
 	if host.getCalls != 1 || len(host.updates) != 0 {

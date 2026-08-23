@@ -540,3 +540,16 @@ func TestNormalizeFindingsPersistsGeneratedIDProvenance(t *testing.T) {
 		t.Fatalf("round-trip provenance = %#v", parsed.Items)
 	}
 }
+
+func TestFindingIDCorroboratesUsesSemanticContinuity(t *testing.T) {
+	prior := Finding{ID: "loader-race", File: "loader.go", Line: 12, Description: "unsafe loader"}
+	moved := Finding{ID: "loader-race", File: "manager.go", Line: 88, Description: "loader races concurrent shutdown"}
+	unrelated := Finding{ID: "loader-race", File: "loader.go", Line: 12, Description: "cache write can deadlock"}
+
+	if !FindingIDCorroborates(moved, prior) {
+		t.Fatal("rephrased and relocated finding lost its stable identity")
+	}
+	if FindingIDCorroborates(unrelated, prior) {
+		t.Fatal("unrelated finding with the same ID and location reused stable identity")
+	}
+}

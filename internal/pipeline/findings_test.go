@@ -26,7 +26,7 @@ func TestMergeFindingsJSON_KeepsDistinctFindingsWithSameAutoID(t *testing.T) {
 
 func TestMergeCarriedFindingsJSON_PreservesExplicitIDAcrossRephrasing(t *testing.T) {
 	carriedRaw := `{"findings":[{"id":"loader-race","severity":"warning","file":"loader.go","line":12,"description":"unsafe loader","action":"ask-user"}],"risk_level":"medium","risk_rationale":"Needs review."}`
-	freshRaw := `{"findings":[{"id":"loader-race","severity":"error","file":"loader.go","line":12,"description":"loader races concurrent shutdown","action":"auto-fix"}],"risk_level":"high","risk_rationale":"Reproduced."}`
+	freshRaw := `{"findings":[{"id":"loader-race","severity":"error","file":"manager.go","line":88,"description":"loader races concurrent shutdown","action":"auto-fix"}],"risk_level":"high","risk_rationale":"Reproduced."}`
 
 	mergedRaw := mergeCarriedFindingsJSON(freshRaw, carriedRaw, "review")
 	merged, err := types.ParseFindingsJSON(mergedRaw)
@@ -43,7 +43,7 @@ func TestMergeCarriedFindingsJSON_PreservesExplicitIDAcrossRephrasing(t *testing
 
 func TestMergeCarriedFindingsJSON_DoesNotTrustUncorroboratedExplicitID(t *testing.T) {
 	carriedRaw := `{"findings":[{"id":"review-1","severity":"warning","file":"loader.go","line":12,"description":"unsafe loader","action":"ask-user"}]}`
-	freshRaw := `{"findings":[{"id":"review-1","severity":"error","file":"cache.go","line":30,"description":"cache write can deadlock","action":"auto-fix"}]}`
+	freshRaw := `{"findings":[{"id":"review-1","severity":"error","file":"loader.go","line":12,"description":"cache write can deadlock","action":"auto-fix"}]}`
 
 	mergedRaw := mergeCarriedFindingsJSON(freshRaw, carriedRaw, "review")
 	merged, err := types.ParseFindingsJSON(mergedRaw)

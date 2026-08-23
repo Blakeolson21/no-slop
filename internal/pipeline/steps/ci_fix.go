@@ -6,20 +6,30 @@ import (
 	"strings"
 
 	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/db"
 	"github.com/Blakeolson21/no-slop/internal/pipeline"
 	"github.com/Blakeolson21/no-slop/internal/scm"
 	"github.com/Blakeolson21/no-slop/internal/testguidance"
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
+type ciFixResult struct {
+	Pushed             bool
+	PreviousHeadSHA    string
+	HeadSHA            string
+	RequiredGatesStale bool
+}
+
+func (r ciFixResult) HeadChanged() bool {
+	return r.HeadSHA != "" && r.HeadSHA != r.PreviousHeadSHA
+}
+
 // autoFixCI runs the agent to fix CI failures and/or merge conflicts, then
 // commits the repair locally for a new validation cycle.
-// Returns (true, nil) when the local head changed, (false, nil)
-// when the agent produced no changes, or (false, err) on failure.
-func (s *CIStep) autoFixCI(sctx *pipeline.StepContext, host scm.Host, pr *scm.PR, failingNames []string, mergeConflict bool) (bool, error) {
+func (s *CIStep) autoFixCI(sctx *pipeline.StepContext, host scm.Host, pr *scm.PR, failingNames []string, mergeConflict bool) (ciFixResult, error) {
 	ctx := sctx.Ctx
 	if err := sctx.DB.SetRunPushActive(sctx.Run.ID, true); err != nil {
-		return false, err
+		return ciFixResult{}, err
 	}
 	defer func() { _ = sctx.DB.SetRunPushActive(sctx.Run.ID, false) }()
 	baseSHA := resolveBranchBaseSHA(ctx, sctx.WorkDir, sctx.Run.BaseSHA, sctx.Repo.DefaultBranch)
@@ -110,36 +120,58 @@ CI logs:
 		OnChunk:    sctx.LogChunk,
 	})
 	if err != nil {
-		return false, fmt.Errorf("agent CI fix: %w", err)
+		return ciFixResult{}, fmt.Errorf("agent CI fix: %w", err)
 	}
 
+	previousHeadSHA := sctx.Run.HeadSHA
 	summary, summaryErr := extractCommitSummary(result)
 	if summaryErr != nil {
 		sctx.Log(fmt.Sprintf("warning: could not parse CI repair summary: %v", summaryErr))
 	}
-	return s.commitRepair(sctx, summary)
+	_, err = s.commitRepair(sctx, summary)
+	fixResult := ciFixResult{PreviousHeadSHA: previousHeadSHA, HeadSHA: sctx.Run.HeadSHA}
+	if err != nil {
+		return fixResult, err
+	}
+	return fixResult, nil
 }
 
-func (s *CIStep) refreshPRAttestation(sctx *pipeline.StepContext, host scm.Host, pr *scm.PR, certifiedHeadSHA string) error {
+func (s *CIStep) refreshPRAttestation(sctx *pipeline.StepContext, host scm.Host, pr *scm.PR, certifiedHeadSHA string) (bool, error) {
 	reader, ok := host.(scm.PRContentReader)
 	if !ok {
-		return nil
+		return false, nil
 	}
 	content, err := reader.GetPRContent(sctx.Ctx, pr)
 	if err != nil {
-		return err
+		return false, err
 	}
 	steps, err := sctx.DB.GetStepsByRun(sctx.Run.ID)
 	if err != nil {
-		return err
+		return false, err
 	}
+	requiredGatesStale := completedRequiredGateCount(steps) == 3
 	body, changed, err := replacePipelineAttestation(content.Body, buildPipelineAttestationWithCertifiedHead(steps, sctx.Run.HeadSHA, certifiedHeadSHA))
 	if err != nil || !changed {
-		return err
+		return requiredGatesStale, err
 	}
 	content.Body = body
 	_, err = host.UpdatePR(sctx.Ctx, pr, content)
-	return err
+	return requiredGatesStale, err
+}
+
+func completedRequiredGateCount(steps []*db.StepResult) int {
+	required := map[types.StepName]bool{
+		types.StepReview:   true,
+		types.StepTest:     true,
+		types.StepDocument: true,
+	}
+	completed := make(map[types.StepName]bool, len(required))
+	for _, step := range steps {
+		if required[step.StepName] && step.Status == types.StepStatusCompleted {
+			completed[step.StepName] = true
+		}
+	}
+	return len(completed)
 }
 
 func replacePipelineAttestation(body, attestation string) (string, bool, error) {
