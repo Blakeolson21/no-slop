@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/ipc"
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
@@ -68,7 +69,23 @@ func TestExecutor_CIRepairMustPassReviewBeforeAnotherPush(t *testing.T) {
 		record(types.StepTest)
 		return &StepOutcome{}, nil
 	}}
-	exec := NewExecutor(database, p, nil, nil, []Step{review, testStep, push, ci}, nil)
+	type resetObservation struct {
+		event    ipc.Event
+		statuses map[types.StepName]types.StepStatus
+		err      error
+	}
+	resetObserved := make(chan resetObservation, 1)
+	exec := NewExecutor(database, p, nil, nil, []Step{review, testStep, push, ci}, func(event ipc.Event) {
+		if event.Type != ipc.EventStepsReset {
+			return
+		}
+		results, err := database.GetStepsByRun(run.ID)
+		observation := resetObservation{event: event, statuses: make(map[types.StepName]types.StepStatus), err: err}
+		for _, result := range results {
+			observation.statuses[result.StepName] = result.Status
+		}
+		resetObserved <- observation
+	})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- exec.Execute(ctx, run, repo, workDir) }()
@@ -95,6 +112,23 @@ func TestExecutor_CIRepairMustPassReviewBeforeAnotherPush(t *testing.T) {
 	}
 	if pushCalls != 1 {
 		t.Fatalf("push executed %d times; repaired head reached push before re-review", pushCalls)
+	}
+	var reset resetObservation
+	select {
+	case reset = <-resetObserved:
+	case <-time.After(5 * time.Second):
+		t.Fatal("steps reset event was not published")
+	}
+	if reset.err != nil {
+		t.Fatalf("read reset state at event publication: %v", reset.err)
+	}
+	if reset.event.RunID != run.ID || reset.event.RepoID != repo.ID {
+		t.Fatalf("steps reset event = %#v, want run %s repo %s", reset.event, run.ID, repo.ID)
+	}
+	for _, stepName := range []types.StepName{types.StepReview, types.StepTest, types.StepPush, types.StepCI} {
+		if reset.statuses[stepName] != types.StepStatusPending {
+			t.Fatalf("%s status at reset publication = %s, want %s", stepName, reset.statuses[stepName], types.StepStatusPending)
+		}
 	}
 	gotRun, err := database.GetRun(run.ID)
 	if err != nil {
@@ -124,6 +158,9 @@ func TestExecutor_CIRepairMustPassReviewBeforeAnotherPush(t *testing.T) {
 			if len(rounds) != 1 || rounds[0].Trigger != "auto_fix" {
 				t.Fatalf("CI repair rounds = %#v, want one auto_fix-triggered round", rounds)
 			}
+		}
+		if result.StepName != types.StepReview && result.Status != types.StepStatusPending {
+			t.Fatalf("reset %s status = %s, want %s", result.StepName, result.Status, types.StepStatusPending)
 		}
 	}
 }

@@ -244,7 +244,7 @@ func (e *Executor) Execute(ctx context.Context, run *db.Run, repo *db.Repo, work
 			break
 		}
 		if restartFrom != "" {
-			restartIndex, err := e.prepareRestart(run.ID, restartFrom, i)
+			restartIndex, err := e.prepareRestart(run, repo, restartFrom, i)
 			if err != nil {
 				return e.failRun(run, repo, fmt.Errorf("step %s requested invalid restart from %s", step.Name(), restartFrom), ctx)
 			}
@@ -269,14 +269,15 @@ func (e *Executor) stepIndex(name types.StepName) (int, error) {
 	return 0, fmt.Errorf("step %s is not in the pipeline", name)
 }
 
-func (e *Executor) prepareRestart(runID string, name types.StepName, currentIndex int) (int, error) {
+func (e *Executor) prepareRestart(run *db.Run, repo *db.Repo, name types.StepName, currentIndex int) (int, error) {
 	index, err := e.stepIndex(name)
 	if err != nil || index >= currentIndex {
 		return 0, fmt.Errorf("invalid restart boundary")
 	}
-	if err := e.db.ResetStepsFrom(runID, e.steps[index].Name().Order()); err != nil {
+	if err := e.db.ResetStepsFrom(run.ID, e.steps[index].Name().Order()); err != nil {
 		return 0, err
 	}
+	e.onEvent(ipc.Event{Type: ipc.EventStepsReset, RunID: run.ID, RepoID: repo.ID})
 	return index, nil
 }
 
@@ -523,7 +524,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 			return e.skipRecoveredRemainder(run, repo, gate.index+1)
 		}
 		if restartFrom != "" {
-			restartIndex, indexErr := e.prepareRestart(run.ID, restartFrom, gate.index)
+			restartIndex, indexErr := e.prepareRestart(run, repo, restartFrom, gate.index)
 			if indexErr != nil {
 				return e.failRun(run, repo, fmt.Errorf("step %s requested invalid restart from %s", gate.step.Name(), restartFrom), ctx)
 			}
@@ -629,7 +630,7 @@ func (e *Executor) executeRecoveredRemainder(ctx context.Context, run *db.Run, r
 			return e.skipRecoveredRemainder(run, repo, index+1)
 		}
 		if restartFrom != "" {
-			restartIndex, indexErr := e.prepareRestart(run.ID, restartFrom, index)
+			restartIndex, indexErr := e.prepareRestart(run, repo, restartFrom, index)
 			if indexErr != nil {
 				return e.failRun(run, repo, fmt.Errorf("step %s requested invalid restart from %s", e.steps[index].Name(), restartFrom), ctx)
 			}
