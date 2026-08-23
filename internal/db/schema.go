@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS step_results (
     last_activity    TEXT,
     agent_pid        INTEGER,
     auto_fix_limit   INTEGER,
+    ci_fix_attempts  INTEGER NOT NULL DEFAULT 0,
     convergence_json TEXT
 );
 
@@ -214,6 +215,7 @@ var migrationStatements = []string{
 	`ALTER TABLE step_results ADD COLUMN last_activity TEXT`,
 	`ALTER TABLE step_results ADD COLUMN agent_pid INTEGER`,
 	`ALTER TABLE step_results ADD COLUMN auto_fix_limit INTEGER`,
+	`ALTER TABLE step_results ADD COLUMN ci_fix_attempts INTEGER NOT NULL DEFAULT 0`,
 	// The review step's convergence report is nullable: legacy rows and
 	// non-review steps read back as "no report", never a fabricated one.
 	`ALTER TABLE step_results ADD COLUMN convergence_json TEXT`,
