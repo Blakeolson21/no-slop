@@ -55,6 +55,7 @@ ci:
 
 commit:
   fix_message: "chore(no-slop-{{.Step}}): {{.Summary}}"
+  signoff: true
 
 intent:
   enabled: true
@@ -371,6 +372,17 @@ Legitimate `U+200C` zero-width non-joiner and `U+200D` zero-width joiner text sh
 The final rendered subject is validated again, so unsafe characters in an agent-provided summary are also rejected.
 The setting does not change commit subjects created by the Rebase or Push steps.
 A per-repo [`commit.fix_message`](/no-slop/reference/repo-config/#commitfix_message) value overrides this global setting.
+
+### commit.signoff
+
+Add a DCO `Signed-off-by` trailer to commits authored by the Review, Test, Document, Lint, CI, and Push fix paths.
+
+| | |
+| --- | --- |
+| Type | `bool` |
+| Default | `false` |
+
+The trailer is derived by Git from the daemon's committing identity. Enable this only when that identity is authorized to certify pipeline-authored changes. A trusted per-repo [`commit.signoff`](/no-slop/reference/repo-config/#commitsignoff) value overrides the global setting.
 
 ### intent
 

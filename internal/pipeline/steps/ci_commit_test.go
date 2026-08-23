@@ -370,6 +370,7 @@ func TestCIStep_CommitAndPush(t *testing.T) {
 
 	ag := &mockAgent{name: "test"}
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Config.Commit.Signoff = true
 	sctx.Repo.UpstreamURL = upstream
 	sctx.Run.Branch = "refs/heads/feature"
 	if err := sctx.DB.UpdateRunPushBinding(sctx.Run.ID, db.PushBinding{HeadSHA: headSHA, TargetKind: "upstream", TargetFingerprint: branchsync.TargetFingerprint(upstream), Ref: "refs/heads/feature"}); err != nil {
@@ -392,6 +393,9 @@ func TestCIStep_CommitAndPush(t *testing.T) {
 	}
 	if localSHA == headSHA {
 		t.Fatal("local head should contain the CI repair")
+	}
+	if body := gitCmd(t, dir, "log", "-1", "--pretty=%B"); !strings.Contains(body, "Signed-off-by: test <test@test.com>") {
+		t.Fatalf("CI-fix commit body = %q, want configured Signed-off-by trailer", body)
 	}
 	dbRun, err := sctx.DB.GetRun(sctx.Run.ID)
 	if err != nil {

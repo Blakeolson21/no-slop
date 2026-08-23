@@ -1127,6 +1127,35 @@ func TestCommitAgentFixes_UsesFallbackSummary(t *testing.T) {
 	}
 }
 
+func TestCommitAgentFixes_RespectsSignoffPolicy(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		signoff     bool
+		wantTrailer bool
+	}{
+		{name: "disabled by default"},
+		{name: "enabled", signoff: true, wantTrailer: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir, baseSHA, headSHA := setupGitRepo(t)
+			gitCmd(t, dir, "checkout", "--detach", headSHA)
+			sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+			sctx.Config.Commit.Signoff = tt.signoff
+			if err := os.WriteFile(filepath.Join(dir, "agent-change.txt"), []byte("change"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := commitAgentFixes(sctx, types.StepDocument, "update docs", "fallback"); err != nil {
+				t.Fatal(err)
+			}
+			body := gitCmd(t, dir, "log", "-1", "--pretty=%B")
+			hasTrailer := strings.Contains(body, "Signed-off-by: test <test@test.com>")
+			if hasTrailer != tt.wantTrailer {
+				t.Fatalf("Signed-off-by present = %v, want %v; body %q", hasTrailer, tt.wantTrailer, body)
+			}
+		})
+	}
+}
+
 func TestMatchIgnorePattern(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

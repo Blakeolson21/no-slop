@@ -30,11 +30,13 @@ const MaxFixMessageSummaryBytes = 4096
 // CommitRaw is the YAML representation of auto-fix commit settings.
 type CommitRaw struct {
 	FixMessage *string `yaml:"fix_message"`
+	Signoff    *bool   `yaml:"signoff"`
 }
 
 // Commit is the resolved auto-fix commit configuration.
 type Commit struct {
 	FixMessage string
+	Signoff    bool
 }
 
 type fixMessageData struct {

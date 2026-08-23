@@ -85,6 +85,21 @@ func TestEffectiveRepoConfig_TrustedOverridesPushedCommands(t *testing.T) {
 	}
 }
 
+func TestEffectiveRepoConfig_CommitSignoffIsTrustedOnly(t *testing.T) {
+	t.Parallel()
+	yes, no := true, false
+	pushed := &RepoConfig{Commit: CommitRaw{Signoff: &yes}}
+	trusted := &RepoConfig{Commit: CommitRaw{Signoff: &no}}
+
+	got := EffectiveRepoConfig(pushed, trusted, true)
+	if got.Commit.Signoff == nil || *got.Commit.Signoff {
+		t.Fatalf("effective commit.signoff = %v, want trusted false", got.Commit.Signoff)
+	}
+	if EffectiveRepoConfig(pushed, nil, true).Commit.Signoff != nil {
+		t.Fatal("commit.signoff should be unset without a trusted repository value")
+	}
+}
+
 // TestEffectiveRepoConfig_TrustedEmptyAgentInheritsGlobal proves that when the
 // trusted copy does not pin an agent, the effective agent is empty so Merge
 // falls back to the global agent — the pushed-branch agent never wins.

@@ -169,7 +169,7 @@ func (s *CIStep) commitRepair(sctx *pipeline.StepContext, summary string) (bool,
 	if _, err := stepGitRun(sctx, "add", "-A"); err != nil {
 		return false, fmt.Errorf("stage CI changes: %w", err)
 	}
-	if _, err := stepGitRun(sctx, "commit", "-m", message); err != nil {
+	if _, err := stepGitRun(sctx, pipelineFixCommitArgs(sctx.Config.Commit, message)...); err != nil {
 		return false, fmt.Errorf("commit: %w", err)
 	}
 	headSHA, err := stepGitHeadSHA(sctx)

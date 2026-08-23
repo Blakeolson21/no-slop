@@ -151,7 +151,7 @@ func commitAgentFixes(sctx *pipeline.StepContext, stepName types.StepName, summa
 		if _, err := git.Run(ctx, sctx.WorkDir, "add", "-A"); err != nil {
 			return fmt.Errorf("stage %s changes: %w", stepName, err)
 		}
-		if _, err := git.Run(ctx, sctx.WorkDir, "commit", "-m", commitMessage); err != nil {
+		if _, err := git.Run(ctx, sctx.WorkDir, pipelineFixCommitArgs(sctx.Config.Commit, commitMessage)...); err != nil {
 			return fmt.Errorf("commit %s changes: %w", stepName, err)
 		}
 	}
@@ -205,6 +205,18 @@ func stepPersistsUncertifiedReview(stepName types.StepName) bool {
 	default:
 		return false
 	}
+}
+
+// pipelineFixCommitArgs is the single policy seam for commits authored by the
+// pipeline after the submitted branch enters the gate. Signoff is opt-in: it
+// asserts the configured daemon committer's DCO authority and therefore comes
+// only from operator config or the trusted default-branch repository config.
+func pipelineFixCommitArgs(commit config.Commit, message string) []string {
+	args := []string{"commit"}
+	if commit.Signoff {
+		args = append(args, "-s")
+	}
+	return append(args, "-m", message)
 }
 
 func extractCommitSummary(result *agent.Result) (string, error) {

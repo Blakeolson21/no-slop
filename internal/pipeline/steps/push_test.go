@@ -166,6 +166,31 @@ func TestAssertReviewApprovedPushHead_RefusesMissingLegacyState(t *testing.T) {
 	}
 }
 
+func TestPushStep_SignsOffResidualAgentChangesWhenConfigured(t *testing.T) {
+	upstream := t.TempDir()
+	gitCmd(t, upstream, "init", "--bare")
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "remote", "add", "origin", upstream)
+	gitCmd(t, dir, "push", "origin", "main")
+	gitCmd(t, dir, "push", "origin", "feature")
+	if err := os.WriteFile(filepath.Join(dir, "residual.txt"), []byte("formatted\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Repo.UpstreamURL = upstream
+	sctx.Run.Branch = "refs/heads/feature"
+	sctx.Config.Commit.Signoff = true
+	recordReviewApproval(t, sctx, headSHA)
+	if _, err := (&PushStep{}).Execute(sctx); err != nil {
+		t.Fatal(err)
+	}
+	body := gitCmd(t, dir, "log", "-1", "--pretty=%B")
+	if !strings.Contains(body, "Signed-off-by: test <test@test.com>") {
+		t.Fatalf("push-fix commit body = %q, want configured Signed-off-by trailer", body)
+	}
+}
+
 func TestPushStep_BindsRemoteAndDatabaseToVerifiedCommitWhenHEADMovesDuringPush(t *testing.T) {
 	upstream := t.TempDir()
 	gitCmd(t, upstream, "init", "--bare")

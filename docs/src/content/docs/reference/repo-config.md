@@ -74,6 +74,7 @@ ci:
 
 commit:
   fix_message: "chore(no-slop-{{.Step}}): {{.Summary}}"
+  signoff: true
 
 intent:
   enabled: true
@@ -493,6 +494,17 @@ That includes the 1,024-byte template limit, 16-placeholder limit, 4,096-byte su
 The setting applies to the Review, Test, Document, Lint, and CI repair paths, not commits created by the Rebase or Push steps.
 
 This non-executing field is read from the pushed branch, so a branch can adopt its own commit convention without enabling `allow_repo_commands`.
+
+### commit.signoff
+
+Override whether pipeline-authored fix commits receive Git's `Signed-off-by` trailer.
+
+| | |
+| --- | --- |
+| Type | `bool` |
+| Default | Inherits global config, whose default is `false` |
+
+This policy applies to the shared Review, Test, Document, and Lint fix path and to residual CI and Push fix commits. It is honored only from the trusted default-branch copy of `.no-slop.yaml`: a feature branch cannot opt the daemon's committing identity into a DCO assertion for its own changes.
 
 ### intent
 

@@ -295,3 +295,50 @@ func TestMerge_CommitFixMessagePrecedence(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadCommitSignoffPolicy(t *testing.T) {
+	t.Parallel()
+	globalPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(globalPath, []byte("commit:\n  signoff: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	global, err := LoadGlobal(globalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if global.Commit.Signoff == nil || !*global.Commit.Signoff {
+		t.Fatalf("global commit.signoff = %v, want true", global.Commit.Signoff)
+	}
+
+	repo, err := LoadRepoFromBytes([]byte("commit:\n  signoff: false\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repo.Commit.Signoff == nil || *repo.Commit.Signoff {
+		t.Fatalf("repo commit.signoff = %v, want false", repo.Commit.Signoff)
+	}
+}
+
+func TestMergeCommitSignoffPrecedence(t *testing.T) {
+	t.Parallel()
+	yes, no := true, false
+	tests := []struct {
+		name   string
+		global CommitRaw
+		repo   CommitRaw
+		want   bool
+	}{
+		{name: "default off"},
+		{name: "global on", global: CommitRaw{Signoff: &yes}, want: true},
+		{name: "repo overrides off", global: CommitRaw{Signoff: &yes}, repo: CommitRaw{Signoff: &no}},
+		{name: "repo on", repo: CommitRaw{Signoff: &yes}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Merge(&GlobalConfig{Commit: tt.global}, &RepoConfig{Commit: tt.repo})
+			if cfg.Commit.Signoff != tt.want {
+				t.Fatalf("commit.signoff = %v, want %v", cfg.Commit.Signoff, tt.want)
+			}
+		})
+	}
+}

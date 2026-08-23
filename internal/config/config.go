@@ -821,6 +821,7 @@ ci:
 # Repo config may override this value.
 # commit:
 #   fix_message: "no-slop({{.Step}}): {{.Summary}}"
+#   signoff: false
 
 # User-intent extraction. When you push a branch, no-slop can read recent
 # transcripts from your local agent (Claude Code, Codex, OpenCode, Rovo Dev, Pi,
@@ -1769,17 +1770,21 @@ func validatePathInstructionGlob(pattern string) error {
 // branch - this blocks the supply-chain vector for repos that ship
 // .no-slop.yaml only on feature branches.
 //
-// Non-executing fields (ignore patterns, auto-fix, commit, intent, test) are
+// Non-executing fields (ignore patterns, auto-fix, commit.fix_message, intent, test) are
 // always taken from the pushed copy, matching prior behavior, since they cannot
 // run arbitrary shell, select a process, or spend the maintainer's CI minutes.
-// The single exception inside test is evidence.branch, which names a git ref
-// the daemon pushes to and is therefore trusted-only.
+// commit.signoff is trusted-only because it asserts the daemon committer's DCO
+// authority. The other exception is test.evidence.branch, which names a git
+// ref the daemon pushes to and is therefore trusted-only.
 func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *RepoConfig {
 	if pushed == nil {
 		pushed = &RepoConfig{}
 	}
 	effective := *pushed
 	if trusted != nil {
+		// A DCO signoff asserts the daemon committer's authority. Only the
+		// trusted default branch may opt that identity into signing fixes.
+		effective.Commit.Signoff = trusted.Commit.Signoff
 		effective.Document = trusted.Document
 		// Slop selects validation depth and private-name policy. A pushed branch
 		// must not lower its own tier or suppress an outbound or leak check.
@@ -1814,6 +1819,7 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		// branch without its marker file, so this is defense in depth.
 		effective.Test.Evidence.Branch = trusted.Test.Evidence.Branch
 	} else {
+		effective.Commit.Signoff = nil
 		effective.Document = DocumentRaw{}
 		effective.Slop = SlopRaw{}
 		effective.Review = ReviewRaw{}
@@ -2148,6 +2154,12 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 	}
 	if repo.Commit.FixMessage != nil {
 		commit.FixMessage = *repo.Commit.FixMessage
+	}
+	if global.Commit.Signoff != nil {
+		commit.Signoff = *global.Commit.Signoff
+	}
+	if repo.Commit.Signoff != nil {
+		commit.Signoff = *repo.Commit.Signoff
 	}
 
 	slop := resolveSlop(repo.Slop)

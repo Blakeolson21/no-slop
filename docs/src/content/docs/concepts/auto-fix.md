@@ -108,6 +108,8 @@ An out-of-band backward or divergent reset aborts the run instead of dropping re
 The template does not control commits created by the Rebase or Push steps.
 The Push step uses `no-slop: apply agent fixes` for remaining uncommitted changes.
 
+When `commit.signoff` is enabled globally or by the trusted repository config, every pipeline-authored fix commit includes Git's `Signed-off-by` trailer. The default remains unsigned; enabling signoff asserts that the configured daemon committing identity may certify those automated changes for a DCO-gated repository.
+
 ## Step rounds
 
 Each execution of a step (initial run or follow-up auto-fix run) is recorded as a "round" in the database.
