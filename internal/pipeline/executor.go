@@ -246,7 +246,7 @@ func (e *Executor) Execute(ctx context.Context, run *db.Run, repo *db.Repo, work
 		if restartFrom != "" {
 			restartIndex, err := e.prepareRestart(run, repo, restartFrom, i)
 			if err != nil {
-				return e.failRun(run, repo, fmt.Errorf("step %s requested invalid restart from %s", step.Name(), restartFrom), ctx)
+				return e.failRun(run, repo, restartStepError(step.Name(), restartFrom, err), ctx)
 			}
 			i = restartIndex - 1
 		}
@@ -271,8 +271,11 @@ func (e *Executor) stepIndex(name types.StepName) (int, error) {
 
 func (e *Executor) prepareRestart(run *db.Run, repo *db.Repo, name types.StepName, currentIndex int) (int, error) {
 	index, err := e.stepIndex(name)
-	if err != nil || index >= currentIndex {
-		return 0, fmt.Errorf("invalid restart boundary")
+	if err != nil {
+		return 0, err
+	}
+	if index >= currentIndex {
+		return 0, fmt.Errorf("restart boundary is not before the current step")
 	}
 	if err := e.db.ResetStepsFrom(run.ID, e.steps[index].Name().Order()); err != nil {
 		return 0, err
@@ -526,7 +529,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 		if restartFrom != "" {
 			restartIndex, indexErr := e.prepareRestart(run, repo, restartFrom, gate.index)
 			if indexErr != nil {
-				return e.failRun(run, repo, fmt.Errorf("step %s requested invalid restart from %s", gate.step.Name(), restartFrom), ctx)
+				return e.failRun(run, repo, restartStepError(gate.step.Name(), restartFrom, indexErr), ctx)
 			}
 			return e.executeRecoveredRemainder(ctx, run, repo, workDir, logDir, restartIndex)
 		}
@@ -632,7 +635,7 @@ func (e *Executor) executeRecoveredRemainder(ctx context.Context, run *db.Run, r
 		if restartFrom != "" {
 			restartIndex, indexErr := e.prepareRestart(run, repo, restartFrom, index)
 			if indexErr != nil {
-				return e.failRun(run, repo, fmt.Errorf("step %s requested invalid restart from %s", e.steps[index].Name(), restartFrom), ctx)
+				return e.failRun(run, repo, restartStepError(e.steps[index].Name(), restartFrom, indexErr), ctx)
 			}
 			index = restartIndex - 1
 		}
@@ -641,6 +644,10 @@ func (e *Executor) executeRecoveredRemainder(ctx context.Context, run *db.Run, r
 		return e.failRun(run, repo, fmt.Errorf("complete recovered run: %w", err), ctx)
 	}
 	return nil
+}
+
+func restartStepError(stepName, restartFrom types.StepName, err error) error {
+	return fmt.Errorf("step %s requested restart from %s: %w", stepName, restartFrom, err)
 }
 
 func (e *Executor) skipRecoveredRemainder(run *db.Run, repo *db.Repo, start int) error {

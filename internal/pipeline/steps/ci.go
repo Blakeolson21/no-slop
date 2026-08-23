@@ -464,7 +464,7 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 					} else if changed || sctx.Run.HeadSHA != previousHeadSHA {
 						s.lastFixedChecks = fixKey
 						s.lastFixedCompletedAt = fixCompletedAt
-						return &pipeline.StepOutcome{RestartFrom: types.StepReview}, nil
+						return s.restartValidationOutcome(), nil
 					} else {
 						sctx.Log("CI fix produced no changes, returning for manual intervention...")
 						return ciFailureOutcome(reportedIssues, mergeConflict, "CI fix produced no changes - failures require manual intervention"), nil
@@ -495,7 +495,7 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 					} else if changed || sctx.Run.HeadSHA != previousHeadSHA {
 						s.lastFixedChecks = fixKey
 						s.lastFixedCompletedAt = fixCompletedAt
-						return &pipeline.StepOutcome{RestartFrom: types.StepReview}, nil
+						return s.restartValidationOutcome(), nil
 					} else {
 						// No changes produced - don't set lastFixedChecks so next
 						// poll treats this as a new failure and retries if attempts remain.
@@ -566,6 +566,12 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 			return nil, err
 		}
 	}
+}
+
+func (s *CIStep) restartValidationOutcome() *pipeline.StepOutcome {
+	s.lastFixedChecks = ""
+	s.lastFixedCompletedAt = nil
+	return &pipeline.StepOutcome{RestartFrom: types.StepReview}
 }
 
 func logCIMonitorStatus(sctx *pipeline.StepContext, message, previous string) string {

@@ -3,6 +3,7 @@ package steps
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -157,6 +158,54 @@ func TestCIStep_SuccessfulAutoRepairRestartsFromReview(t *testing.T) {
 	}
 	if message := gitCmd(t, dir, "log", "-1", "--format=%s"); message != "no-slop(ci): stabilize CI repair" {
 		t.Fatalf("CI repair commit message = %q, want agent summary rendered through commit.fix_message", message)
+	}
+}
+
+func TestCIStep_RevalidationCanRepairSameFailureAgainWithoutCompletionTime(t *testing.T) {
+	t.Parallel()
+
+	dir, baseSHA, approvedHead := setupGitRepo(t)
+	fixCalls := 0
+	ag := &mockAgent{
+		name: "test",
+		runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
+			fixCalls++
+			path := filepath.Join(opts.CWD, fmt.Sprintf("ci-fix-%d.txt", fixCalls))
+			if err := os.WriteFile(path, []byte("fixed"), 0o644); err != nil {
+				return nil, err
+			}
+			return &agent.Result{Output: []byte(`{"summary":"repair recurring failure"}`)}, nil
+		},
+	}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, approvedHead, config.Commands{})
+	prURL := "https://github.com/test/repo/pull/42"
+	sctx.Run.PRURL = &prURL
+	sctx.Run.Branch = "refs/heads/feature"
+	sctx.Env = fakeCIGH(t, "OPEN", `[{"name":"test","status":"COMPLETED","conclusion":"failure","bucket":"fail"}]`)
+	sctx.Config.CITimeout = 30 * time.Second
+	sctx.Config.AutoFix = config.AutoFix{CI: 3}
+	stepResult, err := sctx.DB.InsertStepResult(sctx.Run.ID, types.StepCI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sctx.StepResultID = stepResult.ID
+	step := &CIStep{waitForNextPoll: func(context.Context, time.Duration) error {
+		return errors.New("repeated failure was suppressed")
+	}}
+
+	outcome, err := step.Execute(sctx)
+	assertCIRestartsValidation(t, outcome, err)
+	outcome, err = step.Execute(sctx)
+	assertCIRestartsValidation(t, outcome, err)
+	if fixCalls != 2 {
+		t.Fatalf("repair calls = %d, want 2", fixCalls)
+	}
+	persisted, err := sctx.DB.GetStepResult(stepResult.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted == nil || persisted.CIFixAttempts != 2 {
+		t.Fatalf("durable CI repair attempts = %#v, want 2", persisted)
 	}
 }
 

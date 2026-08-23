@@ -2,6 +2,8 @@ package pipeline
 
 import (
 	"context"
+	"database/sql"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -232,6 +234,43 @@ func TestExecutor_InProcessRevalidationPreservesSkippedSteps(t *testing.T) {
 	for _, result := range results {
 		if result.StepName == types.StepTest && result.Status != types.StepStatusSkipped {
 			t.Fatalf("test status = %s, want %s", result.Status, types.StepStatusSkipped)
+		}
+	}
+}
+
+func TestExecutor_RestartResetFailurePreservesCause(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	control, err := sql.Open("sqlite", p.DB()+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := control.Exec(`
+		CREATE TRIGGER fail_revalidation_reset
+		BEFORE UPDATE ON step_results
+		WHEN NEW.status = 'pending' AND OLD.status != 'pending'
+		BEGIN
+			SELECT RAISE(FAIL, 'forced reset failure');
+		END
+	`); err != nil {
+		control.Close()
+		t.Fatal(err)
+	}
+	if err := control.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	review := newPassStep(types.StepReview)
+	ci := &adaptiveCallStep{name: types.StepCI, fn: func(*StepContext) (*StepOutcome, error) {
+		return &StepOutcome{RestartFrom: types.StepReview}, nil
+	}}
+	exec := NewExecutor(database, p, nil, nil, []Step{review, ci}, nil)
+	err = exec.Execute(context.Background(), run, repo, t.TempDir())
+	if err == nil {
+		t.Fatal("Execute() error = nil, want reset failure")
+	}
+	for _, want := range []string{"step ci requested restart from review", "reset steps for revalidation", "forced reset failure"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Execute() error = %q, want %q", err, want)
 		}
 	}
 }
