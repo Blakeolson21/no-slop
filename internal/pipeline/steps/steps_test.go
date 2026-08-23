@@ -328,6 +328,14 @@ func fakeCIGHHandler(args []string) {
 	if len(args) >= 2 && args[0] == "auth" && args[1] == "status" {
 		os.Exit(0)
 	}
+	if strings.Contains(joined, "pr view") && strings.Contains(joined, "--json title,body") {
+		body := "## Pipeline\n\n" + noMistakesPRSignature + "\n\n" + pipelineAttestationCommentPrefix + `{"head_sha":"stale","steps":[]}` + pipelineAttestationCommentClosingToken
+		fmt.Printf("{\"title\":\"test\",\"body\":%s}\n", strconv.Quote(body))
+		os.Exit(0)
+	}
+	if strings.Contains(joined, "pr edit") {
+		os.Exit(0)
+	}
 	if strings.Contains(joined, "pr view") && strings.Contains(joined, "--json mergeable") {
 		if mergeableErr != "" {
 			fmt.Fprintln(os.Stderr, mergeableErr)
@@ -384,6 +392,14 @@ func fakeCIGHSequenceHandler(args []string) {
 	joined := strings.Join(args, " ")
 
 	if len(args) >= 2 && args[0] == "auth" && args[1] == "status" {
+		os.Exit(0)
+	}
+	if strings.Contains(joined, "pr view") && strings.Contains(joined, "--json title,body") {
+		body := "## Pipeline\n\n" + noMistakesPRSignature + "\n\n" + pipelineAttestationCommentPrefix + `{"head_sha":"stale","steps":[]}` + pipelineAttestationCommentClosingToken
+		fmt.Printf("{\"title\":\"test\",\"body\":%s}\n", strconv.Quote(body))
+		os.Exit(0)
+	}
+	if strings.Contains(joined, "pr edit") {
 		os.Exit(0)
 	}
 	if strings.Contains(joined, "pr view") && strings.Contains(joined, "--json mergeable") {

@@ -54,6 +54,16 @@ type Finding struct {
 	Category string `json:"category,omitempty"`
 }
 
+type FindingIdentity struct {
+	File        string
+	Line        int
+	Description string
+}
+
+func (f Finding) Identity() FindingIdentity {
+	return FindingIdentity{File: f.File, Line: f.Line, Description: f.Description}
+}
+
 // TestArtifact describes evidence produced by the test step for human review.
 type TestArtifact struct {
 	Kind    string `json:"kind,omitempty"`

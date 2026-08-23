@@ -176,6 +176,24 @@ func TestUpdatePRStreamsBodyThroughStdin(t *testing.T) {
 	}
 }
 
+func TestGetPRContentTargetsKnownPR(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr view 42 --repo test/repo --json title,body": {
+			stdout: `{"title":"fix: refresh attestation","body":"## Pipeline"}`,
+		},
+	}), nil, "", "test/repo")
+
+	content, err := host.GetPRContent(context.Background(), &scm.PR{Number: "42"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content.Title != "fix: refresh attestation" || content.Body != "## Pipeline" {
+		t.Fatalf("content = %#v", content)
+	}
+}
+
 // UpdatePR shares the same explicit-PR selector boundary as the read methods:
 // when the number is absent it must target the canonical PR URL, never an empty
 // positional that makes `gh pr edit` resolve the cwd branch (main) from the

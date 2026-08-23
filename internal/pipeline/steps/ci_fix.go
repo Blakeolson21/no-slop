@@ -120,6 +120,51 @@ CI logs:
 	return s.commitRepair(sctx, summary)
 }
 
+func (s *CIStep) refreshPRAttestation(sctx *pipeline.StepContext, host scm.Host, pr *scm.PR) error {
+	reader, ok := host.(scm.PRContentReader)
+	if !ok {
+		return nil
+	}
+	content, err := reader.GetPRContent(sctx.Ctx, pr)
+	if err != nil {
+		return err
+	}
+	steps, err := sctx.DB.GetStepsByRun(sctx.Run.ID)
+	if err != nil {
+		return err
+	}
+	body, changed, err := replacePipelineAttestation(content.Body, buildPipelineAttestation(steps, sctx.Run.HeadSHA))
+	if err != nil || !changed {
+		return err
+	}
+	content.Body = body
+	_, err = host.UpdatePR(sctx.Ctx, pr, content)
+	return err
+}
+
+func replacePipelineAttestation(body, attestation string) (string, bool, error) {
+	if attestation == "" {
+		return body, false, fmt.Errorf("pipeline attestation is empty")
+	}
+	start := strings.Index(body, pipelineAttestationCommentPrefix)
+	if start >= 0 {
+		end := strings.Index(body[start:], pipelineAttestationCommentClosingToken)
+		if end < 0 {
+			return body, false, fmt.Errorf("existing pipeline attestation is malformed")
+		}
+		end += start + len(pipelineAttestationCommentClosingToken)
+		updated := body[:start] + attestation + body[end:]
+		return updated, updated != body, nil
+	}
+	for _, marker := range []string{noMistakesPRSignature, legacyNoMistakesPRSignature} {
+		if markerAt := strings.Index(body, marker); markerAt >= 0 {
+			insertAt := markerAt + len(marker)
+			return body[:insertAt] + "\n\n" + attestation + body[insertAt:], true, nil
+		}
+	}
+	return body, false, fmt.Errorf("PR body has no no-slop pipeline signature")
+}
+
 // commitAndPush retains its historical name as the narrow test seam. CI repair
 // commits stay local; the normal Push step publishes them only after the
 // restarted validation cycle succeeds.

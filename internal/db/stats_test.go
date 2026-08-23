@@ -167,6 +167,29 @@ func TestStepFindingStatsAddsNewFindingsToTotal(t *testing.T) {
 	}
 }
 
+func TestStepFindingStatsTreatsReclassificationAsSameFinding(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/repo/reclassified", "git@example.com:reclassified.git", "main")
+	run, _ := d.InsertRun(repo.ID, "reclassified", "head", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepReview)
+	initial := `{"findings":[{"id":"r1","severity":"warning","file":"loader.go","line":12,"description":"unsafe loader","action":"ask-user","review_scope":"source","category":"documentation"}],"summary":"one"}`
+	final := `{"findings":[{"id":"r1","severity":"error","file":"loader.go","line":12,"description":"unsafe loader","action":"ask-user","review_scope":"external-delivery","category":"lint"}],"summary":"one"}`
+	if _, err := d.InsertStepRound(step.ID, 1, "initial", &initial, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.InsertStepRound(step.ID, 2, "auto_fix", &final, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := d.StepFindingStats(step)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ReportedFindings != 1 || stats.FixedFindings != 0 {
+		t.Fatalf("stats = reported %d fixed %d", stats.ReportedFindings, stats.FixedFindings)
+	}
+}
+
 func assertStepStat(t *testing.T, stats []StepStats, step types.StepName, reported int, fixes int) {
 	t.Helper()
 	for _, got := range stats {

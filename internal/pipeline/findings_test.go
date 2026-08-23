@@ -131,6 +131,53 @@ func TestMergeFindingsJSON_DeduplicatesShiftedUniqueDismissedFinding(t *testing.
 	}
 }
 
+func TestMergeCarriedFindingsJSON_PreservesIdentityAcrossReclassification(t *testing.T) {
+	carriedRaw := `{"findings":[{"id":"review-1","severity":"warning","file":"loader.go","line":12,"description":"unsafe loader","action":"ask-user","review_scope":"source","category":"documentation"}],"risk_level":"medium","risk_rationale":"Needs review."}`
+	freshRaw := `{"findings":[{"id":"review-9","severity":"error","file":"loader.go","line":12,"description":"unsafe loader","action":"no-op","review_scope":"external-delivery","category":"lint"}],"risk_level":"high","risk_rationale":"Reclassified."}`
+
+	mergedRaw := mergeCarriedFindingsJSON(freshRaw, carriedRaw, "review")
+	merged, err := types.ParseFindingsJSON(mergedRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged.Items) != 1 {
+		t.Fatalf("findings = %#v, want one stable defect", merged.Items)
+	}
+	if merged.Items[0].ID != "review-1" || merged.Items[0].Severity != "error" || merged.Items[0].Action != "ask-user" {
+		t.Fatalf("merged finding = %#v", merged.Items[0])
+	}
+}
+
+func TestMergeCarriedFindingsJSON_UsesFreshAggregateRisk(t *testing.T) {
+	carriedRaw := `{"findings":[{"id":"review-2","severity":"warning","description":"remaining concern","action":"ask-user"}],"risk_level":"high","risk_rationale":"Selected finding can corrupt data.","risk_scope":"source-or-external"}`
+	freshRaw := `{"findings":[],"risk_level":"low","risk_rationale":"The selected defect is fixed.","risk_scope":"source-or-external"}`
+
+	mergedRaw := mergeCarriedFindingsJSON(freshRaw, carriedRaw, "review")
+	merged, err := types.ParseFindingsJSON(mergedRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged.RiskLevel != "low" || merged.RiskRationale != "The selected defect is fixed." {
+		t.Fatalf("aggregate risk = %q %q", merged.RiskLevel, merged.RiskRationale)
+	}
+}
+
+func TestExcludeFindingsJSON_DropsAggregateRiskForSubset(t *testing.T) {
+	raw := `{"findings":[{"id":"review-1","severity":"error","description":"selected defect"},{"id":"review-2","severity":"warning","description":"remaining concern"}],"risk_level":"high","risk_rationale":"Selected defect can corrupt data.","risk_scope":"source-or-external"}`
+
+	excludedRaw := excludeFindingsJSON(raw, []string{"review-1"})
+	excluded, err := types.ParseFindingsJSON(excludedRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(excluded.Items) != 1 || excluded.Items[0].ID != "review-2" {
+		t.Fatalf("remaining findings = %#v", excluded.Items)
+	}
+	if excluded.RiskLevel != "" || excluded.RiskRationale != "" || excluded.RiskScope != "" {
+		t.Fatalf("subset retained aggregate risk: %#v", excluded)
+	}
+}
+
 func TestFilterFindingsJSON_EmptySelectionReturnsEmptyFindings(t *testing.T) {
 	raw := `{"findings":[{"id":"review-1","severity":"error","description":"first"}],"summary":"1 finding"}`
 

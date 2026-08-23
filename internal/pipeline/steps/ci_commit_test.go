@@ -1,6 +1,7 @@
 package steps
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,7 +11,45 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/branchsync"
 	"github.com/Blakeolson21/no-slop/internal/config"
 	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/scm"
 )
+
+type recordingPRContentHost struct {
+	scm.Host
+	content scm.PRContent
+	updates []scm.PRContent
+}
+
+func (h *recordingPRContentHost) GetPRContent(context.Context, *scm.PR) (scm.PRContent, error) {
+	return h.content, nil
+}
+
+func (h *recordingPRContentHost) UpdatePR(_ context.Context, _ *scm.PR, content scm.PRContent) (*scm.PR, error) {
+	h.updates = append(h.updates, content)
+	h.content = content
+	return &scm.PR{Number: "42"}, nil
+}
+
+func TestCIStep_RefreshPRAttestationBindsCurrentHead(t *testing.T) {
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	oldAttestation := buildPipelineAttestation(nil, baseSHA)
+	host := &recordingPRContentHost{content: scm.PRContent{
+		Title: "fix: preserve CI fixes",
+		Body:  "## Pipeline\n\n" + noMistakesPRSignature + "\n\n" + oldAttestation,
+	}}
+
+	if err := (&CIStep{}).refreshPRAttestation(sctx, host, &scm.PR{Number: "42"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(host.updates) != 1 {
+		t.Fatalf("PR updates = %d, want 1", len(host.updates))
+	}
+	want := buildPipelineAttestation(nil, headSHA)
+	if !strings.Contains(host.updates[0].Body, want) || strings.Contains(host.updates[0].Body, oldAttestation) {
+		t.Fatalf("updated PR body = %q", host.updates[0].Body)
+	}
+}
 
 func TestCIStep_CommitAndPush(t *testing.T) {
 	t.Parallel()

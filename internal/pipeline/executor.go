@@ -1012,7 +1012,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			}
 		}
 
-		carryRequiresApproval := carryFindings && carriedFindings != "" && actionableFindingsCountJSON(effectiveFindings) > 0
+		carryRequiresApproval := carryFindings && actionableFindingsCountJSON(carriedFindings) > 0
 		if !outcome.NeedsApproval && !hasAskUserFindingsJSON(effectiveFindings) && !carryRequiresApproval &&
 			!(convergenceTripped && actionableFindingsCountJSON(effectiveFindings) > 0) {
 			// Step completed without needing approval.

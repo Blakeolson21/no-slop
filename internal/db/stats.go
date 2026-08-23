@@ -142,7 +142,7 @@ func stepFindingStats(step *StepResult, rounds []*StepRound) StepStats {
 		return stats
 	}
 
-	reported := make(map[types.Finding]bool)
+	reported := make(map[types.FindingIdentity]bool)
 	var current []types.Finding
 	for _, round := range rounds {
 		items := findingItems(round.FindingsJSON)
@@ -204,12 +204,8 @@ func findingItems(raw *string) []types.Finding {
 	return findings.Items
 }
 
-func findingStatsKey(item types.Finding) types.Finding {
-	item.ID = ""
-	item.Action = ""
-	item.Source = ""
-	item.UserInstructions = ""
-	return item
+func findingStatsKey(item types.Finding) types.FindingIdentity {
+	return item.Identity()
 }
 
 func sortStepStats(stats []StepStats) {

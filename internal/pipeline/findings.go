@@ -44,29 +44,25 @@ func marshalFindingIDs(ids []string) string {
 	return string(encoded)
 }
 
-func findingKey(item types.Finding) types.Finding {
-	item.ID = ""
-	item.Action = ""
-	item.Source = ""
-	item.UserInstructions = ""
-	return item
+func findingKey(item types.Finding) types.FindingIdentity {
+	return item.Identity()
 }
 
-func findingFingerprint(item types.Finding) types.Finding {
-	item = findingKey(item)
-	item.Line = 0
-	return item
+func findingFingerprint(item types.Finding) types.FindingIdentity {
+	identity := item.Identity()
+	identity.Line = 0
+	return identity
 }
 
-func countFindingFingerprints(items []types.Finding) map[types.Finding]int {
-	counts := make(map[types.Finding]int, len(items))
+func countFindingFingerprints(items []types.Finding) map[types.FindingIdentity]int {
+	counts := make(map[types.FindingIdentity]int, len(items))
 	for _, item := range items {
 		counts[findingFingerprint(item)]++
 	}
 	return counts
 }
 
-func hasFindingMatch(item types.Finding, exact map[types.Finding]bool, itemCounts, candidateCounts map[types.Finding]int) bool {
+func hasFindingMatch(item types.Finding, exact map[types.FindingIdentity]bool, itemCounts, candidateCounts map[types.FindingIdentity]int) bool {
 	if exact[findingKey(item)] {
 		return true
 	}
@@ -104,6 +100,11 @@ func excludeFindingsJSON(raw string, ids []string) string {
 	excluded := types.ExcludeFindings(findings, ids)
 	if len(excluded.Items) == 0 {
 		return ""
+	}
+	if len(excluded.Items) != len(findings.Items) {
+		excluded.RiskLevel = ""
+		excluded.RiskRationale = ""
+		excluded.RiskScope = ""
 	}
 	excludedRaw, err := types.MarshalFindingsJSON(excluded)
 	if err != nil {
@@ -187,11 +188,6 @@ func mergeCarriedFindingsJSON(freshRaw, carriedRaw, prefix string) string {
 	}
 
 	merged.Summary = fmt.Sprintf("%d outstanding %s", len(merged.Items), pluralize(len(merged.Items), "finding", "findings"))
-	if riskRank(carried.RiskLevel) > riskRank(merged.RiskLevel) {
-		merged.RiskLevel = carried.RiskLevel
-		merged.RiskRationale = carried.RiskRationale
-		merged.RiskScope = carried.RiskScope
-	}
 	encoded, err := types.MarshalFindingsJSON(merged)
 	if err != nil {
 		return carriedRaw
@@ -231,19 +227,6 @@ func findingActionRank(action string) int {
 	}
 }
 
-func riskRank(level string) int {
-	switch level {
-	case "high":
-		return 3
-	case "medium":
-		return 2
-	case "low":
-		return 1
-	default:
-		return 0
-	}
-}
-
 func mergeFindingsJSON(existingRaw, additionalRaw string) string {
 	if existingRaw == "" {
 		return additionalRaw
@@ -259,7 +242,7 @@ func mergeFindingsJSON(existingRaw, additionalRaw string) string {
 	if err != nil {
 		return existingRaw
 	}
-	seen := make(map[types.Finding]bool, len(existing.Items)+len(additional.Items))
+	seen := make(map[types.FindingIdentity]bool, len(existing.Items)+len(additional.Items))
 	existingCounts := countFindingFingerprints(existing.Items)
 	additionalCounts := countFindingFingerprints(additional.Items)
 	merged := types.Findings{Summary: existing.Summary, Tested: existing.Tested, TestingSummary: existing.TestingSummary, RiskLevel: existing.RiskLevel, RiskRationale: existing.RiskRationale, RiskScope: existing.RiskScope}
@@ -300,7 +283,7 @@ func removeMatchingFindingsJSON(existingRaw, removeRaw string) string {
 	if err != nil {
 		return existingRaw
 	}
-	toRemove := make(map[types.Finding]bool, len(remove.Items))
+	toRemove := make(map[types.FindingIdentity]bool, len(remove.Items))
 	existingCounts := countFindingFingerprints(existing.Items)
 	removeCounts := countFindingFingerprints(remove.Items)
 	for _, item := range remove.Items {
@@ -335,7 +318,7 @@ func retainMatchingFindingsJSON(existingRaw, keepRaw string) string {
 	if err != nil {
 		return ""
 	}
-	allowed := make(map[types.Finding]bool, len(keep.Items))
+	allowed := make(map[types.FindingIdentity]bool, len(keep.Items))
 	existingCounts := countFindingFingerprints(existing.Items)
 	keepCounts := countFindingFingerprints(keep.Items)
 	for _, item := range keep.Items {

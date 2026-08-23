@@ -261,6 +261,39 @@ func TestExecutor_CarriedFindingKeepsIdentityAndStricterAction(t *testing.T) {
 	}
 }
 
+func TestExecutor_NonActionableCarryDoesNotGateFreshNonblockingFinding(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	initial := `{"findings":[{"id":"review-1","severity":"error","description":"selected defect","action":"ask-user"},{"id":"review-2","severity":"info","description":"informational carry","action":"no-op"}],"summary":"two"}`
+	rereview := `{"findings":[{"id":"review-3","severity":"info","description":"optional cleanup","action":"auto-fix"}],"summary":"one suggestion"}`
+	calls := 0
+	step := &scopeLimitedAdaptiveCallStep{adaptiveCallStep: adaptiveCallStep{
+		name: types.StepReview,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			calls++
+			if calls == 1 {
+				return &StepOutcome{NeedsApproval: true, Findings: initial}, nil
+			}
+			return &StepOutcome{AutoFixable: true, Findings: rereview}, nil
+		},
+	}}
+
+	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
+	done := make(chan error, 1)
+	go func() { done <- exec.Execute(context.Background(), run, repo, t.TempDir()) }()
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	if err := exec.Respond(types.StepReview, types.ActionFix, []string{"review-1"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("non-actionable carry created an approval gate")
+	}
+}
+
 func TestExecutor_FixEmitsFixingStatusImmediately(t *testing.T) {
 	database, p, run, repo := setupTest(t)
 	workDir := t.TempDir()
