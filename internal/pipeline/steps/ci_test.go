@@ -2620,3 +2620,67 @@ func TestCIStep_DelayedSameNameCheckRetainsLegacyNameBehavior(t *testing.T) {
 		t.Fatal("new conclusive link did not retire the rerun record")
 	}
 }
+
+func TestCIStep_PersistentCheckReadFailureParksAtAskUser(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+
+	checksSequence := []string{
+		`not-json`, `not-json`, `not-json`, `not-json`, `not-json`,
+		`not-json`, `not-json`, `not-json`, `not-json`,
+	}
+	env := fakeCIGHSequence(t, "OPEN", checksSequence)
+
+	prURL := "https://github.com/test/repo/pull/42"
+	sctx := newTestContext(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Env = env
+	sctx.Run.PRURL = &prURL
+	sctx.Config.CITimeout = 60 * time.Second
+
+	var logs []string
+	sctx.Log = func(s string) { logs = append(logs, s) }
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sctx.Ctx = ctx
+
+	waits := 0
+	step := &CIStep{
+		baseBranchTip: func(context.Context) (string, bool) { return baseSHA, true },
+		waitForNextPoll: func(ctx context.Context, _ time.Duration) error {
+			waits++
+			if waits >= 8 {
+				cancel()
+				return ctx.Err()
+			}
+			return nil
+		},
+	}
+	outcome, err := step.Execute(sctx)
+	if err != nil {
+		t.Fatalf("expected ask-user approval outcome, got error: %v", err)
+	}
+	if !outcome.NeedsApproval {
+		t.Fatal("expected persistent check-read failures to park at an approval gate")
+	}
+
+	var findings Findings
+	if err := json.Unmarshal([]byte(outcome.Findings), &findings); err != nil {
+		t.Fatalf("unmarshal findings: %v", err)
+	}
+	if len(findings.Items) != 1 || findings.Items[0].Action != types.ActionAskUser {
+		t.Fatalf("findings = %+v, want exactly one ask-user finding", findings.Items)
+	}
+	if !strings.Contains(findings.Items[0].Description, "provider CLI or credentials") ||
+		!strings.Contains(findings.Items[0].Description, "parse CI checks") {
+		t.Fatalf("finding %q must be provider-neutral and preserve the underlying error", findings.Items[0].Description)
+	}
+	parked := 0
+	for _, line := range logs {
+		if strings.Contains(line, "parking for a decision") {
+			parked++
+		}
+	}
+	if parked != 1 {
+		t.Fatalf("expected one parking log line, got %d: %v", parked, logs)
+	}
+}

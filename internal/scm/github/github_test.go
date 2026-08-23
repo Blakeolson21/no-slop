@@ -203,6 +203,25 @@ func TestFindAttestationPublicationIdentityUsesEarliestMatchingRun(t *testing.T)
 	}
 }
 
+func TestGetChecksSurfacesGHErrorStderr(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr checks 123 --repo test/repo --json name,state,bucket,completedAt,link": {
+			stderr: "flag needs an argument: --json",
+			code:   1,
+		},
+	}), nil, "", "test/repo")
+
+	_, err := host.GetChecks(context.Background(), &scm.PR{Number: "123"})
+	if err == nil {
+		t.Fatal("GetChecks() expected the gh failure to propagate")
+	}
+	if !strings.Contains(err.Error(), "flag needs an argument: --json") {
+		t.Fatalf("GetChecks() error = %v, want gh stderr in the error", err)
+	}
+}
+
 func TestGetPRStatePassesRepoFlag(t *testing.T) {
 	t.Parallel()
 

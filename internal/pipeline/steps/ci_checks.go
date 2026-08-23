@@ -294,6 +294,24 @@ func ciFailureOutcome(failing []string, mergeConflict bool, summary string) *pip
 	}
 }
 
+const consecutiveCheckErrorLimit = 6
+
+func ciCheckReadFailureOutcome(err error) *pipeline.StepOutcome {
+	findings := Findings{
+		Summary: "CI checks could not be read from the provider",
+		Items: []Finding{{
+			Severity:    "warning",
+			Description: fmt.Sprintf("CI checks could not be read from the provider: %v. Verify that the provider CLI or credentials are installed, authenticated, and support the required check-reading command. For GitHub errors involving 'pr checks --json', gh >= 2.50 is required.", err),
+			Action:      types.ActionAskUser,
+		}},
+	}
+	findingsJSON, _ := json.Marshal(findings)
+	return &pipeline.StepOutcome{
+		NeedsApproval: true,
+		Findings:      string(findingsJSON),
+	}
+}
+
 func ciMergeabilityOutcome(summary, description string) *pipeline.StepOutcome {
 	findings := Findings{
 		Summary: summary,
