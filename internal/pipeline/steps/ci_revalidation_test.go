@@ -209,6 +209,56 @@ func TestCIStep_RevalidationCanRepairSameFailureAgainWithoutCompletionTime(t *te
 	}
 }
 
+func TestCIStep_PersistenceFailureAfterRepairDoesNotResumePolling(t *testing.T) {
+	t.Parallel()
+
+	dir, baseSHA, approvedHead := setupGitRepo(t)
+	var sctx *pipeline.StepContext
+	ag := &mockAgent{
+		name: "test",
+		runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
+			if err := os.WriteFile(filepath.Join(opts.CWD, "ci-fix.txt"), []byte("fixed"), 0o644); err != nil {
+				return nil, err
+			}
+			if err := sctx.DB.Close(); err != nil {
+				return nil, err
+			}
+			return &agent.Result{Output: []byte(`{"summary":"repair before persistence failure"}`)}, nil
+		},
+	}
+	sctx = newTestContextWithDBRecords(t, ag, dir, baseSHA, approvedHead, config.Commands{})
+	prURL := "https://github.com/test/repo/pull/42"
+	sctx.Run.PRURL = &prURL
+	sctx.Run.Branch = "refs/heads/feature"
+	sctx.Env = fakeCIGH(t, "OPEN", `[{"name":"test","status":"COMPLETED","conclusion":"failure","bucket":"fail"}]`)
+	sctx.Config.CITimeout = 30 * time.Second
+	sctx.Config.AutoFix = config.AutoFix{CI: 1}
+	if err := sctx.DB.UpdateRunReviewApprovedHeadSHA(sctx.Run.ID, approvedHead); err != nil {
+		t.Fatal(err)
+	}
+	sctx.Run.ReviewApprovedHeadSHA = &approvedHead
+	waitCalls := 0
+	step := &CIStep{waitForNextPoll: func(context.Context, time.Duration) error {
+		waitCalls++
+		return errors.New("CI resumed polling after a partial repair")
+	}}
+
+	outcome, err := step.Execute(sctx)
+	if err == nil || !strings.Contains(err.Error(), "update run head sha for revalidation") {
+		t.Fatalf("CI outcome = %#v, error = %v, want actionable persistence failure", outcome, err)
+	}
+	if waitCalls != 0 {
+		t.Fatalf("CI resumed polling %d times after the repaired head advanced", waitCalls)
+	}
+	repairedHead := gitCmd(t, dir, "rev-parse", "HEAD")
+	if repairedHead == approvedHead || sctx.Run.HeadSHA != repairedHead {
+		t.Fatalf("repaired head = %s, in-memory head = %s, approved head = %s", repairedHead, sctx.Run.HeadSHA, approvedHead)
+	}
+	if sctx.Run.ReviewApprovedHeadSHA == nil || *sctx.Run.ReviewApprovedHeadSHA != approvedHead {
+		t.Fatalf("review authority = %#v, want stale authority retained only on the aborted path", sctx.Run.ReviewApprovedHeadSHA)
+	}
+}
+
 func TestCIStep_AutoRepairAttemptBudgetSurvivesStepRecovery(t *testing.T) {
 	t.Parallel()
 

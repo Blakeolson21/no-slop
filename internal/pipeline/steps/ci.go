@@ -460,7 +460,9 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 					previousHeadSHA := sctx.Run.HeadSHA
 					changed, err := s.autoFixCI(sctx, host, pr, fixTargets, mergeConflict)
 					if err != nil {
-						sctx.Log(fmt.Sprintf("warning: CI manual fix failed: %v", err))
+						if fatalErr := s.handleCIRepairError(sctx, previousHeadSHA, "manual fix", err); fatalErr != nil {
+							return nil, fatalErr
+						}
 					} else if changed || sctx.Run.HeadSHA != previousHeadSHA {
 						s.lastFixedChecks = fixKey
 						s.lastFixedCompletedAt = fixCompletedAt
@@ -491,7 +493,9 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 					previousHeadSHA := sctx.Run.HeadSHA
 					changed, err := s.autoFixCI(sctx, host, pr, fixTargets, mergeConflict)
 					if err != nil {
-						sctx.Log(fmt.Sprintf("warning: CI auto-fix failed: %v", err))
+						if fatalErr := s.handleCIRepairError(sctx, previousHeadSHA, "auto-fix", err); fatalErr != nil {
+							return nil, fatalErr
+						}
 					} else if changed || sctx.Run.HeadSHA != previousHeadSHA {
 						s.lastFixedChecks = fixKey
 						s.lastFixedCompletedAt = fixCompletedAt
@@ -572,6 +576,18 @@ func (s *CIStep) restartValidationOutcome() *pipeline.StepOutcome {
 	s.lastFixedChecks = ""
 	s.lastFixedCompletedAt = nil
 	return &pipeline.StepOutcome{RestartFrom: types.StepReview}
+}
+
+func (s *CIStep) handleCIRepairError(sctx *pipeline.StepContext, previousHeadSHA, label string, repairErr error) error {
+	if strings.TrimSpace(sctx.Run.HeadSHA) != strings.TrimSpace(previousHeadSHA) {
+		return repairErr
+	}
+	currentHeadSHA, headErr := stepGitHeadSHA(sctx)
+	if headErr != nil || strings.TrimSpace(currentHeadSHA) != strings.TrimSpace(previousHeadSHA) {
+		return repairErr
+	}
+	sctx.Log(fmt.Sprintf("warning: CI %s failed: %v", label, repairErr))
+	return nil
 }
 
 func logCIMonitorStatus(sctx *pipeline.StepContext, message, previous string) string {
