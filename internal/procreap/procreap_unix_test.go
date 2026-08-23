@@ -3,7 +3,7 @@
 package procreap
 
 import (
-	"context"
+	"bufio"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,8 +12,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"github.com/Blakeolson21/no-slop/internal/shellenv"
 )
 
 // TestSweepReapsSetsidEscapeeThatProcessGroupTeardownCannotReach is the
@@ -96,6 +94,7 @@ func TestProcReapHelper(t *testing.T) {
 			os.Exit(3)
 		}
 		_, _ = os.Stdout.WriteString("escaped pid " + strconv.Itoa(child.Process.Pid) + "\n")
+		time.Sleep(5 * time.Minute)
 		os.Exit(0)
 	case "escaped":
 		// Leaving the session takes this process out of every group the
@@ -182,24 +181,48 @@ func newFakeWorktree(t *testing.T) (root, worktree string) {
 }
 
 // startEscapeeUnderLeader runs a leader in its own process group, has it spawn
-// a setsid child standing in the worktree, then tears the leader's group down
-// exactly the way the pipeline does. The returned pid is what survived.
+// a setsid child standing in the worktree, then tears the leader's group down.
+// It deliberately uses the raw process-group primitive: the stronger shellenv
+// wrapper also tracks descendants and may reap the escapee if the leader lives
+// long enough to be sampled. This package covers the residual gap where a
+// descendant escapes and loses its parent before that sampling can happen.
+// The returned pid is what survived the group-only teardown.
 func startEscapeeUnderLeader(t *testing.T, worktree string) int {
 	t.Helper()
 	ready := filepath.Join(t.TempDir(), "escaped.ready")
-	leader := exec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestProcReapHelper$")
+	leader := exec.Command(os.Args[0], "-test.run=^TestProcReapHelper$")
 	leader.Dir = worktree
 	leader.Env = append(os.Environ(),
 		"NM_PROCREAP_HELPER=leader",
 		"NM_PROCREAP_READY="+ready,
 		"NM_PROCREAP_WORKDIR="+worktree,
 	)
-	shellenv.ConfigureShellCommand(leader)
-	out, err := shellenv.CombinedOutputShellCommand(leader)
+	leader.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	stdout, err := leader.StdoutPipe()
 	if err != nil {
-		t.Fatalf("leader failed: %v; output %q", err, out)
+		t.Fatalf("leader stdout pipe: %v", err)
 	}
-	pid := parseEscapedPID(t, string(out))
+	if err := leader.Start(); err != nil {
+		t.Fatalf("start leader: %v", err)
+	}
+	leaderDone := false
+	stopLeader := func() {
+		if leaderDone {
+			return
+		}
+		if err := syscall.Kill(-leader.Process.Pid, syscall.SIGKILL); err != nil {
+			_ = leader.Process.Kill()
+		}
+		_ = leader.Wait()
+		leaderDone = true
+	}
+	t.Cleanup(stopLeader)
+	line, err := bufio.NewReader(stdout).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read leader output: %v", err)
+	}
+	pid := parseEscapedPID(t, line)
+	stopLeader()
 	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
 	return pid
 }

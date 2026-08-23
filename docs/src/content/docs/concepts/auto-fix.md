@@ -96,7 +96,7 @@ TUI yolo mode approves the fix review automatically after its one fix round. AXI
 
 ## Fix commits
 
-When the shared Review, Test, Document, or Lint fix path commits uncommitted changes, its subject comes from `commit.fix_message`.
+When the Review, Test, Document, Lint, or CI step commits auto-fix changes, its subject comes from `commit.fix_message`.
 The [global config reference](/no-slop/reference/global-config/#commitfix_message) owns the template syntax, default, validation rules, size limits, and supported placeholders; the [repo config reference](/no-slop/reference/repo-config/#commitfix_message) owns the repository override and trust behavior.
 The pipeline validates the template, agent summary, predicted output size, and final rendered subject before `git add -A`, so a rejected value does not leave changes staged.
 The combined document-and-lint housekeeping pass runs in the Document step, so its documentation and safe lint fixes use the Document value for `{{.Step}}`; configured-command lint fixes use the Lint value.
@@ -105,8 +105,8 @@ Before adopting a step's fix result, the pipeline verifies that the live worktre
 It preserves and adopts legitimate forward commits made by an agent. If the agent also leaves uncommitted changes, the pipeline creates the configured fix commit on top before advancing the branch and recorded run head.
 An out-of-band backward or divergent reset aborts the run instead of dropping reviewed history.
 
-The template does not control commits created by the Rebase, CI, or Push steps.
-The CI step uses `no-slop: apply CI fixes`, and the Push step uses `no-slop: apply agent fixes` for remaining uncommitted changes.
+The template does not control commits created by the Rebase or Push steps.
+The Push step uses `no-slop: apply agent fixes` for remaining uncommitted changes.
 
 ## Step rounds
 

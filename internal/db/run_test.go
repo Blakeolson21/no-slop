@@ -662,6 +662,9 @@ func TestUpdateRunHeadSHA(t *testing.T) {
 	d := openTestDB(t)
 	repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
 	run, _ := d.InsertRun(repo.ID, "feature", "abc", "def")
+	if err := d.UpdateRunReviewApprovedHeadSHA(run.ID, "abc"); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := d.UpdateRunHeadSHA(run.ID, "xyz"); err != nil {
 		t.Fatalf("update head sha: %v", err)
@@ -669,6 +672,29 @@ func TestUpdateRunHeadSHA(t *testing.T) {
 	got, _ := d.GetRun(run.ID)
 	if got.HeadSHA != "xyz" {
 		t.Errorf("head sha = %q, want %q", got.HeadSHA, "xyz")
+	}
+	if got.ReviewApprovedHeadSHA == nil || *got.ReviewApprovedHeadSHA != "abc" {
+		t.Fatalf("ordinary head update cleared review authority: %#v", got.ReviewApprovedHeadSHA)
+	}
+}
+
+func TestUpdateRunHeadSHAForRevalidationAtomicallyClearsReviewAuthority(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/revalidation", "git@github.com:user/revalidation.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feature", "approved-head", "base")
+	if err := d.UpdateRunReviewApprovedHeadSHA(run.ID, "approved-head"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := d.UpdateRunHeadSHAForRevalidation(run.ID, "repaired-head"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.HeadSHA != "repaired-head" || got.ReviewApprovedHeadSHA != nil {
+		t.Fatalf("revalidation update = head %q approval %#v, want repaired head without stale approval", got.HeadSHA, got.ReviewApprovedHeadSHA)
 	}
 }
 

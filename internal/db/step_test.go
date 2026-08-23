@@ -1,10 +1,69 @@
 package db
 
 import (
+	"database/sql"
+	"path/filepath"
 	"testing"
 
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
+
+func TestStepReadsTreatMissingCIFixAttemptsAsZero(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "pre-ci-fix-attempts.sqlite")
+	legacy, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Exec(`
+		CREATE TABLE step_results (
+			id TEXT PRIMARY KEY,
+			run_id TEXT NOT NULL,
+			step_name TEXT NOT NULL,
+			step_order INTEGER NOT NULL,
+			status TEXT NOT NULL,
+			exit_code INTEGER,
+			duration_ms INTEGER,
+			log_path TEXT,
+			findings_json TEXT,
+			error TEXT,
+			started_at INTEGER,
+			completed_at INTEGER,
+			last_activity_at INTEGER,
+			last_activity TEXT,
+			agent_pid INTEGER,
+			auto_fix_limit INTEGER,
+			convergence_json TEXT
+		);
+		INSERT INTO step_results (id, run_id, step_name, step_order, status)
+		VALUES ('legacy-ci', 'run-1', 'ci', 7, 'pending');
+	`); err != nil {
+		legacy.Close()
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+
+	step, err := d.GetStepResult("legacy-ci")
+	if err != nil {
+		t.Fatalf("get legacy step: %v", err)
+	}
+	if step == nil || step.CIFixAttempts != 0 {
+		t.Fatalf("legacy step = %#v, want zero CI fix attempts", step)
+	}
+	steps, err := d.GetStepsByRun("run-1")
+	if err != nil {
+		t.Fatalf("get legacy steps by run: %v", err)
+	}
+	if len(steps) != 1 || steps[0].CIFixAttempts != 0 {
+		t.Fatalf("legacy steps = %#v, want one step with zero CI fix attempts", steps)
+	}
+}
 
 func TestGetStepResult_LegacyBabysitStepName(t *testing.T) {
 	d := openTestDB(t)
@@ -64,6 +123,37 @@ func TestStepInsertAndGet(t *testing.T) {
 	}
 	if got.StepName != types.StepReview {
 		t.Errorf("step name = %q, want %q", got.StepName, types.StepReview)
+	}
+}
+
+func TestCIFixAttemptsPersist(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "ci-fix-attempts.sqlite")
+	d, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, _ := d.InsertRepo("/tmp/ci-fix-attempts", "https://example.com/repo.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feature", "head", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepCI)
+
+	if err := d.SetCIFixAttempts(step.ID, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d, err = Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+
+	got, err := d.GetStepResult(step.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CIFixAttempts != 2 {
+		t.Fatalf("CI fix attempts = %d, want 2", got.CIFixAttempts)
 	}
 }
 
@@ -213,6 +303,55 @@ func TestCompleteStepWithStatus(t *testing.T) {
 	if got.CompletedAt == nil {
 		t.Error("expected non-nil completed_at")
 	}
+}
+
+func TestResetStepsFromPreservesSkippedSteps(t *testing.T) {
+	d := openTestDB(t)
+	repo, err := d.InsertRepo("/tmp/revalidation", "https://example.com/revalidation.git", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := d.InsertRun(repo.ID, "feature", "head", "base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	review, err := d.InsertStepResult(run.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	push, err := d.InsertStepResult(run.ID, types.StepPush)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.CompleteStep(review.ID, 0, 15, "review.log"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetStepConvergence(review.ID, `{"round_findings":[1]}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.CompleteStepWithStatus(push.ID, types.StepStatusSkipped, 0, 0, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := d.ResetStepsFrom(run.ID, types.StepReview.Order()); err != nil {
+		t.Fatal(err)
+	}
+
+	gotReview, err := d.GetStepResult(review.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotReview.Status != types.StepStatusPending || gotReview.CompletedAt != nil || gotReview.LogPath != nil || gotReview.ConvergenceJSON != nil {
+		t.Fatalf("review after reset = %#v, want clean pending step", gotReview)
+	}
+	gotPush, err := d.GetStepResult(push.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPush.Status != types.StepStatusSkipped {
+		t.Fatalf("push status = %s, want durable skip preserved", gotPush.Status)
+	}
+	t.Logf("revalidation reset evidence: review status=%s, convergence state=cleared, push status=%s", gotReview.Status, gotPush.Status)
 }
 
 func TestUpdateStepStatusWithDuration(t *testing.T) {

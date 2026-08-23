@@ -20,11 +20,13 @@ import (
 
 // canonicalStaleMonitorPhrases are the load-bearing claims of the corrected
 // "PR fell behind / conflicted after checks pass" guidance: the live CI monitor
-// auto-rebases and re-pushes such a PR, so the agent runs no command and never
-// hand-rebases, and `no-slop rerun` is only the dead-monitor recovery.
+// auto-rebases, restarts validation at Review, and publishes through Push, so
+// the agent runs no command and never hand-rebases, and `no-slop rerun` is only
+// the dead-monitor recovery.
 var canonicalStaleMonitorPhrases = []string{
 	"never hand-rebase",
-	"re-pushes",
+	"validation at Review",
+	"through Push",
 	"no-slop rerun",
 }
 

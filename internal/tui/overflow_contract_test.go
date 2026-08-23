@@ -483,6 +483,26 @@ func TestTUIOverflow_UnknownStateEventRequestsAuthoritativeReconciliation(t *tes
 	}
 }
 
+func TestTUIOverflow_StepsResetRequestsAuthoritativeReconciliation(t *testing.T) {
+	m := ciRunningModel(false)
+	m.stateRev = 8
+	m.reconcile = func(context.Context) (*ipc.RunInfo, error) {
+		return &ipc.RunInfo{ID: "run-1", Status: types.RunRunning, StateRev: 9}, nil
+	}
+
+	updated, cmd := m.Update(eventMsg{
+		event:          ipc.Event{Type: ipc.EventStepsReset, RunID: "run-1", StateRev: 9},
+		subscriptionID: m.subscriptionID,
+	})
+	m = updated.(Model)
+	if !m.reconcilePending || cmd == nil {
+		t.Fatal("steps reset event did not request authoritative reconciliation")
+	}
+	if m.stateRev != 9 {
+		t.Fatalf("stateRev = %d, want reset event revision 9 retained as the monotonic floor", m.stateRev)
+	}
+}
+
 // The fix-review diff is fetched on demand and lands in the model, so removing
 // it from the event stream costs the user nothing.
 func TestTUIOverflow_FixReviewDiffIsFetchedOnDemand(t *testing.T) {

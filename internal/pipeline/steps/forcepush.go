@@ -49,13 +49,11 @@ func (e *forcePushWouldDiscardError) Error() string {
 // fail safe rather than degrade to a blind --force, or the push would discard
 // unseen upstream commits).
 //
-// lastSeenSHA is the remote head the pipeline last observed for this branch:
-//   - push step: the remote-tracking ref synced by the rebase step. On a normal
-//     push that is the exact commit the branch was rebased against; on a force
-//     push the rebase step deliberately leaves it stale, so it stays the head we
-//     last observed rather than the live tip - which is what keeps the fast path
-//     below honest (see the rebase step comment) and forces the content check.
-//   - CI step: the run's last-recorded head, i.e. what the pipeline last pushed.
+// lastSeenSHA is the remote-tracking ref synced by the rebase step. On a normal
+// push that is the exact commit the branch was rebased against; on a force push
+// the rebase step deliberately leaves it stale, so it stays the head the run
+// last observed rather than the live tip - which is what keeps the fast path
+// below honest (see the rebase step comment) and forces the content check.
 //
 // When the remote still points there the push is safe (it only fast-forwards or
 // replays our own prior state). Otherwise the remote moved out of band and the
