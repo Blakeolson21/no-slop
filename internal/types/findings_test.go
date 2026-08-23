@@ -516,3 +516,27 @@ func TestFinding_Action_Values(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeFindingsPersistsGeneratedIDProvenance(t *testing.T) {
+	findings := NormalizeFindings(Findings{Items: []Finding{
+		{Severity: "error", Description: "generated"},
+		{ID: "stable-defect", Severity: "warning", Description: "explicit"},
+	}}, "review")
+	if findings.Items[0].ID != "review-1" || !findings.Items[0].IDGenerated {
+		t.Fatalf("generated finding = %#v", findings.Items[0])
+	}
+	if findings.Items[1].IDGenerated {
+		t.Fatalf("explicit finding marked generated: %#v", findings.Items[1])
+	}
+	raw, err := MarshalFindingsJSON(findings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseFindingsJSON(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !parsed.Items[0].IDGenerated || parsed.Items[1].IDGenerated {
+		t.Fatalf("round-trip provenance = %#v", parsed.Items)
+	}
+}

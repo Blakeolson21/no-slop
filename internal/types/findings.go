@@ -41,6 +41,7 @@ const (
 // Finding represents a single review, test, lint, or PR comment finding.
 type Finding struct {
 	ID               string `json:"id,omitempty"`
+	IDGenerated      bool   `json:"id_generated,omitempty"`
 	Severity         string `json:"severity"`
 	File             string `json:"file,omitempty"`
 	Line             int    `json:"line,omitempty"`
@@ -78,7 +79,20 @@ func CountFindingFingerprints(items []Finding) map[FindingIdentity]int {
 	return counts
 }
 
-func FindingMatches(item Finding, exact map[FindingIdentity]bool, itemCounts, candidateCounts map[FindingIdentity]int) bool {
+func StableFindingIDs(items []Finding) map[string]bool {
+	ids := make(map[string]bool, len(items))
+	for _, item := range items {
+		if item.ID != "" && !item.IDGenerated {
+			ids[item.ID] = true
+		}
+	}
+	return ids
+}
+
+func FindingMatches(item Finding, stableIDs map[string]bool, exact map[FindingIdentity]bool, itemCounts, candidateCounts map[FindingIdentity]int) bool {
+	if item.ID != "" && !item.IDGenerated && stableIDs[item.ID] {
+		return true
+	}
 	if exact[item.Identity()] {
 		return true
 	}
@@ -97,6 +111,7 @@ type TestArtifact struct {
 
 type findingWire struct {
 	ID                  string `json:"id,omitempty"`
+	IDGenerated         bool   `json:"id_generated,omitempty"`
 	Severity            string `json:"severity"`
 	File                string `json:"file,omitempty"`
 	Line                int    `json:"line,omitempty"`
@@ -154,6 +169,7 @@ func NormalizeFindings(findings Findings, prefix string) Findings {
 			continue
 		}
 		findings.Items[i].ID = prefix + "-" + itoa(i+1)
+		findings.Items[i].IDGenerated = true
 	}
 	return findings
 }
@@ -367,6 +383,7 @@ func (f *Finding) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	f.ID = wire.ID
+	f.IDGenerated = wire.IDGenerated
 	f.Severity = wire.Severity
 	f.File = wire.File
 	f.Line = wire.Line

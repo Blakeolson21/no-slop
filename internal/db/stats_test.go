@@ -213,6 +213,29 @@ func TestStepFindingStatsTreatsUniqueLineShiftAsSameFinding(t *testing.T) {
 	}
 }
 
+func TestStepFindingStatsTreatsRephrasedStableIDAsSameFinding(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/repo/rephrased", "git@example.com:rephrased.git", "main")
+	run, _ := d.InsertRun(repo.ID, "rephrased", "head", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepReview)
+	initial := `{"findings":[{"id":"loader-race","severity":"warning","file":"loader.go","line":8,"description":"unsafe loader"}]}`
+	final := `{"findings":[{"id":"loader-race","severity":"error","file":"loader.go","line":14,"description":"loader races concurrent shutdown"}]}`
+	if _, err := d.InsertStepRound(step.ID, 1, "initial", &initial, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.InsertStepRound(step.ID, 2, "auto_fix", &final, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := d.StepFindingStats(step)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ReportedFindings != 1 || stats.FixedFindings != 0 {
+		t.Fatalf("stats = reported %d fixed %d", stats.ReportedFindings, stats.FixedFindings)
+	}
+}
+
 func assertStepStat(t *testing.T, stats []StepStats, step types.StepName, reported int, fixes int) {
 	t.Helper()
 	for _, got := range stats {

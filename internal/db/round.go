@@ -136,6 +136,41 @@ func (d *DB) InsertReviewStepRound(stepResultID string, round int, trigger strin
 }
 
 func (d *DB) InsertReviewStepRoundWithProvenance(stepResultID string, round int, trigger string, findingsJSON *string, fixSummary *string, reviewedHeadSHA, startingHeadSHA, trustedConfigSHA string, globalConfigYAML, repoConfigYAML []byte, durationMS int64) (*StepRound, error) {
+	return d.insertReviewStepRoundWithProvenance(d.sql, stepResultID, round, trigger, findingsJSON, fixSummary, reviewedHeadSHA, startingHeadSHA, trustedConfigSHA, globalConfigYAML, repoConfigYAML, durationMS)
+}
+
+func (d *DB) InsertEffectiveReviewStepRoundWithProvenance(stepResultID string, round int, trigger string, findingsJSON *string, fixSummary *string, reviewedHeadSHA, startingHeadSHA, trustedConfigSHA string, globalConfigYAML, repoConfigYAML []byte, durationMS int64) (*StepRound, error) {
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin effective review round: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`UPDATE step_results SET findings_json = ? WHERE id = ?`, findingsJSON, stepResultID)
+	if err != nil {
+		return nil, fmt.Errorf("set effective review findings: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("set effective review findings result: %w", err)
+	}
+	if rows != 1 {
+		return nil, fmt.Errorf("set effective review findings: updated %d rows", rows)
+	}
+	roundRecord, err := d.insertReviewStepRoundWithProvenance(tx, stepResultID, round, trigger, findingsJSON, fixSummary, reviewedHeadSHA, startingHeadSHA, trustedConfigSHA, globalConfigYAML, repoConfigYAML, durationMS)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit effective review round: %w", err)
+	}
+	return roundRecord, nil
+}
+
+type stepRoundExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func (d *DB) insertReviewStepRoundWithProvenance(execer stepRoundExecer, stepResultID string, round int, trigger string, findingsJSON *string, fixSummary *string, reviewedHeadSHA, startingHeadSHA, trustedConfigSHA string, globalConfigYAML, repoConfigYAML []byte, durationMS int64) (*StepRound, error) {
 	var reviewed, starting, trusted *string
 	if reviewedHeadSHA != "" {
 		reviewed = &reviewedHeadSHA
@@ -146,10 +181,14 @@ func (d *DB) InsertReviewStepRoundWithProvenance(stepResultID string, round int,
 	if trustedConfigSHA != "" {
 		trusted = &trustedConfigSHA
 	}
-	return d.insertStepRound(stepResultID, round, trigger, findingsJSON, fixSummary, reviewed, starting, trusted, globalConfigYAML, repoConfigYAML, durationMS)
+	return d.insertStepRoundWith(execer, stepResultID, round, trigger, findingsJSON, fixSummary, reviewed, starting, trusted, globalConfigYAML, repoConfigYAML, durationMS)
 }
 
 func (d *DB) insertStepRound(stepResultID string, round int, trigger string, findingsJSON *string, fixSummary, reviewedHeadSHA, startingHeadSHA, trustedConfigSHA *string, globalConfigYAML, repoConfigYAML []byte, durationMS int64) (*StepRound, error) {
+	return d.insertStepRoundWith(d.sql, stepResultID, round, trigger, findingsJSON, fixSummary, reviewedHeadSHA, startingHeadSHA, trustedConfigSHA, globalConfigYAML, repoConfigYAML, durationMS)
+}
+
+func (d *DB) insertStepRoundWith(execer stepRoundExecer, stepResultID string, round int, trigger string, findingsJSON *string, fixSummary, reviewedHeadSHA, startingHeadSHA, trustedConfigSHA *string, globalConfigYAML, repoConfigYAML []byte, durationMS int64) (*StepRound, error) {
 	r := &StepRound{
 		ID:               newID(),
 		StepResultID:     stepResultID,
@@ -165,7 +204,7 @@ func (d *DB) insertStepRound(stepResultID string, round int, trigger string, fin
 		DurationMS:       durationMS,
 		CreatedAt:        now(),
 	}
-	_, err := d.sql.Exec(
+	_, err := execer.Exec(
 		`INSERT INTO step_rounds (id, step_result_id, round, trigger_type, findings_json, reviewed_head_sha, starting_head_sha, trusted_config_sha, global_config_yaml, repo_config_yaml, user_findings_json, selected_finding_ids, selection_source, fix_summary, duration_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.ID, r.StepResultID, r.Round, r.Trigger, r.FindingsJSON, r.ReviewedHeadSHA, r.StartingHeadSHA, r.TrustedConfigSHA, r.GlobalConfigYAML, r.RepoConfigYAML, r.UserFindingsJSON, r.SelectedFindingIDs, r.SelectionSource, r.FixSummary, r.DurationMS, r.CreatedAt,
 	)

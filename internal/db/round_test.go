@@ -47,6 +47,89 @@ func TestReviewRoundPersistsExactReplayProvenance(t *testing.T) {
 	}
 }
 
+func TestInsertEffectiveReviewStepRoundRollsBackWhenFindingsUpdateFails(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/tmp/effective-review-update", "https://example.com/repo.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feature", "reviewed", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepReview)
+	oldFindings := `{"findings":[{"id":"old","severity":"error","description":"old"}]}`
+	if err := d.SetStepFindings(step.ID, oldFindings); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.sql.Exec(`CREATE TRIGGER reject_effective_findings BEFORE UPDATE OF findings_json ON step_results BEGIN SELECT RAISE(FAIL, 'injected findings failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.InsertEffectiveReviewStepRoundWithProvenance(step.ID, 1, "initial", nil, nil, "reviewed", "starting", "", nil, nil, 10); err == nil {
+		t.Fatal("expected findings update failure")
+	}
+	assertEffectiveReviewPersistence(t, d, step.ID, oldFindings, 0)
+}
+
+func TestInsertEffectiveReviewStepRoundRollsBackWhenRoundInsertFails(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/tmp/effective-review-round", "https://example.com/repo.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feature", "reviewed", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepReview)
+	oldFindings := `{"findings":[{"id":"old","severity":"error","description":"old"}]}`
+	if err := d.SetStepFindings(step.ID, oldFindings); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.sql.Exec(`CREATE TRIGGER reject_effective_round BEFORE INSERT ON step_rounds BEGIN SELECT RAISE(FAIL, 'injected round failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.InsertEffectiveReviewStepRoundWithProvenance(step.ID, 1, "initial", nil, nil, "reviewed", "starting", "", nil, nil, 10); err == nil {
+		t.Fatal("expected round insert failure")
+	}
+	assertEffectiveReviewPersistence(t, d, step.ID, oldFindings, 0)
+}
+
+func TestInsertEffectiveReviewStepRoundClearsFindingsWithRound(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/tmp/effective-review-success", "https://example.com/repo.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feature", "reviewed", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepReview)
+	oldFindings := `{"findings":[{"id":"old","severity":"error","description":"old"}]}`
+	if err := d.SetStepFindings(step.ID, oldFindings); err != nil {
+		t.Fatal(err)
+	}
+	round, err := d.InsertEffectiveReviewStepRoundWithProvenance(step.ID, 1, "auto_fix", nil, nil, "reviewed", "starting", "trusted", []byte("global"), []byte("repo"), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotStep, err := d.GetStepResult(step.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotStep.FindingsJSON != nil || round.FindingsJSON != nil {
+		t.Fatalf("effective findings were not cleared: step=%v round=%v", gotStep.FindingsJSON, round.FindingsJSON)
+	}
+	rounds, err := d.GetRoundsByStep(step.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rounds) != 1 || rounds[0].TrustedConfigSHA == nil || *rounds[0].TrustedConfigSHA != "trusted" {
+		t.Fatalf("persisted rounds = %#v", rounds)
+	}
+}
+
+func assertEffectiveReviewPersistence(t *testing.T, d *DB, stepID, wantFindings string, wantRounds int) {
+	t.Helper()
+	step, err := d.GetStepResult(stepID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.FindingsJSON == nil || *step.FindingsJSON != wantFindings {
+		t.Fatalf("step findings = %v, want %q", step.FindingsJSON, wantFindings)
+	}
+	rounds, err := d.GetRoundsByStep(stepID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rounds) != wantRounds {
+		t.Fatalf("round count = %d, want %d", len(rounds), wantRounds)
+	}
+}
+
 func TestStepRoundInsertAndGet(t *testing.T) {
 	d := openTestDB(t)
 	repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")

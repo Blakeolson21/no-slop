@@ -904,13 +904,15 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			effectiveFindings = mergeCarriedFindingsJSON(outcome.Findings, carriedFindings, string(stepName))
 		}
 
-		if effectiveFindings != "" {
-			if dbErr := e.db.SetStepFindings(sr.ID, effectiveFindings); dbErr != nil {
-				slog.Warn("failed to set step findings in db", "step", stepName, "error", dbErr)
-			}
-		} else {
-			if dbErr := e.db.ClearStepFindings(sr.ID); dbErr != nil {
-				slog.Warn("failed to clear step findings in db", "step", stepName, "error", dbErr)
+		if !carryFindings {
+			if effectiveFindings != "" {
+				if dbErr := e.db.SetStepFindings(sr.ID, effectiveFindings); dbErr != nil {
+					slog.Warn("failed to set step findings in db", "step", stepName, "error", dbErr)
+				}
+			} else {
+				if dbErr := e.db.ClearStepFindings(sr.ID); dbErr != nil {
+					slog.Warn("failed to clear step findings in db", "step", stepName, "error", dbErr)
+				}
 			}
 		}
 
@@ -930,7 +932,16 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		if stepName == types.StepCI && restartFrom != "" && !sctx.Fixing {
 			roundTrigger = "auto_fix"
 		}
-		if stepName == types.StepReview {
+		if carryFindings {
+			trustedConfigSHA := ""
+			var globalConfigYAML, repoConfigYAML []byte
+			if e.config != nil && e.config.CaptureEvalProvenance {
+				trustedConfigSHA = e.config.TrustedConfigSHA
+				globalConfigYAML = e.config.ReplayGlobalYAML
+				repoConfigYAML = e.config.ReplayRepoYAML
+			}
+			inserted, dbErr = e.db.InsertEffectiveReviewStepRoundWithProvenance(sr.ID, roundNum, roundTrigger, findingsPtr, fixSummaryPtr, reviewApprovedHeadSHA, reviewStartingHeadSHA, trustedConfigSHA, globalConfigYAML, repoConfigYAML, roundDuration)
+		} else if stepName == types.StepReview {
 			if e.config != nil && e.config.CaptureEvalProvenance {
 				inserted, dbErr = e.db.InsertReviewStepRoundWithProvenance(sr.ID, roundNum, roundTrigger, findingsPtr, fixSummaryPtr, reviewApprovedHeadSHA, reviewStartingHeadSHA, e.config.TrustedConfigSHA, e.config.ReplayGlobalYAML, e.config.ReplayRepoYAML, roundDuration)
 			} else {
