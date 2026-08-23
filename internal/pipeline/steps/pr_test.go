@@ -687,6 +687,36 @@ func TestPRStep_UsesAgentGeneratedTitleAndBody(t *testing.T) {
 	}
 }
 
+func TestPRStep_BuildPRContentScrubsHomePathsAtPublicationBoundary(t *testing.T) {
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	t.Setenv("HOME", "/srv/testoperator")
+	t.Setenv("USERPROFILE", "/srv/testoperator")
+
+	ag := &mockAgent{
+		name: "test",
+		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+			payload := json.RawMessage(`{"title":"fix: hide /srv/testoperator workspace","body":"## What Changed\n\n- evidence: /srv/testoperator/evidence/run.log\n- escaped: line\\n/Users/testuser/worktree/out.log\n- windows: C:\\\\Users\\\\testuser\\\\trace.log"}`)
+			return &agent.Result{Output: payload}, nil
+		},
+	}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+
+	content, err := (&PRStep{}).buildPRContent(sctx, "feature", baseSHA, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leaked := range []string{"/srv/testoperator", "/Users/testuser", `C:\\Users\\testuser`} {
+		if strings.Contains(content.Title, leaked) || strings.Contains(content.Body, leaked) {
+			t.Fatalf("published PR content leaked %q: title=%q body=%q", leaked, content.Title, content.Body)
+		}
+	}
+	if !strings.Contains(content.Title, "hide ~ workspace") ||
+		!strings.Contains(content.Body, "evidence: ~/evidence/run.log") ||
+		!strings.Contains(content.Body, `windows: ~\\trace.log`) {
+		t.Fatalf("published PR content did not preserve useful redacted paths: title=%q body=%q", content.Title, content.Body)
+	}
+}
+
 func TestPRStep_AppendsTestingSectionFromTestStep(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)

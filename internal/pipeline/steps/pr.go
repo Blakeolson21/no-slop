@@ -14,6 +14,7 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/db"
 	"github.com/Blakeolson21/no-slop/internal/git"
 	"github.com/Blakeolson21/no-slop/internal/pipeline"
+	"github.com/Blakeolson21/no-slop/internal/safepath"
 	"github.com/Blakeolson21/no-slop/internal/scm"
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
@@ -149,6 +150,19 @@ func describePR(pr *scm.PR) string {
 }
 
 func (s *PRStep) buildPRContent(sctx *pipeline.StepContext, branch, baseSHA string, bodyLimit int) (prContent, error) {
+	content, err := s.draftPRContent(sctx, branch, baseSHA, bodyLimit)
+	if err != nil {
+		return prContent{}, err
+	}
+	content.Title = safepath.RedactText(content.Title)
+	content.Body = safepath.RedactText(content.Body)
+	return content, nil
+}
+
+// draftPRContent assembles content from every source that can reach a pull
+// request. buildPRContent wraps this producer with the final publication scrub
+// so future rendering paths cannot accidentally bypass home-path redaction.
+func (s *PRStep) draftPRContent(sctx *pipeline.StepContext, branch, baseSHA string, bodyLimit int) (prContent, error) {
 	publicationNonce, err := s.newPublicationNonce()
 	if err != nil {
 		return prContent{}, fmt.Errorf("generate PR attestation publication nonce: %w", err)
