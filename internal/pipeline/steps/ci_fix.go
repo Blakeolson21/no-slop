@@ -132,6 +132,17 @@ CI logs:
 	if fixResult.HeadChanged() {
 		persisted, getErr := sctx.DB.GetRun(sctx.Run.ID)
 		fixResult.HeadPersisted = getErr == nil && persisted != nil && persisted.HeadSHA == fixResult.HeadSHA
+		if fixResult.HeadPersisted {
+			candidate := s.transientReruns
+			candidate.expectedAttestationHeadSHA = fixResult.HeadSHA
+			candidate.compliantAttestationRunNumber = 0
+			if persistErr := s.persistRerunBudgetCandidate(sctx, &candidate); persistErr != nil {
+				return fixResult, fmt.Errorf("persist expected attestation head: %w", persistErr)
+			}
+			s.transientReruns.expectedAttestationHeadSHA = fixResult.HeadSHA
+			s.transientReruns.compliantAttestationRunNumber = 0
+			fixResult.ExpectedAttestationTracked = true
+		}
 	}
 	if err != nil {
 		return fixResult, err

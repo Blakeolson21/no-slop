@@ -104,30 +104,37 @@ func TestCIStep_CIFailureAutoFix(t *testing.T) {
 	}
 }
 
-func TestCIStep_ManualFixWithStaleRequiredGatesReturnsForRerun(t *testing.T) {
+func TestCIStep_ManualFixWithFailingCheckRestartsValidation(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
-	ag := &mockAgent{name: "test"}
+	ag := &mockAgent{name: "test", runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
+		if err := os.WriteFile(filepath.Join(opts.CWD, "manual-ci-fix.txt"), []byte("fixed"), 0o644); err != nil {
+			return nil, err
+		}
+		return &agent.Result{Output: []byte(`{"summary":"repair manual CI failure"}`)}, nil
+	}}
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Fixing = true
+	prURL := "https://github.com/test/repo/pull/42"
+	sctx.Run.PRURL = &prURL
+	sctx.Env = fakeCIGH(t, "OPEN", `[{"name":"test","state":"FAILURE","bucket":"fail"}]`)
+	sctx.Config.CITimeout = 30 * time.Second
 	for _, name := range []types.StepName{types.StepReview, types.StepTest, types.StepDocument} {
 		result, err := sctx.DB.InsertStepResult(sctx.Run.ID, name)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := sctx.DB.CompleteStepWithStatusAtHead(result.ID, types.StepStatusCompleted, baseSHA, 0, 1, ""); err != nil {
+		if err := sctx.DB.CompleteStepWithStatusAtHead(result.ID, types.StepStatusCompleted, headSHA, 0, 1, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	outcome, err := (&CIStep{}).Execute(sctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if outcome == nil || outcome.NeedsApproval || outcome.Findings != "" {
-		t.Fatalf("stale manual-fix outcome = %#v", outcome)
-	}
-	if len(ag.calls) != 0 {
-		t.Fatalf("stale required gates reached generic CI repair: %d agent calls", len(ag.calls))
+	outcome, err := (&CIStep{waitForNextPoll: func(context.Context, time.Duration) error {
+		t.Fatal("CI monitor polled after a successful manual repair")
+		return nil
+	}}).Execute(sctx)
+	assertCIRestartsValidation(t, outcome, err)
+	if len(ag.calls) != 1 {
+		t.Fatalf("manual CI repair calls = %d, want 1", len(ag.calls))
 	}
 }
 

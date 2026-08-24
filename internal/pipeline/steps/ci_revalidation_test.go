@@ -200,6 +200,11 @@ func TestCIStep_RevalidationCanRepairSameFailureAgainWithoutCompletionTime(t *te
 
 	outcome, err := step.Execute(sctx)
 	assertCIRestartsValidation(t, outcome, err)
+	sctx.Env = fakeCIGH(t, "OPEN", `[
+		{"name":"PR must be raised via no-slop","state":"SUCCESS","bucket":"pass","link":"https://github.com/test/repo/actions/runs/123/job/456"},
+		{"name":"test","status":"COMPLETED","conclusion":"failure","bucket":"fail"}
+	]`)
+	sctx.Env = append(sctx.Env, "FAKE_CLI_RUN_IDENTITY="+fmt.Sprintf(`{"databaseId":123,"number":2,"attempt":1,"event":"pull_request","headSha":%q}`, sctx.Run.HeadSHA))
 	outcome, err = step.Execute(sctx)
 	assertCIRestartsValidation(t, outcome, err)
 	if fixCalls != 2 {

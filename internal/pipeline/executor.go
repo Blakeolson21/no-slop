@@ -224,13 +224,23 @@ func (e *Executor) Execute(ctx context.Context, run *db.Run, repo *db.Repo, work
 			e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, step.Name(), string(types.StepStatusSkipped), "", "", nil)
 			continue
 		}
-		state, err := e.durableExecutionState(sr.ID)
+		state, sr, err := e.executionStateForStep(step, sr)
 		if err != nil {
 			return e.failRun(run, repo, fmt.Errorf("restore step %s execution state: %w", step.Name(), err), ctx)
 		}
+		stepRecords[step.Name()] = sr
+		previousHeadSHA := run.HeadSHA
 		skipRemaining, restartFrom, err := e.executeStep(ctx, step, sr, run, repo, workDir, logDir, state)
 		if err != nil {
 			return e.failRun(run, repo, err, ctx)
+		}
+		restartIndex, restarting, err := e.restartAfterStep(run, repo, previousHeadSHA, restartFrom, i)
+		if err != nil {
+			return e.failRun(run, repo, restartStepError(step.Name(), restartFrom, err), ctx)
+		}
+		if restarting {
+			i = restartIndex - 1
+			continue
 		}
 		if skipRemaining {
 			// Mark all subsequent steps as skipped
@@ -242,13 +252,6 @@ func (e *Executor) Execute(ctx context.Context, run *db.Run, repo *db.Repo, work
 				e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, remaining.Name(), string(types.StepStatusSkipped), "", "", nil)
 			}
 			break
-		}
-		if restartFrom != "" {
-			restartIndex, err := e.prepareRestart(run, repo, restartFrom, i)
-			if err != nil {
-				return e.failRun(run, repo, restartStepError(step.Name(), restartFrom, err), ctx)
-			}
-			i = restartIndex - 1
 		}
 	}
 
@@ -282,6 +285,24 @@ func (e *Executor) prepareRestart(run *db.Run, repo *db.Repo, name types.StepNam
 	}
 	e.onEvent(ipc.Event{Type: ipc.EventStepsReset, RunID: run.ID, RepoID: repo.ID})
 	return index, nil
+}
+
+func (e *Executor) restartAfterStep(run *db.Run, repo *db.Repo, previousHeadSHA string, requested types.StepName, currentIndex int) (int, bool, error) {
+	if run.HeadSHA != previousHeadSHA {
+		index, err := e.restartIndexForStaleRequiredGates(run)
+		if err != nil {
+			return 0, false, err
+		}
+		if index >= 0 {
+			e.onEvent(ipc.Event{Type: ipc.EventStepsReset, RunID: run.ID, RepoID: repo.ID})
+			return index, true, nil
+		}
+	}
+	if requested == "" {
+		return 0, false, nil
+	}
+	index, err := e.prepareRestart(run, repo, requested, currentIndex)
+	return index, err == nil, err
 }
 
 func (e *Executor) initializeRunScopes(runID string) {
@@ -329,26 +350,30 @@ func (e *Executor) restartIndexForStaleRequiredGates(run *db.Run) (int, error) {
 		types.StepTest:     true,
 		types.StepDocument: true,
 	}
-	earliest := -1
-	for index, step := range steps {
+	var earliest types.StepName
+	for _, step := range steps {
 		if !required[step.StepName] || step.Status != types.StepStatusCompleted {
 			continue
 		}
 		if step.CertifiedHeadSHA != nil && *step.CertifiedHeadSHA == run.HeadSHA {
 			continue
 		}
-		if earliest < 0 || index < earliest {
-			earliest = index
+		if earliest == "" || step.StepOrder < earliest.Order() {
+			earliest = step.StepName
 		}
 	}
-	if earliest < 0 {
+	if earliest == "" {
 		return -1, nil
 	}
-	if err := e.db.ResetStepsFromOrder(run.ID, e.steps[earliest].Name().Order()); err != nil {
+	index, err := e.stepIndex(earliest)
+	if err != nil {
+		return -1, err
+	}
+	if err := e.db.ResetStepsFromOrder(run.ID, earliest.Order()); err != nil {
 		return -1, fmt.Errorf("invalidate stale required gates: %w", err)
 	}
-	slog.Info("pipeline head changed; rerunning required gates", "run", run.ID, "head", run.HeadSHA, "from", e.steps[earliest].Name())
-	return earliest, nil
+	slog.Info("pipeline head changed; rerunning required gates", "run", run.ID, "head", run.HeadSHA, "from", earliest)
+	return index, nil
 }
 
 type stepExecutionState struct {
@@ -359,21 +384,6 @@ type stepExecutionState struct {
 	executionMS      int64
 	currentRoundID   string
 	carriedFindings  string
-}
-
-func (e *Executor) durableExecutionState(stepResultID string) (stepExecutionState, error) {
-	rounds, err := e.db.GetRoundsByStep(stepResultID)
-	if err != nil {
-		return stepExecutionState{}, err
-	}
-	state := stepExecutionState{}
-	for _, round := range rounds {
-		state.roundNum = max(state.roundNum, round.Round)
-		if round.SelectionSource != nil && *round.SelectionSource == db.RoundSelectionSourceAutoFix {
-			state.autoFixAttempts++
-		}
-	}
-	return state, nil
 }
 
 func (e *Executor) dispatchableStepResult(stepResultID string, stepName types.StepName) (*db.StepResult, error) {
@@ -572,6 +582,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 		if findingsMayBeScopeLimited(gate.step) {
 			carried = excludeFindingsJSON(gate.findings, response.findingIDs)
 		}
+		previousHeadSHA := run.HeadSHA
 		skipRemaining, restartFrom, err := e.executeStep(ctx, gate.step, gate.stepResult, run, repo, workDir, logDir, stepExecutionState{
 			fixing:           true,
 			previousFindings: merged,
@@ -584,15 +595,15 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 		if err != nil {
 			return e.failRun(run, repo, err, ctx)
 		}
+		restartIndex, restarting, restartErr := e.restartAfterStep(run, repo, previousHeadSHA, restartFrom, gate.index)
+		if restartErr != nil {
+			return e.failRun(run, repo, restartStepError(gate.step.Name(), restartFrom, restartErr), ctx)
+		}
+		if restarting {
+			return e.executeRecoveredRemainder(ctx, run, repo, workDir, logDir, restartIndex)
+		}
 		if skipRemaining {
 			return e.skipRecoveredRemainder(run, repo, gate.index+1)
-		}
-		if restartFrom != "" {
-			restartIndex, indexErr := e.prepareRestart(run, repo, restartFrom, gate.index)
-			if indexErr != nil {
-				return e.failRun(run, repo, restartStepError(gate.step.Name(), restartFrom, indexErr), ctx)
-			}
-			return e.executeRecoveredRemainder(ctx, run, repo, workDir, logDir, restartIndex)
 		}
 		return e.executeRecoveredRemainder(ctx, run, repo, workDir, logDir, gate.index+1)
 	default:
@@ -682,23 +693,30 @@ func (e *Executor) executeRecoveredRemainder(ctx context.Context, run *db.Run, r
 		if result.Status == types.StepStatusSkipped {
 			continue
 		}
-		state, stateErr := e.durableExecutionState(result.ID)
+		state, result, stateErr := e.executionStateForStep(e.steps[index], result)
 		if stateErr != nil {
 			return e.failRun(run, repo, fmt.Errorf("restore step %s execution state: %w", e.steps[index].Name(), stateErr), ctx)
 		}
+		results[index] = result
+		previousHeadSHA := run.HeadSHA
 		skipRemaining, restartFrom, err := e.executeStep(ctx, e.steps[index], result, run, repo, workDir, logDir, state)
 		if err != nil {
 			return e.failRun(run, repo, err, ctx)
 		}
-		if skipRemaining {
-			return e.skipRecoveredRemainder(run, repo, index+1)
+		restartIndex, restarting, restartErr := e.restartAfterStep(run, repo, previousHeadSHA, restartFrom, index)
+		if restartErr != nil {
+			return e.failRun(run, repo, restartStepError(e.steps[index].Name(), restartFrom, restartErr), ctx)
 		}
-		if restartFrom != "" {
-			restartIndex, indexErr := e.prepareRestart(run, repo, restartFrom, index)
-			if indexErr != nil {
-				return e.failRun(run, repo, restartStepError(e.steps[index].Name(), restartFrom, indexErr), ctx)
+		if restarting {
+			results, err = e.db.GetStepsByRun(run.ID)
+			if err != nil {
+				return e.failRun(run, repo, fmt.Errorf("reload recovered steps after head change: %w", err), ctx)
 			}
 			index = restartIndex - 1
+			continue
+		}
+		if skipRemaining {
+			return e.skipRecoveredRemainder(run, repo, index+1)
 		}
 	}
 	if err := e.completeRun(run, repo); err != nil {

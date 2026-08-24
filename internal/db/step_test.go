@@ -354,6 +354,50 @@ func TestResetStepsFromPreservesSkippedSteps(t *testing.T) {
 	t.Logf("revalidation reset evidence: review status=%s, convergence state=cleared, push status=%s", gotReview.Status, gotPush.Status)
 }
 
+func TestResetStepsFromOrderPreservesSkippedSteps(t *testing.T) {
+	d := openTestDB(t)
+	repo, err := d.InsertRepo("/tmp/head-change", "https://example.com/head-change.git", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := d.InsertRun(repo.ID, "feature", "new-head", "base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	review, err := d.InsertStepResult(run.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	push, err := d.InsertStepResult(run.ID, types.StepPush)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.CompleteStepWithStatusAtHead(review.ID, types.StepStatusCompleted, "old-head", 0, 1, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.CompleteStepWithStatus(push.ID, types.StepStatusSkipped, 0, 0, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := d.ResetStepsFromOrder(run.ID, types.StepReview.Order()); err != nil {
+		t.Fatal(err)
+	}
+	gotReview, err := d.GetStepResult(review.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotReview.Status != types.StepStatusPending || gotReview.CertifiedHeadSHA != nil {
+		t.Fatalf("review after head-change reset = %#v", gotReview)
+	}
+	gotPush, err := d.GetStepResult(push.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPush.Status != types.StepStatusSkipped {
+		t.Fatalf("push status = %s, want durable skip preserved", gotPush.Status)
+	}
+}
+
 func TestCompleteStepWithStatusPersistsCertifiedHead(t *testing.T) {
 	d := openTestDB(t)
 	repo, _ := d.InsertRepo("/home/user/certified", "git@github.com:user/certified.git", "main")

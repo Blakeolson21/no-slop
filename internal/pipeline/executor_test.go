@@ -3,7 +3,9 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/Blakeolson21/no-slop/internal/ipc"
 	"github.com/Blakeolson21/no-slop/internal/telemetry"
@@ -132,6 +134,213 @@ func TestExecutor_HeadMutationsInvalidateRequiredGateCertifications(t *testing.T
 				t.Fatalf("current certifications restart = %d, err = %v", restart, err)
 			}
 		})
+	}
+}
+
+func TestExecutor_DocumentHeadMutationRerunsRequiredGatesWithCarriedReviewState(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	const (
+		oldHead = "1111111111111111111111111111111111111111"
+		newHead = "2222222222222222222222222222222222222222"
+	)
+	run.HeadSHA = oldHead
+	if err := database.UpdateRunHeadSHA(run.ID, oldHead); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	reviewCalls := 0
+	testCalls := 0
+	documentCalls := 0
+	ciCalls := 0
+	review := &scopeLimitedAdaptiveCallStep{adaptiveCallStep: adaptiveCallStep{name: types.StepReview, fn: func(*StepContext) (*StepOutcome, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		reviewCalls++
+		if reviewCalls == 1 {
+			return &StepOutcome{
+				NeedsApproval: true,
+				Findings:      `{"findings":[{"id":"carried-review-finding","severity":"error","description":"requires explicit adjudication","action":"ask-user"}]}`,
+			}, nil
+		}
+		return &StepOutcome{}, nil
+	}}}
+	testStep := &adaptiveCallStep{name: types.StepTest, fn: func(*StepContext) (*StepOutcome, error) {
+		mu.Lock()
+		testCalls++
+		mu.Unlock()
+		return &StepOutcome{}, nil
+	}}
+	document := &adaptiveCallStep{name: types.StepDocument, fn: func(sctx *StepContext) (*StepOutcome, error) {
+		mu.Lock()
+		documentCalls++
+		call := documentCalls
+		mu.Unlock()
+		if call == 1 {
+			if err := sctx.DB.UpdateRunHeadSHA(sctx.Run.ID, newHead); err != nil {
+				return nil, err
+			}
+			sctx.Run.HeadSHA = newHead
+		}
+		return &StepOutcome{}, nil
+	}}
+	ci := &adaptiveCallStep{name: types.StepCI, fn: func(sctx *StepContext) (*StepOutcome, error) {
+		mu.Lock()
+		ciCalls++
+		mu.Unlock()
+		results, err := sctx.DB.GetStepsByRun(sctx.Run.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, result := range results {
+			if result.StepName != types.StepReview && result.StepName != types.StepTest && result.StepName != types.StepDocument {
+				continue
+			}
+			if result.Status != types.StepStatusCompleted || result.CertifiedHeadSHA == nil || *result.CertifiedHeadSHA != newHead {
+				return nil, fmt.Errorf("%s reached CI without current-head certification", result.StepName)
+			}
+		}
+		return &StepOutcome{}, nil
+	}}
+
+	exec := NewExecutor(database, p, nil, nil, []Step{review, testStep, document, ci}, nil)
+	workDir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- exec.Execute(ctx, run, repo, workDir) }()
+
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	results, err := database.GetStepsByRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	carriedID := ""
+	for _, step := range results {
+		if step.StepName != types.StepReview || step.FindingsJSON == nil {
+			continue
+		}
+		findings, err := types.ParseFindingsJSON(*step.FindingsJSON)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(findings.Items) != 1 {
+			t.Fatalf("initial review gate findings = %#v", findings.Items)
+		}
+		carriedID = findings.Items[0].ID
+	}
+	if carriedID == "" {
+		t.Fatal("initial review gate has no durable finding identity")
+	}
+	if err := exec.Respond(types.StepReview, types.ActionApprove, nil); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		calls := reviewCalls
+		mu.Unlock()
+		result, err := database.GetStepsByRun(run.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var reviewResult *string
+		for _, step := range result {
+			if step.StepName == types.StepReview && step.Status == types.StepStatusAwaitingApproval && step.FindingsJSON != nil {
+				reviewResult = step.FindingsJSON
+			}
+		}
+		if calls >= 2 && reviewResult != nil {
+			findings, err := types.ParseFindingsJSON(*reviewResult)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(findings.Items) != 1 || findings.Items[0].ID != carriedID {
+				t.Fatalf("revalidated review gate findings = %#v", findings.Items)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("revalidated review did not preserve its unresolved finding")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := exec.Respond(types.StepReview, types.ActionApprove, nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("executor did not finish revalidation")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if reviewCalls != 2 || testCalls != 2 || documentCalls != 2 || ciCalls != 1 {
+		t.Fatalf("step calls = review:%d test:%d document:%d ci:%d", reviewCalls, testCalls, documentCalls, ciCalls)
+	}
+}
+
+func TestExecutor_RecoveredRemainderRerunsRequiredGatesAfterHeadMutation(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	const (
+		oldHead = "1111111111111111111111111111111111111111"
+		newHead = "2222222222222222222222222222222222222222"
+	)
+	run.HeadSHA = oldHead
+	if err := database.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpdateRunHeadSHA(run.ID, oldHead); err != nil {
+		t.Fatal(err)
+	}
+
+	review := newPassStep(types.StepReview)
+	testStep := newPassStep(types.StepTest)
+	documentCalls := 0
+	document := &adaptiveCallStep{name: types.StepDocument, fn: func(sctx *StepContext) (*StepOutcome, error) {
+		documentCalls++
+		if documentCalls == 1 {
+			if err := sctx.DB.UpdateRunHeadSHA(sctx.Run.ID, newHead); err != nil {
+				return nil, err
+			}
+			sctx.Run.HeadSHA = newHead
+		}
+		return &StepOutcome{}, nil
+	}}
+	ci := newPassStep(types.StepCI)
+	steps := []Step{review, testStep, document, ci}
+	for _, step := range steps {
+		result, err := database.InsertStepResult(run.ID, step.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if step.Name() == types.StepReview || step.Name() == types.StepTest {
+			if err := database.CompleteStepWithStatusAtHead(result.ID, types.StepStatusCompleted, oldHead, 0, 1, ""); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	exec := NewExecutor(database, p, nil, nil, steps, nil)
+	exec.initializeRunScopes(run.ID)
+	if err := exec.executeRecoveredRemainder(context.Background(), run, repo, t.TempDir(), t.TempDir(), 2); err != nil {
+		t.Fatal(err)
+	}
+	if review.callCount() != 1 || testStep.callCount() != 1 || documentCalls != 2 || ci.callCount() != 1 {
+		t.Fatalf("recovered step calls = review:%d test:%d document:%d ci:%d", review.callCount(), testStep.callCount(), documentCalls, ci.callCount())
+	}
+	results, err := database.GetStepsByRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, result := range results {
+		if result.Status != types.StepStatusCompleted || result.CertifiedHeadSHA == nil || *result.CertifiedHeadSHA != newHead {
+			t.Fatalf("recovered %s result = %#v", result.StepName, result)
+		}
 	}
 }
 

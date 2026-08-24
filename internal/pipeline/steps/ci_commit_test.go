@@ -188,8 +188,13 @@ func TestCIStep_AutoFixLocalRepairDoesNotDependOnPRAttestationRefresh(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.HeadChanged() || !result.HeadPersisted {
+	if !result.HeadChanged() || !result.HeadPersisted || !result.ExpectedAttestationTracked {
 		t.Fatalf("local repair result = %#v", result)
+	}
+	recovered := &CIStep{}
+	recovered.loadRerunBudget(sctx)
+	if recovered.transientReruns.expectedAttestationHeadSHA != result.HeadSHA || recovered.transientReruns.compliantAttestationRunNumber != 0 {
+		t.Fatalf("recovered expected attestation state = %#v, want head %s with no compliant run", recovered.transientReruns, result.HeadSHA)
 	}
 	if host.getCalls != 0 || len(host.updates) != 0 {
 		t.Fatalf("local repair touched PR content: reads=%d updates=%d", host.getCalls, len(host.updates))
