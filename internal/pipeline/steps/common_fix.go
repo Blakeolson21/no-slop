@@ -171,9 +171,9 @@ func commitAgentFixes(sctx *pipeline.StepContext, stepName types.StepName, summa
 	if startingHead == "" {
 		startingHead = sctx.Run.HeadSHA
 	}
-	if stepName == types.StepReview {
+	if stepPersistsUncertifiedReview(stepName) {
 		if err := pipeline.PersistUncertifiedPipelineRange(sctx, startingHead, headSHA); err != nil {
-			return fmt.Errorf("persist uncertified review range: %w", err)
+			return fmt.Errorf("persist uncertified review range before %s head adoption: %w", stepName, err)
 		}
 	}
 	if err := adoptBranchRef(sctx, headSHA); err != nil {
@@ -189,6 +189,15 @@ func commitAgentFixes(sctx *pipeline.StepContext, stepName types.StepName, summa
 		sctx.Log(fmt.Sprintf("adopted agent-created commit(s): head advanced to %s", headSHA))
 	}
 	return nil
+}
+
+func stepPersistsUncertifiedReview(stepName types.StepName) bool {
+	switch stepName {
+	case types.StepReview, types.StepTest, types.StepDocument, types.StepLint, types.StepCI:
+		return true
+	default:
+		return false
+	}
 }
 
 func extractCommitSummary(result *agent.Result) (string, error) {

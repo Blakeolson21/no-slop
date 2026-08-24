@@ -24,6 +24,7 @@ const (
 	maxEmbeddedArtifactsTotalBytes         = 32 * 1024
 	noMistakesPRSignature                  = "Updates from [git push no-slop](https://github.com/Blakeolson21/no-slop)"
 	legacyNoMistakesPRSignature            = "Updates from [git push no-mistakes](https://github.com/Blakeolson21/no-slop)"
+	publicationEventCommentPrefix          = "<!-- no-slop-publication:v1 "
 	pipelineAttestationCommentPrefix       = "<!-- no-slop-pipeline-attestation:v1 "
 	pipelineAttestationCommentClosingToken = " -->"
 )

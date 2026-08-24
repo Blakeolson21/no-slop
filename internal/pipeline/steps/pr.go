@@ -149,6 +149,16 @@ func (s *PRStep) buildPRContent(sctx *pipeline.StepContext, branch, baseSHA stri
 	if err != nil {
 		return prContent{}, fmt.Errorf("generate PR attestation publication nonce: %w", err)
 	}
+	publicationMarker := publicationEventCommentPrefix + publicationNonce + pipelineAttestationCommentClosingToken
+	providerLimited := bodyLimit > 0
+	providerBodyLimit := bodyLimit
+	githubBodyLimit := maxPullRequestBodyBytes - len(publicationMarker+"\n\n")
+	if providerLimited {
+		providerBodyLimit -= scm.PRBodyLen(publicationMarker + "\n\n")
+	}
+	if githubBodyLimit < 1 || (providerLimited && providerBodyLimit < 1) {
+		return prContent{}, fmt.Errorf("PR body limit cannot fit publication identity")
+	}
 	ctx := sctx.Ctx
 	diffStat, _ := git.Run(ctx, sctx.WorkDir, "diff", "--stat", baseSHA+".."+sctx.Run.HeadSHA)
 	finalDiff, err := git.Run(ctx, sctx.WorkDir, "diff", "--name-status", baseSHA+".."+sctx.Run.HeadSHA)
@@ -184,7 +194,7 @@ Diff stat:
 Final diff paths and statuses:
 %s%s%s`, branch, baseSHA, sctx.Run.HeadSHA, sctx.Repo.DefaultBranch, conventional.ReleaseTypeRule, diffStat, finalDiff, userIntentPromptSection(sctx), executionContextPromptSection())
 
-	prompt += prBodyBudgetPromptSection(bodyLimit)
+	prompt += prBodyBudgetPromptSection(providerBodyLimit)
 
 	result, err := sctx.Agent.Run(ctx, agent.RunOpts{
 		Prompt:     prompt,
@@ -194,7 +204,8 @@ Final diff paths and statuses:
 	})
 	if err != nil {
 		slog.Warn("agent failed for PR content, using fallback", "error", err)
-		content := fallbackPRContent(sctx, finalDiff, riskLine, testingMD, pipelineMD, bodyLimit)
+		content := fallbackPRContentWithinLimits(sctx, finalDiff, riskLine, testingMD, pipelineMD, providerBodyLimit, githubBodyLimit)
+		content.Body = publicationMarker + "\n\n" + content.Body
 		content.PublicationNonce = publicationNonce
 		return content, nil
 	}
@@ -212,18 +223,20 @@ Final diff paths and statuses:
 				if content.Title != originalTitle {
 					slog.Warn("tightened agent PR title type", "from", originalTitle, "to", content.Title)
 				}
-				if bodyLimit > 0 {
-					content.Body = assemblePRBody(sctx, content.Body, riskLine, testingMD, pipelineMD, bodyLimit)
+				if providerBodyLimit > 0 {
+					content.Body = assemblePRBody(sctx, content.Body, riskLine, testingMD, pipelineMD, providerBodyLimit)
 				} else {
-					content.Body = buildPRBody(content.Body, riskLine, testingMD, pipelineMD, sctx)
+					content.Body = buildPRBodyWithinLimit(content.Body, riskLine, testingMD, pipelineMD, sctx, githubBodyLimit)
 				}
+				content.Body = publicationMarker + "\n\n" + content.Body
 				content.PublicationNonce = publicationNonce
 				return content, nil
 			}
 		}
 	}
 
-	content = fallbackPRContent(sctx, finalDiff, riskLine, testingMD, pipelineMD, bodyLimit)
+	content = fallbackPRContentWithinLimits(sctx, finalDiff, riskLine, testingMD, pipelineMD, providerBodyLimit, githubBodyLimit)
+	content.Body = publicationMarker + "\n\n" + content.Body
 	content.PublicationNonce = publicationNonce
 	return content, nil
 }
@@ -371,8 +384,12 @@ func appendGeneratedSections(body, riskLine, testingMD, pipelineMD string) strin
 }
 
 func buildPRBody(body, riskLine, testingMD, pipelineMD string, sctx *pipeline.StepContext) string {
+	return buildPRBodyWithinLimit(body, riskLine, testingMD, pipelineMD, sctx, maxPullRequestBodyBytes)
+}
+
+func buildPRBodyWithinLimit(body, riskLine, testingMD, pipelineMD string, sctx *pipeline.StepContext, maxBytes int) string {
 	body = stripGeneratedSections(body)
-	sections := appendGeneratedSectionsToCleanBody(body, riskLine, testingMD, pipelineMD)
+	sections := appendGeneratedSectionsToCleanBodyWithinLimit(body, riskLine, testingMD, pipelineMD, maxBytes)
 	cleaned := cleanedUserIntent(sctx)
 	if cleaned == "" {
 		return sections
@@ -380,17 +397,17 @@ func buildPRBody(body, riskLine, testingMD, pipelineMD string, sctx *pipeline.St
 
 	intent := "## Intent\n\n" + cleaned
 	separator := "\n\n"
-	if len(intent)+len(separator)+len(sections) <= maxPullRequestBodyBytes {
+	if len(intent)+len(separator)+len(sections) <= maxBytes {
 		return intent + separator + sections
 	}
-	sectionsBudget := maxPullRequestBodyBytes - len(separator) - len(intent)
+	sectionsBudget := maxBytes - len(separator) - len(intent)
 	minimumSectionsBytes := len(pipelineSectionHeader(pipelineMD))
 	if sectionsBudget > 0 && (minimumSectionsBytes == 0 || sectionsBudget >= minimumSectionsBytes) {
 		sections = appendGeneratedSectionsToCleanBodyWithinLimit(body, riskLine, testingMD, pipelineMD, sectionsBudget)
 		return intent + separator + sections
 	}
 
-	intentBudget := maxPullRequestBodyBytes - len(separator) - len(sections)
+	intentBudget := maxBytes - len(separator) - len(sections)
 	if intentBudget <= 0 {
 		return sections
 	}
@@ -1078,6 +1095,10 @@ func prependIntentSection(body string, sctx *pipeline.StepContext) string {
 }
 
 func fallbackPRContent(sctx *pipeline.StepContext, finalDiff, riskLine, testingMD, pipelineMD string, bodyLimit int) prContent {
+	return fallbackPRContentWithinLimits(sctx, finalDiff, riskLine, testingMD, pipelineMD, bodyLimit, maxPullRequestBodyBytes)
+}
+
+func fallbackPRContentWithinLimits(sctx *pipeline.StepContext, finalDiff, riskLine, testingMD, pipelineMD string, bodyLimit, githubBodyLimit int) prContent {
 	title := "chore: update pull request"
 	diffSummary := strings.TrimSpace(finalDiff)
 	body := "## What Changed\n\nFinal changed paths and statuses:\n\n```text\n" + escapeMarkdownFence(diffSummary) + "\n```"
@@ -1087,7 +1108,7 @@ func fallbackPRContent(sctx *pipeline.StepContext, finalDiff, riskLine, testingM
 	if bodyLimit > 0 {
 		body = assemblePRBody(sctx, body, riskLine, testingMD, pipelineMD, bodyLimit)
 	} else {
-		body = buildPRBody(body, riskLine, testingMD, pipelineMD, sctx)
+		body = buildPRBodyWithinLimit(body, riskLine, testingMD, pipelineMD, sctx, githubBodyLimit)
 	}
 	return prContent{
 		Title: title,

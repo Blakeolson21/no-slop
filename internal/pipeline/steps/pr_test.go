@@ -125,6 +125,9 @@ func TestPRStep_UpdatesExistingPR(t *testing.T) {
 	if nonce := parsePipelineAttestationForTest(t, published.Body).PublicationNonce; nonce != testPublicationNonce {
 		t.Fatalf("updated PR publication nonce = %q, want %q", nonce, testPublicationNonce)
 	}
+	if !strings.HasPrefix(published.Body, publicationEventCommentPrefix+testPublicationNonce+pipelineAttestationCommentClosingToken+"\n\n") {
+		t.Fatalf("updated PR body does not expose publication identity first: %q", published.Body)
+	}
 	if strings.Contains(ghLog, "pr view 42 --repo test/repo --json updatedAt") {
 		t.Fatalf("attestation publication used mutable PR state:\n%s", ghLog)
 	}

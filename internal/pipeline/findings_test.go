@@ -99,6 +99,42 @@ func TestMergeReappearedFindingsJSONPreservesSelectedLineageSemanticsOnly(t *tes
 	}
 }
 
+func TestMergeReappearedFindingsJSONCorroboratesUniqueGeneratedStructure(t *testing.T) {
+	priorRaw := `{"findings":[{"id":"review-a","id_generated":true,"continuity_token":"token-a","severity":"error","file":"loader.go","line":12,"description":"unsafe loader","action":"ask-user","review_scope":"source"}],"risk_level":"high","risk_rationale":"Data can be lost.","risk_scope":"source-or-external"}`
+	freshRaw := `{"findings":[{"id":"review-c","id_generated":true,"continuity_token":"token-c","severity":"info","file":"loader.go","line":12,"description":"unsafe loader","action":"no-op","review_scope":"source"}],"risk_level":"low","risk_rationale":"Narrow path is safe.","risk_scope":"source-or-external"}`
+
+	merged, err := types.ParseFindingsJSON(mergeReappearedFindingsJSON(freshRaw, priorRaw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged.Items) != 1 || merged.Items[0].ID != "review-a" || merged.Items[0].ContinuityToken != "token-a" {
+		t.Fatalf("unique structural continuation = %#v", merged.Items)
+	}
+	if merged.Items[0].Action != types.ActionAskUser || merged.Items[0].Severity != "error" || merged.RiskLevel != "high" {
+		t.Fatalf("continued semantics = %#v, risk %q", merged.Items[0], merged.RiskLevel)
+	}
+}
+
+func TestMergeReappearedFindingsJSONPreservesAmbiguousGeneratedLineages(t *testing.T) {
+	priorRaw := `{"findings":[{"id":"review-a","id_generated":true,"continuity_token":"token-a","severity":"error","file":"loader.go","line":12,"description":"unsafe loader","action":"ask-user"},{"id":"review-b","id_generated":true,"continuity_token":"token-b","severity":"warning","file":"loader.go","line":12,"description":"unsafe loader","action":"ask-user"}]}`
+	freshRaw := `{"findings":[{"id":"review-c","id_generated":true,"continuity_token":"token-c","severity":"info","file":"loader.go","line":12,"description":"unsafe loader","action":"no-op"}]}`
+
+	merged, err := types.ParseFindingsJSON(mergeReappearedFindingsJSON(freshRaw, priorRaw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged.Items) != 3 {
+		t.Fatalf("ambiguous structural continuation dropped lineages: %#v", merged.Items)
+	}
+	ids := map[string]bool{}
+	for _, item := range merged.Items {
+		ids[item.ID] = true
+	}
+	if !ids["review-a"] || !ids["review-b"] || !ids["review-c"] {
+		t.Fatalf("ambiguous structural identities = %#v", merged.Items)
+	}
+}
+
 func TestMergeCarriedFindingsJSON_ExcludesPipelineDeliveryFromEffectiveRisk(t *testing.T) {
 	carriedRaw := `{"findings":[{"id":"review-delivery","severity":"error","description":"PR not pushed","action":"ask-user","review_scope":"pipeline-owned-delivery"}],"risk_level":"high","risk_rationale":"PR is absent.","risk_scope":"pipeline-owned-delivery"}`
 	freshRaw := `{"findings":[{"id":"review-source","severity":"info","description":"bounded source concern","action":"ask-user","review_scope":"source"}],"risk_level":"low","risk_rationale":"Source change is bounded.","risk_scope":"source-or-external"}`

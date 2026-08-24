@@ -136,8 +136,47 @@ func TestCIStep_AutoFixLocalRepairDoesNotUpdatePR(t *testing.T) {
 	if len(host.updates) != 0 {
 		t.Fatalf("local repair updated PR content: %d calls", len(host.updates))
 	}
+	rng, err := sctx.DB.GetUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rng == nil || rng.FromSHA != headSHA || rng.ToSHA != result.HeadSHA || rng.SourceRunID != sctx.Run.ID {
+		t.Fatalf("CI repair uncertified range = %#v", rng)
+	}
 	if got := gitCmd(t, upstream, "rev-parse", "refs/heads/feature"); got != headSHA {
 		t.Fatalf("CI repair published before revalidation: remote head = %s, want %s", got, headSHA)
+	}
+}
+
+func TestCIStep_RefusesLocalHeadWhenUncertifiedRangePersistenceFails(t *testing.T) {
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+	if err := os.WriteFile(filepath.Join(dir, "ci-fix.txt"), []byte("fixed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	originalRunID := sctx.Run.ID
+	sctx.Repo.ID = "missing-repo"
+
+	changed, err := (&CIStep{}).commitRepair(sctx, "repair checks")
+	if err == nil || !strings.Contains(err.Error(), "persist uncertified review range before CI head adoption") {
+		t.Fatalf("commitRepair() = (%v, %v), want persistence refusal", changed, err)
+	}
+	if changed {
+		t.Fatal("failed CI persistence reported an adopted head")
+	}
+	if got := gitCmd(t, dir, "rev-parse", "refs/heads/feature"); got != headSHA {
+		t.Fatalf("branch head = %s, want unchanged %s", got, headSHA)
+	}
+	if sctx.Run.HeadSHA != headSHA {
+		t.Fatalf("in-memory head = %s, want %s", sctx.Run.HeadSHA, headSHA)
+	}
+	stored, getErr := sctx.DB.GetRun(originalRunID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if stored.HeadSHA != headSHA {
+		t.Fatalf("stored head = %s, want %s", stored.HeadSHA, headSHA)
 	}
 }
 

@@ -229,19 +229,17 @@ func TestNoSlopRequiredWorkflowPublishesStableEventIdentity(t *testing.T) {
 		t.Fatalf("required check name changed to %q", workflow.Jobs["check"].Name)
 	}
 
-	first := requiredWorkflowEvent{Action: "edited", UpdatedAt: "2026-08-23T18:42:30Z", PRNumber: 549, RunID: 29962943078, RunNumber: 587}
-	latest := requiredWorkflowEvent{Action: "edited", UpdatedAt: "2026-08-23T18:42:31Z", PRNumber: 549, RunID: 29965243268, RunNumber: 588}
+	firstNonce := "00112233445566778899aabbccddeeff"
+	latestNonce := "ffeeddccbbaa99887766554433221100"
+	first := requiredWorkflowEvent{Action: "edited", Body: "<!-- no-slop-publication:v1 " + firstNonce + " -->\n\nfirst body", PRNumber: 549, RunID: 29962943078, RunNumber: 587}
+	latest := requiredWorkflowEvent{Action: "edited", Body: "<!-- no-slop-publication:v1 " + latestNonce + " -->\n\nlatest body", PRNumber: 549, RunID: 29965243268, RunNumber: 588}
 	firstName := renderRequiredWorkflowTemplate(t, workflow.RunName, first)
 	latestName := renderRequiredWorkflowTemplate(t, workflow.RunName, latest)
-	for _, want := range []string{"no-slop-required|edited|2026-08-23T18:42:30Z", "#549", "587", "29962943078"} {
-		if !strings.Contains(firstName, want) {
-			t.Errorf("first event run name %q does not expose %q", firstName, want)
-		}
+	if !strings.HasPrefix(firstName, "<!-- no-slop-publication:v1 "+firstNonce+" -->") {
+		t.Fatalf("first event run name = %q, want publication identity prefix", firstName)
 	}
-	for _, want := range []string{"no-slop-required|edited|2026-08-23T18:42:31Z", "#549", "588", "29965243268"} {
-		if !strings.Contains(latestName, want) {
-			t.Errorf("latest event run name %q does not expose %q", latestName, want)
-		}
+	if !strings.HasPrefix(latestName, "<!-- no-slop-publication:v1 "+latestNonce+" -->") {
+		t.Fatalf("latest event run name = %q, want publication identity prefix", latestName)
 	}
 	if firstName == latestName {
 		t.Fatalf("distinct body events have ambiguous run name %q", firstName)
@@ -571,6 +569,7 @@ func renderRequiredWorkflowTemplate(t *testing.T, template string, event require
 		value      string
 	}{
 		{expression: "github.event.action", value: event.Action},
+		{expression: "github.event.pull_request.body", value: event.Body},
 		{expression: "github.event.pull_request.number", value: strconv.FormatInt(event.PRNumber, 10)},
 		{expression: "github.event.pull_request.head.sha", value: event.HeadSHA},
 		{expression: "github.event.pull_request.updated_at", value: event.UpdatedAt},

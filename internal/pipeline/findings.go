@@ -221,26 +221,47 @@ func mergeReappearedFindingsJSON(freshRaw, priorRaw string) string {
 	freshIdentityCounts := countFindingIdentities(fresh.Items)
 	priorIdentityCounts := countFindingIdentities(prior.Items)
 	matched := 0
+	ambiguousPrior := make([]bool, len(prior.Items))
+	matchedPrior := make([]bool, len(prior.Items))
 	for i := range fresh.Items {
 		current := &fresh.Items[i]
-		match := -1
+		lineageMatches := make([]int, 0, 1)
+		structuralMatches := make([]int, 0, 1)
 		for j := range prior.Items {
 			old := prior.Items[j]
+			if types.FindingIDCorroborates(*current, old) {
+				lineageMatches = append(lineageMatches, j)
+				continue
+			}
+			if findingKey(*current) == findingKey(old) || findingFingerprint(*current) == findingFingerprint(old) {
+				structuralMatches = append(structuralMatches, j)
+			}
+		}
+		match := -1
+		switch len(lineageMatches) {
+		case 1:
+			match = lineageMatches[0]
+		case 0:
 			identity := findingKey(*current)
-			legacyMatch := (!current.HasLineage() || !old.HasLineage()) && ((identity == findingKey(old) && freshIdentityCounts[identity] == 1 && priorIdentityCounts[identity] == 1) ||
-				(findingFingerprint(*current) == findingFingerprint(old) && freshCounts[findingFingerprint(*current)] == 1 && priorCounts[findingFingerprint(old)] == 1))
-			if types.FindingIDCorroborates(*current, old) || legacyMatch {
-				if match >= 0 {
-					match = -1
-					break
+			fingerprint := findingFingerprint(*current)
+			if len(structuralMatches) == 1 && ((identity == findingKey(prior.Items[structuralMatches[0]]) && freshIdentityCounts[identity] == 1 && priorIdentityCounts[identity] == 1) ||
+				(fingerprint == findingFingerprint(prior.Items[structuralMatches[0]]) && freshCounts[fingerprint] == 1 && priorCounts[fingerprint] == 1)) {
+				match = structuralMatches[0]
+			} else {
+				for _, j := range structuralMatches {
+					ambiguousPrior[j] = true
 				}
-				match = j
+			}
+		default:
+			for _, j := range lineageMatches {
+				ambiguousPrior[j] = true
 			}
 		}
 		if match < 0 {
 			continue
 		}
 		old := prior.Items[match]
+		matchedPrior[match] = true
 		current.ID = old.ID
 		current.IDGenerated = old.IDGenerated
 		current.ContinuityToken = old.ContinuityToken
@@ -261,6 +282,12 @@ func mergeReappearedFindingsJSON(freshRaw, priorRaw string) string {
 			current.Source = old.Source
 		}
 		matched++
+	}
+	for j, ambiguous := range ambiguousPrior {
+		if ambiguous && !matchedPrior[j] {
+			fresh.Items = append(fresh.Items, prior.Items[j])
+			matched++
+		}
 	}
 	if matched == 0 {
 		return freshRaw

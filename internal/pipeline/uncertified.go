@@ -49,8 +49,8 @@ func BindUncertifiedPipelineRange(sctx *StepContext) error {
 	return nil
 }
 
-// PersistUncertifiedPipelineRange records the fixer commit span after a
-// review fix round commits and before its re-review completes.
+// PersistUncertifiedPipelineRange records a post-review commit span until a
+// review of the new head completes.
 func PersistUncertifiedPipelineRange(sctx *StepContext, fromSHA, toSHA string) error {
 	if sctx == nil || sctx.DB == nil || sctx.Repo == nil || sctx.Run == nil {
 		return fmt.Errorf("persist uncertified pipeline range: missing pipeline context")
@@ -62,8 +62,7 @@ func PersistUncertifiedPipelineRange(sctx *StepContext, fromSHA, toSHA string) e
 	}
 	existing, err := sctx.DB.GetUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch)
 	if err != nil {
-		slog.Warn("failed to read uncertified pipeline range before persist", "run_id", sctx.Run.ID, "error", err)
-		existing = nil
+		return fmt.Errorf("read uncertified pipeline range before persist: %w", err)
 	}
 	if existing != nil && strings.TrimSpace(existing.FromSHA) != "" &&
 		uncertifiedRangeStillInLineage(sctx, existing.ToSHA, fromSHA, toSHA) {

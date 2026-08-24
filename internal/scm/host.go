@@ -87,9 +87,8 @@ func ExtractPRNumber(prURL string) (string, error) {
 
 // PR identifies a pull/merge request on a provider.
 type PR struct {
-	Number    string
-	URL       string
-	UpdatedAt time.Time
+	Number string
+	URL    string
 }
 
 // PRContent is the title + body for creating or updating a PR.

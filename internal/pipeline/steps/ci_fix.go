@@ -181,6 +181,9 @@ func (s *CIStep) commitRepair(sctx *pipeline.StepContext, summary string) (bool,
 }
 
 func (s *CIStep) recordLocalRepair(sctx *pipeline.StepContext, newHeadSHA string) (bool, error) {
+	if err := pipeline.PersistUncertifiedPipelineRange(sctx, sctx.Run.HeadSHA, newHeadSHA); err != nil {
+		return false, fmt.Errorf("persist uncertified review range before CI head adoption: %w", err)
+	}
 	if err := adoptBranchRef(sctx, newHeadSHA); err != nil {
 		return false, err
 	}

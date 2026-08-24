@@ -116,11 +116,8 @@ func TestGetCheckAttemptIdentityReadsImmutableRunIdentityWithLegacyTitle(t *test
 	t.Parallel()
 
 	host := New(githubTestCmdFactory(map[string]githubTestResponse{
-		"gh run view 900 --repo test/repo --json databaseId,number,attempt,event,headSha": {
+		"gh run view 900 --repo test/repo --json databaseId,number,attempt,event,headSha,displayTitle": {
 			stdout: `{"databaseId":900,"number":42,"attempt":3,"event":"pull_request","headSha":"abc123","displayTitle":"legacy workflow title"}` + "\n",
-		},
-		"gh run view 900 --repo test/repo --log": {
-			stdout: "check\tVerify no-slop signature\tNO_SLOP_PUBLICATION_NONCE=00112233445566778899aabbccddeeff\n",
 		},
 	}), nil, "", "test/repo")
 
@@ -128,8 +125,27 @@ func TestGetCheckAttemptIdentityReadsImmutableRunIdentityWithLegacyTitle(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if identity.RunID != 900 || identity.RunNumber != 42 || identity.RunAttempt != 3 || identity.Event != "pull_request" || identity.HeadSHA != "abc123" || identity.PublicationNonce != "00112233445566778899aabbccddeeff" {
+	if identity.RunID != 900 || identity.RunNumber != 42 || identity.RunAttempt != 3 || identity.Event != "pull_request" || identity.HeadSHA != "abc123" || identity.PublicationNonce != "" {
 		t.Fatalf("identity = %#v", identity)
+	}
+}
+
+func TestGetCheckAttemptIdentityReadsPublicationFromCancelledRunMetadata(t *testing.T) {
+	t.Parallel()
+
+	const nonce = "00112233445566778899aabbccddeeff"
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh run view 901 --repo test/repo --json databaseId,number,attempt,event,headSha,displayTitle": {
+			stdout: `{"databaseId":901,"number":43,"attempt":1,"event":"pull_request","headSha":"abc123","displayTitle":"<!-- no-slop-publication:v1 ` + nonce + ` --> PR body"}` + "\n",
+		},
+	}), nil, "", "test/repo")
+
+	identity, err := host.GetCheckAttemptIdentity(context.Background(), scm.Check{Bucket: scm.CheckBucketCancel, Link: "https://github.com/test/repo/actions/runs/901/job/13"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.RunID != 901 || identity.PublicationNonce != nonce {
+		t.Fatalf("cancelled run identity = %#v", identity)
 	}
 }
 
@@ -178,7 +194,6 @@ func TestUpdatePRStreamsBodyThroughStdin(t *testing.T) {
 	t.Parallel()
 
 	const body = "## What Changed\n\n- update existing pull request bodies without long argv"
-	wantUpdatedAt := time.Date(2026, 8, 23, 18, 42, 31, 0, time.UTC)
 	host := New(githubTestCmdFactory(map[string]githubTestResponse{
 		"gh api --method PATCH repos/test/repo/pulls/42 --input -": {
 			stdout:    `{"number":42,"html_url":"https://github.com/test/repo/pull/42","updated_at":"2026-08-23T18:42:31Z"}`,
@@ -194,7 +209,7 @@ func TestUpdatePRStreamsBodyThroughStdin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdatePR() error = %v", err)
 	}
-	if updated == nil || updated.Number != "42" || updated.URL != pr.URL || !updated.UpdatedAt.Equal(wantUpdatedAt) {
+	if updated == nil || updated.Number != "42" || updated.URL != pr.URL {
 		t.Fatalf("UpdatePR() = %+v", updated)
 	}
 }
@@ -232,12 +247,8 @@ func TestUpdatePRScopesAtomicPublicationToEnterpriseHost(t *testing.T) {
 			wantStdin: `{"title":"fix: publish","body":"body"}`,
 		},
 	}), nil, "ghe.example.com", "ghe.example.com/org/repo")
-	updated, err := host.UpdatePR(context.Background(), &scm.PR{Number: "42"}, scm.PRContent{Title: "fix: publish", Body: "body"})
-	if err != nil {
+	if _, err := host.UpdatePR(context.Background(), &scm.PR{Number: "42"}, scm.PRContent{Title: "fix: publish", Body: "body"}); err != nil {
 		t.Fatal(err)
-	}
-	if updated == nil || updated.UpdatedAt.IsZero() {
-		t.Fatalf("updated PR = %#v", updated)
 	}
 }
 

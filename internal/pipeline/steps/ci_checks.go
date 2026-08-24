@@ -39,13 +39,12 @@ func (s *CIStep) filterExpectedStaleAttestationChecks(sctx *pipeline.StepContext
 			return nil, fmt.Errorf("attestation check attempt has no immutable run identity")
 		}
 		if identity.HeadSHA == sctx.Run.HeadSHA && identity.PublicationNonce == state.PublicationNonce {
-			if publicationRunID != 0 && publicationRunID != identity.RunID {
-				return nil, fmt.Errorf("attestation publication nonce identifies multiple provider runs")
+			if publicationRunID == 0 || identity.RunID < publicationRunID {
+				publicationRunID = identity.RunID
 			}
-			publicationRunID = identity.RunID
 		}
 	}
-	if state.PublicationRunID == 0 && publicationRunID != 0 {
+	if publicationRunID != 0 && state.PublicationRunID != publicationRunID {
 		state.PublicationRunID = publicationRunID
 		if err := persistExpectedAttestationState(sctx, *state); err != nil {
 			return nil, fmt.Errorf("persist attestation publication run identity: %w", err)

@@ -98,15 +98,15 @@ func TestFilterExpectedStaleAttestationChecksUsesPublicationNonce(t *testing.T) 
 	staleNonce := "ffeeddccbbaa99887766554433221100"
 	olderPass := scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketPass, State: "SUCCESS", Link: "older-pass"}
 	stale := scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketFail, State: "FAILURE", Link: "stale"}
-	publicationPass := scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketPass, State: "SUCCESS", Link: "publication-pass"}
+	publicationCancelled := scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketCancel, State: "CANCELLED", Link: "publication-cancelled"}
 	laterFailure := scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketFail, State: "FAILURE", Link: "later-failure"}
-	laterCancelled := scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketCancel, State: "CANCELLED", Link: "later-cancelled"}
+	laterSameBody := scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketPass, State: "SUCCESS", Link: "later-same-body"}
 	host := &attestationIdentityHost{identities: map[string]scm.CheckAttemptIdentity{
-		"older-pass":       {RunID: 999, RunNumber: 99, RunAttempt: 1, HeadSHA: headSHA, PublicationNonce: staleNonce},
-		"stale":            {RunID: 1001, RunNumber: 101, RunAttempt: 1, HeadSHA: headSHA, PublicationNonce: staleNonce},
-		"publication-pass": {RunID: 1002, RunNumber: 102, RunAttempt: 1, HeadSHA: headSHA, PublicationNonce: currentNonce},
-		"later-failure":    {RunID: 1003, RunNumber: 103, RunAttempt: 1, HeadSHA: headSHA, PublicationNonce: staleNonce},
-		"later-cancelled":  {RunID: 1004, RunNumber: 104, RunAttempt: 1, HeadSHA: headSHA},
+		"older-pass":            {RunID: 999, RunNumber: 99, RunAttempt: 1, HeadSHA: headSHA, PublicationNonce: staleNonce},
+		"stale":                 {RunID: 1001, RunNumber: 101, RunAttempt: 1, HeadSHA: headSHA, PublicationNonce: staleNonce},
+		"publication-cancelled": {RunID: 1002, RunNumber: 102, RunAttempt: 1, HeadSHA: headSHA, PublicationNonce: currentNonce},
+		"later-failure":         {RunID: 1003, RunNumber: 103, RunAttempt: 1, HeadSHA: headSHA, PublicationNonce: staleNonce},
+		"later-same-body":       {RunID: 1004, RunNumber: 104, RunAttempt: 1, HeadSHA: headSHA, PublicationNonce: currentNonce},
 	}}
 	state := expectedAttestationState{HeadSHA: headSHA, PublicationNonce: currentNonce}
 	encoded, err := json.Marshal(state)
@@ -130,22 +130,22 @@ func TestFilterExpectedStaleAttestationChecksUsesPublicationNonce(t *testing.T) 
 		t.Fatalf("pre-update terminal checks = %#v, want synthetic pending", filtered)
 	}
 
-	filtered, err = step.filterExpectedStaleAttestationChecks(sctx, host, []scm.Check{olderPass, stale, publicationPass})
+	filtered, err = step.filterExpectedStaleAttestationChecks(sctx, host, []scm.Check{olderPass, stale, publicationCancelled})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(filtered) != 1 || filtered[0].Link != "publication-pass" || filtered[0].Bucket != scm.CheckBucketPass {
+	if len(filtered) != 1 || filtered[0].Link != "publication-cancelled" || filtered[0].Bucket != scm.CheckBucketCancel {
 		t.Fatalf("publication attempt ordering = %#v", filtered)
 	}
 	if step.expectedAttestation.PublicationRunID != 1002 {
 		t.Fatalf("publication run ID = %d, want 1002", step.expectedAttestation.PublicationRunID)
 	}
 
-	filtered, err = step.filterExpectedStaleAttestationChecks(sctx, host, []scm.Check{olderPass, stale, publicationPass, laterFailure, laterCancelled})
+	filtered, err = step.filterExpectedStaleAttestationChecks(sctx, host, []scm.Check{olderPass, stale, publicationCancelled, laterFailure, laterSameBody})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(filtered) != 3 || filtered[0].Link != "publication-pass" || filtered[1].Link != "later-failure" || filtered[2].Link != "later-cancelled" {
+	if len(filtered) != 3 || filtered[0].Link != "publication-cancelled" || filtered[1].Link != "later-failure" || filtered[2].Link != "later-same-body" {
 		t.Fatalf("later authoritative attempts were suppressed: %#v", filtered)
 	}
 
@@ -153,11 +153,11 @@ func TestFilterExpectedStaleAttestationChecksUsesPublicationNonce(t *testing.T) 
 	if err := recovered.loadExpectedAttestationState(sctx); err != nil {
 		t.Fatal(err)
 	}
-	filtered, err = recovered.filterExpectedStaleAttestationChecks(sctx, host, []scm.Check{stale, publicationPass, laterFailure})
+	filtered, err = recovered.filterExpectedStaleAttestationChecks(sctx, host, []scm.Check{stale, publicationCancelled, laterFailure})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(filtered) != 2 || filtered[0].Link != "publication-pass" || filtered[1].Link != "later-failure" {
+	if len(filtered) != 2 || filtered[0].Link != "publication-cancelled" || filtered[1].Link != "later-failure" {
 		t.Fatalf("recovered attempt ordering = %#v", filtered)
 	}
 	if recovered.expectedAttestation.PublicationRunID != 1002 {

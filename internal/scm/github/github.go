@@ -28,7 +28,7 @@ type Host struct {
 	forkOwner    string // fork owner for cross-repository PR heads
 }
 
-var publicationNoncePattern = regexp.MustCompile(`(?:^|[[:space:]])NO_SLOP_PUBLICATION_NONCE=([0-9a-f]{32})(?:$|[[:space:]])`)
+var publicationNoncePattern = regexp.MustCompile(`(?:^|[[:space:]])<!-- no-slop-publication:v1 ([0-9a-f]{32}) -->(?:$|[[:space:]])`)
 
 // New builds a Host. cliAvailable reports whether the gh binary is
 // resolvable on the caller's PATH (possibly overridden by env). host is the
@@ -267,7 +267,11 @@ func (h *Host) CreatePR(ctx context.Context, branch, base string, content scm.PR
 }
 
 func (h *Host) UpdatePR(ctx context.Context, pr *scm.PR, content scm.PRContent) (*scm.PR, error) {
-	repo, number, err := h.prAPIIdentity(pr)
+	selector, err := prSelector(pr)
+	if err != nil {
+		return nil, err
+	}
+	repo, number, err := h.prAPIIdentity(pr, selector)
 	if err != nil {
 		return nil, err
 	}
@@ -291,17 +295,13 @@ func (h *Host) UpdatePR(ctx context.Context, pr *scm.PR, content scm.PRContent) 
 		return nil, fmt.Errorf("gh api update pull request: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	var response struct {
-		Number    int       `json:"number"`
-		URL       string    `json:"html_url"`
-		UpdatedAt time.Time `json:"updated_at"`
+		Number int    `json:"number"`
+		URL    string `json:"html_url"`
 	}
 	if err := json.Unmarshal(out, &response); err != nil {
 		return nil, fmt.Errorf("parse updated pull request: %w", err)
 	}
-	if response.UpdatedAt.IsZero() {
-		return nil, errors.New("updated pull request response has no publication timestamp")
-	}
-	updated := &scm.PR{Number: number, UpdatedAt: response.UpdatedAt}
+	updated := &scm.PR{Number: number}
 	if response.Number != 0 {
 		updated.Number = fmt.Sprintf("%d", response.Number)
 	}
@@ -312,20 +312,14 @@ func (h *Host) UpdatePR(ctx context.Context, pr *scm.PR, content scm.PRContent) 
 	return updated, nil
 }
 
-func (h *Host) prAPIIdentity(pr *scm.PR) (string, string, error) {
-	if pr == nil {
-		return "", "", errors.New("no PR number or URL known; refusing to update pull request")
-	}
-	number := strings.TrimSpace(pr.Number)
-	if number == "" && strings.TrimSpace(pr.URL) != "" {
+func (h *Host) prAPIIdentity(pr *scm.PR, selector string) (string, string, error) {
+	number := strings.TrimSpace(selector)
+	if strings.Contains(number, "://") {
 		var err error
-		number, err = scm.ExtractPRNumber(pr.URL)
+		number, err = scm.ExtractPRNumber(number)
 		if err != nil {
 			return "", "", err
 		}
-	}
-	if number == "" {
-		return "", "", errors.New("no PR number or URL known; refusing to update pull request")
 	}
 	repo := strings.TrimSpace(h.repo)
 	if h.host != "" {
@@ -405,7 +399,7 @@ func (h *Host) GetCheckAttemptIdentity(ctx context.Context, check scm.Check) (sc
 		return scm.CheckAttemptIdentity{}, fmt.Errorf("check link does not identify a GitHub Actions run: %s", check.Link)
 	}
 	args := append([]string{"run", "view", runID}, h.repoArgs()...)
-	args = append(args, "--json", "databaseId,number,attempt,event,headSha")
+	args = append(args, "--json", "databaseId,number,attempt,event,headSha,displayTitle")
 	cmd := h.cmd(ctx, "gh", args...)
 	shellenv.ConfigureShellCommand(cmd)
 	out, err := shellenv.OutputShellCommand(cmd)
@@ -413,11 +407,12 @@ func (h *Host) GetCheckAttemptIdentity(ctx context.Context, check scm.Check) (sc
 		return scm.CheckAttemptIdentity{}, fmt.Errorf("gh run view: %w", err)
 	}
 	var raw struct {
-		RunID      int64  `json:"databaseId"`
-		RunNumber  int64  `json:"number"`
-		RunAttempt int    `json:"attempt"`
-		Event      string `json:"event"`
-		HeadSHA    string `json:"headSha"`
+		RunID        int64  `json:"databaseId"`
+		RunNumber    int64  `json:"number"`
+		RunAttempt   int    `json:"attempt"`
+		Event        string `json:"event"`
+		HeadSHA      string `json:"headSha"`
+		DisplayTitle string `json:"displayTitle"`
 	}
 	if err := json.Unmarshal(out, &raw); err != nil {
 		return scm.CheckAttemptIdentity{}, fmt.Errorf("parse GitHub Actions run identity: %w", err)
@@ -425,20 +420,9 @@ func (h *Host) GetCheckAttemptIdentity(ctx context.Context, check scm.Check) (sc
 	if raw.RunID == 0 || raw.RunNumber == 0 {
 		return scm.CheckAttemptIdentity{}, fmt.Errorf("GitHub Actions run identity is incomplete for %s", check.Link)
 	}
-	publicationNonce := ""
-	if checkAttemptIsTerminal(check) {
-		logArgs := append([]string{"run", "view", runID}, h.repoArgs()...)
-		logArgs = append(logArgs, "--log")
-		logCmd := h.cmd(ctx, "gh", logArgs...)
-		shellenv.ConfigureShellCommand(logCmd)
-		logOutput, err := shellenv.OutputShellCommand(logCmd)
-		if err != nil {
-			return scm.CheckAttemptIdentity{}, fmt.Errorf("gh run view logs: %w", err)
-		}
-		publicationNonce, err = parsePublicationNonce(logOutput)
-		if err != nil {
-			return scm.CheckAttemptIdentity{}, err
-		}
+	publicationNonce, err := parsePublicationNonce([]byte(raw.DisplayTitle))
+	if err != nil {
+		return scm.CheckAttemptIdentity{}, err
 	}
 	return scm.CheckAttemptIdentity{
 		RunID:            raw.RunID,
@@ -450,22 +434,13 @@ func (h *Host) GetCheckAttemptIdentity(ctx context.Context, check scm.Check) (sc
 	}, nil
 }
 
-func checkAttemptIsTerminal(check scm.Check) bool {
-	switch check.Bucket {
-	case scm.CheckBucketPass, scm.CheckBucketFail, scm.CheckBucketCancel, scm.CheckBucketSkip:
-		return true
-	default:
-		return false
-	}
-}
-
-func parsePublicationNonce(logOutput []byte) (string, error) {
-	matches := publicationNoncePattern.FindAllSubmatch(logOutput, -1)
+func parsePublicationNonce(providerIdentity []byte) (string, error) {
+	matches := publicationNoncePattern.FindAllSubmatch(providerIdentity, -1)
 	if len(matches) == 0 {
 		return "", nil
 	}
 	if len(matches) != 1 {
-		return "", fmt.Errorf("GitHub Actions run log has no unique attestation publication nonce")
+		return "", fmt.Errorf("GitHub Actions run identity has no unique attestation publication nonce")
 	}
 	return string(matches[0][1]), nil
 }
