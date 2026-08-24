@@ -13,10 +13,9 @@ import (
 )
 
 type ciFixResult struct {
-	PreviousHeadSHA            string
-	HeadSHA                    string
-	HeadPersisted              bool
-	ExpectedAttestationTracked bool
+	PreviousHeadSHA string
+	HeadSHA         string
+	HeadPersisted   bool
 }
 
 func (r ciFixResult) HeadChanged() bool {
@@ -132,67 +131,11 @@ CI logs:
 	if fixResult.HeadChanged() {
 		persisted, getErr := sctx.DB.GetRun(sctx.Run.ID)
 		fixResult.HeadPersisted = getErr == nil && persisted != nil && persisted.HeadSHA == fixResult.HeadSHA
-		if fixResult.HeadPersisted {
-			candidate := s.transientReruns
-			candidate.expectedAttestationHeadSHA = fixResult.HeadSHA
-			candidate.compliantAttestationRunNumber = 0
-			if persistErr := s.persistRerunBudgetCandidate(sctx, &candidate); persistErr != nil {
-				return fixResult, fmt.Errorf("persist expected attestation head: %w", persistErr)
-			}
-			s.transientReruns.expectedAttestationHeadSHA = fixResult.HeadSHA
-			s.transientReruns.compliantAttestationRunNumber = 0
-			fixResult.ExpectedAttestationTracked = true
-		}
 	}
 	if err != nil {
 		return fixResult, err
 	}
 	return fixResult, nil
-}
-
-func (s *CIStep) refreshPRAttestation(sctx *pipeline.StepContext, host scm.Host, pr *scm.PR) error {
-	reader, ok := host.(scm.PRContentReader)
-	if !ok {
-		return nil
-	}
-	content, err := reader.GetPRContent(sctx.Ctx, pr)
-	if err != nil {
-		return err
-	}
-	steps, err := sctx.DB.GetStepsByRun(sctx.Run.ID)
-	if err != nil {
-		return err
-	}
-	body, changed, err := replacePipelineAttestation(content.Body, buildPipelineAttestation(steps, sctx.Run.HeadSHA))
-	if err != nil || !changed {
-		return err
-	}
-	content.Body = body
-	_, err = host.UpdatePR(sctx.Ctx, pr, content)
-	return err
-}
-
-func replacePipelineAttestation(body, attestation string) (string, bool, error) {
-	if attestation == "" {
-		return body, false, fmt.Errorf("pipeline attestation is empty")
-	}
-	start := strings.Index(body, pipelineAttestationCommentPrefix)
-	if start >= 0 {
-		end := strings.Index(body[start:], pipelineAttestationCommentClosingToken)
-		if end < 0 {
-			return body, false, fmt.Errorf("existing pipeline attestation is malformed")
-		}
-		end += start + len(pipelineAttestationCommentClosingToken)
-		updated := body[:start] + attestation + body[end:]
-		return updated, updated != body, nil
-	}
-	for _, marker := range []string{noMistakesPRSignature, legacyNoMistakesPRSignature} {
-		if markerAt := strings.Index(body, marker); markerAt >= 0 {
-			insertAt := markerAt + len(marker)
-			return body[:insertAt] + "\n\n" + attestation + body[insertAt:], true, nil
-		}
-	}
-	return body, false, fmt.Errorf("PR body has no no-slop pipeline signature")
 }
 
 // commitAndPush retains its historical name as the narrow test seam. CI repair

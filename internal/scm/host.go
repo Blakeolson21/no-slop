@@ -209,10 +209,6 @@ type Host interface {
 	FetchFailedCheckLogs(ctx context.Context, pr *PR, branch, headSHA string, failingNames []string) (string, error)
 }
 
-type PRContentReader interface {
-	GetPRContent(ctx context.Context, pr *PR) (PRContent, error)
-}
-
 // CheckRerunner re-runs the provider-side job behind a failed check without
 // changing the commit under test. It is deliberately a separate interface
 // rather than a Host method: a backend whose provider exposes no rerun

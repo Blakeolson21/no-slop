@@ -526,6 +526,24 @@ func (s *CIStep) persistRerunBudgetCandidate(sctx *pipeline.StepContext, candida
 	return sctx.DB.SetRunCIRerunState(sctx.Run.ID, encoded)
 }
 
+func persistExpectedAttestationHead(sctx *pipeline.StepContext) error {
+	encoded, err := sctx.DB.GetRunCIRerunState(sctx.Run.ID)
+	if err != nil {
+		return err
+	}
+	state := &checkRerunBudget{}
+	if err := state.unmarshal(encoded); err != nil {
+		return err
+	}
+	state.expectedAttestationHeadSHA = sctx.Run.HeadSHA
+	state.compliantAttestationRunNumber = 0
+	encoded, err = state.marshal()
+	if err != nil {
+		return err
+	}
+	return sctx.DB.SetRunCIRerunState(sctx.Run.ID, encoded)
+}
+
 func (s *CIStep) retireResolvedReruns(sctx *pipeline.StepContext, checks []scm.Check) (bool, error) {
 	return s.transientReruns.retireResolvedReruns(checks, sctx.Run.HeadSHA, func(candidate *checkRerunBudget) error {
 		return s.persistRerunBudgetCandidate(sctx, candidate)

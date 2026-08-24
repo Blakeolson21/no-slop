@@ -62,6 +62,18 @@ func TestPRStep_UpdatesExistingPR(t *testing.T) {
 	if err := sctx.DB.UpdateStepStatus(reviewStep.ID, types.StepStatusCompleted); err != nil {
 		t.Fatal(err)
 	}
+	budget := &checkRerunBudget{
+		spent:                         map[string]int{"build": 1},
+		expectedAttestationHeadSHA:    baseSHA,
+		compliantAttestationRunNumber: 41,
+	}
+	encoded, err := budget.marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sctx.DB.SetRunCIRerunState(sctx.Run.ID, encoded); err != nil {
+		t.Fatal(err)
+	}
 
 	step := &PRStep{}
 	outcome, err := step.Execute(sctx)
@@ -95,6 +107,17 @@ func TestPRStep_UpdatesExistingPR(t *testing.T) {
 	}
 	if run.PRURL == nil || *run.PRURL != "https://github.com/test/repo/pull/42" {
 		t.Errorf("PR URL = %v, want https://github.com/test/repo/pull/42", run.PRURL)
+	}
+	encoded, err = sctx.DB.GetRunCIRerunState(sctx.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted := &checkRerunBudget{}
+	if err := persisted.unmarshal(encoded); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.expectedAttestationHeadSHA != headSHA || persisted.compliantAttestationRunNumber != 0 || persisted.used("build") != 1 {
+		t.Fatalf("persisted attestation expectation = %#v", persisted)
 	}
 }
 

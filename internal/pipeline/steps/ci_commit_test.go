@@ -2,7 +2,6 @@ package steps
 
 import (
 	"context"
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,93 +16,43 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
-type recordingPRContentHost struct {
-	content  scm.PRContent
-	updates  []scm.PRContent
-	getCalls int
-	getErr   error
+type recordingPRUpdateHost struct {
+	updates []scm.PRContent
 }
 
-func (h *recordingPRContentHost) GetPRContent(context.Context, *scm.PR) (scm.PRContent, error) {
-	h.getCalls++
-	return h.content, h.getErr
-}
-
-func (h *recordingPRContentHost) UpdatePR(_ context.Context, _ *scm.PR, content scm.PRContent) (*scm.PR, error) {
+func (h *recordingPRUpdateHost) UpdatePR(_ context.Context, _ *scm.PR, content scm.PRContent) (*scm.PR, error) {
 	h.updates = append(h.updates, content)
-	h.content = content
 	return &scm.PR{Number: "42"}, nil
 }
 
-func (h *recordingPRContentHost) Provider() scm.Provider { return scm.ProviderGitHub }
-func (h *recordingPRContentHost) Capabilities() scm.Capabilities {
+func (h *recordingPRUpdateHost) Provider() scm.Provider { return scm.ProviderGitHub }
+func (h *recordingPRUpdateHost) Capabilities() scm.Capabilities {
 	return scm.Capabilities{}
 }
-func (h *recordingPRContentHost) Available(context.Context) error { return nil }
-func (h *recordingPRContentHost) FindPR(context.Context, string, string) (*scm.PR, error) {
+func (h *recordingPRUpdateHost) Available(context.Context) error { return nil }
+func (h *recordingPRUpdateHost) FindPR(context.Context, string, string) (*scm.PR, error) {
 	return nil, nil
 }
-func (h *recordingPRContentHost) CreatePR(context.Context, string, string, scm.PRContent) (*scm.PR, error) {
+func (h *recordingPRUpdateHost) CreatePR(context.Context, string, string, scm.PRContent) (*scm.PR, error) {
 	return nil, nil
 }
-func (h *recordingPRContentHost) GetPRState(context.Context, *scm.PR) (scm.PRState, error) {
+func (h *recordingPRUpdateHost) GetPRState(context.Context, *scm.PR) (scm.PRState, error) {
 	return scm.PRStateOpen, nil
 }
-func (h *recordingPRContentHost) GetChecks(context.Context, *scm.PR) ([]scm.Check, error) {
+func (h *recordingPRUpdateHost) GetChecks(context.Context, *scm.PR) ([]scm.Check, error) {
 	return nil, nil
 }
-func (h *recordingPRContentHost) GetMergeableState(context.Context, *scm.PR) (scm.MergeableState, error) {
+func (h *recordingPRUpdateHost) GetMergeableState(context.Context, *scm.PR) (scm.MergeableState, error) {
 	return scm.MergeableUnknown, scm.ErrUnsupported
 }
-func (h *recordingPRContentHost) FetchFailedCheckLogs(context.Context, *scm.PR, string, string, []string) (string, error) {
+func (h *recordingPRUpdateHost) FetchFailedCheckLogs(context.Context, *scm.PR, string, string, []string) (string, error) {
 	return "", scm.ErrUnsupported
 }
 
-func TestCIStep_RefreshPRAttestationBindsCurrentHead(t *testing.T) {
+func TestCIStep_AutoFixWithoutPushDoesNotUpdatePR(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
-	var steps []*db.StepResult
-	for _, name := range []types.StepName{types.StepReview, types.StepTest, types.StepDocument} {
-		step, err := sctx.DB.InsertStepResult(sctx.Run.ID, name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := sctx.DB.CompleteStepWithStatusAtHead(step.ID, types.StepStatusCompleted, baseSHA, 0, 1, ""); err != nil {
-			t.Fatal(err)
-		}
-		step.Status = types.StepStatusCompleted
-		step.CertifiedHeadSHA = &baseSHA
-		steps = append(steps, step)
-	}
-	oldAttestation := buildPipelineAttestation(steps, baseSHA)
-	host := &recordingPRContentHost{content: scm.PRContent{
-		Title: "fix: preserve CI fixes",
-		Body:  "## Pipeline\n\n" + noMistakesPRSignature + "\n\n" + oldAttestation,
-	}}
-
-	if err := (&CIStep{}).refreshPRAttestation(sctx, host, &scm.PR{Number: "42"}); err != nil {
-		t.Fatal(err)
-	}
-	if len(host.updates) != 1 {
-		t.Fatalf("PR updates = %d, want 1", len(host.updates))
-	}
-	attestation := parsePipelineAttestationForTest(t, host.updates[0].Body)
-	if attestation.HeadSHA != headSHA {
-		t.Fatalf("attestation head = %q, want %q", attestation.HeadSHA, headSHA)
-	}
-	for _, step := range attestation.Steps {
-		if step.Step == types.StepReview || step.Step == types.StepTest || step.Step == types.StepDocument {
-			if step.HeadSHA != baseSHA {
-				t.Fatalf("step %s certified head = %q, want prior head %q", step.Step, step.HeadSHA, baseSHA)
-			}
-		}
-	}
-}
-
-func TestCIStep_AutoFixWithoutPushDoesNotRefreshPRAttestation(t *testing.T) {
-	dir, baseSHA, headSHA := setupGitRepo(t)
-	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
-	host := &recordingPRContentHost{getErr: errors.New("PR content unavailable")}
+	host := &recordingPRUpdateHost{}
 
 	result, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)
 	if err != nil {
@@ -112,12 +61,12 @@ func TestCIStep_AutoFixWithoutPushDoesNotRefreshPRAttestation(t *testing.T) {
 	if result.HeadChanged() {
 		t.Fatal("no-change CI fix reported a push")
 	}
-	if host.getCalls != 0 || len(host.updates) != 0 {
-		t.Fatalf("no-change CI fix touched PR content: reads=%d updates=%d", host.getCalls, len(host.updates))
+	if len(host.updates) != 0 {
+		t.Fatalf("no-change CI fix updated PR content: %d calls", len(host.updates))
 	}
 }
 
-func TestCIStep_AutoFixDefersAttestationRefreshAfterAdoptingLocalHead(t *testing.T) {
+func TestCIStep_AutoFixDefersPRUpdateAfterAdoptingLocalHead(t *testing.T) {
 	upstream := t.TempDir()
 	gitCmd(t, upstream, "init", "--bare")
 	dir, baseSHA, headSHA := setupGitRepo(t)
@@ -134,7 +83,6 @@ func TestCIStep_AutoFixDefersAttestationRefreshAfterAdoptingLocalHead(t *testing
 	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Repo.UpstreamURL = upstream
 	sctx.Run.Branch = "refs/heads/feature"
-	var completed []*db.StepResult
 	for _, name := range []types.StepName{types.StepReview, types.StepTest, types.StepDocument} {
 		step, err := sctx.DB.InsertStepResult(sctx.Run.ID, name)
 		if err != nil {
@@ -143,14 +91,8 @@ func TestCIStep_AutoFixDefersAttestationRefreshAfterAdoptingLocalHead(t *testing
 		if err := sctx.DB.CompleteStepWithStatusAtHead(step.ID, types.StepStatusCompleted, headSHA, 0, 1, ""); err != nil {
 			t.Fatal(err)
 		}
-		step.Status = types.StepStatusCompleted
-		step.CertifiedHeadSHA = &headSHA
-		completed = append(completed, step)
 	}
-	host := &recordingPRContentHost{content: scm.PRContent{
-		Title: "fix: adopt published head",
-		Body:  "## Pipeline\n\n" + noMistakesPRSignature + "\n\n" + buildPipelineAttestation(completed, headSHA),
-	}}
+	host := &recordingPRUpdateHost{}
 
 	result, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)
 	if err != nil {
@@ -162,12 +104,12 @@ func TestCIStep_AutoFixDefersAttestationRefreshAfterAdoptingLocalHead(t *testing
 	if result.HeadSHA != newHeadSHA || sctx.Run.HeadSHA != newHeadSHA {
 		t.Fatalf("adopted head = %q / %q, want %q", result.HeadSHA, sctx.Run.HeadSHA, newHeadSHA)
 	}
-	if host.getCalls != 0 || len(host.updates) != 0 {
-		t.Fatalf("local repair touched PR content before revalidation: reads=%d updates=%d", host.getCalls, len(host.updates))
+	if len(host.updates) != 0 {
+		t.Fatalf("local repair updated PR content before revalidation: %d calls", len(host.updates))
 	}
 }
 
-func TestCIStep_AutoFixLocalRepairDoesNotDependOnPRAttestationRefresh(t *testing.T) {
+func TestCIStep_AutoFixLocalRepairDoesNotUpdatePR(t *testing.T) {
 	upstream := t.TempDir()
 	gitCmd(t, upstream, "init", "--bare")
 	dir, baseSHA, headSHA := setupGitRepo(t)
@@ -182,22 +124,17 @@ func TestCIStep_AutoFixLocalRepairDoesNotDependOnPRAttestationRefresh(t *testing
 	sctx := newTestContextWithDBRecords(t, agent, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Repo.UpstreamURL = upstream
 	sctx.Run.Branch = "refs/heads/feature"
-	host := &recordingPRContentHost{getErr: errors.New("PR content unavailable")}
+	host := &recordingPRUpdateHost{}
 
 	result, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.HeadChanged() || !result.HeadPersisted || !result.ExpectedAttestationTracked {
+	if !result.HeadChanged() || !result.HeadPersisted {
 		t.Fatalf("local repair result = %#v", result)
 	}
-	recovered := &CIStep{}
-	recovered.loadRerunBudget(sctx)
-	if recovered.transientReruns.expectedAttestationHeadSHA != result.HeadSHA || recovered.transientReruns.compliantAttestationRunNumber != 0 {
-		t.Fatalf("recovered expected attestation state = %#v, want head %s with no compliant run", recovered.transientReruns, result.HeadSHA)
-	}
-	if host.getCalls != 0 || len(host.updates) != 0 {
-		t.Fatalf("local repair touched PR content: reads=%d updates=%d", host.getCalls, len(host.updates))
+	if len(host.updates) != 0 {
+		t.Fatalf("local repair updated PR content: %d calls", len(host.updates))
 	}
 	if got := gitCmd(t, upstream, "rev-parse", "refs/heads/feature"); got != headSHA {
 		t.Fatalf("CI repair published before revalidation: remote head = %s, want %s", got, headSHA)
@@ -223,7 +160,7 @@ func TestCIStep_AutoFixDoesNotPersistLocalHeadWhenRefAdoptionFails(t *testing.T)
 	sctx := newTestContextWithDBRecords(t, agent, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Repo.UpstreamURL = upstream
 	sctx.Run.Branch = "refs/heads/feature"
-	host := &recordingPRContentHost{}
+	host := &recordingPRUpdateHost{}
 
 	result, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)
 	if err == nil || !strings.Contains(err.Error(), "refusing to move branch ref") {
@@ -274,7 +211,7 @@ func TestCIStep_AutoFixLocalRepairDoesNotVerifyOrPublishRemote(t *testing.T) {
 	sctx.Env = env
 	sctx.Repo.UpstreamURL = upstream
 	sctx.Run.Branch = "refs/heads/feature"
-	host := &recordingPRContentHost{}
+	host := &recordingPRUpdateHost{}
 
 	result, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)
 	if err != nil {
@@ -328,7 +265,7 @@ func TestCIStep_AutoFixLocalRepairDoesNotInvokeAmbiguousPush(t *testing.T) {
 	sctx.Env = env
 	sctx.Repo.UpstreamURL = upstream
 	sctx.Run.Branch = "refs/heads/feature"
-	host := &recordingPRContentHost{}
+	host := &recordingPRUpdateHost{}
 
 	result, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)
 	if err != nil {

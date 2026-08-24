@@ -10,7 +10,7 @@ import (
 )
 
 type attestationIdentityHost struct {
-	recordingPRContentHost
+	recordingPRUpdateHost
 	identities map[string]scm.CheckAttemptIdentity
 }
 

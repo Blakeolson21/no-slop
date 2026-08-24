@@ -436,10 +436,6 @@ func fakeCIGHHandler(args []string) {
 	if strings.Contains(joined, "run rerun") {
 		fakeCIGHRerun()
 	}
-	if strings.Contains(joined, "run view") && strings.Contains(joined, "--json databaseId,number,attempt,event,headSha") {
-		fmt.Println(os.Getenv("FAKE_CLI_RUN_IDENTITY"))
-		os.Exit(0)
-	}
 	if strings.Contains(joined, "run view") {
 		fmt.Println("error log output")
 		os.Exit(0)

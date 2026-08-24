@@ -372,7 +372,31 @@ func TestResetStepsFromOrderPreservesSkippedSteps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	testStep, err := d.InsertStepResult(run.ID, types.StepTest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewFindings := `{"findings":[{"id":"review-1","severity":"error","description":"carry review truth","action":"ask-user"}]}`
+	testFindings := `{"findings":[{"id":"test-1","severity":"error","description":"stale test truth","action":"ask-user"}]}`
+	if err := d.SetStepFindings(review.ID, reviewFindings); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetStepFindings(testStep.ID, testFindings); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetStepConvergence(review.ID, `{"round_findings":[1]}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetStepConvergence(testStep.ID, `{"stale":true}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetStepAutoFixLimit(testStep.ID, 3); err != nil {
+		t.Fatal(err)
+	}
 	if err := d.CompleteStepWithStatusAtHead(review.ID, types.StepStatusCompleted, "old-head", 0, 1, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.CompleteStepWithStatusAtHead(testStep.ID, types.StepStatusCompleted, "old-head", 0, 1, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.CompleteStepWithStatus(push.ID, types.StepStatusSkipped, 0, 0, ""); err != nil {
@@ -386,8 +410,15 @@ func TestResetStepsFromOrderPreservesSkippedSteps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotReview.Status != types.StepStatusPending || gotReview.CertifiedHeadSHA != nil {
+	if gotReview.Status != types.StepStatusPending || gotReview.CertifiedHeadSHA != nil || gotReview.FindingsJSON == nil || *gotReview.FindingsJSON != reviewFindings || gotReview.ConvergenceJSON == nil {
 		t.Fatalf("review after head-change reset = %#v", gotReview)
+	}
+	gotTest, err := d.GetStepResult(testStep.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotTest.Status != types.StepStatusPending || gotTest.CertifiedHeadSHA != nil || gotTest.FindingsJSON != nil || gotTest.ConvergenceJSON != nil || gotTest.AutoFixLimit != nil {
+		t.Fatalf("test after head-change reset = %#v", gotTest)
 	}
 	gotPush, err := d.GetStepResult(push.ID)
 	if err != nil {

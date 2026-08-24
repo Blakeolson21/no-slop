@@ -296,8 +296,8 @@ func (d *DB) ResetStepsFromOrder(runID string, stepOrder int) error {
 	}
 	defer tx.Rollback()
 	if _, err := tx.Exec(
-		`UPDATE step_results SET status = ?, exit_code = NULL, duration_ms = NULL, log_path = NULL, error = NULL, started_at = NULL, completed_at = NULL, last_activity_at = ?, last_activity = ?, agent_pid = NULL, certified_head_sha = NULL WHERE run_id = ? AND step_order >= ? AND status != ?`,
-		types.StepStatusPending, now(), "invalidated by head change", runID, stepOrder, types.StepStatusSkipped,
+		`UPDATE step_results SET status = ?, exit_code = NULL, duration_ms = NULL, log_path = NULL, findings_json = CASE WHEN step_name = ? THEN findings_json ELSE NULL END, error = NULL, started_at = NULL, completed_at = NULL, last_activity_at = ?, last_activity = ?, agent_pid = NULL, auto_fix_limit = CASE WHEN step_name = ? THEN auto_fix_limit ELSE NULL END, convergence_json = CASE WHEN step_name = ? THEN convergence_json ELSE NULL END, certified_head_sha = NULL WHERE run_id = ? AND step_order >= ? AND status != ?`,
+		types.StepStatusPending, types.StepReview, now(), "invalidated by head change", types.StepReview, types.StepReview, runID, stepOrder, types.StepStatusSkipped,
 	); err != nil {
 		return fmt.Errorf("reset steps from order %d: %w", stepOrder, err)
 	}
