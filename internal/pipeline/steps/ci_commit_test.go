@@ -199,6 +199,9 @@ func TestCIStep_AutoFixDoesNotPersistLocalHeadWhenRefAdoptionFails(t *testing.T)
 	sctx := newTestContextWithDBRecords(t, agent, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Repo.UpstreamURL = upstream
 	sctx.Run.Branch = "refs/heads/feature"
+	if err := sctx.DB.UpsertUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch, baseSHA, headSHA, sctx.Run.ID); err != nil {
+		t.Fatal(err)
+	}
 	host := &recordingPRUpdateHost{}
 
 	result, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)
@@ -218,6 +221,13 @@ func TestCIStep_AutoFixDoesNotPersistLocalHeadWhenRefAdoptionFails(t *testing.T)
 	}
 	if persisted.HeadSHA != headSHA {
 		t.Fatalf("persisted head = %q, want original %q", persisted.HeadSHA, headSHA)
+	}
+	rng, rangeErr := sctx.DB.GetUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch)
+	if rangeErr != nil {
+		t.Fatal(rangeErr)
+	}
+	if rng == nil || rng.FromSHA != baseSHA || rng.ToSHA != headSHA || rng.SourceRunID != sctx.Run.ID {
+		t.Fatalf("failed CI adoption left rewritten uncertified range: %#v", rng)
 	}
 }
 

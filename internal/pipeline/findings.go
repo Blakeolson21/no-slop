@@ -229,6 +229,10 @@ func mergeReappearedFindingsJSON(freshRaw, priorRaw string) string {
 		structuralMatches := make([]int, 0, 1)
 		for j := range prior.Items {
 			old := prior.Items[j]
+			if current.PriorID != "" && current.PriorContinuityToken != "" && old.HasLineage() &&
+				current.PriorID == old.ID && current.PriorContinuityToken == old.ContinuityToken {
+				ambiguousPrior[j] = true
+			}
 			if types.FindingIDCorroborates(*current, old) {
 				lineageMatches = append(lineageMatches, j)
 				continue
@@ -283,6 +287,14 @@ func mergeReappearedFindingsJSON(freshRaw, priorRaw string) string {
 		}
 		matched++
 	}
+	cleanedClaims := false
+	for i := range fresh.Items {
+		if fresh.Items[i].PriorID != "" || fresh.Items[i].PriorContinuityToken != "" {
+			cleanedClaims = true
+			fresh.Items[i].PriorID = ""
+			fresh.Items[i].PriorContinuityToken = ""
+		}
+	}
 	for j, ambiguous := range ambiguousPrior {
 		if ambiguous && !matchedPrior[j] {
 			fresh.Items = append(fresh.Items, prior.Items[j])
@@ -290,7 +302,14 @@ func mergeReappearedFindingsJSON(freshRaw, priorRaw string) string {
 		}
 	}
 	if matched == 0 {
-		return freshRaw
+		if !cleanedClaims {
+			return freshRaw
+		}
+		encoded, err := types.MarshalFindingsJSON(fresh)
+		if err != nil {
+			return freshRaw
+		}
+		return encoded
 	}
 	fresh.Tested = mergeComparable(fresh.Tested, prior.Tested)
 	fresh.Artifacts = mergeComparable(fresh.Artifacts, prior.Artifacts)
@@ -348,16 +367,54 @@ func FilterDeferredPipelineOwnedDeliveryFindings(findings types.Findings) (types
 	default:
 		out.Summary = fmt.Sprintf("%d review findings remain", len(kept))
 	}
-	switch findings.RiskScope {
-	case types.FindingsRiskScopePipelineOwnedDelivery:
+	if len(kept) == 0 {
 		out.RiskLevel = "low"
 		out.RiskRationale = "no delivery-independent review risk was reported"
 		out.RiskScope = types.FindingsRiskScopeSourceOrExternal
-	case types.FindingsRiskScopeSourceOrExternal:
-	default:
-		out.RiskRationale = "review risk retained after deferred delivery filtering"
+		return out, dropped
 	}
+	rank := 0
+	if findings.RiskScope != types.FindingsRiskScopePipelineOwnedDelivery {
+		rank = riskRank(findings.RiskLevel)
+	}
+	for _, item := range kept {
+		if item.ReviewScope == types.FindingReviewScopePipelineOwnedDelivery {
+			continue
+		}
+		if itemRank := severityRank(item.Severity); itemRank > rank {
+			rank = itemRank
+		}
+	}
+	if rank == 0 {
+		rank = riskRank("low")
+	}
+	out.RiskLevel = riskLevel(rank)
+	out.RiskRationale = "review risk recomputed after deferred delivery filtering"
+	out.RiskScope = types.FindingsRiskScopeSourceOrExternal
 	return out, dropped
+}
+
+func normalizeUserFindingsJSON(raw, existingRaw string) (string, error) {
+	if raw == "" {
+		return raw, nil
+	}
+	findings, err := types.ParseFindingsJSON(raw)
+	if err != nil {
+		return "", err
+	}
+	var existing []types.Finding
+	if existingRaw != "" {
+		parsed, err := types.ParseFindingsJSON(existingRaw)
+		if err != nil {
+			return "", err
+		}
+		existing = parsed.Items
+	}
+	normalized, err := types.NormalizeUserFindings(findings, existing)
+	if err != nil {
+		return "", err
+	}
+	return types.MarshalFindingsJSON(normalized)
 }
 
 func countFindingIdentities(items []types.Finding) map[types.FindingIdentity]int {
@@ -687,6 +744,18 @@ func mergeUserOverridesJSON(raw string, instructions map[string]string, added []
 		return raw
 	}
 	return encoded
+}
+
+func prepareUserFixFindingsJSON(selected, known string, instructions map[string]string, added []types.Finding, registerLineages bool) (string, string, error) {
+	merged := mergeUserOverridesJSON(selected, instructions, added)
+	if !registerLineages {
+		return merged, "", nil
+	}
+	normalized, err := normalizeUserFindingsJSON(merged, known)
+	if err != nil {
+		return "", "", err
+	}
+	return normalized, mergeFindingsJSON(normalized, known), nil
 }
 
 func filterFindingsJSON(raw string, ids []string) string {

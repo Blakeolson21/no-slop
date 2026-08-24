@@ -28,7 +28,7 @@ type Host struct {
 	forkOwner    string // fork owner for cross-repository PR heads
 }
 
-var publicationNoncePattern = regexp.MustCompile(`(?:^|[[:space:]])<!-- no-slop-publication:v1 ([0-9a-f]{32}) -->(?:$|[[:space:]])`)
+var publicationNoncePattern = regexp.MustCompile(`^no-slop-required\|(?:opened|edited|synchronize|reopened)\|PR #[0-9]+ event [0-9]+ \(run [0-9]+\)\|<!-- no-slop-publication:v1 ([0-9a-f]{32}) -->`)
 
 // New builds a Host. cliAvailable reports whether the gh binary is
 // resolvable on the caller's PATH (possibly overridden by env). host is the
@@ -434,15 +434,59 @@ func (h *Host) GetCheckAttemptIdentity(ctx context.Context, check scm.Check) (sc
 	}, nil
 }
 
+func (h *Host) FindAttestationPublicationIdentity(ctx context.Context, headSHA, publicationNonce string) (scm.CheckAttemptIdentity, bool, error) {
+	args := append([]string{"run", "list", "--workflow", "no-slop-required.yml", "--commit", headSHA, "--limit", "1000"}, h.repoArgs()...)
+	args = append(args, "--json", "databaseId,number,attempt,event,headSha,displayTitle")
+	cmd := h.cmd(ctx, "gh", args...)
+	shellenv.ConfigureShellCommand(cmd)
+	out, err := shellenv.OutputShellCommand(cmd)
+	if err != nil {
+		return scm.CheckAttemptIdentity{}, false, fmt.Errorf("gh run list attestation publications: %w", err)
+	}
+	var runs []struct {
+		RunID        int64  `json:"databaseId"`
+		RunNumber    int64  `json:"number"`
+		RunAttempt   int    `json:"attempt"`
+		Event        string `json:"event"`
+		HeadSHA      string `json:"headSha"`
+		DisplayTitle string `json:"displayTitle"`
+	}
+	if err := json.Unmarshal(out, &runs); err != nil {
+		return scm.CheckAttemptIdentity{}, false, fmt.Errorf("parse GitHub Actions attestation publications: %w", err)
+	}
+	var found scm.CheckAttemptIdentity
+	for _, run := range runs {
+		nonce, err := parsePublicationNonce([]byte(run.DisplayTitle))
+		if err != nil {
+			return scm.CheckAttemptIdentity{}, false, err
+		}
+		if nonce != publicationNonce || strings.TrimSpace(run.HeadSHA) != strings.TrimSpace(headSHA) {
+			continue
+		}
+		if run.RunID <= 0 || run.RunNumber <= 0 {
+			return scm.CheckAttemptIdentity{}, false, fmt.Errorf("GitHub Actions publication identity is incomplete")
+		}
+		if found.RunID != 0 && found.RunID != run.RunID {
+			return scm.CheckAttemptIdentity{}, false, fmt.Errorf("GitHub Actions publication nonce identifies multiple workflow runs")
+		}
+		found = scm.CheckAttemptIdentity{
+			RunID:            run.RunID,
+			RunNumber:        run.RunNumber,
+			RunAttempt:       run.RunAttempt,
+			Event:            strings.TrimSpace(run.Event),
+			HeadSHA:          strings.TrimSpace(run.HeadSHA),
+			PublicationNonce: nonce,
+		}
+	}
+	return found, found.RunID != 0, nil
+}
+
 func parsePublicationNonce(providerIdentity []byte) (string, error) {
-	matches := publicationNoncePattern.FindAllSubmatch(providerIdentity, -1)
-	if len(matches) == 0 {
+	match := publicationNoncePattern.FindSubmatch(providerIdentity)
+	if len(match) == 0 {
 		return "", nil
 	}
-	if len(matches) != 1 {
-		return "", fmt.Errorf("GitHub Actions run identity has no unique attestation publication nonce")
-	}
-	return string(matches[0][1]), nil
+	return string(match[1]), nil
 }
 
 // RerunCheck re-runs the Actions job behind check for the same commit, so a

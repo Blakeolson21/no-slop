@@ -621,21 +621,30 @@ func TestExecutor_FixAppliesUserInstructionsAndAddedFindings(t *testing.T) {
 	workDir := t.TempDir()
 
 	var capturedFindings string
+	var capturedDurableFindings string
 	callCount := 0
-	step := &adaptiveCallStep{
+	step := &scopeLimitedAdaptiveCallStep{adaptiveCallStep: adaptiveCallStep{
 		name: types.StepReview,
 		fn: func(sctx *StepContext) (*StepOutcome, error) {
 			callCount++
 			if callCount == 1 {
 				return &StepOutcome{
 					NeedsApproval: true,
-					Findings:      `{"findings":[{"id":"review-1","severity":"error","description":"first","action":"auto-fix"},{"id":"review-2","severity":"warning","description":"second","action":"auto-fix"}],"summary":"2 findings"}`,
+					Findings:      `{"findings":[{"id":"review-1","severity":"error","description":"first","action":"auto-fix"}],"summary":"1 finding"}`,
 				}, nil
 			}
 			capturedFindings = sctx.PreviousFindings
+			stored, err := sctx.DB.GetStepResult(sctx.StepResultID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored == nil || stored.FindingsJSON == nil {
+				t.Fatalf("durable review lineages = %#v", stored)
+			}
+			capturedDurableFindings = *stored.FindingsJSON
 			return &StepOutcome{}, nil
 		},
-	}
+	}}
 
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
 
@@ -661,7 +670,11 @@ func TestExecutor_FixAppliesUserInstructionsAndAddedFindings(t *testing.T) {
 		t.Fatal("executor timed out")
 	}
 
-	items := mustParseFindingItems(t, capturedFindings)
+	parsedFindings, err := types.ParseFindingsJSON(capturedFindings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := parsedFindings.Items
 	if len(items) != 2 {
 		t.Fatalf("expected 2 findings (selected + user-added), got %d: %s", len(items), capturedFindings)
 	}
@@ -676,6 +689,24 @@ func TestExecutor_FixAppliesUserInstructionsAndAddedFindings(t *testing.T) {
 	}
 	if items[1].Source != types.FindingSourceUser {
 		t.Errorf("expected user-added finding to be tagged source=user, got %q", items[1].Source)
+	}
+	if !items[1].HasLineage() || len(items[1].ContinuityToken) != 32 {
+		t.Fatalf("user-added finding has no durable lineage: %#v", items[1])
+	}
+	parsedDurable, err := types.ParseFindingsJSON(capturedDurableFindings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	durableItems := parsedDurable.Items
+	var durableUser *types.Finding
+	for i := range durableItems {
+		if durableItems[i].ID == items[1].ID {
+			durableUser = &durableItems[i]
+			break
+		}
+	}
+	if durableUser == nil || durableUser.ContinuityToken != items[1].ContinuityToken || durableUser.Source != types.FindingSourceUser {
+		t.Fatalf("durable user lineage = %#v, rereview finding = %#v", durableUser, items[1])
 	}
 
 	rounds, err := database.GetRoundsByStep(firstStepID(t, database, run.ID))

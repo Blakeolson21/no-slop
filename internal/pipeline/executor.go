@@ -567,8 +567,12 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	case types.ActionFix:
 		telemetry.Track("fix", e.fixTelemetryFields("user", gate.step.Name(), selectedFindingCount(gate.findings, response.findingIDs), 0))
 		selected := filterFindingsJSON(gate.findings, response.findingIDs)
-		merged := mergeUserOverridesJSON(selected, response.instructions, response.addedFindings)
-		if err := e.persistUserFixDecision(gate.lastRoundID, response.findingIDs, selected, merged); err != nil {
+		registerLineages := findingsMayBeScopeLimited(gate.step)
+		merged, registered, err := prepareUserFixFindingsJSON(selected, gate.findings, response.instructions, response.addedFindings, registerLineages)
+		if err != nil {
+			return e.failRun(run, repo, fmt.Errorf("normalize recovered %s user findings: %w", gate.step.Name(), err), ctx)
+		}
+		if err := e.persistUserFixDecision(gate.lastRoundID, gate.stepResult.ID, response.findingIDs, selected, merged, registered); err != nil {
 			if findingsMayBeScopeLimited(gate.step) {
 				return e.failRun(run, repo, fmt.Errorf("record recovered %s user decision: %w", gate.step.Name(), err), ctx)
 			}
@@ -579,8 +583,9 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 		}
 		e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, gate.step.Name(), string(types.StepStatusFixing), "", "", nil)
 		carried := ""
-		if findingsMayBeScopeLimited(gate.step) {
+		if registerLineages {
 			carried = excludeFindingsJSON(gate.findings, response.findingIDs)
+			gate.stepResult.FindingsJSON = &registered
 		}
 		previousHeadSHA := run.HeadSHA
 		skipRemaining, restartFrom, err := e.executeStep(ctx, gate.step, gate.stepResult, run, repo, workDir, logDir, stepExecutionState{
@@ -1248,8 +1253,11 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			selectedCount := selectedFindingCount(effectiveFindings, response.findingIDs)
 			writeLog(fmt.Sprintf("user-fix round starting after round %d (%d %s selected)", roundNum, selectedCount, pluralize(selectedCount, "finding", "findings")))
 			selectedFindings := filterFindingsJSON(effectiveFindings, response.findingIDs)
-			mergedFindings := mergeUserOverridesJSON(selectedFindings, response.instructions, response.addedFindings)
-			if err := e.persistUserFixDecision(currentRoundID, response.findingIDs, selectedFindings, mergedFindings); err != nil {
+			mergedFindings, registeredLineages, err := prepareUserFixFindingsJSON(selectedFindings, knownLineages, response.instructions, response.addedFindings, carryFindings)
+			if err != nil {
+				return false, "", fmt.Errorf("normalize %s user findings: %w", stepName, err)
+			}
+			if err := e.persistUserFixDecision(currentRoundID, sr.ID, response.findingIDs, selectedFindings, mergedFindings, registeredLineages); err != nil {
 				if carryFindings {
 					return false, "", fmt.Errorf("record %s user decision: %w", stepName, err)
 				}
@@ -1261,6 +1269,8 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			sctx.Fixing = true
 			sctx.PreviousFindings = mergedFindings
 			if carryFindings {
+				knownLineages = registeredLineages
+				sr.FindingsJSON = &registeredLineages
 				carriedFindings = excludeFindingsJSON(effectiveFindings, response.findingIDs)
 			}
 			nextTrigger = "auto_fix"
@@ -1309,7 +1319,7 @@ func (e *Executor) persistAutoFixSelection(roundID, findings string) error {
 	return e.db.SetStepRoundSelection(roundID, &idsJSON, db.RoundSelectionSourceAutoFix)
 }
 
-func (e *Executor) persistUserFixDecision(roundID string, selectedIDs []string, selected, merged string) error {
+func (e *Executor) persistUserFixDecision(roundID, stepResultID string, selectedIDs []string, selected, merged, registeredLineages string) error {
 	idsJSON := marshalFindingIDs(combineSelectedFindingIDs(selectedIDs, merged))
 	if idsJSON == "" {
 		return nil
@@ -1320,6 +1330,9 @@ func (e *Executor) persistUserFixDecision(roundID string, selectedIDs []string, 
 	var userFindingsJSON *string
 	if merged != "" && merged != selected {
 		userFindingsJSON = &merged
+	}
+	if registeredLineages != "" {
+		return e.db.SetStepRoundUserDecisionAndFindings(roundID, stepResultID, &idsJSON, db.RoundSelectionSourceUser, userFindingsJSON, registeredLineages)
 	}
 	return e.db.SetStepRoundUserDecision(roundID, &idsJSON, db.RoundSelectionSourceUser, userFindingsJSON)
 }

@@ -136,7 +136,7 @@ func TestGetCheckAttemptIdentityReadsPublicationFromCancelledRunMetadata(t *test
 	const nonce = "00112233445566778899aabbccddeeff"
 	host := New(githubTestCmdFactory(map[string]githubTestResponse{
 		"gh run view 901 --repo test/repo --json databaseId,number,attempt,event,headSha,displayTitle": {
-			stdout: `{"databaseId":901,"number":43,"attempt":1,"event":"pull_request","headSha":"abc123","displayTitle":"<!-- no-slop-publication:v1 ` + nonce + ` --> PR body"}` + "\n",
+			stdout: `{"databaseId":901,"number":43,"attempt":1,"event":"pull_request","headSha":"abc123","displayTitle":"no-slop-required|edited|PR #42 event 43 (run 901)|<!-- no-slop-publication:v1 ` + nonce + ` --> PR body"}` + "\n",
 		},
 	}), nil, "", "test/repo")
 
@@ -146,6 +146,40 @@ func TestGetCheckAttemptIdentityReadsPublicationFromCancelledRunMetadata(t *test
 	}
 	if identity.RunID != 901 || identity.PublicationNonce != nonce {
 		t.Fatalf("cancelled run identity = %#v", identity)
+	}
+}
+
+func TestParsePublicationNonceReadsOnlyOwnedDisplayTitlePrefix(t *testing.T) {
+	t.Parallel()
+
+	const current = "00112233445566778899aabbccddeeff"
+	title := "no-slop-required|edited|PR #42 event 43 (run 901)|<!-- no-slop-publication:v1 " + current + " --> body quoting <!-- no-slop-publication:v1 ffeeddccbbaa99887766554433221100 -->"
+	got, err := parsePublicationNonce([]byte(title))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != current {
+		t.Fatalf("publication nonce = %q, want %q", got, current)
+	}
+}
+
+func TestFindAttestationPublicationIdentityDoesNotRequireJobCheck(t *testing.T) {
+	t.Parallel()
+
+	const nonce = "00112233445566778899aabbccddeeff"
+	const head = "abc123"
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh run list --workflow no-slop-required.yml --commit abc123 --limit 1000 --repo test/repo --json databaseId,number,attempt,event,headSha,displayTitle": {
+			stdout: `[{"databaseId":900,"number":42,"attempt":1,"event":"pull_request","headSha":"abc123","displayTitle":"unrelated mutation <!-- no-slop-publication:v1 ` + nonce + ` -->"},{"databaseId":901,"number":43,"attempt":1,"event":"pull_request","headSha":"abc123","displayTitle":"no-slop-required|edited|PR #42 event 43 (run 901)|<!-- no-slop-publication:v1 ` + nonce + ` --> body"}]` + "\n",
+		},
+	}), nil, "", "test/repo")
+
+	identity, found, err := host.FindAttestationPublicationIdentity(context.Background(), head, nonce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || identity.RunID != 901 || identity.RunNumber != 43 || identity.PublicationNonce != nonce || identity.HeadSHA != head {
+		t.Fatalf("publication identity = (%#v, %v)", identity, found)
 	}
 }
 

@@ -171,12 +171,19 @@ func commitAgentFixes(sctx *pipeline.StepContext, stepName types.StepName, summa
 	if startingHead == "" {
 		startingHead = sctx.Run.HeadSHA
 	}
+	var rollbackRange func() error
 	if stepPersistsUncertifiedReview(stepName) {
-		if err := pipeline.PersistUncertifiedPipelineRange(sctx, startingHead, headSHA); err != nil {
+		rollbackRange, err = pipeline.PersistUncertifiedPipelineRangeWithRollback(sctx, startingHead, headSHA)
+		if err != nil {
 			return fmt.Errorf("persist uncertified review range before %s head adoption: %w", stepName, err)
 		}
 	}
 	if err := adoptBranchRef(sctx, headSHA); err != nil {
+		if rollbackRange != nil {
+			if rollbackErr := rollbackRange(); rollbackErr != nil {
+				return fmt.Errorf("%w; restore uncertified review range: %v", err, rollbackErr)
+			}
+		}
 		return err
 	}
 	sctx.Run.HeadSHA = headSHA

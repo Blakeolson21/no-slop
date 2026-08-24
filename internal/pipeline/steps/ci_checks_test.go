@@ -13,7 +13,8 @@ import (
 
 type attestationIdentityHost struct {
 	recordingPRUpdateHost
-	identities map[string]scm.CheckAttemptIdentity
+	identities  map[string]scm.CheckAttemptIdentity
+	publication scm.CheckAttemptIdentity
 }
 
 func TestCIStepFailsClosedWhenAttestationStateCannotBeRestored(t *testing.T) {
@@ -91,6 +92,13 @@ func (h *attestationIdentityHost) GetCheckAttemptIdentity(_ context.Context, che
 	return h.identities[check.Link], nil
 }
 
+func (h *attestationIdentityHost) FindAttestationPublicationIdentity(_ context.Context, headSHA, nonce string) (scm.CheckAttemptIdentity, bool, error) {
+	if h.publication.HeadSHA != headSHA || h.publication.PublicationNonce != nonce {
+		return scm.CheckAttemptIdentity{}, false, nil
+	}
+	return h.publication, true, nil
+}
+
 func TestFilterExpectedStaleAttestationChecksUsesPublicationNonce(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
@@ -107,7 +115,7 @@ func TestFilterExpectedStaleAttestationChecksUsesPublicationNonce(t *testing.T) 
 		"publication-cancelled": {RunID: 1002, RunNumber: 102, RunAttempt: 1, HeadSHA: headSHA, PublicationNonce: currentNonce},
 		"later-failure":         {RunID: 1003, RunNumber: 103, RunAttempt: 1, HeadSHA: headSHA, PublicationNonce: staleNonce},
 		"later-same-body":       {RunID: 1004, RunNumber: 104, RunAttempt: 1, HeadSHA: headSHA, PublicationNonce: currentNonce},
-	}}
+	}, publication: scm.CheckAttemptIdentity{RunID: 1002, RunNumber: 102, RunAttempt: 1, HeadSHA: headSHA, PublicationNonce: currentNonce}}
 	state := expectedAttestationState{HeadSHA: headSHA, PublicationNonce: currentNonce}
 	encoded, err := json.Marshal(state)
 	if err != nil {

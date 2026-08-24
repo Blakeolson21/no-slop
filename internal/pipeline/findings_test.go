@@ -135,6 +135,112 @@ func TestMergeReappearedFindingsJSONPreservesAmbiguousGeneratedLineages(t *testi
 	}
 }
 
+func TestReconcileReviewFindingsPreservesRejectedSelectedClaim(t *testing.T) {
+	prior, err := types.NormalizeFindings(types.Findings{Items: []types.Finding{{
+		Severity:    "error",
+		File:        "loader.go",
+		Line:        42,
+		Description: "nil dereference remains reachable",
+		Action:      types.ActionAskUser,
+		ReviewScope: types.FindingReviewScopeSource,
+	}}}, "review", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priorRaw, err := types.MarshalFindingsJSON(prior)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := types.Findings{Items: []types.Finding{{
+		PriorID:              prior.Items[0].ID,
+		PriorContinuityToken: prior.Items[0].ContinuityToken,
+		Severity:             "warning",
+		File:                 "loader.go",
+		Line:                 42,
+		Description:          "SQL injection remains reachable",
+		Action:               types.ActionAutoFix,
+		ReviewScope:          types.FindingReviewScopeSource,
+	}}}
+
+	reconciled, _, err := ReconcileReviewFindings(fresh, priorRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reconciled.Items) != 2 {
+		t.Fatalf("ambiguous selected claim dropped a finding: %#v", reconciled.Items)
+	}
+	byDescription := make(map[string]types.Finding, len(reconciled.Items))
+	for _, item := range reconciled.Items {
+		byDescription[item.Description] = item
+	}
+	if byDescription["nil dereference remains reachable"].ID != prior.Items[0].ID || byDescription["nil dereference remains reachable"].Action != types.ActionAskUser {
+		t.Fatalf("prior selected lineage changed: %#v", reconciled.Items)
+	}
+	if byDescription["SQL injection remains reachable"].ID == prior.Items[0].ID {
+		t.Fatalf("unrelated finding inherited selected lineage: %#v", reconciled.Items)
+	}
+}
+
+func TestFilterDeferredPipelineOwnedDeliveryRecomputesRetainedSourceRisk(t *testing.T) {
+	filtered, dropped := FilterDeferredPipelineOwnedDeliveryFindings(types.Findings{
+		Items: []types.Finding{
+			{Severity: "error", Description: "source corruption remains", ReviewScope: types.FindingReviewScopeSource},
+			{Severity: "error", Description: "PR publication is pending", ReviewScope: types.FindingReviewScopePipelineOwnedDelivery},
+		},
+		RiskLevel: "low",
+		RiskScope: types.FindingsRiskScopePipelineOwnedDelivery,
+	})
+	if dropped != 1 || len(filtered.Items) != 1 {
+		t.Fatalf("filtered findings = %#v, dropped = %d", filtered.Items, dropped)
+	}
+	if filtered.RiskLevel != "high" || filtered.RiskScope != types.FindingsRiskScopeSourceOrExternal {
+		t.Fatalf("retained source risk = %q/%q", filtered.RiskLevel, filtered.RiskScope)
+	}
+}
+
+func TestReconcileReviewFindingsRestoresUserLineageSemanticsBeforeFiltering(t *testing.T) {
+	prior := types.Findings{Items: []types.Finding{{
+		ID:               "user-1",
+		IDGenerated:      true,
+		ContinuityToken:  "00112233445566778899aabbccddeeff",
+		Severity:         "error",
+		File:             "loader.go",
+		Description:      "operator-added defect",
+		Action:           types.ActionAskUser,
+		Source:           types.FindingSourceUser,
+		UserInstructions: "preserve the compatibility path",
+		ReviewScope:      types.FindingReviewScopeSource,
+	}}}
+	priorRaw, err := types.MarshalFindingsJSON(prior)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := types.Findings{Items: []types.Finding{{
+		PriorID:              "user-1",
+		PriorContinuityToken: "00112233445566778899aabbccddeeff",
+		Severity:             "warning",
+		File:                 "loader.go",
+		Description:          "operator-added defect",
+		Action:               types.ActionNoOp,
+		ReviewScope:          types.FindingReviewScopePipelineOwnedDelivery,
+	}}}
+
+	reconciled, dropped, err := ReconcileReviewFindings(fresh, priorRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dropped != 0 || len(reconciled.Items) != 1 {
+		t.Fatalf("reconciled findings = %#v, dropped = %d", reconciled.Items, dropped)
+	}
+	item := reconciled.Items[0]
+	if item.ID != "user-1" || item.ContinuityToken != prior.Items[0].ContinuityToken || item.Source != types.FindingSourceUser {
+		t.Fatalf("user lineage changed: %#v", item)
+	}
+	if item.Action != types.ActionAskUser || item.Severity != "error" || item.UserInstructions != prior.Items[0].UserInstructions || item.ReviewScope != types.FindingReviewScopeSource {
+		t.Fatalf("user lineage semantics changed: %#v", item)
+	}
+}
+
 func TestMergeCarriedFindingsJSON_ExcludesPipelineDeliveryFromEffectiveRisk(t *testing.T) {
 	carriedRaw := `{"findings":[{"id":"review-delivery","severity":"error","description":"PR not pushed","action":"ask-user","review_scope":"pipeline-owned-delivery"}],"risk_level":"high","risk_rationale":"PR is absent.","risk_scope":"pipeline-owned-delivery"}`
 	freshRaw := `{"findings":[{"id":"review-source","severity":"info","description":"bounded source concern","action":"ask-user","review_scope":"source"}],"risk_level":"low","risk_rationale":"Source change is bounded.","risk_scope":"source-or-external"}`

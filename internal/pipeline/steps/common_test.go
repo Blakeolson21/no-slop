@@ -633,6 +633,33 @@ func TestCommitAgentFixes_RefusesReviewHeadWhenRangePersistenceFails(t *testing.
 	}
 }
 
+func TestCommitAgentFixes_RestoresUncertifiedRangeWhenRefAdoptionFails(t *testing.T) {
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	if err := sctx.DB.UpsertUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch, baseSHA, headSHA, sctx.Run.ID); err != nil {
+		t.Fatal(err)
+	}
+	tree := gitCmd(t, dir, "rev-parse", headSHA+"^{tree}")
+	unrelated := gitCmd(t, dir, "commit-tree", tree, "-m", "unrelated branch head")
+	gitCmd(t, dir, "update-ref", "refs/heads/feature", unrelated)
+	if err := os.WriteFile(filepath.Join(dir, "review-fix.txt"), []byte("fixed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := commitAgentFixes(sctx, types.StepReview, "apply fix", "fallback")
+	if err == nil || !strings.Contains(err.Error(), "refusing to move branch ref") {
+		t.Fatalf("commitAgentFixes() error = %v, want ref-adoption refusal", err)
+	}
+	got, getErr := sctx.DB.GetUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if got == nil || got.FromSHA != baseSHA || got.ToSHA != headSHA || got.SourceRunID != sctx.Run.ID {
+		t.Fatalf("failed adoption left rewritten uncertified range: %#v", got)
+	}
+}
+
 func TestCommitAgentFixes_PersistsUncertifiedRangeForPostReviewSteps(t *testing.T) {
 	for _, stepName := range []types.StepName{types.StepTest, types.StepDocument, types.StepLint} {
 		t.Run(string(stepName), func(t *testing.T) {

@@ -238,6 +238,64 @@ func NormalizeFindings(findings Findings, prefix string, existing []Finding) (Fi
 		item.ID = id
 		item.IDGenerated = true
 		item.ContinuityToken = token
+	}
+	return findings, nil
+}
+
+func NormalizeUserFindings(findings Findings, existing []Finding) (Findings, error) {
+	existingByID := make(map[string][]Finding, len(existing))
+	usedIDs := make(map[string]bool, len(existing)+len(findings.Items))
+	usedTokens := make(map[string]bool, len(existing)+len(findings.Items))
+	for _, item := range existing {
+		if item.ID != "" {
+			existingByID[item.ID] = append(existingByID[item.ID], item)
+			usedIDs[item.ID] = true
+		}
+		if item.ContinuityToken != "" {
+			usedTokens[item.ContinuityToken] = true
+		}
+	}
+	for _, item := range findings.Items {
+		if item.Source == FindingSourceUser && !item.HasLineage() {
+			continue
+		}
+		if item.ID != "" {
+			usedIDs[item.ID] = true
+		}
+		if item.ContinuityToken != "" {
+			usedTokens[item.ContinuityToken] = true
+		}
+	}
+	counter := 0
+	for i := range findings.Items {
+		item := &findings.Items[i]
+		if item.Source != FindingSourceUser || item.HasLineage() {
+			continue
+		}
+		continuations := make([]Finding, 0, 1)
+		for _, candidate := range existingByID[item.ID] {
+			if candidate.Source == FindingSourceUser && candidate.Identity() == item.Identity() {
+				continuations = append(continuations, candidate)
+			}
+		}
+		if len(continuations) == 1 {
+			item.ID = continuations[0].ID
+			item.IDGenerated = true
+			item.ContinuityToken = continuations[0].ContinuityToken
+		}
+		if item.ID == "" || (usedIDs[item.ID] && len(continuations) != 1) {
+			item.ID, counter = nextUserFindingID(usedIDs, counter)
+		} else {
+			usedIDs[item.ID] = true
+		}
+		if item.ContinuityToken == "" {
+			token, err := newFindingContinuityToken(usedTokens)
+			if err != nil {
+				return Findings{}, err
+			}
+			item.ContinuityToken = token
+		}
+		item.IDGenerated = true
 		item.PriorID = ""
 		item.PriorContinuityToken = ""
 	}

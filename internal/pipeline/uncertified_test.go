@@ -193,27 +193,31 @@ func TestExecutor_RestoresUncertifiedPriorRunEffectiveFindings(t *testing.T) {
 	}
 }
 
-func TestBindUncertifiedPipelineRange_MissingFromGateWarnsAndContinues(t *testing.T) {
+func TestBindUncertifiedPipelineRange_MissingCommitFailsClosed(t *testing.T) {
 	database, _, run, repo := setupTest(t)
 	if err := database.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, "from-missing", "to-missing", "source-run"); err != nil {
 		t.Fatal(err)
 	}
-	var logs []string
 	sctx := &StepContext{
 		Ctx:     context.Background(),
 		DB:      database,
 		Repo:    repo,
 		Run:     run,
 		WorkDir: t.TempDir(),
-		Log:     func(line string) { logs = append(logs, line) },
 	}
-	BindUncertifiedPipelineRange(sctx)
+	err := BindUncertifiedPipelineRange(sctx)
+	if err == nil || !strings.Contains(err.Error(), "verify uncertified pipeline range ancestry") {
+		t.Fatalf("BindUncertifiedPipelineRange() error = %v, want ancestry failure", err)
+	}
 	if sctx.UncertifiedToSHA != "" || sctx.UncertifiedFromSHA != "" {
 		t.Fatalf("missing range was applied: from=%q to=%q", sctx.UncertifiedFromSHA, sctx.UncertifiedToSHA)
 	}
-	joined := strings.Join(logs, "\n")
-	if !strings.Contains(joined, "uncertified range from-missing..to-missing not in gate; not applying provenance") {
-		t.Fatalf("logs = %q, want skip warning", joined)
+	got, getErr := database.GetUncertifiedPipelineRange(repo.ID, run.Branch)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if got == nil || got.FromSHA != "from-missing" || got.ToSHA != "to-missing" {
+		t.Fatalf("failed ancestry probe changed range: %#v", got)
 	}
 }
 
@@ -499,6 +503,34 @@ func TestPersistUncertifiedPipelineRange_ReplacesRangeWhenHistoryDiverged(t *tes
 	}
 }
 
+func TestPersistUncertifiedPipelineRange_IndeterminateLineagePreservesRange(t *testing.T) {
+	database, _, run, repo := setupTest(t)
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	h0 := currentSHA(t, dir)
+	writeTestFile(t, dir, "fix.txt", "fix\n")
+	execGit(t, dir, "add", ".")
+	execGit(t, dir, "commit", "-m", "fix")
+	h1 := currentSHA(t, dir)
+	if err := database.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, h0, h1, run.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	err := PersistUncertifiedPipelineRange(&StepContext{
+		Ctx: context.Background(), DB: database, Repo: repo, Run: run, WorkDir: dir,
+	}, "missing-object", h0)
+	if err == nil || !strings.Contains(err.Error(), "verify uncertified pipeline range lineage") {
+		t.Fatalf("PersistUncertifiedPipelineRange() error = %v, want indeterminate lineage failure", err)
+	}
+	got, getErr := database.GetUncertifiedPipelineRange(repo.ID, run.Branch)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if got == nil || got.FromSHA != h0 || got.ToSHA != h1 || got.SourceRunID != run.ID {
+		t.Fatalf("indeterminate lineage overwrote range: %#v", got)
+	}
+}
+
 func TestRemapUncertifiedPipelineRangeAfterRebase_RewrittenHeadStaysBindable(t *testing.T) {
 	database, _, run, repo := setupTest(t)
 	dir := t.TempDir()
@@ -561,7 +593,7 @@ func TestRemapUncertifiedPipelineRangeAfterRebase_RewrittenHeadStaysBindable(t *
 	}
 }
 
-func TestRemapUncertifiedPipelineRangeAfterRebase_LeavesRangeWhenOldHeadDidNotContainIt(t *testing.T) {
+func TestRemapUncertifiedPipelineRangeAfterRebase_MissingRangeCommitFailsClosed(t *testing.T) {
 	database, _, run, repo := setupTest(t)
 	dir := t.TempDir()
 	initGitRepo(t, dir)
@@ -586,8 +618,8 @@ func TestRemapUncertifiedPipelineRangeAfterRebase_LeavesRangeWhenOldHeadDidNotCo
 		Repo:    repo,
 		Run:     run,
 		WorkDir: dir,
-	}, oldHead, newHead); err != nil {
-		t.Fatal(err)
+	}, oldHead, newHead); err == nil || !strings.Contains(err.Error(), "verify uncertified range against pre-rebase head") {
+		t.Fatalf("RemapUncertifiedPipelineRangeAfterRebase() error = %v, want missing-object failure", err)
 	}
 
 	got, err := database.GetUncertifiedPipelineRange(repo.ID, run.Branch)

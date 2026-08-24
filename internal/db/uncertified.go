@@ -85,3 +85,36 @@ func (d *DB) DeleteUncertifiedPipelineRange(repoID, branch string) error {
 	}
 	return nil
 }
+
+func (d *DB) RestoreUncertifiedPipelineRangeIfCurrent(current UncertifiedPipelineRange, previous *UncertifiedPipelineRange) (bool, error) {
+	if strings.TrimSpace(current.RepoID) == "" || strings.TrimSpace(current.Branch) == "" {
+		return false, fmt.Errorf("restore uncertified pipeline range requires current repo and branch")
+	}
+	var (
+		result sql.Result
+		err    error
+	)
+	if previous == nil {
+		result, err = d.sql.Exec(
+			`DELETE FROM uncertified_pipeline_ranges
+			 WHERE repo_id = ? AND branch = ? AND from_sha = ? AND to_sha = ? AND source_run_id = ?`,
+			current.RepoID, current.Branch, current.FromSHA, current.ToSHA, current.SourceRunID,
+		)
+	} else {
+		result, err = d.sql.Exec(
+			`UPDATE uncertified_pipeline_ranges
+			 SET from_sha = ?, to_sha = ?, source_run_id = ?, created_at = ?
+			 WHERE repo_id = ? AND branch = ? AND from_sha = ? AND to_sha = ? AND source_run_id = ?`,
+			previous.FromSHA, previous.ToSHA, previous.SourceRunID, previous.CreatedAt,
+			current.RepoID, current.Branch, current.FromSHA, current.ToSHA, current.SourceRunID,
+		)
+	}
+	if err != nil {
+		return false, fmt.Errorf("restore uncertified pipeline range: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("read restored uncertified pipeline range count: %w", err)
+	}
+	return changed == 1, nil
+}

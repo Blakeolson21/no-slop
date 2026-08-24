@@ -3,8 +3,10 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"os/exec"
 	"strconv"
 	"strings"
 
@@ -15,8 +17,8 @@ import (
 
 // BindUncertifiedPipelineRange copies a persisted uncertified fixer range
 // onto the review step context when this run's head is that range's tip or a
-// descendant of it. Missing commit objects skip provenance with a bounded
-// warning; unreadable persisted review truth blocks replacement review.
+// descendant of it. Unreadable commit ancestry or persisted review truth
+// blocks replacement review.
 func BindUncertifiedPipelineRange(sctx *StepContext) error {
 	if sctx == nil || sctx.DB == nil || sctx.Repo == nil || sctx.Run == nil || sctx.Fixing {
 		return nil
@@ -32,7 +34,11 @@ func BindUncertifiedPipelineRange(sctx *StepContext) error {
 	if head == "" {
 		head = strings.TrimSpace(sctx.ReviewStartingHeadSHA)
 	}
-	if !commitIsSelfOrAncestor(sctx.Ctx, sctx.WorkDir, rng.ToSHA, head) {
+	inLineage, err := commitIsSelfOrAncestor(sctx.Ctx, sctx.WorkDir, rng.ToSHA, head)
+	if err != nil {
+		return fmt.Errorf("verify uncertified pipeline range ancestry: %w", err)
+	}
+	if !inLineage {
 		warnUncertifiedRangeSkipped(sctx, rng, "uncertified range %s..%s not in gate; not applying provenance")
 		return nil
 	}
@@ -52,26 +58,53 @@ func BindUncertifiedPipelineRange(sctx *StepContext) error {
 // PersistUncertifiedPipelineRange records a post-review commit span until a
 // review of the new head completes.
 func PersistUncertifiedPipelineRange(sctx *StepContext, fromSHA, toSHA string) error {
+	_, err := PersistUncertifiedPipelineRangeWithRollback(sctx, fromSHA, toSHA)
+	return err
+}
+
+func PersistUncertifiedPipelineRangeWithRollback(sctx *StepContext, fromSHA, toSHA string) (func() error, error) {
 	if sctx == nil || sctx.DB == nil || sctx.Repo == nil || sctx.Run == nil {
-		return fmt.Errorf("persist uncertified pipeline range: missing pipeline context")
+		return nil, fmt.Errorf("persist uncertified pipeline range: missing pipeline context")
 	}
 	fromSHA = strings.TrimSpace(fromSHA)
 	toSHA = strings.TrimSpace(toSHA)
 	if fromSHA == "" || toSHA == "" || fromSHA == toSHA {
-		return fmt.Errorf("persist uncertified pipeline range: invalid commit range")
+		return nil, fmt.Errorf("persist uncertified pipeline range: invalid commit range")
 	}
 	existing, err := sctx.DB.GetUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch)
 	if err != nil {
-		return fmt.Errorf("read uncertified pipeline range before persist: %w", err)
+		return nil, fmt.Errorf("read uncertified pipeline range before persist: %w", err)
 	}
-	if existing != nil && strings.TrimSpace(existing.FromSHA) != "" &&
-		uncertifiedRangeStillInLineage(sctx, existing.ToSHA, fromSHA, toSHA) {
-		fromSHA = existing.FromSHA
+	if existing != nil && strings.TrimSpace(existing.FromSHA) != "" {
+		inLineage, err := uncertifiedRangeStillInLineage(sctx, existing.ToSHA, fromSHA, toSHA)
+		if err != nil {
+			return nil, fmt.Errorf("verify uncertified pipeline range lineage before persist: %w", err)
+		}
+		if inLineage {
+			fromSHA = existing.FromSHA
+		}
 	}
 	if err := sctx.DB.UpsertUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch, fromSHA, toSHA, sctx.Run.ID); err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	current := db.UncertifiedPipelineRange{
+		RepoID:      sctx.Repo.ID,
+		Branch:      sctx.Run.Branch,
+		FromSHA:     fromSHA,
+		ToSHA:       toSHA,
+		SourceRunID: sctx.Run.ID,
+	}
+	rollback := func() error {
+		restored, err := sctx.DB.RestoreUncertifiedPipelineRangeIfCurrent(current, existing)
+		if err != nil {
+			return err
+		}
+		if !restored {
+			return fmt.Errorf("uncertified pipeline range changed before rollback")
+		}
+		return nil
+	}
+	return rollback, nil
 }
 
 // ClearUncertifiedPipelineRangeIfCertified drops the branch marker once a
@@ -93,8 +126,15 @@ func ClearUncertifiedPipelineRangeIfCertified(ctx context.Context, database *db.
 	if approvedHead == "" {
 		return
 	}
-	if rng.ToSHA != approvedHead && !commitIsSelfOrAncestor(ctx, workDir, rng.ToSHA, approvedHead) {
-		return
+	if rng.ToSHA != approvedHead {
+		inLineage, err := commitIsSelfOrAncestor(ctx, workDir, rng.ToSHA, approvedHead)
+		if err != nil {
+			slog.Warn("failed to verify uncertified pipeline range before clear", "repo_id", repoID, "error", err)
+			return
+		}
+		if !inLineage {
+			return
+		}
 	}
 	if err := database.DeleteUncertifiedPipelineRange(repoID, branch); err != nil {
 		slog.Warn("failed to clear uncertified pipeline range after certified review", "repo_id", repoID, "error", err)
@@ -112,9 +152,6 @@ func RemapUncertifiedPipelineRangeAfterRebase(sctx *StepContext, oldHead, newHea
 	if oldHead == "" || newHead == "" || oldHead == newHead {
 		return nil, nil
 	}
-	if commitIsSelfOrAncestor(sctx.Ctx, sctx.WorkDir, oldHead, newHead) {
-		return nil, nil
-	}
 	rng, err := sctx.DB.GetUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch)
 	if err != nil {
 		return nil, fmt.Errorf("read uncertified pipeline range before rebase remap: %w", err)
@@ -122,86 +159,116 @@ func RemapUncertifiedPipelineRangeAfterRebase(sctx *StepContext, oldHead, newHea
 	if rng == nil {
 		return nil, nil
 	}
-	if !commitIsSelfOrAncestor(sctx.Ctx, sctx.WorkDir, rng.ToSHA, oldHead) {
+	oldInNew, err := commitIsSelfOrAncestor(sctx.Ctx, sctx.WorkDir, oldHead, newHead)
+	if err != nil {
+		return nil, fmt.Errorf("verify rebased head ancestry: %w", err)
+	}
+	if oldInNew {
 		return nil, nil
 	}
-	if commitIsSelfOrAncestor(sctx.Ctx, sctx.WorkDir, rng.ToSHA, newHead) {
+	rangeInOld, err := commitIsSelfOrAncestor(sctx.Ctx, sctx.WorkDir, rng.ToSHA, oldHead)
+	if err != nil {
+		return nil, fmt.Errorf("verify uncertified range against pre-rebase head: %w", err)
+	}
+	if !rangeInOld {
 		return nil, nil
 	}
-	fromBehind, ok := commitBehindCount(sctx.Ctx, sctx.WorkDir, rng.FromSHA, oldHead)
-	if !ok {
-		return nil, fmt.Errorf("map uncertified range start %s after rebase", rng.FromSHA)
+	rangeInNew, err := commitIsSelfOrAncestor(sctx.Ctx, sctx.WorkDir, rng.ToSHA, newHead)
+	if err != nil {
+		return nil, fmt.Errorf("verify uncertified range against rebased head: %w", err)
 	}
-	toBehind, ok := commitBehindCount(sctx.Ctx, sctx.WorkDir, rng.ToSHA, oldHead)
-	if !ok {
-		return nil, fmt.Errorf("map uncertified range end %s after rebase", rng.ToSHA)
+	if rangeInNew {
+		return nil, nil
 	}
-	newFrom, ok := commitNthAncestor(sctx.Ctx, sctx.WorkDir, newHead, fromBehind)
-	if !ok {
-		return nil, fmt.Errorf("resolve remapped uncertified range start after rebase")
+	fromBehind, err := commitBehindCount(sctx.Ctx, sctx.WorkDir, rng.FromSHA, oldHead)
+	if err != nil {
+		return nil, fmt.Errorf("map uncertified range start %s after rebase: %w", rng.FromSHA, err)
 	}
-	newTo, ok := commitNthAncestor(sctx.Ctx, sctx.WorkDir, newHead, toBehind)
-	if !ok || newFrom == "" || newTo == "" || newFrom == newTo {
+	toBehind, err := commitBehindCount(sctx.Ctx, sctx.WorkDir, rng.ToSHA, oldHead)
+	if err != nil {
+		return nil, fmt.Errorf("map uncertified range end %s after rebase: %w", rng.ToSHA, err)
+	}
+	newFrom, err := commitNthAncestor(sctx.Ctx, sctx.WorkDir, newHead, fromBehind)
+	if err != nil {
+		return nil, fmt.Errorf("resolve remapped uncertified range start after rebase: %w", err)
+	}
+	newTo, err := commitNthAncestor(sctx.Ctx, sctx.WorkDir, newHead, toBehind)
+	if err != nil || newFrom == "" || newTo == "" || newFrom == newTo {
 		return nil, fmt.Errorf("resolve remapped uncertified range end after rebase")
 	}
 	if err := sctx.DB.UpsertUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch, newFrom, newTo, rng.SourceRunID); err != nil {
 		return nil, fmt.Errorf("persist remapped uncertified pipeline range: %w", err)
 	}
+	current := db.UncertifiedPipelineRange{RepoID: rng.RepoID, Branch: rng.Branch, FromSHA: newFrom, ToSHA: newTo, SourceRunID: rng.SourceRunID}
 	rollback := func() error {
-		return sctx.DB.UpsertUncertifiedPipelineRange(rng.RepoID, rng.Branch, rng.FromSHA, rng.ToSHA, rng.SourceRunID)
+		restored, err := sctx.DB.RestoreUncertifiedPipelineRangeIfCurrent(current, rng)
+		if err != nil {
+			return err
+		}
+		if !restored {
+			return fmt.Errorf("uncertified pipeline range changed before rollback")
+		}
+		return nil
 	}
 	return rollback, nil
 }
 
-func uncertifiedRangeStillInLineage(sctx *StepContext, existingTo, newFrom, newTo string) bool {
+func uncertifiedRangeStillInLineage(sctx *StepContext, existingTo, newFrom, newTo string) (bool, error) {
 	if sctx == nil {
-		return false
+		return false, fmt.Errorf("missing pipeline context")
 	}
-	return commitIsSelfOrAncestor(sctx.Ctx, sctx.WorkDir, existingTo, newFrom) ||
-		commitIsSelfOrAncestor(sctx.Ctx, sctx.WorkDir, existingTo, newTo)
+	inFrom, err := commitIsSelfOrAncestor(sctx.Ctx, sctx.WorkDir, existingTo, newFrom)
+	if err != nil || inFrom {
+		return inFrom, err
+	}
+	return commitIsSelfOrAncestor(sctx.Ctx, sctx.WorkDir, existingTo, newTo)
 }
 
-func commitBehindCount(ctx context.Context, workDir, ancestor, descendent string) (int, bool) {
-	if !commitIsSelfOrAncestor(ctx, workDir, ancestor, descendent) {
-		return 0, false
+func commitBehindCount(ctx context.Context, workDir, ancestor, descendent string) (int, error) {
+	inLineage, err := commitIsSelfOrAncestor(ctx, workDir, ancestor, descendent)
+	if err != nil {
+		return 0, err
+	}
+	if !inLineage {
+		return 0, fmt.Errorf("%s is not an ancestor of %s", ancestor, descendent)
 	}
 	if strings.TrimSpace(ancestor) == strings.TrimSpace(descendent) {
-		return 0, true
+		return 0, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	out, err := git.Run(ctx, workDir, "rev-list", "--count", ancestor+".."+descendent)
 	if err != nil {
-		return 0, false
+		return 0, err
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(out))
 	if err != nil || n < 0 {
-		return 0, false
+		return 0, fmt.Errorf("invalid commit distance %q", out)
 	}
-	return n, true
+	return n, nil
 }
 
-func commitNthAncestor(ctx context.Context, workDir, sha string, n int) (string, bool) {
+func commitNthAncestor(ctx context.Context, workDir, sha string, n int) (string, error) {
 	sha = strings.TrimSpace(sha)
 	if sha == "" || n < 0 || workDir == "" {
-		return "", false
+		return "", fmt.Errorf("invalid commit ancestor request")
 	}
 	if n == 0 {
-		return sha, true
+		return sha, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	out, err := git.Run(ctx, workDir, "rev-parse", "--verify", fmt.Sprintf("%s~%d", sha, n))
 	if err != nil {
-		return "", false
+		return "", err
 	}
 	out = strings.TrimSpace(out)
 	if out == "" {
-		return "", false
+		return "", fmt.Errorf("resolved empty commit ancestor")
 	}
-	return out, true
+	return out, nil
 }
 
 func warnUncertifiedRangeSkipped(sctx *StepContext, rng *db.UncertifiedPipelineRange, format string) {
@@ -212,20 +279,27 @@ func warnUncertifiedRangeSkipped(sctx *StepContext, rng *db.UncertifiedPipelineR
 	}
 }
 
-func commitIsSelfOrAncestor(ctx context.Context, workDir, ancestor, descendent string) bool {
+func commitIsSelfOrAncestor(ctx context.Context, workDir, ancestor, descendent string) (bool, error) {
 	ancestor = strings.TrimSpace(ancestor)
 	descendent = strings.TrimSpace(descendent)
 	if ancestor == "" || descendent == "" || workDir == "" {
-		return false
+		return false, fmt.Errorf("commit ancestry requires worktree and two commits")
 	}
 	if ancestor == descendent {
-		return true
+		return true, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	_, err := git.Run(ctx, workDir, "merge-base", "--is-ancestor", ancestor, descendent)
-	return err == nil
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, err
 }
 
 type uncertifiedReviewStore interface {

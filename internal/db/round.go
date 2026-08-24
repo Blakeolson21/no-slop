@@ -265,6 +265,49 @@ func (d *DB) SetStepRoundUserDecision(id string, selectedFindingIDs *string, sou
 	return requireStepRoundUpdated(result, id)
 }
 
+func (d *DB) SetStepRoundUserDecisionAndFindings(id, stepResultID string, selectedFindingIDs *string, source string, userFindingsJSON *string, findingsJSON string) error {
+	var selectionSource *string
+	if selectedFindingIDs != nil && *selectedFindingIDs != "" && source != "" {
+		selectionSource = &source
+	}
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return fmt.Errorf("begin step round user decision: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(
+		`UPDATE step_results SET findings_json = ?
+		 WHERE id = ? AND EXISTS (
+		   SELECT 1 FROM step_rounds WHERE id = ? AND step_result_id = step_results.id
+		 )`,
+		findingsJSON, stepResultID, id,
+	)
+	if err != nil {
+		return fmt.Errorf("set durable review lineages: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read durable review lineages result: %w", err)
+	}
+	if rows != 1 {
+		return fmt.Errorf("step result %s not found", stepResultID)
+	}
+	result, err = tx.Exec(
+		`UPDATE step_rounds SET selected_finding_ids = ?, selection_source = ?, user_findings_json = ? WHERE id = ? AND step_result_id = ?`,
+		selectedFindingIDs, selectionSource, userFindingsJSON, id, stepResultID,
+	)
+	if err != nil {
+		return fmt.Errorf("set step round user decision: %w", err)
+	}
+	if err := requireStepRoundUpdated(result, id); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit step round user decision: %w", err)
+	}
+	return nil
+}
+
 func requireStepRoundUpdated(result sql.Result, id string) error {
 	rows, err := result.RowsAffected()
 	if err != nil {

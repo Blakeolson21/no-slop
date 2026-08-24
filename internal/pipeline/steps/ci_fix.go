@@ -181,10 +181,14 @@ func (s *CIStep) commitRepair(sctx *pipeline.StepContext, summary string) (bool,
 }
 
 func (s *CIStep) recordLocalRepair(sctx *pipeline.StepContext, newHeadSHA string) (bool, error) {
-	if err := pipeline.PersistUncertifiedPipelineRange(sctx, sctx.Run.HeadSHA, newHeadSHA); err != nil {
+	rollbackRange, err := pipeline.PersistUncertifiedPipelineRangeWithRollback(sctx, sctx.Run.HeadSHA, newHeadSHA)
+	if err != nil {
 		return false, fmt.Errorf("persist uncertified review range before CI head adoption: %w", err)
 	}
 	if err := adoptBranchRef(sctx, newHeadSHA); err != nil {
+		if rollbackErr := rollbackRange(); rollbackErr != nil {
+			return false, fmt.Errorf("%w; restore uncertified review range: %v", err, rollbackErr)
+		}
 		return false, err
 	}
 	sctx.Run.HeadSHA = newHeadSHA

@@ -25,23 +25,22 @@ func (s *CIStep) filterExpectedStaleAttestationChecks(sctx *pipeline.StepContext
 	if !ok {
 		return nil, fmt.Errorf("provider cannot identify expected stale attestation check attempts")
 	}
+	publicationReader, ok := host.(scm.AttestationPublicationIdentityReader)
+	if !ok {
+		return nil, fmt.Errorf("provider cannot identify the attestation publication workflow event")
+	}
 	identities := make(map[string]scm.CheckAttemptIdentity)
 	publicationRunID := state.PublicationRunID
-	for _, check := range checks {
-		if check.Name != requiredAttestationCheckName {
-			continue
-		}
-		identity, err := readCheckAttemptIdentity(sctx.Ctx, reader, check, identities)
+	if publicationRunID == 0 {
+		identity, found, err := publicationReader.FindAttestationPublicationIdentity(sctx.Ctx, sctx.Run.HeadSHA, state.PublicationNonce)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("identify attestation publication workflow event: %w", err)
 		}
-		if identity.RunID <= 0 {
-			return nil, fmt.Errorf("attestation check attempt has no immutable run identity")
-		}
-		if identity.HeadSHA == sctx.Run.HeadSHA && identity.PublicationNonce == state.PublicationNonce {
-			if publicationRunID == 0 || identity.RunID < publicationRunID {
-				publicationRunID = identity.RunID
+		if found {
+			if identity.RunID <= 0 || identity.HeadSHA != sctx.Run.HeadSHA || identity.PublicationNonce != state.PublicationNonce {
+				return nil, fmt.Errorf("attestation publication workflow identity is incomplete")
 			}
+			publicationRunID = identity.RunID
 		}
 	}
 	if publicationRunID != 0 && state.PublicationRunID != publicationRunID {
@@ -73,6 +72,9 @@ func (s *CIStep) filterExpectedStaleAttestationChecks(sctx *pipeline.StepContext
 		}
 		if identity.HeadSHA != sctx.Run.HeadSHA {
 			continue
+		}
+		if identity.RunID <= 0 {
+			return nil, fmt.Errorf("attestation check attempt has no immutable run identity")
 		}
 		if identity.RunID < publicationRunID {
 			continue

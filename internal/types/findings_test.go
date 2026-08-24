@@ -624,6 +624,9 @@ func TestNormalizeFindingsPreservesRewordingAtSameLocation(t *testing.T) {
 	if FindingIDCorroborates(fresh.Items[0], prior.Items[0]) {
 		t.Fatalf("description change inherited prior lineage: %#v", fresh.Items[0])
 	}
+	if fresh.Items[0].PriorID != prior.Items[0].ID || fresh.Items[0].PriorContinuityToken != prior.Items[0].ContinuityToken {
+		t.Fatalf("rejected claim provenance was lost: %#v", fresh.Items[0])
+	}
 }
 
 func TestNormalizeFindingsPreservesAmbiguousDuplicateClaims(t *testing.T) {
@@ -638,5 +641,26 @@ func TestNormalizeFindingsPreservesAmbiguousDuplicateClaims(t *testing.T) {
 	}
 	if fresh.Items[0].ID == prior.Items[0].ID || fresh.Items[1].ID == prior.Items[0].ID || fresh.Items[0].ID == fresh.Items[1].ID {
 		t.Fatalf("ambiguous claims reused lineage: %#v", fresh.Items)
+	}
+}
+
+func TestNormalizeUserFindingsAssignsDurableLineage(t *testing.T) {
+	findings, err := NormalizeUserFindings(Findings{Items: []Finding{{
+		ID:               "user-1",
+		Severity:         "error",
+		Description:      "operator-added defect",
+		Action:           ActionAskUser,
+		Source:           FindingSourceUser,
+		UserInstructions: "preserve the compatibility path",
+	}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := findings.Items[0]
+	if item.ID != "user-1" || !item.HasLineage() || len(item.ContinuityToken) != 32 {
+		t.Fatalf("user finding lineage = %#v", item)
+	}
+	if item.Source != FindingSourceUser || item.UserInstructions != "preserve the compatibility path" || item.Action != ActionAskUser {
+		t.Fatalf("user finding semantics changed: %#v", item)
 	}
 }

@@ -232,14 +232,14 @@ func TestNoSlopRequiredWorkflowPublishesStableEventIdentity(t *testing.T) {
 
 	firstNonce := "00112233445566778899aabbccddeeff"
 	latestNonce := "ffeeddccbbaa99887766554433221100"
-	first := requiredWorkflowEvent{Action: "edited", Body: "<!-- no-slop-publication:v1 " + firstNonce + " -->\n\nfirst body", PRNumber: 549, RunID: 29962943078, RunNumber: 587}
+	first := requiredWorkflowEvent{Action: "edited", Body: "<!-- no-slop-publication:v1 " + firstNonce + " -->\n\nfirst body quoting <!-- no-slop-publication:v1 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -->", PRNumber: 549, RunID: 29962943078, RunNumber: 587}
 	latest := requiredWorkflowEvent{Action: "edited", Body: "<!-- no-slop-publication:v1 " + latestNonce + " -->\n\nlatest body", PRNumber: 549, RunID: 29965243268, RunNumber: 588}
 	firstName := renderRequiredWorkflowTemplate(t, workflow.RunName, first)
 	latestName := renderRequiredWorkflowTemplate(t, workflow.RunName, latest)
-	if !strings.HasPrefix(firstName, "<!-- no-slop-publication:v1 "+firstNonce+" -->") {
+	if !strings.HasPrefix(firstName, "no-slop-required|edited|PR #549 event 587 (run 29962943078)|<!-- no-slop-publication:v1 "+firstNonce+" -->") {
 		t.Fatalf("first event run name = %q, want publication identity prefix", firstName)
 	}
-	if !strings.HasPrefix(latestName, "<!-- no-slop-publication:v1 "+latestNonce+" -->") {
+	if !strings.HasPrefix(latestName, "no-slop-required|edited|PR #549 event 588 (run 29965243268)|<!-- no-slop-publication:v1 "+latestNonce+" -->") {
 		t.Fatalf("latest event run name = %q, want publication identity prefix", latestName)
 	}
 	for label, rendered := range map[string]string{"first": firstName, "latest": latestName} {
