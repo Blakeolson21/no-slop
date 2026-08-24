@@ -117,7 +117,7 @@ func TestCIStep_AutoFixWithoutPushDoesNotRefreshPRAttestation(t *testing.T) {
 	}
 }
 
-func TestCIStep_AutoFixRefreshesAttestationAfterAdoptingRemoteHead(t *testing.T) {
+func TestCIStep_AutoFixDefersAttestationRefreshAfterAdoptingLocalHead(t *testing.T) {
 	upstream := t.TempDir()
 	gitCmd(t, upstream, "init", "--bare")
 	dir, baseSHA, headSHA := setupGitRepo(t)
@@ -162,21 +162,12 @@ func TestCIStep_AutoFixRefreshesAttestationAfterAdoptingRemoteHead(t *testing.T)
 	if result.HeadSHA != newHeadSHA || sctx.Run.HeadSHA != newHeadSHA {
 		t.Fatalf("adopted head = %q / %q, want %q", result.HeadSHA, sctx.Run.HeadSHA, newHeadSHA)
 	}
-	if host.getCalls != 1 || len(host.updates) != 1 {
-		t.Fatalf("attestation refresh calls: reads=%d updates=%d", host.getCalls, len(host.updates))
-	}
-	attestation := parsePipelineAttestationForTest(t, host.updates[0].Body)
-	if attestation.HeadSHA != newHeadSHA {
-		t.Fatalf("attestation head = %q, want %q", attestation.HeadSHA, newHeadSHA)
-	}
-	for _, step := range attestation.Steps {
-		if step.HeadSHA != headSHA {
-			t.Fatalf("step %s certified head = %q, want %q", step.Step, step.HeadSHA, headSHA)
-		}
+	if host.getCalls != 0 || len(host.updates) != 0 {
+		t.Fatalf("local repair touched PR content before revalidation: reads=%d updates=%d", host.getCalls, len(host.updates))
 	}
 }
 
-func TestCIStep_AutoFixPushFailsClosedWhenAttestationRefreshFails(t *testing.T) {
+func TestCIStep_AutoFixLocalRepairDoesNotDependOnPRAttestationRefresh(t *testing.T) {
 	upstream := t.TempDir()
 	gitCmd(t, upstream, "init", "--bare")
 	dir, baseSHA, headSHA := setupGitRepo(t)
@@ -194,21 +185,21 @@ func TestCIStep_AutoFixPushFailsClosedWhenAttestationRefreshFails(t *testing.T) 
 	host := &recordingPRContentHost{getErr: errors.New("PR content unavailable")}
 
 	result, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)
-	if err == nil || !strings.Contains(err.Error(), "refresh PR pipeline attestation") {
-		t.Fatalf("autoFixCI error = %v", err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !result.HeadChanged() {
-		t.Fatalf("failed refresh lost the published head change: %#v", result)
+	if !result.HeadChanged() || !result.HeadPersisted {
+		t.Fatalf("local repair result = %#v", result)
 	}
-	if host.getCalls != 1 || len(host.updates) != 0 {
-		t.Fatalf("attestation refresh calls: reads=%d updates=%d", host.getCalls, len(host.updates))
+	if host.getCalls != 0 || len(host.updates) != 0 {
+		t.Fatalf("local repair touched PR content: reads=%d updates=%d", host.getCalls, len(host.updates))
 	}
-	if got := gitCmd(t, upstream, "rev-parse", "refs/heads/feature"); got == headSHA {
-		t.Fatal("CI fix did not reach remote before refresh failure")
+	if got := gitCmd(t, upstream, "rev-parse", "refs/heads/feature"); got != headSHA {
+		t.Fatalf("CI repair published before revalidation: remote head = %s, want %s", got, headSHA)
 	}
 }
 
-func TestCIStep_AutoFixPreservesPublishedHeadWhenRefAdoptionFails(t *testing.T) {
+func TestCIStep_AutoFixDoesNotPersistLocalHeadWhenRefAdoptionFails(t *testing.T) {
 	upstream := t.TempDir()
 	gitCmd(t, upstream, "init", "--bare")
 	dir, baseSHA, headSHA := setupGitRepo(t)
@@ -233,23 +224,23 @@ func TestCIStep_AutoFixPreservesPublishedHeadWhenRefAdoptionFails(t *testing.T) 
 	if err == nil || !strings.Contains(err.Error(), "refusing to move branch ref") {
 		t.Fatalf("autoFixCI error = %v", err)
 	}
-	if !result.HeadChanged() || !result.HeadPersisted {
-		t.Fatalf("published head result = %#v", result)
+	if result.HeadChanged() || result.HeadPersisted {
+		t.Fatalf("failed local adoption changed durable head: %#v", result)
 	}
 	remoteHead := gitCmd(t, upstream, "rev-parse", "refs/heads/feature")
-	if result.HeadSHA != remoteHead || remoteHead == headSHA {
-		t.Fatalf("published head = result %q remote %q old %q", result.HeadSHA, remoteHead, headSHA)
+	if remoteHead != headSHA {
+		t.Fatalf("failed local adoption published remote head %q, want %q", remoteHead, headSHA)
 	}
 	persisted, getErr := sctx.DB.GetRun(sctx.Run.ID)
 	if getErr != nil {
 		t.Fatal(getErr)
 	}
-	if persisted.HeadSHA != remoteHead {
-		t.Fatalf("persisted head = %q, want %q", persisted.HeadSHA, remoteHead)
+	if persisted.HeadSHA != headSHA {
+		t.Fatalf("persisted head = %q, want original %q", persisted.HeadSHA, headSHA)
 	}
 }
 
-func TestCIStep_AutoFixPreservesPublishedHeadWhenVerificationFails(t *testing.T) {
+func TestCIStep_AutoFixLocalRepairDoesNotVerifyOrPublishRemote(t *testing.T) {
 	upstream := t.TempDir()
 	gitCmd(t, upstream, "init", "--bare")
 	dir, baseSHA, headSHA := setupGitRepo(t)
@@ -281,37 +272,29 @@ func TestCIStep_AutoFixPreservesPublishedHeadWhenVerificationFails(t *testing.T)
 	host := &recordingPRContentHost{}
 
 	result, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)
-	if err == nil || !strings.Contains(err.Error(), "verify successful push") {
-		t.Fatalf("autoFixCI error = %v", err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !result.HeadChanged() || !result.HeadPersisted || !result.ExpectedAttestationTracked {
-		t.Fatalf("published head result = %#v", result)
+	if !result.HeadChanged() || !result.HeadPersisted {
+		t.Fatalf("local repair result = %#v", result)
 	}
 	remoteHead := gitCmd(t, upstream, "rev-parse", "refs/heads/feature")
-	if result.HeadSHA != remoteHead || remoteHead == headSHA {
-		t.Fatalf("published head = result %q remote %q old %q", result.HeadSHA, remoteHead, headSHA)
+	if remoteHead != headSHA {
+		t.Fatalf("local repair published remote head %q, want %q", remoteHead, headSHA)
 	}
 	persisted, getErr := sctx.DB.GetRun(sctx.Run.ID)
 	if getErr != nil {
 		t.Fatal(getErr)
 	}
-	if persisted.HeadSHA != remoteHead {
-		t.Fatalf("persisted head = %q, want %q", persisted.HeadSHA, remoteHead)
+	if persisted.HeadSHA != result.HeadSHA {
+		t.Fatalf("persisted head = %q, want local repair %q", persisted.HeadSHA, result.HeadSHA)
 	}
-	encoded, getErr := sctx.DB.GetRunCIRerunState(sctx.Run.ID)
-	if getErr != nil {
-		t.Fatal(getErr)
-	}
-	var tracking checkRerunBudget
-	if err := tracking.unmarshal(encoded); err != nil {
-		t.Fatal(err)
-	}
-	if tracking.expectedAttestationHeadSHA != remoteHead {
-		t.Fatalf("tracked attestation head = %q, want %q", tracking.expectedAttestationHeadSHA, remoteHead)
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("local repair unexpectedly invoked push; marker error = %v", err)
 	}
 }
 
-func TestCIStep_AutoFixPreservesCandidateWhenPushErrorsAfterRemoteUpdate(t *testing.T) {
+func TestCIStep_AutoFixLocalRepairDoesNotInvokeAmbiguousPush(t *testing.T) {
 	upstream := t.TempDir()
 	gitCmd(t, upstream, "init", "--bare")
 	dir, baseSHA, headSHA := setupGitRepo(t)
@@ -343,33 +326,25 @@ func TestCIStep_AutoFixPreservesCandidateWhenPushErrorsAfterRemoteUpdate(t *test
 	host := &recordingPRContentHost{}
 
 	result, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)
-	if err == nil || !strings.Contains(err.Error(), "push reconciliation unavailable") {
-		t.Fatalf("autoFixCI error = %v", err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !result.HeadChanged() || !result.HeadPersisted || !result.ExpectedAttestationTracked {
-		t.Fatalf("uncertain published head result = %#v", result)
+	if !result.HeadChanged() || !result.HeadPersisted {
+		t.Fatalf("local repair result = %#v", result)
 	}
 	remoteHead := gitCmd(t, upstream, "rev-parse", "refs/heads/feature")
-	if result.HeadSHA != remoteHead || remoteHead == headSHA {
-		t.Fatalf("preserved candidate = result %q remote %q old %q", result.HeadSHA, remoteHead, headSHA)
+	if remoteHead != headSHA {
+		t.Fatalf("local repair published remote head %q, want %q", remoteHead, headSHA)
 	}
 	persisted, getErr := sctx.DB.GetRun(sctx.Run.ID)
 	if getErr != nil {
 		t.Fatal(getErr)
 	}
-	if persisted.HeadSHA != remoteHead {
-		t.Fatalf("persisted head = %q, want %q", persisted.HeadSHA, remoteHead)
+	if persisted.HeadSHA != result.HeadSHA {
+		t.Fatalf("persisted head = %q, want local repair %q", persisted.HeadSHA, result.HeadSHA)
 	}
-	encoded, getErr := sctx.DB.GetRunCIRerunState(sctx.Run.ID)
-	if getErr != nil {
-		t.Fatal(getErr)
-	}
-	var tracking checkRerunBudget
-	if err := tracking.unmarshal(encoded); err != nil {
-		t.Fatal(err)
-	}
-	if tracking.expectedAttestationHeadSHA != remoteHead {
-		t.Fatalf("tracked attestation head = %q, want %q", tracking.expectedAttestationHeadSHA, remoteHead)
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("local repair unexpectedly invoked push; marker error = %v", err)
 	}
 }
 

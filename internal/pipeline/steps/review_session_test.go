@@ -272,7 +272,27 @@ func TestReviewLoop_ParkRespondFixKeepsRoleSessions(t *testing.T) {
 	}()
 
 	waitForReviewStatus(t, database, run.ID, types.StepStatusAwaitingApproval)
-	if err := exec.Respond(types.StepReview, types.ActionFix, []string{"f-1"}); err != nil {
+	steps, err := database.GetStepsByRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var selectedID string
+	for _, step := range steps {
+		if step.StepName != types.StepReview || step.FindingsJSON == nil {
+			continue
+		}
+		findings, parseErr := types.ParseFindingsJSON(*step.FindingsJSON)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		if len(findings.Items) == 1 {
+			selectedID = findings.Items[0].ID
+		}
+	}
+	if selectedID == "" {
+		t.Fatal("parked review did not expose a selectable finding ID")
+	}
+	if err := exec.Respond(types.StepReview, types.ActionFix, []string{selectedID}); err != nil {
 		t.Fatalf("respond: %v", err)
 	}
 
