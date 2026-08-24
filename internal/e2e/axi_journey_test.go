@@ -130,6 +130,27 @@ func branchSyncScenario(t *testing.T) string {
 	return path
 }
 
+func axiGateFindingID(t *testing.T, output string) string {
+	t.Helper()
+	if start := strings.LastIndex(output, "\nrun:\n"); start >= 0 {
+		output = output[start+1:]
+	}
+	var doc struct {
+		Gate struct {
+			Findings []struct {
+				ID string `toon:"id"`
+			} `toon:"findings"`
+		} `toon:"gate"`
+	}
+	if err := toon.UnmarshalString(output, &doc); err != nil {
+		t.Fatalf("decode axi gate TOON: %v\n%s", err, output)
+	}
+	if len(doc.Gate.Findings) != 1 || doc.Gate.Findings[0].ID == "" {
+		t.Fatalf("axi gate findings = %#v, want one finding with a published ID\n%s", doc.Gate.Findings, output)
+	}
+	return doc.Gate.Findings[0].ID
+}
+
 // TestAxiBranchSyncJourney reproduces the end-user stale-local journey with the
 // real binary, fake agent, isolated daemon, and local bare push target.
 func TestAxiBranchSyncJourney(t *testing.T) {
@@ -143,10 +164,11 @@ func TestAxiBranchSyncJourney(t *testing.T) {
 	originalHead := h.CommitChange("feature/sync-journey", "feature.txt", "unsafe\n", "add unsafe feature")
 	operator := h.AddWorktree("feature/sync-journey")
 	gateOut, err := h.RunInDir(operator, "axi", "run", "--intent", "guard the feature and preserve pipeline fixes")
-	if err != nil || !strings.Contains(gateOut, "sync-1") {
+	if err != nil {
 		t.Fatalf("initial review gate: %v\n%s", err, gateOut)
 	}
-	fixOut, err := h.RunInDir(operator, "axi", "respond", "--action", "fix", "--findings", "sync-1")
+	findingID := axiGateFindingID(t, gateOut)
+	fixOut, err := h.RunInDir(operator, "axi", "respond", "--action", "fix", "--findings", findingID)
 	if err != nil {
 		t.Fatalf("review fix: %v\n%s", err, fixOut)
 	}
@@ -225,15 +247,16 @@ func TestAxiRunReattachesAfterManagedFix(t *testing.T) {
 	submitted := h.CommitChange(branch, "feature.txt", "unsafe\n", "add unsafe feature")
 	operator := h.AddWorktree(branch)
 	gateOut, err := h.RunInDir(operator, "axi", "run", "--intent", "guard the feature and preserve the submitting head")
-	if err != nil || !strings.Contains(gateOut, "sync-1") {
+	if err != nil {
 		t.Fatalf("initial review gate: %v\n%s", err, gateOut)
 	}
+	findingID := axiGateFindingID(t, gateOut)
 	originalRun := h.ActiveRun(branch)
 	if originalRun == nil {
 		t.Fatal("initial axi run did not leave an active run")
 	}
 
-	fixOut, err := h.RunInDir(operator, "axi", "respond", "--action", "fix", "--findings", "sync-1")
+	fixOut, err := h.RunInDir(operator, "axi", "respond", "--action", "fix", "--findings", findingID)
 	if err != nil || !strings.Contains(fixOut, "status: fix_review") {
 		t.Fatalf("review fix: %v\n%s", err, fixOut)
 	}
@@ -356,10 +379,11 @@ func TestAxiCustodyRecoveryJourney(t *testing.T) {
 	submitted := h.CommitChange("feature/recover-journey", "feature.txt", "unsafe\n", "add unsafe feature")
 	operator := h.AddWorktree("feature/recover-journey")
 	gateOut, err := h.RunInDir(operator, "axi", "run", "--intent", "guard the feature before cancellation")
-	if err != nil || !strings.Contains(gateOut, "sync-1") {
+	if err != nil {
 		t.Fatalf("initial review gate: %v\n%s", err, gateOut)
 	}
-	fixOut, err := h.RunInDir(operator, "axi", "respond", "--action", "fix", "--findings", "sync-1")
+	findingID := axiGateFindingID(t, gateOut)
+	fixOut, err := h.RunInDir(operator, "axi", "respond", "--action", "fix", "--findings", findingID)
 	if err != nil {
 		t.Fatalf("review fix: %v\n%s", err, fixOut)
 	}
@@ -564,14 +588,15 @@ func TestAxiCustodyRecoveryAfterRebaseJourney(t *testing.T) {
 
 	operator := h.AddWorktree("feature/rebase-recover")
 	gateOut, err := h.RunInDir(operator, "axi", "run", "--intent", "guard the feature across a rebased base before cancellation")
-	if err != nil || !strings.Contains(gateOut, "rebase-1") {
+	if err != nil {
 		t.Fatalf("initial review gate: %v\n%s", err, gateOut)
 	}
+	findingID := axiGateFindingID(t, gateOut)
 	// Take the fix round, which adds a file without rewriting the operator's
 	// line, then cancel. The preserved head is now the operator's own commits
 	// replayed onto the advanced base plus one additive pipeline commit, so it
 	// still carries every local change.
-	fixOut, err := h.RunInDir(operator, "axi", "respond", "--action", "fix", "--findings", "rebase-1")
+	fixOut, err := h.RunInDir(operator, "axi", "respond", "--action", "fix", "--findings", findingID)
 	if err != nil {
 		t.Fatalf("review fix: %v\n%s", err, fixOut)
 	}
@@ -670,9 +695,10 @@ func TestAxiPrePushAbortUnmovedHeadCustodyJourney(t *testing.T) {
 	submitted := h.CommitChange("feature/unmoved-abort", "feature.txt", "unsafe\n", "add unsafe feature")
 	operator := h.AddWorktree("feature/unmoved-abort")
 	gateOut, err := h.RunInDir(operator, "axi", "run", "--intent", "guard the feature before the delivery switch")
-	if err != nil || !strings.Contains(gateOut, "sync-1") {
+	if err != nil {
 		t.Fatalf("initial review gate: %v\n%s", err, gateOut)
 	}
+	axiGateFindingID(t, gateOut)
 
 	// Delivery switches to a direct PR: abort at the gate, before any pipeline
 	// edit, through the supported public command.
@@ -835,8 +861,10 @@ func TestAxiPrePushAbortUnmovedHeadCustodyJourney(t *testing.T) {
 	// between.
 	h.CommitChange("feature/unmoved-rerun", "feature.txt", "unsafe\n", "add second unsafe feature")
 	rerunOperator := h.AddWorktree("feature/unmoved-rerun")
-	if out, err := h.RunInDir(rerunOperator, "axi", "run", "--intent", "guard the second feature"); err != nil || !strings.Contains(out, "sync-1") {
+	if out, err := h.RunInDir(rerunOperator, "axi", "run", "--intent", "guard the second feature"); err != nil {
 		t.Fatalf("second lane review gate: %v\n%s", err, out)
+	} else {
+		axiGateFindingID(t, out)
 	}
 	if out, err := h.RunInDir(rerunOperator, "axi", "abort"); err != nil {
 		t.Fatalf("second lane abort: %v\n%s", err, out)
@@ -848,9 +876,10 @@ func TestAxiPrePushAbortUnmovedHeadCustodyJourney(t *testing.T) {
 		t.Fatalf("commit follow-up: %v\n%s", gitErr, out)
 	}
 	freshOut, err := h.RunInDir(rerunOperator, "axi", "run", "--intent", "revalidate after the unmoved abort without a recovery")
-	if err != nil || !strings.Contains(freshOut, "sync-1") {
+	if err != nil {
 		t.Fatalf("fresh validation after unmoved abort was blocked: %v\n%s", err, freshOut)
 	}
+	axiGateFindingID(t, freshOut)
 	if out, err := h.RunInDir(rerunOperator, "axi", "abort"); err != nil {
 		t.Fatalf("cleanup abort: %v\n%s", err, out)
 	}

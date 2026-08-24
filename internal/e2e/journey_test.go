@@ -493,7 +493,8 @@ func cleanReviewScenario(t *testing.T) string {
     delay_ms: 1500
     structured:
       findings:
-        - id: "review-info"
+        - prior_id: null
+          prior_continuity_token: null
           severity: info
           file: "hello.txt"
           line: 1
@@ -511,7 +512,8 @@ func cleanReviewScenario(t *testing.T) string {
     text: "looks good"
     structured:
       findings:
-        - id: "review-info"
+        - prior_id: null
+          prior_continuity_token: null
           severity: info
           file: "hello.txt"
           line: 1
