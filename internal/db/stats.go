@@ -151,8 +151,8 @@ func stepFindingStats(step *StepResult, rounds []*StepRound) StepStats {
 		items := findingItems(round.FindingsJSON)
 		itemCounts := types.CountFindingFingerprints(items)
 		for _, item := range items {
-			if lineageStats && item.ID != "" && item.IDGenerated {
-				reportedLineages[item.ID] = true
+			if key, ok := findingStatsLineageKey(item, lineageStats); ok {
+				reportedLineages[key] = true
 				continue
 			}
 			if reportedLegacy[item.Identity()] || (itemCounts[item.Fingerprint()] == 1 && reportedLegacyCounts[item.Fingerprint()] == 1) {
@@ -161,7 +161,15 @@ func stepFindingStats(step *StepResult, rounds []*StepRound) StepStats {
 			reportedLegacy[findingStatsKey(item)] = true
 			reportedLegacyCounts[item.Fingerprint()]++
 		}
-		current = items
+		if lineageStats {
+			for _, item := range findingItems(round.UserFindingsJSON) {
+				if item.Source != types.FindingSourceUser || !item.HasLineage() {
+					continue
+				}
+				reportedLineages[findingLineageStatsKey(item)] = true
+			}
+		}
+		current = appendPendingUserFindings(items, round.UserFindingsJSON, lineageStats)
 	}
 
 	stats.ReportedFindings = len(reportedLineages) + len(reportedLegacy)
@@ -174,6 +182,44 @@ func stepFindingStats(step *StepResult, rounds []*StepRound) StepStats {
 		stats.FixedFindings = stats.ReportedFindings
 	}
 	return stats
+}
+
+func findingStatsLineageKey(item types.Finding, lineageStats bool) (string, bool) {
+	if !lineageStats || item.ID == "" || !item.IDGenerated {
+		return "", false
+	}
+	if item.HasLineage() {
+		return findingLineageStatsKey(item), true
+	}
+	return "generated\x00" + item.ID, true
+}
+
+func findingLineageStatsKey(item types.Finding) string {
+	return "lineage\x00" + item.ID + "\x00" + item.ContinuityToken
+}
+
+func appendPendingUserFindings(current []types.Finding, raw *string, lineageStats bool) []types.Finding {
+	if !lineageStats {
+		return current
+	}
+	seen := make(map[string]bool, len(current))
+	for _, item := range current {
+		if item.HasLineage() {
+			seen[findingLineageStatsKey(item)] = true
+		}
+	}
+	for _, item := range findingItems(raw) {
+		if item.Source != types.FindingSourceUser || !item.HasLineage() {
+			continue
+		}
+		key := findingLineageStatsKey(item)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		current = append(current, item)
+	}
+	return current
 }
 
 // FixedFindingsByStep returns how many findings were resolved for a single step.

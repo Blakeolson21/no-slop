@@ -99,6 +99,25 @@ func TestMergeReappearedFindingsJSONPreservesSelectedLineageSemanticsOnly(t *tes
 	}
 }
 
+func TestMergeReappearedFindingsJSONDropsClearedLineageAggregateEvidence(t *testing.T) {
+	priorRaw := `{"findings":[{"id":"review-a","id_generated":true,"continuity_token":"token-a","severity":"warning","description":"surviving defect","action":"ask-user","review_scope":"source"},{"id":"review-b","id_generated":true,"continuity_token":"token-b","severity":"error","description":"cleared defect","action":"ask-user","review_scope":"source"}],"tested":["reproduced cleared defect"],"testing_summary":"Cleared defect corrupts data.","artifacts":[{"kind":"log","label":"cleared-defect.log"}],"risk_level":"high","risk_rationale":"Cleared defect can corrupt data.","risk_scope":"source-or-external"}`
+	freshRaw := `{"findings":[{"id":"review-a","id_generated":true,"continuity_token":"token-a","severity":"info","description":"surviving defect","action":"no-op","review_scope":"source"}],"tested":["retested surviving defect"],"testing_summary":"Surviving defect remains bounded.","risk_level":"low","risk_rationale":"Current review is bounded.","risk_scope":"source-or-external"}`
+
+	merged, err := types.ParseFindingsJSON(mergeReappearedFindingsJSON(freshRaw, priorRaw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged.Items) != 1 || merged.Items[0].ID != "review-a" || merged.Items[0].Action != types.ActionAskUser || merged.Items[0].Severity != "warning" {
+		t.Fatalf("surviving lineage semantics = %#v", merged.Items)
+	}
+	if len(merged.Tested) != 1 || merged.Tested[0] != "retested surviving defect" || merged.TestingSummary != "Surviving defect remains bounded." || len(merged.Artifacts) != 0 {
+		t.Fatalf("cleared lineage evidence survived: tested=%#v summary=%q artifacts=%#v", merged.Tested, merged.TestingSummary, merged.Artifacts)
+	}
+	if merged.RiskLevel != "medium" || merged.RiskScope != types.FindingsRiskScopeSourceOrExternal || strings.Contains(merged.RiskRationale, "Cleared defect") {
+		t.Fatalf("recomputed risk = %q/%q %q", merged.RiskLevel, merged.RiskScope, merged.RiskRationale)
+	}
+}
+
 func TestMergeReappearedFindingsJSONCorroboratesUniqueGeneratedStructure(t *testing.T) {
 	priorRaw := `{"findings":[{"id":"review-a","id_generated":true,"continuity_token":"token-a","severity":"error","file":"loader.go","line":12,"description":"unsafe loader","action":"ask-user","review_scope":"source"}],"risk_level":"high","risk_rationale":"Data can be lost.","risk_scope":"source-or-external"}`
 	freshRaw := `{"findings":[{"id":"review-c","id_generated":true,"continuity_token":"token-c","severity":"info","file":"loader.go","line":12,"description":"unsafe loader","action":"no-op","review_scope":"source"}],"risk_level":"low","risk_rationale":"Narrow path is safe.","risk_scope":"source-or-external"}`

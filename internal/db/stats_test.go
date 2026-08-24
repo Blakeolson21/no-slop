@@ -97,6 +97,42 @@ func TestGetStatsFallsBackToStepFindingsWhenRoundsAreMissing(t *testing.T) {
 	}
 }
 
+func TestStepFindingStatsCountsUniqueUserLineageUntilRereview(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/repo/user-findings", "git@example.com:user-findings.git", "main")
+	run, _ := d.InsertRun(repo.ID, "user-findings", "head", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepReview)
+	initial := `{"findings":[{"id":"review-a","id_generated":true,"continuity_token":"token-a","severity":"warning","description":"agent defect","action":"auto-fix"}]}`
+	round, err := d.InsertStepRound(step.ID, 1, "initial", &initial, nil, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userSelection := `{"findings":[{"id":"review-a","id_generated":true,"continuity_token":"token-a","severity":"warning","description":"agent defect","action":"auto-fix"},{"id":"user-1","id_generated":true,"continuity_token":"token-user","severity":"error","description":"operator defect","action":"auto-fix","source":"user"}]}`
+	selected := `["review-a","user-1"]`
+	if err := d.SetStepRoundUserDecision(round.ID, &selected, RoundSelectionSourceUser, &userSelection); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := d.StepFindingStats(step)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ReportedFindings != 2 || stats.FixedFindings != 0 {
+		t.Fatalf("pre-rereview stats = reported %d fixed %d, want 2/0", stats.ReportedFindings, stats.FixedFindings)
+	}
+
+	if _, err := d.InsertStepRound(step.ID, 2, "user_fix", nil, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+	stats, err = d.StepFindingStats(step)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ReportedFindings != 2 || stats.FixedFindings != 2 {
+		t.Fatalf("post-rereview stats = reported %d fixed %d, want 2/2", stats.ReportedFindings, stats.FixedFindings)
+	}
+}
+
 func TestFixedFindingsByStepCountsResolvedRoundFindings(t *testing.T) {
 	d := openTestDB(t)
 	repo, _ := d.InsertRepo("/repo/fixes", "git@example.com:fixes.git", "main")

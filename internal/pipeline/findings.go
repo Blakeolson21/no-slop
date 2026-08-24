@@ -298,6 +298,7 @@ func mergeReappearedFindingsJSON(freshRaw, priorRaw string) string {
 	for j, ambiguous := range ambiguousPrior {
 		if ambiguous && !matchedPrior[j] {
 			fresh.Items = append(fresh.Items, prior.Items[j])
+			matchedPrior[j] = true
 			matched++
 		}
 	}
@@ -311,16 +312,49 @@ func mergeReappearedFindingsJSON(freshRaw, priorRaw string) string {
 		}
 		return encoded
 	}
-	fresh.Tested = mergeComparable(fresh.Tested, prior.Tested)
-	fresh.Artifacts = mergeComparable(fresh.Artifacts, prior.Artifacts)
-	fresh.TestingSummary = mergeEvidenceSummary(fresh.TestingSummary, prior.TestingSummary)
 	fresh.Summary = fmt.Sprintf("%d outstanding %s", len(fresh.Items), pluralize(len(fresh.Items), "finding", "findings"))
-	fresh.RiskLevel, fresh.RiskRationale, fresh.RiskScope = effectiveFindingsRisk(fresh.Items, fresh, prior, matched)
+	allPriorSurvived := true
+	for _, survived := range matchedPrior {
+		if !survived {
+			allPriorSurvived = false
+			break
+		}
+	}
+	if allPriorSurvived {
+		fresh.Tested = mergeComparable(fresh.Tested, prior.Tested)
+		fresh.Artifacts = mergeComparable(fresh.Artifacts, prior.Artifacts)
+		fresh.TestingSummary = mergeEvidenceSummary(fresh.TestingSummary, prior.TestingSummary)
+		fresh.RiskLevel, fresh.RiskRationale, fresh.RiskScope = effectiveFindingsRisk(fresh.Items, fresh, prior, matched)
+	} else {
+		fresh.RiskLevel, fresh.RiskRationale, fresh.RiskScope = survivingFindingsRisk(fresh)
+	}
 	encoded, err := types.MarshalFindingsJSON(fresh)
 	if err != nil {
 		return freshRaw
 	}
 	return encoded
+}
+
+func survivingFindingsRisk(findings types.Findings) (string, string, string) {
+	rank := 0
+	if findings.RiskScope != types.FindingsRiskScopePipelineOwnedDelivery {
+		rank = riskRank(findings.RiskLevel)
+	}
+	retained := 0
+	for _, item := range findings.Items {
+		if item.ReviewScope == types.FindingReviewScopePipelineOwnedDelivery {
+			continue
+		}
+		retained++
+		if itemRank := severityRank(item.Severity); itemRank > rank {
+			rank = itemRank
+		}
+	}
+	if rank == 0 {
+		rank = riskRank("low")
+	}
+	rationale := fmt.Sprintf("Review risk recomputed from %d surviving %s.", retained, pluralize(retained, "finding", "findings"))
+	return riskLevel(rank), rationale, types.FindingsRiskScopeSourceOrExternal
 }
 
 func ReconcileReviewFindings(findings types.Findings, priorRaw string) (types.Findings, int, error) {
