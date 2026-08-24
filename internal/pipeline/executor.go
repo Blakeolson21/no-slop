@@ -937,7 +937,9 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		OnPRMerged:         e.onPRMerged,
 	}
 	if stepName == types.StepReview {
-		BindUncertifiedPipelineRange(sctx)
+		if err := BindUncertifiedPipelineRange(sctx); err != nil {
+			return false, "", fmt.Errorf("restore uncertified review: %w", err)
+		}
 		if sctx.UncertifiedPriorFindings != "" {
 			carriedFindings = mergeCarriedFindingsJSON(carriedFindings, sctx.UncertifiedPriorFindings, string(stepName))
 			knownLineages = carriedFindings

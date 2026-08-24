@@ -161,6 +161,7 @@ type CheckAttemptIdentity struct {
 	EventAction          string
 	PullRequestUpdatedAt time.Time
 	HeadSHA              string
+	PublicationNonce     string
 }
 
 type CheckAttemptIdentityReader interface {

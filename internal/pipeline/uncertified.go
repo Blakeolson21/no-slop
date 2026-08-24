@@ -14,19 +14,18 @@ import (
 
 // BindUncertifiedPipelineRange copies a persisted uncertified fixer range
 // onto the review step context when this run's head is that range's tip or a
-// descendant of it. Missing objects fail open: the run continues without the
-// provenance clause and a bounded warning is logged. Never blocks the run.
-func BindUncertifiedPipelineRange(sctx *StepContext) {
+// descendant of it. Missing commit objects skip provenance with a bounded
+// warning; unreadable persisted review truth blocks replacement review.
+func BindUncertifiedPipelineRange(sctx *StepContext) error {
 	if sctx == nil || sctx.DB == nil || sctx.Repo == nil || sctx.Run == nil || sctx.Fixing {
-		return
+		return nil
 	}
 	rng, err := sctx.DB.GetUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch)
 	if err != nil {
-		slog.Warn("failed to read uncertified pipeline range; not applying provenance", "repo_id", sctx.Repo.ID, "error", err)
-		return
+		return fmt.Errorf("read uncertified pipeline range: %w", err)
 	}
 	if rng == nil {
-		return
+		return nil
 	}
 	head := strings.TrimSpace(sctx.Run.HeadSHA)
 	if head == "" {
@@ -34,24 +33,30 @@ func BindUncertifiedPipelineRange(sctx *StepContext) {
 	}
 	if !commitIsSelfOrAncestor(sctx.Ctx, sctx.WorkDir, rng.ToSHA, head) {
 		warnUncertifiedRangeSkipped(sctx, rng, "uncertified range %s..%s not in gate; not applying provenance")
-		return
+		return nil
+	}
+	priorRounds, priorFindings, err := loadUncertifiedPriorReview(sctx.DB, rng.SourceRunID)
+	if err != nil {
+		return err
 	}
 	sctx.UncertifiedFromSHA = rng.FromSHA
 	sctx.UncertifiedToSHA = rng.ToSHA
 	sctx.UncertifiedSourceRunID = rng.SourceRunID
-	sctx.UncertifiedPriorRounds, sctx.UncertifiedPriorFindings = loadUncertifiedPriorReview(sctx.DB, rng.SourceRunID)
+	sctx.UncertifiedPriorRounds = priorRounds
+	sctx.UncertifiedPriorFindings = priorFindings
+	return nil
 }
 
 // PersistUncertifiedPipelineRange records the fixer commit span after a
 // review fix round commits and before its re-review completes.
-func PersistUncertifiedPipelineRange(sctx *StepContext, fromSHA, toSHA string) {
+func PersistUncertifiedPipelineRange(sctx *StepContext, fromSHA, toSHA string) error {
 	if sctx == nil || sctx.DB == nil || sctx.Repo == nil || sctx.Run == nil {
-		return
+		return fmt.Errorf("persist uncertified pipeline range: missing pipeline context")
 	}
 	fromSHA = strings.TrimSpace(fromSHA)
 	toSHA = strings.TrimSpace(toSHA)
 	if fromSHA == "" || toSHA == "" || fromSHA == toSHA {
-		return
+		return fmt.Errorf("persist uncertified pipeline range: invalid commit range")
 	}
 	existing, err := sctx.DB.GetUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch)
 	if err != nil {
@@ -63,11 +68,9 @@ func PersistUncertifiedPipelineRange(sctx *StepContext, fromSHA, toSHA string) {
 		fromSHA = existing.FromSHA
 	}
 	if err := sctx.DB.UpsertUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch, fromSHA, toSHA, sctx.Run.ID); err != nil {
-		slog.Warn("failed to persist uncertified pipeline range", "run_id", sctx.Run.ID, "error", err)
-		if sctx.Log != nil {
-			sctx.Log("warning: failed to persist uncertified fixer commit range")
-		}
+		return err
 	}
+	return nil
 }
 
 // ClearUncertifiedPipelineRangeIfCertified drops the branch marker once a
@@ -237,30 +240,37 @@ func commitIsSelfOrAncestor(ctx context.Context, workDir, ancestor, descendent s
 	return err == nil
 }
 
-func loadUncertifiedPriorReview(database *db.DB, sourceRunID string) ([]*db.StepRound, string) {
+type uncertifiedReviewStore interface {
+	GetStepsByRun(string) ([]*db.StepResult, error)
+	GetRoundsByStep(string) ([]*db.StepRound, error)
+}
+
+func loadUncertifiedPriorReview(database uncertifiedReviewStore, sourceRunID string) ([]*db.StepRound, string, error) {
 	sourceRunID = strings.TrimSpace(sourceRunID)
 	if database == nil || sourceRunID == "" {
-		return nil, ""
+		return nil, "", fmt.Errorf("load uncertified review: missing source run")
 	}
 	steps, err := database.GetStepsByRun(sourceRunID)
 	if err != nil {
-		slog.Warn("failed to read uncertified source-run steps", "run_id", sourceRunID, "error", err)
-		return nil, ""
+		return nil, "", fmt.Errorf("read uncertified source-run steps: %w", err)
 	}
 	for _, step := range steps {
 		if step.StepName != types.StepReview {
 			continue
 		}
-		rounds, err := database.GetRoundsByStep(step.ID)
-		if err != nil {
-			slog.Warn("failed to read uncertified source-run review rounds", "run_id", sourceRunID, "error", err)
-			return nil, ""
-		}
 		findings := ""
 		if step.FindingsJSON != nil {
 			findings = *step.FindingsJSON
+			if _, err := types.ParseFindingsJSON(findings); err != nil {
+				return nil, "", fmt.Errorf("read uncertified source-run findings: %w", err)
+			}
 		}
-		return rounds, findings
+		rounds, err := database.GetRoundsByStep(step.ID)
+		if err != nil {
+			slog.Warn("failed to read uncertified source-run review rounds", "run_id", sourceRunID, "error", err)
+			return nil, findings, nil
+		}
+		return rounds, findings, nil
 	}
-	return nil, ""
+	return nil, "", fmt.Errorf("uncertified source run %s has no review step", sourceRunID)
 }

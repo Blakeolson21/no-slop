@@ -167,19 +167,21 @@ func commitAgentFixes(sctx *pipeline.StepContext, stepName types.StepName, summa
 	if err := assertPipelineHeadContinuity(sctx, stepName); err != nil {
 		return err
 	}
-	if err := adoptBranchRef(sctx, headSHA); err != nil {
-		return err
-	}
 	startingHead := strings.TrimSpace(sctx.ReviewStartingHeadSHA)
 	if startingHead == "" {
 		startingHead = sctx.Run.HeadSHA
 	}
+	if stepName == types.StepReview {
+		if err := pipeline.PersistUncertifiedPipelineRange(sctx, startingHead, headSHA); err != nil {
+			return fmt.Errorf("persist uncertified review range: %w", err)
+		}
+	}
+	if err := adoptBranchRef(sctx, headSHA); err != nil {
+		return err
+	}
 	sctx.Run.HeadSHA = headSHA
 	if err := sctx.DB.UpdateRunHeadSHA(sctx.Run.ID, headSHA); err != nil {
 		return err
-	}
-	if stepName == types.StepReview {
-		pipeline.PersistUncertifiedPipelineRange(sctx, startingHead, headSHA)
 	}
 	if commitMessage != "" {
 		sctx.Log(fmt.Sprintf("committed agent fixes: %s", commitMessage))

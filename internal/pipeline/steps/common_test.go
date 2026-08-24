@@ -605,6 +605,34 @@ func TestCommitAgentFixes_PersistsUncertifiedRangeForReview(t *testing.T) {
 	}
 }
 
+func TestCommitAgentFixes_RefusesReviewHeadWhenRangePersistenceFails(t *testing.T) {
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	originalRunID := sctx.Run.ID
+	sctx.Repo.ID = "missing-repo"
+	if err := os.WriteFile(filepath.Join(dir, "review-fix.txt"), []byte("fixed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := commitAgentFixes(sctx, types.StepReview, "apply fix", "fallback")
+	if err == nil || !strings.Contains(err.Error(), "persist uncertified review range") {
+		t.Fatalf("commitAgentFixes() error = %v, want persistence refusal", err)
+	}
+	if got := gitCmd(t, dir, "rev-parse", "refs/heads/feature"); got != headSHA {
+		t.Fatalf("branch head = %s, want unchanged %s", got, headSHA)
+	}
+	if sctx.Run.HeadSHA != headSHA {
+		t.Fatalf("in-memory run head = %s, want unchanged %s", sctx.Run.HeadSHA, headSHA)
+	}
+	stored, err := sctx.DB.GetRun(originalRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.HeadSHA != headSHA {
+		t.Fatalf("persisted run head = %s, want unchanged %s", stored.HeadSHA, headSHA)
+	}
+}
+
 func TestCommitAgentFixes_LintDoesNotPersistUncertifiedRange(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)

@@ -115,8 +115,8 @@ type persistedRerunBudget struct {
 }
 
 type expectedAttestationState struct {
-	HeadSHA   string    `json:"head_sha"`
-	UpdatedAt time.Time `json:"updated_at"`
+	HeadSHA          string `json:"head_sha"`
+	PublicationNonce string `json:"publication_nonce"`
 }
 
 type legacyExpectedAttestationState struct {
@@ -530,26 +530,13 @@ func (s *CIStep) loadExpectedAttestationState(sctx *pipeline.StepContext) error 
 		if legacy.HeadSHA == "" || legacy.UpdatedAt == "" {
 			return fmt.Errorf("restore persisted CI attestation state: expected attestation boundary is incomplete")
 		}
-		updatedAt, err := time.Parse(time.RFC3339Nano, legacy.UpdatedAt)
-		if err != nil {
-			return fmt.Errorf("restore persisted CI attestation state: %w", err)
-		}
-		state := expectedAttestationState{HeadSHA: legacy.HeadSHA, UpdatedAt: updatedAt}
-		migrated, err := json.Marshal(state)
-		if err != nil {
-			return fmt.Errorf("restore persisted CI attestation state: %w", err)
-		}
-		if err := sctx.DB.SetRunCIAttestationState(sctx.Run.ID, string(migrated)); err != nil {
-			return fmt.Errorf("restore persisted CI attestation state: %w", err)
-		}
-		s.expectedAttestation = state
-		return nil
+		return fmt.Errorf("restore persisted CI attestation state: timestamp boundary requires PR attestation republication")
 	}
 	var state expectedAttestationState
 	if err := json.Unmarshal([]byte(encoded), &state); err != nil {
 		return fmt.Errorf("restore persisted CI attestation state: %w", err)
 	}
-	if state.HeadSHA == "" || state.UpdatedAt.IsZero() {
+	if state.HeadSHA == "" || !validPublicationNonce(state.PublicationNonce) {
 		return fmt.Errorf("restore persisted CI attestation state: expected attestation boundary is incomplete")
 	}
 	s.expectedAttestation = state
@@ -573,16 +560,28 @@ func (s *CIStep) persistRerunBudgetCandidate(sctx *pipeline.StepContext, candida
 	return sctx.DB.SetRunCIRerunState(sctx.Run.ID, encoded)
 }
 
-func persistExpectedAttestationBoundary(sctx *pipeline.StepContext, updatedAt time.Time) error {
-	if updatedAt.IsZero() {
-		return fmt.Errorf("PR attestation boundary is empty")
+func persistExpectedAttestationPublication(sctx *pipeline.StepContext, publicationNonce string) error {
+	if !validPublicationNonce(publicationNonce) {
+		return fmt.Errorf("PR attestation publication nonce is invalid")
 	}
-	state := expectedAttestationState{HeadSHA: sctx.Run.HeadSHA, UpdatedAt: updatedAt}
+	state := expectedAttestationState{HeadSHA: sctx.Run.HeadSHA, PublicationNonce: publicationNonce}
 	encoded, err := json.Marshal(state)
 	if err != nil {
 		return err
 	}
 	return sctx.DB.SetRunCIAttestationState(sctx.Run.ID, string(encoded))
+}
+
+func validPublicationNonce(nonce string) bool {
+	if len(nonce) != 32 {
+		return false
+	}
+	for _, char := range nonce {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *CIStep) retireResolvedReruns(sctx *pipeline.StepContext, checks []scm.Check) (bool, error) {

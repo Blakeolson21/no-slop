@@ -68,7 +68,7 @@ func TestCIStepKeepsLegacyRerunRestorationBestEffort(t *testing.T) {
 	}
 }
 
-func TestCIStepMigratesLegacyExpectedAttestationState(t *testing.T) {
+func TestCIStepRejectsLegacyTimestampAttestationState(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
 	boundary := time.Date(2026, 8, 23, 18, 42, 31, 0, time.UTC)
@@ -78,22 +78,12 @@ func TestCIStepMigratesLegacyExpectedAttestationState(t *testing.T) {
 	}
 	step := &CIStep{}
 	step.loadRerunBudget(sctx)
-	if err := step.loadExpectedAttestationState(sctx); err != nil {
-		t.Fatal(err)
+	err := step.loadExpectedAttestationState(sctx)
+	if err == nil || !strings.Contains(err.Error(), "requires PR attestation republication") {
+		t.Fatalf("loadExpectedAttestationState() error = %v, want republication", err)
 	}
-	if step.transientReruns.used("build") != 1 || step.expectedAttestation.HeadSHA != headSHA || !step.expectedAttestation.UpdatedAt.Equal(boundary) {
+	if step.transientReruns.used("build") != 1 {
 		t.Fatalf("restored state = budget %#v, attestation %#v", step.transientReruns, step.expectedAttestation)
-	}
-	encoded, err := sctx.DB.GetRunCIAttestationState(sctx.Run.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var migrated expectedAttestationState
-	if err := json.Unmarshal([]byte(encoded), &migrated); err != nil {
-		t.Fatal(err)
-	}
-	if migrated.HeadSHA != headSHA || !migrated.UpdatedAt.Equal(boundary) {
-		t.Fatalf("migrated attestation = %#v", migrated)
 	}
 }
 
@@ -101,23 +91,25 @@ func (h *attestationIdentityHost) GetCheckAttemptIdentity(_ context.Context, che
 	return h.identities[check.Link], nil
 }
 
-func TestFilterExpectedStaleAttestationChecksUsesEventBoundary(t *testing.T) {
+func TestFilterExpectedStaleAttestationChecksUsesPublicationNonce(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
 	boundary := time.Date(2026, 8, 23, 18, 42, 31, 0, time.UTC)
+	currentNonce := "00112233445566778899aabbccddeeff"
+	staleNonce := "ffeeddccbbaa99887766554433221100"
 	olderPass := scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketPass, State: "SUCCESS", Link: "older-pass"}
 	stale := scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketFail, State: "FAILURE", Link: "stale"}
 	stalePending := scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketPending, State: "IN_PROGRESS", Link: "stale-pending"}
 	currentPending := scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketPending, State: "IN_PROGRESS", Link: "current-pending"}
 	newFailure := scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketFail, State: "FAILURE", Link: "new-failure"}
 	host := &attestationIdentityHost{identities: map[string]scm.CheckAttemptIdentity{
-		"older-pass":      {RunID: 999, RunNumber: 99, RunAttempt: 1, EventAction: "synchronize", PullRequestUpdatedAt: boundary.Add(-2 * time.Minute), HeadSHA: headSHA},
-		"stale":           {RunID: 1001, RunNumber: 101, RunAttempt: 1, EventAction: "synchronize", PullRequestUpdatedAt: boundary.Add(-time.Minute), HeadSHA: headSHA},
+		"older-pass":      {RunID: 999, RunNumber: 99, RunAttempt: 1, EventAction: "edited", PullRequestUpdatedAt: boundary, HeadSHA: headSHA, PublicationNonce: staleNonce},
+		"stale":           {RunID: 1001, RunNumber: 101, RunAttempt: 1, EventAction: "edited", PullRequestUpdatedAt: boundary, HeadSHA: headSHA, PublicationNonce: staleNonce},
 		"stale-pending":   {RunID: 998, RunNumber: 98, RunAttempt: 1, EventAction: "synchronize", PullRequestUpdatedAt: boundary.Add(-3 * time.Minute), HeadSHA: headSHA},
 		"current-pending": {RunID: 1002, RunNumber: 102, RunAttempt: 1, EventAction: "edited", PullRequestUpdatedAt: boundary, HeadSHA: headSHA},
-		"new-failure":     {RunID: 1002, RunNumber: 102, RunAttempt: 1, EventAction: "edited", PullRequestUpdatedAt: boundary, HeadSHA: headSHA},
+		"new-failure":     {RunID: 1002, RunNumber: 102, RunAttempt: 1, EventAction: "edited", PullRequestUpdatedAt: boundary, HeadSHA: headSHA, PublicationNonce: currentNonce},
 	}}
-	state := expectedAttestationState{HeadSHA: headSHA, UpdatedAt: boundary}
+	state := expectedAttestationState{HeadSHA: headSHA, PublicationNonce: currentNonce}
 	encoded, err := json.Marshal(state)
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +154,7 @@ func TestFilterExpectedStaleAttestationChecksUsesEventBoundary(t *testing.T) {
 	if len(filtered) != 1 || filtered[0].Link != "new-failure" || !filtered[0].Failing() {
 		t.Fatalf("post-update failure was suppressed: %#v", filtered)
 	}
-	if step.expectedAttestation.HeadSHA != headSHA || !step.expectedAttestation.UpdatedAt.Equal(boundary) {
+	if step.expectedAttestation.HeadSHA != headSHA || step.expectedAttestation.PublicationNonce != currentNonce {
 		t.Fatalf("recovered attestation boundary = %#v", step.expectedAttestation)
 	}
 }

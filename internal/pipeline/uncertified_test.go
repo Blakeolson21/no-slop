@@ -2,19 +2,28 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Blakeolson21/no-slop/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/db"
 	"github.com/Blakeolson21/no-slop/internal/git"
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestExecutor_BindsUncertifiedRangeOntoInitialReview(t *testing.T) {
 	database, p, run, repo := setupTest(t)
-	if err := database.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, "from-sha", run.HeadSHA, "source-run"); err != nil {
+	source, err := database.InsertRun(repo.ID, run.Branch, "older", "base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.InsertStepResult(source.ID, types.StepReview); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, "from-sha", run.HeadSHA, source.ID); err != nil {
 		t.Fatal(err)
 	}
 	var gotFrom, gotTo, gotSource string
@@ -31,8 +40,44 @@ func TestExecutor_BindsUncertifiedRangeOntoInitialReview(t *testing.T) {
 	if fixing {
 		t.Fatal("initial review ran in fix mode")
 	}
-	if gotFrom != "from-sha" || gotTo != run.HeadSHA || gotSource != "source-run" {
+	if gotFrom != "from-sha" || gotTo != run.HeadSHA || gotSource != source.ID {
 		t.Fatalf("initial review bound from=%q to=%q source=%q", gotFrom, gotTo, gotSource)
+	}
+}
+
+type failingUncertifiedReviewStore struct {
+	steps     []*db.StepResult
+	stepsErr  error
+	roundsErr error
+}
+
+func (s *failingUncertifiedReviewStore) GetStepsByRun(string) ([]*db.StepResult, error) {
+	return s.steps, s.stepsErr
+}
+
+func (s *failingUncertifiedReviewStore) GetRoundsByStep(string) ([]*db.StepRound, error) {
+	return nil, s.roundsErr
+}
+
+func TestLoadUncertifiedPriorReviewKeepsEffectiveFindingsWhenRoundsFail(t *testing.T) {
+	findings := `{"findings":[{"id":"review-b","severity":"error","description":"unresolved defect","action":"ask-user"}]}`
+	store := &failingUncertifiedReviewStore{
+		steps:     []*db.StepResult{{ID: "review-step", StepName: types.StepReview, FindingsJSON: &findings}},
+		roundsErr: errors.New("round history unavailable"),
+	}
+	rounds, got, err := loadUncertifiedPriorReview(store, "source-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rounds != nil || got != findings {
+		t.Fatalf("loadUncertifiedPriorReview() = (%#v, %q), want nil rounds and effective findings", rounds, got)
+	}
+}
+
+func TestLoadUncertifiedPriorReviewFailsWhenEffectiveTruthCannotBeRead(t *testing.T) {
+	store := &failingUncertifiedReviewStore{stepsErr: errors.New("step truth unavailable")}
+	if _, _, err := loadUncertifiedPriorReview(store, "source-run"); err == nil || !strings.Contains(err.Error(), "source-run steps") {
+		t.Fatalf("loadUncertifiedPriorReview() error = %v, want critical read failure", err)
 	}
 }
 

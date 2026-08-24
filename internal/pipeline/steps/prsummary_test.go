@@ -14,6 +14,7 @@ import (
 )
 
 const testPipelineHeadSHA = "0123456789abcdef0123456789abcdef01234567"
+const testPublicationNonce = "00112233445566778899aabbccddeeff"
 
 func testCertifiedHead(sha string) *string { return &sha }
 
@@ -86,8 +87,9 @@ func TestBuildPipelineSummary_EmitsStructuredStepAttestation(t *testing.T) {
 		t.Fatalf("attestation comment is not closed:\n%s", got)
 	}
 	var attestation struct {
-		HeadSHA string `json:"head_sha"`
-		Steps   []struct {
+		HeadSHA          string `json:"head_sha"`
+		PublicationNonce string `json:"publication_nonce"`
+		Steps            []struct {
 			Step    types.StepName   `json:"step"`
 			Status  types.StepStatus `json:"status"`
 			HeadSHA string           `json:"head_sha"`
@@ -99,6 +101,9 @@ func TestBuildPipelineSummary_EmitsStructuredStepAttestation(t *testing.T) {
 	}
 	if attestation.HeadSHA != testPipelineHeadSHA {
 		t.Fatalf("attested head = %q, want %q", attestation.HeadSHA, testPipelineHeadSHA)
+	}
+	if !validPublicationNonce(attestation.PublicationNonce) {
+		t.Fatalf("publication nonce = %q, want valid nonce", attestation.PublicationNonce)
 	}
 
 	want := []struct {

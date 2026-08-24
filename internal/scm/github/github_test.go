@@ -120,13 +120,16 @@ func TestGetCheckAttemptIdentityReadsGitHubRunIdentity(t *testing.T) {
 		"gh run view 900 --repo test/repo --json databaseId,number,attempt,event,headSha,displayTitle": {
 			stdout: `{"databaseId":900,"number":42,"attempt":3,"event":"pull_request","headSha":"abc123","displayTitle":"no-slop-required|edited|2026-08-23T18:42:31Z|PR #42"}` + "\n",
 		},
+		"gh run view 900 --repo test/repo --log": {
+			stdout: "check\tVerify no-slop signature\tNO_SLOP_PUBLICATION_NONCE=00112233445566778899aabbccddeeff\n",
+		},
 	}), nil, "", "test/repo")
 
-	identity, err := host.GetCheckAttemptIdentity(context.Background(), scm.Check{Link: "https://github.com/test/repo/actions/runs/900/job/12"})
+	identity, err := host.GetCheckAttemptIdentity(context.Background(), scm.Check{Bucket: scm.CheckBucketPass, Link: "https://github.com/test/repo/actions/runs/900/job/12"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if identity.RunID != 900 || identity.RunNumber != 42 || identity.RunAttempt != 3 || identity.Event != "pull_request" || identity.EventAction != "edited" || !identity.PullRequestUpdatedAt.Equal(updatedAt) || identity.HeadSHA != "abc123" {
+	if identity.RunID != 900 || identity.RunNumber != 42 || identity.RunAttempt != 3 || identity.Event != "pull_request" || identity.EventAction != "edited" || !identity.PullRequestUpdatedAt.Equal(updatedAt) || identity.HeadSHA != "abc123" || identity.PublicationNonce != "00112233445566778899aabbccddeeff" {
 		t.Fatalf("identity = %#v", identity)
 	}
 }

@@ -1,8 +1,10 @@
 package steps
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"unicode/utf8"
@@ -17,11 +19,14 @@ import (
 )
 
 // PRStep creates or updates a pull request via the provider CLI or API.
-type PRStep struct{}
+type PRStep struct {
+	publicationNonceReader io.Reader
+}
 
 type prContent struct {
-	Title string `json:"title"`
-	Body  string `json:"body"`
+	Title            string `json:"title"`
+	Body             string `json:"body"`
+	PublicationNonce string `json:"-"`
 }
 
 var prContentSchema = json.RawMessage(`{
@@ -89,15 +94,12 @@ func (s *PRStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 	}
 	if existing != nil {
 		sctx.Log(fmt.Sprintf("pull request already exists: %s, updating...", describePR(existing)))
-		updated, err := host.UpdatePR(ctx, existing, scm.PRContent(content))
+		updated, err := host.UpdatePR(ctx, existing, scm.PRContent{Title: content.Title, Body: content.Body})
 		if err != nil {
 			return nil, fmt.Errorf("update pull request: %w", err)
 		}
 		if provider == scm.ProviderGitHub {
-			if updated == nil || updated.UpdatedAt.IsZero() {
-				return nil, fmt.Errorf("updated pull request has no attestation publication identity")
-			}
-			if err := persistExpectedAttestationBoundary(sctx, updated.UpdatedAt); err != nil {
+			if err := persistExpectedAttestationPublication(sctx, content.PublicationNonce); err != nil {
 				return nil, fmt.Errorf("persist expected attestation boundary: %w", err)
 			}
 		}
@@ -115,7 +117,7 @@ func (s *PRStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 	}
 
 	sctx.Log("creating pull request...")
-	created, err := host.CreatePR(ctx, branch, sctx.Repo.DefaultBranch, scm.PRContent(content))
+	created, err := host.CreatePR(ctx, branch, sctx.Repo.DefaultBranch, scm.PRContent{Title: content.Title, Body: content.Body})
 	if err != nil {
 		return nil, err
 	}
@@ -143,13 +145,17 @@ func describePR(pr *scm.PR) string {
 }
 
 func (s *PRStep) buildPRContent(sctx *pipeline.StepContext, branch, baseSHA string, bodyLimit int) (prContent, error) {
+	publicationNonce, err := s.newPublicationNonce()
+	if err != nil {
+		return prContent{}, fmt.Errorf("generate PR attestation publication nonce: %w", err)
+	}
 	ctx := sctx.Ctx
 	diffStat, _ := git.Run(ctx, sctx.WorkDir, "diff", "--stat", baseSHA+".."+sctx.Run.HeadSHA)
 	finalDiff, err := git.Run(ctx, sctx.WorkDir, "diff", "--name-status", baseSHA+".."+sctx.Run.HeadSHA)
 	if err != nil {
 		return prContent{}, fmt.Errorf("read final branch diff: %w", err)
 	}
-	pipelineMD, riskLine, testingMD, err := s.buildPipelineSection(sctx)
+	pipelineMD, riskLine, testingMD, err := s.buildPipelineSection(sctx, publicationNonce)
 	if err != nil {
 		return prContent{}, err
 	}
@@ -188,7 +194,9 @@ Final diff paths and statuses:
 	})
 	if err != nil {
 		slog.Warn("agent failed for PR content, using fallback", "error", err)
-		return fallbackPRContent(sctx, finalDiff, riskLine, testingMD, pipelineMD, bodyLimit), nil
+		content := fallbackPRContent(sctx, finalDiff, riskLine, testingMD, pipelineMD, bodyLimit)
+		content.PublicationNonce = publicationNonce
+		return content, nil
 	}
 
 	var content prContent
@@ -209,19 +217,34 @@ Final diff paths and statuses:
 				} else {
 					content.Body = buildPRBody(content.Body, riskLine, testingMD, pipelineMD, sctx)
 				}
+				content.PublicationNonce = publicationNonce
 				return content, nil
 			}
 		}
 	}
 
-	return fallbackPRContent(sctx, finalDiff, riskLine, testingMD, pipelineMD, bodyLimit), nil
+	content = fallbackPRContent(sctx, finalDiff, riskLine, testingMD, pipelineMD, bodyLimit)
+	content.PublicationNonce = publicationNonce
+	return content, nil
+}
+
+func (s *PRStep) newPublicationNonce() (string, error) {
+	reader := s.publicationNonceReader
+	if reader == nil {
+		reader = rand.Reader
+	}
+	var nonce [16]byte
+	if _, err := io.ReadFull(reader, nonce[:]); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", nonce[:]), nil
 }
 
 // buildPipelineSection queries step results and rounds from the DB and
 // produces the deterministic pipeline, risk, and testing sections. These are
 // scoped to this run's own steps and rounds, so they already describe only
 // the final terminal state each step reached in this run.
-func (s *PRStep) buildPipelineSection(sctx *pipeline.StepContext) (pipelineMD, riskLine, testingMD string, err error) {
+func (s *PRStep) buildPipelineSection(sctx *pipeline.StepContext, publicationNonce string) (pipelineMD, riskLine, testingMD string, err error) {
 	steps, err := sctx.DB.GetStepsByRun(sctx.Run.ID)
 	if err != nil {
 		return "", "", "", fmt.Errorf("query step results for pipeline summary: %w", err)
@@ -237,7 +260,7 @@ func (s *PRStep) buildPipelineSection(sctx *pipeline.StepContext) (pipelineMD, r
 		rounds[sr.ID] = r
 	}
 
-	pipelineMD, riskLine = BuildPipelineSummary(steps, rounds, sctx.Run.HeadSHA)
+	pipelineMD, riskLine = buildPipelineSummary(steps, rounds, sctx.Run.HeadSHA, publicationNonce)
 	testingMD = BuildTestingSummaryForPR(steps, rounds, sctx.Repo.UpstreamURL, sctx.Run.HeadSHA, sctx.WorkDir, testEvidenceDir(sctx), publishRunEvidence(sctx))
 	return pipelineMD, riskLine, testingMD, nil
 }

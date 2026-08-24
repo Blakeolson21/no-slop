@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -26,6 +27,8 @@ type Host struct {
 	repo         string // "owner/name" slug for --repo; empty when unknown
 	forkOwner    string // fork owner for cross-repository PR heads
 }
+
+var publicationNoncePattern = regexp.MustCompile(`(?:^|[[:space:]])NO_SLOP_PUBLICATION_NONCE=([0-9a-f]{32})(?:$|[[:space:]])`)
 
 // New builds a Host. cliAvailable reports whether the gh binary is
 // resolvable on the caller's PATH (possibly overridden by env). host is the
@@ -427,6 +430,21 @@ func (h *Host) GetCheckAttemptIdentity(ctx context.Context, check scm.Check) (sc
 	if err != nil {
 		return scm.CheckAttemptIdentity{}, err
 	}
+	publicationNonce := ""
+	if checkAttemptIsTerminal(check) {
+		logArgs := append([]string{"run", "view", runID}, h.repoArgs()...)
+		logArgs = append(logArgs, "--log")
+		logCmd := h.cmd(ctx, "gh", logArgs...)
+		shellenv.ConfigureShellCommand(logCmd)
+		logOutput, err := shellenv.OutputShellCommand(logCmd)
+		if err != nil {
+			return scm.CheckAttemptIdentity{}, fmt.Errorf("gh run view logs: %w", err)
+		}
+		publicationNonce, err = parsePublicationNonce(logOutput)
+		if err != nil {
+			return scm.CheckAttemptIdentity{}, err
+		}
+	}
 	return scm.CheckAttemptIdentity{
 		RunID:                raw.RunID,
 		RunNumber:            raw.RunNumber,
@@ -435,7 +453,28 @@ func (h *Host) GetCheckAttemptIdentity(ctx context.Context, check scm.Check) (sc
 		EventAction:          action,
 		PullRequestUpdatedAt: updatedAt,
 		HeadSHA:              strings.TrimSpace(raw.HeadSHA),
+		PublicationNonce:     publicationNonce,
 	}, nil
+}
+
+func checkAttemptIsTerminal(check scm.Check) bool {
+	switch check.Bucket {
+	case scm.CheckBucketPass, scm.CheckBucketFail, scm.CheckBucketCancel, scm.CheckBucketSkip:
+		return true
+	default:
+		return false
+	}
+}
+
+func parsePublicationNonce(logOutput []byte) (string, error) {
+	matches := publicationNoncePattern.FindAllSubmatch(logOutput, -1)
+	if len(matches) == 0 {
+		return "", nil
+	}
+	if len(matches) != 1 {
+		return "", fmt.Errorf("GitHub Actions run log has no unique attestation publication nonce")
+	}
+	return string(matches[0][1]), nil
 }
 
 func parseAttestationRunBoundary(title string) (string, time.Time, error) {

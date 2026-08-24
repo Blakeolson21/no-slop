@@ -108,6 +108,7 @@ func TestNoSlopRequiredWorkflowEnforcesCompletedPipelineAttestation(t *testing.T
 		{name: "document skipped", body: generatedPipelineBodyWithStatuses(t, types.StepStatusCompleted, types.StepStatusCompleted, types.StepStatusSkipped), want: "failure"},
 		{name: "stale head", body: generatedPipelineBody(t), headSHA: "ffffffffffffffffffffffffffffffffffffffff", want: "failure"},
 		{name: "review certified stale head", body: generatedPipelineBodyWithStaleReviewCertification(t), want: "failure"},
+		{name: "quoted malformed attestation before owned pipeline", body: "## Intent\n\nQuoted legacy data: <!-- no-slop-pipeline-attestation:v1 { -->\n\n" + generatedPipelineBody(t), want: "success"},
 		{name: "all required steps completed", body: generatedPipelineBody(t), want: "success"},
 	}
 
@@ -386,8 +387,9 @@ func generatedPipelineBodyWithStaleReviewCertification(t *testing.T) string {
 		t.Fatal("generated body has malformed pipeline attestation")
 	}
 	var attestation struct {
-		HeadSHA string `json:"head_sha"`
-		Steps   []struct {
+		HeadSHA          string `json:"head_sha"`
+		PublicationNonce string `json:"publication_nonce"`
+		Steps            []struct {
 			Step    types.StepName   `json:"step"`
 			Status  types.StepStatus `json:"status"`
 			HeadSHA string           `json:"head_sha"`

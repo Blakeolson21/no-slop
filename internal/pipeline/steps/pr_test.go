@@ -1,6 +1,7 @@
 package steps
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -79,7 +80,7 @@ func TestPRStep_UpdatesExistingPR(t *testing.T) {
 	if err := sctx.DB.SetRunCIRerunState(sctx.Run.ID, encoded); err != nil {
 		t.Fatal(err)
 	}
-	priorAttestation, err := json.Marshal(expectedAttestationState{HeadSHA: baseSHA, UpdatedAt: boundary.Add(-time.Minute)})
+	priorAttestation, err := json.Marshal(expectedAttestationState{HeadSHA: baseSHA, PublicationNonce: "ffeeddccbbaa99887766554433221100"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +88,7 @@ func TestPRStep_UpdatesExistingPR(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	step := &PRStep{}
+	step := &PRStep{publicationNonceReader: bytes.NewReader([]byte{0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff})}
 	outcome, err := step.Execute(sctx)
 	if err != nil {
 		t.Fatal(err)
@@ -109,6 +110,20 @@ func TestPRStep_UpdatesExistingPR(t *testing.T) {
 	}
 	if !strings.Contains(ghLog, noMistakesPRSignature) {
 		t.Errorf("expected updated PR body to include no-slop signature, got:\n%s", ghLog)
+	}
+	const publishedBodyMarker = "stdin --body "
+	publishedBodyAt := strings.LastIndex(ghLog, publishedBodyMarker)
+	if publishedBodyAt < 0 {
+		t.Fatalf("updated PR request body was not recorded:\n%s", ghLog)
+	}
+	var published struct {
+		Body string `json:"body"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(ghLog[publishedBodyAt+len(publishedBodyMarker):])), &published); err != nil {
+		t.Fatalf("parse updated PR request body: %v", err)
+	}
+	if nonce := parsePipelineAttestationForTest(t, published.Body).PublicationNonce; nonce != testPublicationNonce {
+		t.Fatalf("updated PR publication nonce = %q, want %q", nonce, testPublicationNonce)
 	}
 	if strings.Contains(ghLog, "pr view 42 --repo test/repo --json updatedAt") {
 		t.Fatalf("attestation publication used mutable PR state:\n%s", ghLog)
@@ -140,7 +155,7 @@ func TestPRStep_UpdatesExistingPR(t *testing.T) {
 	if err := json.Unmarshal([]byte(encoded), &attestation); err != nil {
 		t.Fatal(err)
 	}
-	if attestation.HeadSHA != headSHA || !attestation.UpdatedAt.Equal(boundary) || attestation.UpdatedAt.Equal(unrelatedMutation) {
+	if attestation.HeadSHA != headSHA || attestation.PublicationNonce != testPublicationNonce {
 		t.Fatalf("persisted attestation expectation = %#v", attestation)
 	}
 }
@@ -869,7 +884,7 @@ func TestAssemblePRBody_RetainsAttestationWhenCoreExceedsAzureCap(t *testing.T) 
 		{StepName: types.StepReview, Status: types.StepStatusCompleted},
 		{StepName: types.StepTest, Status: types.StepStatusFailed},
 	}
-	attestation := buildPipelineAttestation(steps, testPipelineHeadSHA)
+	attestation := buildPipelineAttestation(steps, testPipelineHeadSHA, testPublicationNonce)
 	pipelineMD := pipelineMarkdownForTest(strings.Repeat("review detail 😀 ", 1000))
 	pipelineMD = strings.Replace(pipelineMD, noMistakesPRSignature+"\n\n", noMistakesPRSignature+"\n\n"+attestation+"\n\n", 1)
 
@@ -976,7 +991,7 @@ func TestAppendGeneratedSections_RetainsPipelineAttestationWhenTruncated(t *test
 		{StepName: types.StepReview, Status: types.StepStatusCompleted},
 		{StepName: types.StepTest, Status: types.StepStatusSkipped},
 	}
-	attestation := buildPipelineAttestation(steps, testPipelineHeadSHA)
+	attestation := buildPipelineAttestation(steps, testPipelineHeadSHA, testPublicationNonce)
 	pipelineMD := pipelineMarkdownForTest(strings.Repeat("review round - "+strings.Repeat("x", 1000), 100))
 	pipelineMD = strings.Replace(pipelineMD, noMistakesPRSignature+"\n\n", noMistakesPRSignature+"\n\n"+attestation+"\n\n", 1)
 
@@ -993,7 +1008,7 @@ func TestAppendGeneratedSections_RetainsAttestationWhenEssentialSectionsOverflow
 		{StepName: types.StepReview, Status: types.StepStatusCompleted},
 		{StepName: types.StepTest, Status: types.StepStatusFailed},
 	}
-	attestation := buildPipelineAttestation(steps, testPipelineHeadSHA)
+	attestation := buildPipelineAttestation(steps, testPipelineHeadSHA, testPublicationNonce)
 	pipelineMD := pipelineMarkdownForTest("review round 001")
 	pipelineMD = strings.Replace(pipelineMD, noMistakesPRSignature+"\n\n", noMistakesPRSignature+"\n\n"+attestation+"\n\n", 1)
 

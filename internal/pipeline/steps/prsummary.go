@@ -2,6 +2,7 @@ package steps
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -28,8 +29,9 @@ const (
 )
 
 type pipelineAttestation struct {
-	HeadSHA string                    `json:"head_sha"`
-	Steps   []pipelineAttestationStep `json:"steps"`
+	HeadSHA          string                    `json:"head_sha"`
+	PublicationNonce string                    `json:"publication_nonce"`
+	Steps            []pipelineAttestationStep `json:"steps"`
 }
 
 type pipelineAttestationStep struct {
@@ -63,6 +65,11 @@ type testingSummaryOptions struct {
 
 // BuildPipelineSummary produces a deterministic markdown section from step results and rounds.
 func BuildPipelineSummary(steps []*db.StepResult, rounds map[string][]*db.StepRound, headSHA string) (string, string) {
+	digest := sha256.Sum256([]byte(strings.TrimSpace(headSHA)))
+	return buildPipelineSummary(steps, rounds, headSHA, fmt.Sprintf("%x", digest[:16]))
+}
+
+func buildPipelineSummary(steps []*db.StepResult, rounds map[string][]*db.StepRound, headSHA, publicationNonce string) (string, string) {
 	if len(steps) == 0 {
 		return "", ""
 	}
@@ -88,7 +95,7 @@ func BuildPipelineSummary(steps []*db.StepResult, rounds map[string][]*db.StepRo
 	b.WriteString("## Pipeline\n\n")
 	b.WriteString(noMistakesPRSignature)
 	b.WriteString("\n\n")
-	b.WriteString(buildPipelineAttestation(steps, headSHA))
+	b.WriteString(buildPipelineAttestation(steps, headSHA, publicationNonce))
 	b.WriteString("\n\n")
 	for i, detail := range detailBlocks {
 		if i > 0 {
@@ -105,10 +112,11 @@ func BuildPipelineSummary(steps []*db.StepResult, rounds map[string][]*db.StepRo
 // when no-slop writes the PR body. Its compact JSON is deliberately data only:
 // consumers decide their own policy from step names, statuses, and certified
 // heads.
-func buildPipelineAttestation(steps []*db.StepResult, headSHA string) string {
+func buildPipelineAttestation(steps []*db.StepResult, headSHA, publicationNonce string) string {
 	attestation := pipelineAttestation{
-		HeadSHA: headSHA,
-		Steps:   make([]pipelineAttestationStep, 0, len(steps)),
+		HeadSHA:          headSHA,
+		PublicationNonce: publicationNonce,
+		Steps:            make([]pipelineAttestationStep, 0, len(steps)),
 	}
 	for _, sr := range steps {
 		if sr == nil {

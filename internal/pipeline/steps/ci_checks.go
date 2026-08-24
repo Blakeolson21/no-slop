@@ -18,7 +18,7 @@ func (s *CIStep) filterExpectedStaleAttestationChecks(sctx *pipeline.StepContext
 	if state.HeadSHA == "" || state.HeadSHA != sctx.Run.HeadSHA {
 		return checks, nil
 	}
-	if state.UpdatedAt.IsZero() {
+	if !validPublicationNonce(state.PublicationNonce) {
 		return nil, fmt.Errorf("expected attestation boundary is missing")
 	}
 	reader, ok := host.(scm.CheckAttemptIdentityReader)
@@ -41,7 +41,7 @@ func (s *CIStep) filterExpectedStaleAttestationChecks(sctx *pipeline.StepContext
 		if identity.HeadSHA != sctx.Run.HeadSHA {
 			continue
 		}
-		if checkAttemptTerminal(check) && !checkAttemptUsesExpectedOrNewerBody(identity, state.UpdatedAt) {
+		if checkAttemptTerminal(check) && identity.PublicationNonce != state.PublicationNonce {
 			continue
 		}
 		filtered = append(filtered, check)
@@ -51,10 +51,6 @@ func (s *CIStep) filterExpectedStaleAttestationChecks(sctx *pipeline.StepContext
 		filtered = append(filtered, scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketPending, State: "EXPECTED_ATTESTATION"})
 	}
 	return filtered, nil
-}
-
-func checkAttemptUsesExpectedOrNewerBody(identity scm.CheckAttemptIdentity, boundary time.Time) bool {
-	return identity.PullRequestUpdatedAt.After(boundary) || identity.PullRequestUpdatedAt.Equal(boundary) && identity.EventAction == "edited"
 }
 
 func checkAttemptTerminal(check scm.Check) bool {
