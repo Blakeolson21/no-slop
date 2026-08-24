@@ -506,6 +506,10 @@ func updateHeadSHA(ctx context.Context, sctx *pipeline.StepContext) (*pipeline.S
 	}
 	if headSHA != "" && headSHA != sctx.Run.HeadSHA {
 		oldHead := sctx.Run.HeadSHA
+		rollbackRange, err := pipeline.RemapUncertifiedPipelineRangeAfterRebase(sctx, oldHead, headSHA)
+		if err != nil {
+			return nil, fmt.Errorf("remap uncertified review range before rebase adoption: %w", err)
+		}
 		// Anchor the rebased head on the gate branch ref before recording it.
 		// The pipeline worktree is detached, so without this the recorded head
 		// is referenced by nothing: the worktree is removed at the end of the
@@ -516,9 +520,13 @@ func updateHeadSHA(ctx context.Context, sctx *pipeline.StepContext) (*pipeline.S
 		// the ref non-fast-forward, so an unanchored write here would destroy a
 		// commit a concurrent push landed on the branch.
 		if err := adoptBranchRef(sctx, headSHA); err != nil {
+			if rollbackRange != nil {
+				if rollbackErr := rollbackRange(); rollbackErr != nil {
+					return nil, fmt.Errorf("%w; restore uncertified review range: %v", err, rollbackErr)
+				}
+			}
 			return nil, err
 		}
-		pipeline.RemapUncertifiedPipelineRangeAfterRebase(sctx, oldHead, headSHA)
 		sctx.Run.HeadSHA = headSHA
 		if err := sctx.DB.UpdateRunHeadSHA(sctx.Run.ID, headSHA); err != nil {
 			return nil, err

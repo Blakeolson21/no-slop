@@ -224,19 +224,20 @@ Stores the PR URL in the database and streams it to the TUI.
 Immediately after the existing `Updates from [git push no-slop](https://github.com/Blakeolson21/no-slop)` signature, no-slop writes one stable HTML comment:
 
 ```html
-<!-- no-slop-pipeline-attestation:v1 {"head_sha":"0123456789abcdef0123456789abcdef01234567","steps":[{"step":"review","status":"completed","head_sha":"0123456789abcdef0123456789abcdef01234567"},{"step":"test","status":"completed","head_sha":"0123456789abcdef0123456789abcdef01234567"},{"step":"document","status":"completed","head_sha":"0123456789abcdef0123456789abcdef01234567"}]} -->
+<!-- no-slop-pipeline-attestation:v1 {"head_sha":"0123456789abcdef0123456789abcdef01234567","publication_nonce":"00112233445566778899aabbccddeeff","steps":[{"step":"review","status":"completed","head_sha":"0123456789abcdef0123456789abcdef01234567"},{"step":"test","status":"completed","head_sha":"0123456789abcdef0123456789abcdef01234567"},{"step":"document","status":"completed","head_sha":"0123456789abcdef0123456789abcdef01234567"}]} -->
 ```
 
 The `v1` payload is compact JSON with these required fields:
 
 - `head_sha`: the exact git commit SHA recorded for the run when no-slop writes the PR body
+- `publication_nonce`: a unique identity generated for this exact PR-body publication
 - `steps`: the ordered pipeline step snapshot; every item has exactly the fields below
 
 - `step`: the raw pipeline step name, such as `intent`, `rebase`, `review`, `test`, `document`, `lint`, `push`, `pr`, or `ci`
 - `status`: the raw [step status](#step-statuses) recorded for that step, such as `completed`, `skipped`, or `failed`
 - `head_sha`: the commit SHA that the recorded step status certifies, or an empty string while the step has not certified a commit
 
-Items are ordered by the fixed pipeline order and represent the exact database snapshot when no-slop creates or updates the PR body. The attestation includes `pr` and `ci` records even though their human-readable details are not shown in `## Pipeline`; at the normal PR write point those records are commonly `running` and `pending`. The top-level `head_sha` identifies the current published PR head, while each item's `head_sha` identifies the commit that step actually certified. If later pipeline work creates or adopts a different head after a required gate completes, no-slop invalidates stale required-step results and automatically reruns review, test, and document before publishing a compliant attestation for the new commit. After updating an existing GitHub PR, no-slop durably records the provider's PR-update timestamp; the required workflow publishes its event action and matching PR timestamp so CI suppresses only terminal checks that observed an older body.
+Items are ordered by the fixed pipeline order and represent the exact database snapshot when no-slop creates or updates the PR body. The attestation includes `pr` and `ci` records even though their human-readable details are not shown in `## Pipeline`; at the normal PR write point those records are commonly `running` and `pending`. The top-level `head_sha` identifies the current published PR head, while each item's `head_sha` identifies the commit that step actually certified. If later pipeline work creates or adopts a different head after a required gate completes, no-slop invalidates stale required-step results and automatically reruns review, test, and document before publishing a compliant attestation for the new commit. After updating an existing GitHub PR, no-slop records the publication nonce and then learns the immutable Actions run ID that emitted it. CI suppresses only required-check attempts with an older provider run ID; attempts from later PR edits remain authoritative even when they carry a different nonce or were cancelled before emitting one.
 
 The comment is intentionally data only. It does not declare any step required, passed for a policy, compliant, or mergeable. Consumers can parse the versioned JSON without scraping prose and apply their own policy. The comment stays with the Pipeline header when no-slop truncates older human-readable update details to fit a PR-body limit.
 

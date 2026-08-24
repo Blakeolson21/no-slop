@@ -109,6 +109,7 @@ func TestNoSlopRequiredWorkflowEnforcesCompletedPipelineAttestation(t *testing.T
 		{name: "stale head", body: generatedPipelineBody(t), headSHA: "ffffffffffffffffffffffffffffffffffffffff", want: "failure"},
 		{name: "review certified stale head", body: generatedPipelineBodyWithStaleReviewCertification(t), want: "failure"},
 		{name: "quoted malformed attestation before owned pipeline", body: "## Intent\n\nQuoted legacy data: <!-- no-slop-pipeline-attestation:v1 { -->\n\n" + generatedPipelineBody(t), want: "success"},
+		{name: "pipeline heading in generated detail", body: generatedPipelineBody(t) + "\n\nFinding detail\n## Pipeline\n\nnot an owned attestation", want: "success"},
 		{name: "all required steps completed", body: generatedPipelineBody(t), want: "success"},
 	}
 

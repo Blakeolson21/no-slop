@@ -154,14 +154,12 @@ type Check struct {
 }
 
 type CheckAttemptIdentity struct {
-	RunID                int64
-	RunNumber            int64
-	RunAttempt           int
-	Event                string
-	EventAction          string
-	PullRequestUpdatedAt time.Time
-	HeadSHA              string
-	PublicationNonce     string
+	RunID            int64
+	RunNumber        int64
+	RunAttempt       int
+	Event            string
+	HeadSHA          string
+	PublicationNonce string
 }
 
 type CheckAttemptIdentityReader interface {

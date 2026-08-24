@@ -112,13 +112,12 @@ func TestGetChecksPassesRepoFlag(t *testing.T) {
 	}
 }
 
-func TestGetCheckAttemptIdentityReadsGitHubRunIdentity(t *testing.T) {
+func TestGetCheckAttemptIdentityReadsImmutableRunIdentityWithLegacyTitle(t *testing.T) {
 	t.Parallel()
-	updatedAt := time.Date(2026, 8, 23, 18, 42, 31, 0, time.UTC)
 
 	host := New(githubTestCmdFactory(map[string]githubTestResponse{
-		"gh run view 900 --repo test/repo --json databaseId,number,attempt,event,headSha,displayTitle": {
-			stdout: `{"databaseId":900,"number":42,"attempt":3,"event":"pull_request","headSha":"abc123","displayTitle":"no-slop-required|edited|2026-08-23T18:42:31Z|PR #42"}` + "\n",
+		"gh run view 900 --repo test/repo --json databaseId,number,attempt,event,headSha": {
+			stdout: `{"databaseId":900,"number":42,"attempt":3,"event":"pull_request","headSha":"abc123","displayTitle":"legacy workflow title"}` + "\n",
 		},
 		"gh run view 900 --repo test/repo --log": {
 			stdout: "check\tVerify no-slop signature\tNO_SLOP_PUBLICATION_NONCE=00112233445566778899aabbccddeeff\n",
@@ -129,7 +128,7 @@ func TestGetCheckAttemptIdentityReadsGitHubRunIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if identity.RunID != 900 || identity.RunNumber != 42 || identity.RunAttempt != 3 || identity.Event != "pull_request" || identity.EventAction != "edited" || !identity.PullRequestUpdatedAt.Equal(updatedAt) || identity.HeadSHA != "abc123" || identity.PublicationNonce != "00112233445566778899aabbccddeeff" {
+	if identity.RunID != 900 || identity.RunNumber != 42 || identity.RunAttempt != 3 || identity.Event != "pull_request" || identity.HeadSHA != "abc123" || identity.PublicationNonce != "00112233445566778899aabbccddeeff" {
 		t.Fatalf("identity = %#v", identity)
 	}
 }

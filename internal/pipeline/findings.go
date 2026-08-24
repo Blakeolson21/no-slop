@@ -204,6 +204,79 @@ func mergeCarriedFindingsJSON(freshRaw, carriedRaw, prefix string) string {
 	return encoded
 }
 
+func mergeReappearedFindingsJSON(freshRaw, priorRaw string) string {
+	if freshRaw == "" || priorRaw == "" {
+		return freshRaw
+	}
+	fresh, err := types.ParseFindingsJSON(freshRaw)
+	if err != nil {
+		return freshRaw
+	}
+	prior, err := types.ParseFindingsJSON(priorRaw)
+	if err != nil {
+		return freshRaw
+	}
+	freshCounts := types.CountFindingFingerprints(fresh.Items)
+	priorCounts := types.CountFindingFingerprints(prior.Items)
+	freshIdentityCounts := countFindingIdentities(fresh.Items)
+	priorIdentityCounts := countFindingIdentities(prior.Items)
+	matched := 0
+	for i := range fresh.Items {
+		current := &fresh.Items[i]
+		match := -1
+		for j := range prior.Items {
+			old := prior.Items[j]
+			identity := findingKey(*current)
+			legacyMatch := (!current.HasLineage() || !old.HasLineage()) && ((identity == findingKey(old) && freshIdentityCounts[identity] == 1 && priorIdentityCounts[identity] == 1) ||
+				(findingFingerprint(*current) == findingFingerprint(old) && freshCounts[findingFingerprint(*current)] == 1 && priorCounts[findingFingerprint(old)] == 1))
+			if types.FindingIDCorroborates(*current, old) || legacyMatch {
+				if match >= 0 {
+					match = -1
+					break
+				}
+				match = j
+			}
+		}
+		if match < 0 {
+			continue
+		}
+		old := prior.Items[match]
+		current.ID = old.ID
+		current.IDGenerated = old.IDGenerated
+		current.ContinuityToken = old.ContinuityToken
+		current.Action = stricterFindingAction(old.Action, current.Action)
+		if severityRank(old.Severity) > severityRank(current.Severity) {
+			current.Severity = old.Severity
+		}
+		if current.UserInstructions == "" {
+			current.UserInstructions = old.UserInstructions
+		}
+		if current.ReviewScope == "" {
+			current.ReviewScope = old.ReviewScope
+		}
+		if current.Category == "" {
+			current.Category = old.Category
+		}
+		if old.Source == types.FindingSourceUser {
+			current.Source = old.Source
+		}
+		matched++
+	}
+	if matched == 0 {
+		return freshRaw
+	}
+	fresh.Tested = mergeComparable(fresh.Tested, prior.Tested)
+	fresh.Artifacts = mergeComparable(fresh.Artifacts, prior.Artifacts)
+	fresh.TestingSummary = mergeEvidenceSummary(fresh.TestingSummary, prior.TestingSummary)
+	fresh.Summary = fmt.Sprintf("%d outstanding %s", len(fresh.Items), pluralize(len(fresh.Items), "finding", "findings"))
+	fresh.RiskLevel, fresh.RiskRationale, fresh.RiskScope = effectiveFindingsRisk(fresh.Items, fresh, prior, matched)
+	encoded, err := types.MarshalFindingsJSON(fresh)
+	if err != nil {
+		return freshRaw
+	}
+	return encoded
+}
+
 func countFindingIdentities(items []types.Finding) map[types.FindingIdentity]int {
 	counts := make(map[types.FindingIdentity]int, len(items))
 	for _, item := range items {

@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -35,7 +36,7 @@ func BindUncertifiedPipelineRange(sctx *StepContext) error {
 		warnUncertifiedRangeSkipped(sctx, rng, "uncertified range %s..%s not in gate; not applying provenance")
 		return nil
 	}
-	priorRounds, priorFindings, err := loadUncertifiedPriorReview(sctx.DB, rng.SourceRunID)
+	priorRounds, priorFindings, priorLineages, err := loadUncertifiedPriorReview(sctx.DB, rng.SourceRunID)
 	if err != nil {
 		return err
 	}
@@ -44,6 +45,7 @@ func BindUncertifiedPipelineRange(sctx *StepContext) error {
 	sctx.UncertifiedSourceRunID = rng.SourceRunID
 	sctx.UncertifiedPriorRounds = priorRounds
 	sctx.UncertifiedPriorFindings = priorFindings
+	sctx.UncertifiedPriorLineages = priorLineages
 	return nil
 }
 
@@ -102,59 +104,54 @@ func ClearUncertifiedPipelineRangeIfCertified(ctx context.Context, database *db.
 
 // RemapUncertifiedPipelineRangeAfterRebase rewrites a persisted uncertified
 // range onto the new head when rebase replaced a head that contained it.
-// Fast-forwards and missing objects leave the row unchanged and never block.
-func RemapUncertifiedPipelineRangeAfterRebase(sctx *StepContext, oldHead, newHead string) {
+func RemapUncertifiedPipelineRangeAfterRebase(sctx *StepContext, oldHead, newHead string) (func() error, error) {
 	if sctx == nil || sctx.DB == nil || sctx.Repo == nil || sctx.Run == nil {
-		return
+		return nil, fmt.Errorf("remap uncertified pipeline range: missing pipeline context")
 	}
 	oldHead = strings.TrimSpace(oldHead)
 	newHead = strings.TrimSpace(newHead)
 	if oldHead == "" || newHead == "" || oldHead == newHead {
-		return
+		return nil, nil
 	}
 	if commitIsSelfOrAncestor(sctx.Ctx, sctx.WorkDir, oldHead, newHead) {
-		return
+		return nil, nil
 	}
 	rng, err := sctx.DB.GetUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch)
 	if err != nil {
-		slog.Warn("failed to read uncertified pipeline range before rebase remap", "run_id", sctx.Run.ID, "error", err)
-		return
+		return nil, fmt.Errorf("read uncertified pipeline range before rebase remap: %w", err)
 	}
 	if rng == nil {
-		return
+		return nil, nil
 	}
 	if !commitIsSelfOrAncestor(sctx.Ctx, sctx.WorkDir, rng.ToSHA, oldHead) {
-		return
+		return nil, nil
 	}
 	if commitIsSelfOrAncestor(sctx.Ctx, sctx.WorkDir, rng.ToSHA, newHead) {
-		return
+		return nil, nil
 	}
 	fromBehind, ok := commitBehindCount(sctx.Ctx, sctx.WorkDir, rng.FromSHA, oldHead)
 	if !ok {
-		warnUncertifiedRemapSkipped(sctx, rng)
-		return
+		return nil, fmt.Errorf("map uncertified range start %s after rebase", rng.FromSHA)
 	}
 	toBehind, ok := commitBehindCount(sctx.Ctx, sctx.WorkDir, rng.ToSHA, oldHead)
 	if !ok {
-		warnUncertifiedRemapSkipped(sctx, rng)
-		return
+		return nil, fmt.Errorf("map uncertified range end %s after rebase", rng.ToSHA)
 	}
 	newFrom, ok := commitNthAncestor(sctx.Ctx, sctx.WorkDir, newHead, fromBehind)
 	if !ok {
-		warnUncertifiedRemapSkipped(sctx, rng)
-		return
+		return nil, fmt.Errorf("resolve remapped uncertified range start after rebase")
 	}
 	newTo, ok := commitNthAncestor(sctx.Ctx, sctx.WorkDir, newHead, toBehind)
 	if !ok || newFrom == "" || newTo == "" || newFrom == newTo {
-		warnUncertifiedRemapSkipped(sctx, rng)
-		return
+		return nil, fmt.Errorf("resolve remapped uncertified range end after rebase")
 	}
 	if err := sctx.DB.UpsertUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch, newFrom, newTo, rng.SourceRunID); err != nil {
-		slog.Warn("failed to remap uncertified pipeline range after rebase", "run_id", sctx.Run.ID, "error", err)
-		if sctx.Log != nil {
-			sctx.Log("warning: failed to remap uncertified fixer commit range after rebase")
-		}
+		return nil, fmt.Errorf("persist remapped uncertified pipeline range: %w", err)
 	}
+	rollback := func() error {
+		return sctx.DB.UpsertUncertifiedPipelineRange(rng.RepoID, rng.Branch, rng.FromSHA, rng.ToSHA, rng.SourceRunID)
+	}
+	return rollback, nil
 }
 
 func uncertifiedRangeStillInLineage(sctx *StepContext, existingTo, newFrom, newTo string) bool {
@@ -163,14 +160,6 @@ func uncertifiedRangeStillInLineage(sctx *StepContext, existingTo, newFrom, newT
 	}
 	return commitIsSelfOrAncestor(sctx.Ctx, sctx.WorkDir, existingTo, newFrom) ||
 		commitIsSelfOrAncestor(sctx.Ctx, sctx.WorkDir, existingTo, newTo)
-}
-
-func warnUncertifiedRemapSkipped(sctx *StepContext, rng *db.UncertifiedPipelineRange) {
-	msg := fmt.Sprintf("uncertified range %s..%s could not be remapped after rebase; not updating provenance", rng.FromSHA, rng.ToSHA)
-	slog.Warn(msg, "repo_id", sctx.Repo.ID, "branch", sctx.Run.Branch)
-	if sctx.Log != nil {
-		sctx.Log("warning: " + msg)
-	}
 }
 
 func commitBehindCount(ctx context.Context, workDir, ancestor, descendent string) (int, bool) {
@@ -243,34 +232,48 @@ func commitIsSelfOrAncestor(ctx context.Context, workDir, ancestor, descendent s
 type uncertifiedReviewStore interface {
 	GetStepsByRun(string) ([]*db.StepResult, error)
 	GetRoundsByStep(string) ([]*db.StepRound, error)
+	GetLatestStepRoundSelection(string) (*string, error)
 }
 
-func loadUncertifiedPriorReview(database uncertifiedReviewStore, sourceRunID string) ([]*db.StepRound, string, error) {
+func loadUncertifiedPriorReview(database uncertifiedReviewStore, sourceRunID string) ([]*db.StepRound, string, string, error) {
 	sourceRunID = strings.TrimSpace(sourceRunID)
 	if database == nil || sourceRunID == "" {
-		return nil, "", fmt.Errorf("load uncertified review: missing source run")
+		return nil, "", "", fmt.Errorf("load uncertified review: missing source run")
 	}
 	steps, err := database.GetStepsByRun(sourceRunID)
 	if err != nil {
-		return nil, "", fmt.Errorf("read uncertified source-run steps: %w", err)
+		return nil, "", "", fmt.Errorf("read uncertified source-run steps: %w", err)
 	}
 	for _, step := range steps {
 		if step.StepName != types.StepReview {
 			continue
 		}
 		findings := ""
+		lineages := ""
 		if step.FindingsJSON != nil {
 			findings = *step.FindingsJSON
 			if _, err := types.ParseFindingsJSON(findings); err != nil {
-				return nil, "", fmt.Errorf("read uncertified source-run findings: %w", err)
+				return nil, "", "", fmt.Errorf("read uncertified source-run findings: %w", err)
 			}
+			lineages = findings
+		}
+		selectedRaw, err := database.GetLatestStepRoundSelection(step.ID)
+		if err != nil {
+			return nil, "", "", fmt.Errorf("read uncertified source-run selection: %w", err)
+		}
+		if selectedRaw != nil {
+			var selected []string
+			if err := json.Unmarshal([]byte(*selectedRaw), &selected); err != nil {
+				return nil, "", "", fmt.Errorf("read uncertified source-run selection: %w", err)
+			}
+			findings = excludeFindingsJSON(findings, selected)
 		}
 		rounds, err := database.GetRoundsByStep(step.ID)
 		if err != nil {
 			slog.Warn("failed to read uncertified source-run review rounds", "run_id", sourceRunID, "error", err)
-			return nil, findings, nil
+			return nil, findings, lineages, nil
 		}
-		return rounds, findings, nil
+		return rounds, findings, lineages, nil
 	}
-	return nil, "", fmt.Errorf("uncertified source run %s has no review step", sourceRunID)
+	return nil, "", "", fmt.Errorf("uncertified source run %s has no review step", sourceRunID)
 }

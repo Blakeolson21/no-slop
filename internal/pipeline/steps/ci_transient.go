@@ -117,6 +117,7 @@ type persistedRerunBudget struct {
 type expectedAttestationState struct {
 	HeadSHA          string `json:"head_sha"`
 	PublicationNonce string `json:"publication_nonce"`
+	PublicationRunID int64  `json:"publication_run_id,omitempty"`
 }
 
 type legacyExpectedAttestationState struct {
@@ -536,7 +537,7 @@ func (s *CIStep) loadExpectedAttestationState(sctx *pipeline.StepContext) error 
 	if err := json.Unmarshal([]byte(encoded), &state); err != nil {
 		return fmt.Errorf("restore persisted CI attestation state: %w", err)
 	}
-	if state.HeadSHA == "" || !validPublicationNonce(state.PublicationNonce) {
+	if state.HeadSHA == "" || !validPublicationNonce(state.PublicationNonce) || state.PublicationRunID < 0 {
 		return fmt.Errorf("restore persisted CI attestation state: expected attestation boundary is incomplete")
 	}
 	s.expectedAttestation = state
@@ -565,6 +566,10 @@ func persistExpectedAttestationPublication(sctx *pipeline.StepContext, publicati
 		return fmt.Errorf("PR attestation publication nonce is invalid")
 	}
 	state := expectedAttestationState{HeadSHA: sctx.Run.HeadSHA, PublicationNonce: publicationNonce}
+	return persistExpectedAttestationState(sctx, state)
+}
+
+func persistExpectedAttestationState(sctx *pipeline.StepContext, state expectedAttestationState) error {
 	encoded, err := json.Marshal(state)
 	if err != nil {
 		return err

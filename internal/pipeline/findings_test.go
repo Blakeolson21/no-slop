@@ -80,6 +80,25 @@ func TestMergeCarriedFindingsJSON_MatchedLineagePreservesEffectiveRisk(t *testin
 	}
 }
 
+func TestMergeReappearedFindingsJSONPreservesSelectedLineageSemanticsOnly(t *testing.T) {
+	priorRaw := `{"findings":[{"id":"review-a","id_generated":true,"continuity_token":"token-a","severity":"error","file":"loader.go","line":12,"description":"unsafe loader","action":"ask-user","review_scope":"source"},{"id":"review-b","id_generated":true,"continuity_token":"token-b","severity":"warning","description":"narrow omitted issue","action":"ask-user","review_scope":"source"}],"tested":["reproduced data loss"],"testing_summary":"Full reproduction failed.","risk_level":"high","risk_rationale":"Data can be lost.","risk_scope":"source-or-external"}`
+	freshRaw := `{"findings":[{"id":"review-a","id_generated":true,"continuity_token":"token-a","severity":"info","file":"loader.go","line":12,"description":"unsafe loader","action":"no-op","review_scope":"source"}],"tested":["narrow retest"],"testing_summary":"Narrow path passed.","risk_level":"low","risk_rationale":"Narrow path is safe.","risk_scope":"source-or-external"}`
+
+	merged, err := types.ParseFindingsJSON(mergeReappearedFindingsJSON(freshRaw, priorRaw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged.Items) != 1 || merged.Items[0].ID != "review-a" {
+		t.Fatalf("reappeared findings = %#v, want only selected lineage A", merged.Items)
+	}
+	if merged.Items[0].Action != types.ActionAskUser || merged.Items[0].Severity != "error" || merged.RiskLevel != "high" {
+		t.Fatalf("reappeared semantics = %#v, risk %q", merged.Items[0], merged.RiskLevel)
+	}
+	if !strings.Contains(merged.TestingSummary, "Full reproduction failed") || !strings.Contains(merged.TestingSummary, "Narrow path passed") || len(merged.Tested) != 2 {
+		t.Fatalf("reappeared evidence = tested %#v, summary %q", merged.Tested, merged.TestingSummary)
+	}
+}
+
 func TestMergeCarriedFindingsJSON_ExcludesPipelineDeliveryFromEffectiveRisk(t *testing.T) {
 	carriedRaw := `{"findings":[{"id":"review-delivery","severity":"error","description":"PR not pushed","action":"ask-user","review_scope":"pipeline-owned-delivery"}],"risk_level":"high","risk_rationale":"PR is absent.","risk_scope":"pipeline-owned-delivery"}`
 	freshRaw := `{"findings":[{"id":"review-source","severity":"info","description":"bounded source concern","action":"ask-user","review_scope":"source"}],"risk_level":"low","risk_rationale":"Source change is bounded.","risk_scope":"source-or-external"}`

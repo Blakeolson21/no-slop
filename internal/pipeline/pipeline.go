@@ -62,6 +62,7 @@ type StepContext struct {
 	// the uncertified range. Nil when none apply.
 	UncertifiedPriorRounds   []*db.StepRound
 	UncertifiedPriorFindings string
+	UncertifiedPriorLineages string
 	// Sessions manages the run's durable review-fixer session. The session
 	// machinery remains role-generic for legacy recovery; nil runs every
 	// invocation cold.

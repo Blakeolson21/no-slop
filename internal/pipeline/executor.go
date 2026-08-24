@@ -942,10 +942,14 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		}
 		if sctx.UncertifiedPriorFindings != "" {
 			carriedFindings = mergeCarriedFindingsJSON(carriedFindings, sctx.UncertifiedPriorFindings, string(stepName))
-			knownLineages = carriedFindings
 			if err := e.db.SetStepFindings(sr.ID, carriedFindings); err != nil {
 				return false, "", fmt.Errorf("restore uncertified review findings: %w", err)
 			}
+		}
+		if sctx.UncertifiedPriorLineages != "" {
+			knownLineages = mergeFindingsJSON(knownLineages, sctx.UncertifiedPriorLineages)
+		} else if carriedFindings != "" {
+			knownLineages = carriedFindings
 		}
 	}
 
@@ -988,9 +992,13 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		if stepName == types.StepReview {
 			reviewApprovedHeadSHA = outcome.ReviewApprovedHeadSHA
 		}
+		priorLineages := knownLineages
 		outcome.Findings, err = normalizeFindingsJSON(outcome.Findings, string(stepName), knownLineages)
 		if err != nil {
 			return false, "", fmt.Errorf("normalize %s findings: %w", stepName, err)
+		}
+		if carryFindings {
+			outcome.Findings = mergeReappearedFindingsJSON(outcome.Findings, priorLineages)
 		}
 		finalExitCode = outcome.ExitCode
 		durationOverrideMS += outcome.DurationOverrideMS

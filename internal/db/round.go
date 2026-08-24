@@ -124,6 +124,21 @@ func (d *DB) StepRoundStats(stepResultID string) (StepRoundStats, error) {
 	return stats, nil
 }
 
+func (d *DB) GetLatestStepRoundSelection(stepResultID string) (*string, error) {
+	row := d.sql.QueryRow(`SELECT selected_finding_ids FROM step_rounds WHERE step_result_id = ? ORDER BY round DESC LIMIT 1`, stepResultID)
+	var selected sql.NullString
+	if err := row.Scan(&selected); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get latest step round selection: %w", err)
+	}
+	if !selected.Valid || selected.String == "" {
+		return nil, nil
+	}
+	return &selected.String, nil
+}
+
 // InsertStepRound creates a new round record for a step result. fixSummary may
 // be nil for non-fix rounds or when the agent produced no summary.
 func (d *DB) InsertStepRound(stepResultID string, round int, trigger string, findingsJSON *string, fixSummary *string, durationMS int64) (*StepRound, error) {

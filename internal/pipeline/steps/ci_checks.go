@@ -26,8 +26,42 @@ func (s *CIStep) filterExpectedStaleAttestationChecks(sctx *pipeline.StepContext
 		return nil, fmt.Errorf("provider cannot identify expected stale attestation check attempts")
 	}
 	identities := make(map[string]scm.CheckAttemptIdentity)
+	publicationRunID := state.PublicationRunID
+	for _, check := range checks {
+		if check.Name != requiredAttestationCheckName {
+			continue
+		}
+		identity, err := readCheckAttemptIdentity(sctx.Ctx, reader, check, identities)
+		if err != nil {
+			return nil, err
+		}
+		if identity.RunID <= 0 {
+			return nil, fmt.Errorf("attestation check attempt has no immutable run identity")
+		}
+		if identity.HeadSHA == sctx.Run.HeadSHA && identity.PublicationNonce == state.PublicationNonce {
+			if publicationRunID != 0 && publicationRunID != identity.RunID {
+				return nil, fmt.Errorf("attestation publication nonce identifies multiple provider runs")
+			}
+			publicationRunID = identity.RunID
+		}
+	}
+	if state.PublicationRunID == 0 && publicationRunID != 0 {
+		state.PublicationRunID = publicationRunID
+		if err := persistExpectedAttestationState(sctx, *state); err != nil {
+			return nil, fmt.Errorf("persist attestation publication run identity: %w", err)
+		}
+	}
 
 	filtered := make([]scm.Check, 0, len(checks)+1)
+	if publicationRunID == 0 {
+		for _, check := range checks {
+			if check.Name != requiredAttestationCheckName {
+				filtered = append(filtered, check)
+			}
+		}
+		filtered = append(filtered, scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketPending, State: "EXPECTED_ATTESTATION"})
+		return filtered, nil
+	}
 	currentAttemptPresent := false
 	for _, check := range checks {
 		if check.Name != requiredAttestationCheckName {
@@ -41,7 +75,7 @@ func (s *CIStep) filterExpectedStaleAttestationChecks(sctx *pipeline.StepContext
 		if identity.HeadSHA != sctx.Run.HeadSHA {
 			continue
 		}
-		if checkAttemptTerminal(check) && identity.PublicationNonce != state.PublicationNonce {
+		if identity.RunID < publicationRunID {
 			continue
 		}
 		filtered = append(filtered, check)
@@ -51,15 +85,6 @@ func (s *CIStep) filterExpectedStaleAttestationChecks(sctx *pipeline.StepContext
 		filtered = append(filtered, scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketPending, State: "EXPECTED_ATTESTATION"})
 	}
 	return filtered, nil
-}
-
-func checkAttemptTerminal(check scm.Check) bool {
-	switch check.Bucket {
-	case scm.CheckBucketPass, scm.CheckBucketFail, scm.CheckBucketCancel, scm.CheckBucketSkip:
-		return true
-	default:
-		return false
-	}
 }
 
 func readCheckAttemptIdentity(ctx context.Context, reader scm.CheckAttemptIdentityReader, check scm.Check, cache map[string]scm.CheckAttemptIdentity) (scm.CheckAttemptIdentity, error) {

@@ -92,24 +92,28 @@ jobs:
               sys.stderr.write(f"::error::{message}\n")
               raise SystemExit(1)
 
-          section_start = body.rfind(pipeline_heading)
-          if section_start < 0:
-              fail("This PR is missing the no-slop v1 pipeline attestation. Re-run 'git push no-slop'.")
-          pipeline = body[section_start + len(pipeline_heading):]
-          signature, separator, owned_content = pipeline.partition("\n\n")
-          if not separator or signature not in owned_markers or not owned_content.startswith(prefix):
-              fail("This PR is missing the owned no-slop v1 pipeline attestation. Re-run 'git push no-slop'.")
-          start = len(prefix)
-          end = owned_content.find(closing, start)
-          if end < 0:
-              fail("The no-slop v1 pipeline attestation is malformed. Re-run 'git push no-slop'.")
+          candidates = []
+          for marker in owned_markers:
+              structural_prefix = pipeline_heading + marker + "\n\n" + prefix
+              search_from = 0
+              while True:
+                  tuple_start = body.find(structural_prefix, search_from)
+                  if tuple_start < 0:
+                      break
+                  start = tuple_start + len(structural_prefix)
+                  end = body.find(closing, start)
+                  if end >= 0:
+                      try:
+                          parsed = json.loads(body[start:end])
+                      except json.JSONDecodeError:
+                          parsed = None
+                      if isinstance(parsed, dict) and isinstance(parsed.get("steps"), list):
+                          candidates.append(parsed)
+                  search_from = tuple_start + 1
 
-          try:
-              attestation = json.loads(owned_content[start:end])
-          except json.JSONDecodeError:
-              fail("The no-slop v1 pipeline attestation is malformed. Re-run 'git push no-slop'.")
-          if not isinstance(attestation, dict) or not isinstance(attestation.get("steps"), list):
-              fail("The no-slop v1 pipeline attestation is malformed. Re-run 'git push no-slop'.")
+          if len(candidates) != 1:
+              fail("This PR must contain one unambiguous owned no-slop v1 pipeline attestation. Re-run 'git push no-slop'.")
+          attestation = candidates[0]
 
           publication_nonce = attestation.get("publication_nonce")
           if not isinstance(publication_nonce, str) or re.fullmatch(r"[0-9a-f]{32}", publication_nonce) is None:
