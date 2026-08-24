@@ -206,18 +206,20 @@ func NormalizeFindings(findings Findings, prefix string, existing []Finding) (Fi
 			allowed[claim] = append(allowed[claim], item)
 		}
 	}
-	claimed := make(map[lineageClaim]bool, len(findings.Items))
+	corroborated := make(map[lineageClaim][]int, len(findings.Items))
+	for i := range findings.Items {
+		item := findings.Items[i]
+		claim := lineageClaim{id: item.PriorID, token: item.PriorContinuityToken}
+		matches := allowed[claim]
+		if claim.id != "" && claim.token != "" && len(matches) == 1 && findingSemanticallyCorroborates(item, matches[0]) {
+			corroborated[claim] = append(corroborated[claim], i)
+		}
+	}
 	for i := range findings.Items {
 		item := &findings.Items[i]
 		claim := lineageClaim{id: item.PriorID, token: item.PriorContinuityToken}
 		matches := allowed[claim]
-		if claim.id != "" && claim.token != "" {
-			if claimed[claim] {
-				return Findings{}, fmt.Errorf("finding lineage %q claimed more than once", claim.id)
-			}
-			claimed[claim] = true
-		}
-		if claim.id != "" && claim.token != "" && len(matches) == 1 {
+		if claim.id != "" && claim.token != "" && len(matches) == 1 && len(corroborated[claim]) == 1 && corroborated[claim][0] == i {
 			item.ID = matches[0].ID
 			item.IDGenerated = true
 			item.ContinuityToken = matches[0].ContinuityToken
@@ -240,6 +242,16 @@ func NormalizeFindings(findings Findings, prefix string, existing []Finding) (Fi
 		item.PriorContinuityToken = ""
 	}
 	return findings, nil
+}
+
+func findingSemanticallyCorroborates(item, candidate Finding) bool {
+	if strings.TrimSpace(item.Description) == "" || strings.TrimSpace(candidate.Description) == "" {
+		return false
+	}
+	if item.Fingerprint() == candidate.Fingerprint() {
+		return true
+	}
+	return item.File != "" && item.File == candidate.File && item.Line > 0 && item.Line == candidate.Line
 }
 
 func normalizeNonReviewFindings(findings Findings, prefix string, _ []Finding) (Findings, error) {

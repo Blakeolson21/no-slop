@@ -104,6 +104,52 @@ func TestMergeCarriedFindingsJSON_DoesNotTrustUncorroboratedExplicitID(t *testin
 	}
 }
 
+func TestMergeCarriedFindingsJSON_PreservesPriorWhenClaimIsUnrelated(t *testing.T) {
+	prior, err := types.NormalizeFindings(types.Findings{Items: []types.Finding{{
+		File:        "loader.go",
+		Description: "unsafe loader",
+		Action:      types.ActionAskUser,
+	}}}, "review", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := types.NormalizeFindings(types.Findings{Items: []types.Finding{{
+		PriorID:              prior.Items[0].ID,
+		PriorContinuityToken: prior.Items[0].ContinuityToken,
+		File:                 "auth.go",
+		Description:          "authentication token leaks in logs",
+		Action:               types.ActionAutoFix,
+	}}}, "review", prior.Items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priorRaw, err := types.MarshalFindingsJSON(prior)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshRaw, err := types.MarshalFindingsJSON(fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	merged, err := types.ParseFindingsJSON(mergeCarriedFindingsJSON(freshRaw, priorRaw, "review"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged.Items) != 2 {
+		t.Fatalf("unrelated claim replaced carried finding: %#v", merged.Items)
+	}
+	byDescription := make(map[string]types.Finding, len(merged.Items))
+	for _, item := range merged.Items {
+		byDescription[item.Description] = item
+	}
+	if byDescription["unsafe loader"].ID != prior.Items[0].ID || byDescription["unsafe loader"].Action != types.ActionAskUser {
+		t.Fatalf("prior finding changed: %#v", merged.Items)
+	}
+	if byDescription["authentication token leaks in logs"].ID == prior.Items[0].ID {
+		t.Fatalf("new finding inherited prior lineage: %#v", merged.Items)
+	}
+}
+
 func TestMergeCarriedFindingsJSON_DoesNotTrustReviewerIDCollision(t *testing.T) {
 	carriedRaw := `{"findings":[{"id":"review-1","severity":"warning","description":"first defect","action":"ask-user"}]}`
 	freshRaw := `{"findings":[{"id":"review-1","severity":"error","description":"second defect","action":"auto-fix"}]}`

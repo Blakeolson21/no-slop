@@ -565,8 +565,8 @@ func TestNormalizeFindingsKeepsNonReviewIdentitySemantics(t *testing.T) {
 	}
 }
 
-func TestNormalizeFindingsRequiresExactPriorLineageClaim(t *testing.T) {
-	prior, err := NormalizeFindings(Findings{Items: []Finding{{ID: "review-1", Description: "authentication token expires too early"}}}, "review", nil)
+func TestNormalizeFindingsRequiresCorroboratedPriorLineageClaim(t *testing.T) {
+	prior, err := NormalizeFindings(Findings{Items: []Finding{{ID: "review-1", File: "manager.go", Line: 80, Description: "credentials are invalidated prematurely"}}}, "review", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -587,14 +587,56 @@ func TestNormalizeFindingsRequiresExactPriorLineageClaim(t *testing.T) {
 	}
 }
 
-func TestNormalizeFindingsRejectsDuplicatePriorLineageClaim(t *testing.T) {
-	prior, err := NormalizeFindings(Findings{Items: []Finding{{Description: "unsafe loader"}}}, "review", nil)
+func TestNormalizeFindingsPreservesUnrelatedClaimAsNewLineage(t *testing.T) {
+	prior, err := NormalizeFindings(Findings{Items: []Finding{{File: "loader.go", Description: "unsafe loader"}}}, "review", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	claim := Finding{PriorID: prior.Items[0].ID, PriorContinuityToken: prior.Items[0].ContinuityToken, Description: "same defect"}
-	_, err = NormalizeFindings(Findings{Items: []Finding{claim, claim}}, "review", prior.Items)
-	if err == nil || !strings.Contains(err.Error(), "claimed more than once") {
-		t.Fatalf("duplicate claim error = %v", err)
+	fresh, err := NormalizeFindings(Findings{Items: []Finding{{
+		PriorID:              prior.Items[0].ID,
+		PriorContinuityToken: prior.Items[0].ContinuityToken,
+		File:                 "auth.go",
+		Description:          "authentication token leaks in logs",
+	}}}, "review", prior.Items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Items[0].ID == prior.Items[0].ID || FindingIDCorroborates(fresh.Items[0], prior.Items[0]) {
+		t.Fatalf("unrelated finding inherited prior lineage: %#v", fresh.Items[0])
+	}
+}
+
+func TestNormalizeFindingsCorroboratesRewordingAtSameLocation(t *testing.T) {
+	prior, err := NormalizeFindings(Findings{Items: []Finding{{File: "loader.go", Line: 42, Description: "unsafe loader"}}}, "review", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := NormalizeFindings(Findings{Items: []Finding{{
+		PriorID:              prior.Items[0].ID,
+		PriorContinuityToken: prior.Items[0].ContinuityToken,
+		File:                 "loader.go",
+		Line:                 42,
+		Description:          "loader permits traversal outside its root",
+	}}}, "review", prior.Items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !FindingIDCorroborates(fresh.Items[0], prior.Items[0]) {
+		t.Fatalf("same-location continuation lost lineage: %#v", fresh.Items[0])
+	}
+}
+
+func TestNormalizeFindingsPreservesAmbiguousDuplicateClaims(t *testing.T) {
+	prior, err := NormalizeFindings(Findings{Items: []Finding{{File: "loader.go", Description: "unsafe loader"}}}, "review", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := Finding{PriorID: prior.Items[0].ID, PriorContinuityToken: prior.Items[0].ContinuityToken, File: "loader.go", Description: "unsafe loader"}
+	fresh, err := NormalizeFindings(Findings{Items: []Finding{claim, claim}}, "review", prior.Items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Items[0].ID == prior.Items[0].ID || fresh.Items[1].ID == prior.Items[0].ID || fresh.Items[0].ID == fresh.Items[1].ID {
+		t.Fatalf("ambiguous claims reused lineage: %#v", fresh.Items)
 	}
 }

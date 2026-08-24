@@ -136,6 +136,22 @@ func fakeGHHandler(args []string) {
 		}
 		os.Exit(1)
 	}
+	if len(args) >= 2 && args[0] == "pr" && args[1] == "checks" {
+		checks := os.Getenv("FAKE_CLI_GH_CHECKS_JSON")
+		if checks == "" {
+			checks = "[]"
+		}
+		fmt.Println(checks)
+		os.Exit(0)
+	}
+	if len(args) >= 2 && args[0] == "run" && args[1] == "view" {
+		identity := os.Getenv("FAKE_CLI_GH_RUN_IDENTITY_JSON")
+		if identity == "" {
+			os.Exit(1)
+		}
+		fmt.Println(identity)
+		os.Exit(0)
+	}
 	if len(args) >= 2 && args[0] == "pr" && args[1] == "edit" {
 		if os.Getenv("FAKE_CLI_GH_EDIT_ERROR") != "" {
 			fmt.Fprintln(os.Stderr, "injected PR update failure")

@@ -27,7 +27,7 @@ func roundHistoryPromptSection(sctx *pipeline.StepContext) string {
 		return ""
 	}
 
-	selectedLater := latestSelectedRounds(rounds)
+	selectedLater := selectedRoundFindings(rounds)
 	var blocks []string
 	for _, r := range rounds {
 		block := renderRoundHistoryEntryWithLaterSelections(r, selectedLater)
@@ -74,7 +74,7 @@ func renderRoundHistoryEntry(r *db.StepRound) string {
 	return renderRoundHistoryEntryWithLaterSelections(r, nil)
 }
 
-func renderRoundHistoryEntryWithLaterSelections(r *db.StepRound, selectedLater map[string]int) string {
+func renderRoundHistoryEntryWithLaterSelections(r *db.StepRound, selectedLater []selectedRoundFinding) string {
 	if r == nil {
 		return ""
 	}
@@ -131,8 +131,14 @@ func renderRoundHistoryEntryWithLaterSelections(r *db.StepRound, selectedLater m
 }
 
 type roundFindingLine struct {
-	ID   string
-	Line string
+	ID      string
+	Finding types.Finding
+	Line    string
+}
+
+type selectedRoundFinding struct {
+	Finding types.Finding
+	Round   int
 }
 
 func renderRoundFindingLines(raw string) []string {
@@ -176,7 +182,7 @@ func parseRoundFindingLines(raw string) []roundFindingLine {
 		if err != nil {
 			continue
 		}
-		lines = append(lines, roundFindingLine{ID: item.ID, Line: string(encoded)})
+		lines = append(lines, roundFindingLine{ID: item.ID, Finding: item, Line: string(encoded)})
 	}
 	return lines
 }
@@ -190,7 +196,7 @@ func partitionRoundFindings(findingsJSON *string, userFindingsJSON *string, sele
 	return partitionRoundFindingsWithLaterSelections(findingsJSON, userFindingsJSON, selectedJSON, 0, nil)
 }
 
-func partitionRoundFindingsWithLaterSelections(findingsJSON *string, userFindingsJSON *string, selectedJSON *string, round int, selectedLater map[string]int) (selected []string, unselected []string) {
+func partitionRoundFindingsWithLaterSelections(findingsJSON *string, userFindingsJSON *string, selectedJSON *string, round int, selectedLater []selectedRoundFinding) (selected []string, unselected []string) {
 	if findingsJSON == nil || strings.TrimSpace(*findingsJSON) == "" {
 		return nil, nil
 	}
@@ -228,7 +234,7 @@ func partitionRoundFindingsWithLaterSelections(findingsJSON *string, userFinding
 		if item.ID != "" && selectedSet[item.ID] {
 			continue
 		}
-		if item.ID != "" && selectedLater[item.ID] > round {
+		if findingSelectedLater(item.Finding, allFindings, round, selectedLater) {
 			continue
 		}
 		unselected = append(unselected, item.Line)
@@ -241,23 +247,67 @@ func partitionRoundFindingsWithLaterSelections(findingsJSON *string, userFinding
 	return selected, unselected
 }
 
-func latestSelectedRounds(rounds []*db.StepRound) map[string]int {
-	latest := make(map[string]int)
+func selectedRoundFindings(rounds []*db.StepRound) []selectedRoundFinding {
+	var selected []selectedRoundFinding
 	for _, round := range rounds {
-		if round == nil || round.SelectedFindingIDs == nil {
+		if round == nil || round.SelectedFindingIDs == nil || round.FindingsJSON == nil {
 			continue
 		}
 		var ids []string
 		if err := json.Unmarshal([]byte(*round.SelectedFindingIDs), &ids); err != nil {
 			continue
 		}
+		selectedIDs := make(map[string]bool, len(ids))
 		for _, id := range ids {
-			if id != "" && round.Round > latest[id] {
-				latest[id] = round.Round
+			if id != "" {
+				selectedIDs[id] = true
+			}
+		}
+		raw := round.FindingsJSON
+		if round.UserFindingsJSON != nil && strings.TrimSpace(*round.UserFindingsJSON) != "" {
+			raw = round.UserFindingsJSON
+		}
+		for _, item := range parseRoundFindingLines(*raw) {
+			if selectedIDs[item.ID] {
+				selected = append(selected, selectedRoundFinding{Finding: item.Finding, Round: round.Round})
 			}
 		}
 	}
-	return latest
+	return selected
+}
+
+func findingSelectedLater(item types.Finding, roundItems []roundFindingLine, round int, selectedLater []selectedRoundFinding) bool {
+	var candidates []types.Finding
+	for _, selected := range selectedLater {
+		if selected.Round > round {
+			candidates = append(candidates, selected.Finding)
+		}
+	}
+	if len(candidates) == 0 {
+		return false
+	}
+	current := make([]types.Finding, 0, len(roundItems))
+	for _, candidate := range roundItems {
+		current = append(current, candidate.Finding)
+	}
+	currentCounts := types.CountFindingFingerprints(current)
+	candidateCounts := types.CountFindingFingerprints(candidates)
+	for _, candidate := range candidates {
+		if item.HasLineage() && candidate.HasLineage() {
+			if types.FindingIDCorroborates(item, candidate) {
+				return true
+			}
+			continue
+		}
+		if item.Identity() == candidate.Identity() {
+			return true
+		}
+		fingerprint := item.Fingerprint()
+		if fingerprint == candidate.Fingerprint() && currentCounts[fingerprint] == 1 && candidateCounts[fingerprint] == 1 {
+			return true
+		}
+	}
+	return false
 }
 
 func selectionSourceValue(source *string) string {

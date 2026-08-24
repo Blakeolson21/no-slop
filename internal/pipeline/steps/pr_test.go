@@ -51,6 +51,10 @@ func TestPRStep_UpdatesExistingPR(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
 
 	env, logFile := fakeGH(t, "https://github.com/test/repo/pull/42")
+	env = append(env,
+		`FAKE_CLI_GH_CHECKS_JSON=[{"name":"PR must be raised via no-slop","bucket":"fail","state":"FAILURE","link":"https://github.com/test/repo/actions/runs/100/job/1000"}]`,
+		`FAKE_CLI_GH_RUN_IDENTITY_JSON={"databaseId":100,"number":41,"attempt":3,"event":"pull_request_target","headSha":"`+headSHA+`"}`,
+	)
 
 	ag := &mockAgent{name: "test"}
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
@@ -63,9 +67,10 @@ func TestPRStep_UpdatesExistingPR(t *testing.T) {
 		t.Fatal(err)
 	}
 	budget := &checkRerunBudget{
-		spent:                         map[string]int{"build": 1},
-		expectedAttestationHeadSHA:    baseSHA,
-		compliantAttestationRunNumber: 41,
+		spent:                               map[string]int{"build": 1},
+		expectedAttestationHeadSHA:          baseSHA,
+		expectedAttestationRunNumberCutoff:  12,
+		expectedAttestationRunAttemptCutoff: 2,
 	}
 	encoded, err := budget.marshal()
 	if err != nil {
@@ -116,7 +121,7 @@ func TestPRStep_UpdatesExistingPR(t *testing.T) {
 	if err := persisted.unmarshal(encoded); err != nil {
 		t.Fatal(err)
 	}
-	if persisted.expectedAttestationHeadSHA != headSHA || persisted.compliantAttestationRunNumber != 0 || persisted.used("build") != 1 {
+	if persisted.expectedAttestationHeadSHA != headSHA || persisted.expectedAttestationRunNumberCutoff != 41 || persisted.expectedAttestationRunAttemptCutoff != 3 || persisted.used("build") != 1 {
 		t.Fatalf("persisted attestation expectation = %#v", persisted)
 	}
 }

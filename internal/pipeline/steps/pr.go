@@ -89,9 +89,9 @@ func (s *PRStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 	}
 	if existing != nil {
 		sctx.Log(fmt.Sprintf("pull request already exists: %s, updating...", describePR(existing)))
-		if _, ok := host.(scm.CheckAttemptIdentityReader); ok {
-			if err := persistExpectedAttestationHead(sctx); err != nil {
-				return nil, fmt.Errorf("persist expected attestation head: %w", err)
+		if reader, ok := host.(scm.CheckAttemptIdentityReader); ok {
+			if err := persistExpectedAttestationBoundary(sctx, host, existing, reader); err != nil {
+				return nil, fmt.Errorf("persist expected attestation boundary: %w", err)
 			}
 		}
 		updated, err := host.UpdatePR(ctx, existing, scm.PRContent(content))

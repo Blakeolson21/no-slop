@@ -21,58 +21,62 @@ func (h *attestationIdentityHost) GetCheckAttemptIdentity(_ context.Context, che
 func TestFilterExpectedStaleAttestationChecksUsesAttemptOrder(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	olderPass := scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketPass, State: "SUCCESS", Link: "older-pass"}
 	stale := scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketFail, State: "FAILURE", Link: "stale"}
-	compliantPending := scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketPending, State: "IN_PROGRESS", Link: "compliant"}
-	compliantPass := scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketPass, State: "SUCCESS", Link: "compliant"}
+	stalePending := scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketPending, State: "IN_PROGRESS", Link: "stale-pending"}
+	currentPending := scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketPending, State: "IN_PROGRESS", Link: "current-pending"}
 	newFailure := scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketFail, State: "FAILURE", Link: "new-failure"}
 	host := &attestationIdentityHost{identities: map[string]scm.CheckAttemptIdentity{
-		"stale":       {RunID: 1000, RunNumber: 100, HeadSHA: headSHA},
-		"compliant":   {RunID: 1001, RunNumber: 101, HeadSHA: headSHA},
-		"new-failure": {RunID: 1002, RunNumber: 102, HeadSHA: headSHA},
+		"older-pass":      {RunID: 999, RunNumber: 99, RunAttempt: 1, HeadSHA: headSHA},
+		"stale":           {RunID: 1000, RunNumber: 100, RunAttempt: 1, HeadSHA: headSHA},
+		"stale-pending":   {RunID: 998, RunNumber: 98, RunAttempt: 1, HeadSHA: headSHA},
+		"current-pending": {RunID: 1001, RunNumber: 101, RunAttempt: 1, HeadSHA: headSHA},
+		"new-failure":     {RunID: 1000, RunNumber: 100, RunAttempt: 2, HeadSHA: headSHA},
 	}}
-	step := &CIStep{transientReruns: checkRerunBudget{expectedAttestationHeadSHA: headSHA}}
+	state := checkRerunBudget{expectedAttestationHeadSHA: headSHA, expectedAttestationRunNumberCutoff: 100, expectedAttestationRunAttemptCutoff: 1}
+	encoded, err := state.marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sctx.DB.SetRunCIRerunState(sctx.Run.ID, encoded); err != nil {
+		t.Fatal(err)
+	}
+	step := &CIStep{}
+	step.loadRerunBudget(sctx)
 
-	filtered, err := step.filterExpectedStaleAttestationChecks(sctx, host, []scm.Check{stale})
+	filtered, err := step.filterExpectedStaleAttestationChecks(sctx, host, []scm.Check{olderPass, stale})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(filtered) != 1 || filtered[0].Bucket != scm.CheckBucketPending {
-		t.Fatalf("stale-only checks = %#v, want synthetic pending", filtered)
+		t.Fatalf("pre-update terminal checks = %#v, want synthetic pending", filtered)
 	}
 
-	filtered, err = step.filterExpectedStaleAttestationChecks(sctx, host, []scm.Check{stale, compliantPending})
+	filtered, err = step.filterExpectedStaleAttestationChecks(sctx, host, []scm.Check{stalePending, stale})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(filtered) != 1 || filtered[0].Link != "compliant" || filtered[0].Bucket != scm.CheckBucketPending {
-		t.Fatalf("pending compliant checks = %#v", filtered)
+	if len(filtered) != 1 || filtered[0].Link != "stale-pending" || filtered[0].Bucket != scm.CheckBucketPending {
+		t.Fatalf("pre-update pending check was suppressed: %#v", filtered)
 	}
 
-	filtered, err = step.filterExpectedStaleAttestationChecks(sctx, host, []scm.Check{stale, compliantPass})
+	filtered, err = step.filterExpectedStaleAttestationChecks(sctx, host, []scm.Check{olderPass, stale, currentPending})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(filtered) != 1 || filtered[0].Link != "compliant" || filtered[0].Bucket != scm.CheckBucketPass {
-		t.Fatalf("passing compliant checks = %#v", filtered)
-	}
-	encoded, err := sctx.DB.GetRunCIRerunState(sctx.Run.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var persisted checkRerunBudget
-	if err := persisted.unmarshal(encoded); err != nil {
-		t.Fatal(err)
-	}
-	if persisted.expectedAttestationHeadSHA != headSHA || persisted.compliantAttestationRunNumber != 101 {
-		t.Fatalf("persisted attestation state = %#v", persisted)
+	if len(filtered) != 1 || filtered[0].Link != "current-pending" || filtered[0].Bucket != scm.CheckBucketPending {
+		t.Fatalf("post-update pending checks = %#v", filtered)
 	}
 
-	filtered, err = step.filterExpectedStaleAttestationChecks(sctx, host, []scm.Check{stale, compliantPass, newFailure})
+	filtered, err = step.filterExpectedStaleAttestationChecks(sctx, host, []scm.Check{olderPass, stale, newFailure})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(filtered) != 2 || filtered[0].Link != "compliant" || filtered[1].Link != "new-failure" || !filtered[1].Failing() {
-		t.Fatalf("newer failure checks = %#v", filtered)
+	if len(filtered) != 1 || filtered[0].Link != "new-failure" || !filtered[0].Failing() {
+		t.Fatalf("post-update failure was suppressed: %#v", filtered)
+	}
+	if step.transientReruns.expectedAttestationHeadSHA != headSHA || step.transientReruns.expectedAttestationRunNumberCutoff != 100 || step.transientReruns.expectedAttestationRunAttemptCutoff != 1 {
+		t.Fatalf("recovered attestation boundary = %#v", step.transientReruns)
 	}
 }
 

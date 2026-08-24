@@ -102,20 +102,22 @@ type rerunRollupState struct {
 // key and therefore one budget. Selection must reserve against that shared key
 // (see transientRerunCandidates) or a single poll could spend it more than once.
 type checkRerunBudget struct {
-	spent                         map[string]int
-	rollup                        map[string]rerunRollupState
-	expectedAttestationHeadSHA    string
-	compliantAttestationRunNumber int64
+	spent                               map[string]int
+	rollup                              map[string]rerunRollupState
+	expectedAttestationHeadSHA          string
+	expectedAttestationRunNumberCutoff  int64
+	expectedAttestationRunAttemptCutoff int
 }
 
 // persistedRerunBudget is the on-disk shape of a checkRerunBudget. It is a
 // named type rather than an inline literal so a field added here is a
 // compile-time decision about what must survive a restart.
 type persistedRerunBudget struct {
-	Spent                         map[string]int                  `json:"spent,omitempty"`
-	Rollup                        map[string]persistedRollupState `json:"rollup,omitempty"`
-	ExpectedAttestationHeadSHA    string                          `json:"expected_attestation_head_sha,omitempty"`
-	CompliantAttestationRunNumber int64                           `json:"compliant_attestation_run_number,omitempty"`
+	Spent                               map[string]int                  `json:"spent,omitempty"`
+	Rollup                              map[string]persistedRollupState `json:"rollup,omitempty"`
+	ExpectedAttestationHeadSHA          string                          `json:"expected_attestation_head_sha,omitempty"`
+	ExpectedAttestationRunNumberCutoff  int64                           `json:"expected_attestation_run_number_cutoff,omitempty"`
+	ExpectedAttestationRunAttemptCutoff int                             `json:"expected_attestation_run_attempt_cutoff,omitempty"`
 }
 
 type persistedRollupState struct {
@@ -128,13 +130,14 @@ type persistedRollupState struct {
 // marshal renders the budget for persistence. An empty budget marshals to the
 // empty string so a run that never spent a rerun writes nothing.
 func (b *checkRerunBudget) marshal() (string, error) {
-	if len(b.spent) == 0 && len(b.rollup) == 0 && b.expectedAttestationHeadSHA == "" && b.compliantAttestationRunNumber == 0 {
+	if len(b.spent) == 0 && len(b.rollup) == 0 && b.expectedAttestationHeadSHA == "" && b.expectedAttestationRunNumberCutoff == 0 && b.expectedAttestationRunAttemptCutoff == 0 {
 		return "", nil
 	}
 	payload := persistedRerunBudget{
-		Spent:                         b.spent,
-		ExpectedAttestationHeadSHA:    b.expectedAttestationHeadSHA,
-		CompliantAttestationRunNumber: b.compliantAttestationRunNumber,
+		Spent:                               b.spent,
+		ExpectedAttestationHeadSHA:          b.expectedAttestationHeadSHA,
+		ExpectedAttestationRunNumberCutoff:  b.expectedAttestationRunNumberCutoff,
+		ExpectedAttestationRunAttemptCutoff: b.expectedAttestationRunAttemptCutoff,
 	}
 	if len(b.rollup) > 0 {
 		payload.Rollup = make(map[string]persistedRollupState, len(b.rollup))
@@ -175,7 +178,8 @@ func (b *checkRerunBudget) unmarshal(encoded string) error {
 	}
 	b.rollup = make(map[string]rerunRollupState, len(payload.Rollup))
 	b.expectedAttestationHeadSHA = payload.ExpectedAttestationHeadSHA
-	b.compliantAttestationRunNumber = payload.CompliantAttestationRunNumber
+	b.expectedAttestationRunNumberCutoff = payload.ExpectedAttestationRunNumberCutoff
+	b.expectedAttestationRunAttemptCutoff = payload.ExpectedAttestationRunAttemptCutoff
 	for name, state := range payload.Rollup {
 		observedLinks := make(map[string]bool, len(state.ObservedLinks))
 		for _, link := range state.ObservedLinks {
@@ -270,10 +274,11 @@ func (b *checkRerunBudget) retireResolvedReruns(checks []scm.Check, currentHead 
 		return false, nil
 	}
 	candidate := &checkRerunBudget{
-		spent:                         b.spent,
-		rollup:                        make(map[string]rerunRollupState, len(b.rollup)-len(retirable)),
-		expectedAttestationHeadSHA:    b.expectedAttestationHeadSHA,
-		compliantAttestationRunNumber: b.compliantAttestationRunNumber,
+		spent:                               b.spent,
+		rollup:                              make(map[string]rerunRollupState, len(b.rollup)-len(retirable)),
+		expectedAttestationHeadSHA:          b.expectedAttestationHeadSHA,
+		expectedAttestationRunNumberCutoff:  b.expectedAttestationRunNumberCutoff,
+		expectedAttestationRunAttemptCutoff: b.expectedAttestationRunAttemptCutoff,
 	}
 	for name, state := range b.rollup {
 		if !retirable[name] {
@@ -526,7 +531,25 @@ func (s *CIStep) persistRerunBudgetCandidate(sctx *pipeline.StepContext, candida
 	return sctx.DB.SetRunCIRerunState(sctx.Run.ID, encoded)
 }
 
-func persistExpectedAttestationHead(sctx *pipeline.StepContext) error {
+func persistExpectedAttestationBoundary(sctx *pipeline.StepContext, host scm.Host, pr *scm.PR, reader scm.CheckAttemptIdentityReader) error {
+	checks, err := host.GetChecks(sctx.Ctx, pr)
+	if err != nil {
+		return err
+	}
+	cutoff := scm.CheckAttemptIdentity{}
+	identities := make(map[string]scm.CheckAttemptIdentity)
+	for _, check := range checks {
+		if check.Name != requiredAttestationCheckName {
+			continue
+		}
+		identity, err := readCheckAttemptIdentity(sctx.Ctx, reader, check, identities)
+		if err != nil {
+			return err
+		}
+		if checkAttemptAfter(identity, cutoff.RunNumber, cutoff.RunAttempt) {
+			cutoff = identity
+		}
+	}
 	encoded, err := sctx.DB.GetRunCIRerunState(sctx.Run.ID)
 	if err != nil {
 		return err
@@ -536,7 +559,8 @@ func persistExpectedAttestationHead(sctx *pipeline.StepContext) error {
 		return err
 	}
 	state.expectedAttestationHeadSHA = sctx.Run.HeadSHA
-	state.compliantAttestationRunNumber = 0
+	state.expectedAttestationRunNumberCutoff = cutoff.RunNumber
+	state.expectedAttestationRunAttemptCutoff = cutoff.RunAttempt
 	encoded, err = state.marshal()
 	if err != nil {
 		return err

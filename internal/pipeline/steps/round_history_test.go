@@ -155,6 +155,93 @@ func TestRoundHistoryPromptSection_LaterSelectionSupersedesEarlierIgnore(t *test
 	}
 }
 
+func TestRoundHistoryPromptSection_RawIDReuseDoesNotSupersedeEarlierIgnore(t *testing.T) {
+	sctx, stepID := newRoundHistoryContext(t)
+
+	initial := `{"findings":[{"id":"review-1","severity":"error","file":"loader.go","line":10,"description":"unsafe loader","action":"ask-user"}]}`
+	r1, err := sctx.DB.InsertStepRound(stepID, 1, "initial", &initial, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	none := `[]`
+	if err := sctx.DB.SetStepRoundSelection(r1.ID, &none, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	later := `{"findings":[{"id":"review-1","severity":"error","file":"auth.go","line":20,"description":"token leak","action":"ask-user"}]}`
+	r2, err := sctx.DB.InsertStepRound(stepID, 2, "recovery", &later, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := `["review-1"]`
+	if err := sctx.DB.SetStepRoundSelection(r2.ID, &selected, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	got := roundHistoryPromptSection(sctx)
+	if !strings.Contains(got, "user_chose_to_ignore:") || !strings.Contains(got, `"description":"unsafe loader"`) {
+		t.Fatalf("unrelated raw ID reuse erased earlier history:\n%s", got)
+	}
+}
+
+func TestRoundHistoryPromptSection_LegacyUniqueStructureSupersedesEarlierIgnore(t *testing.T) {
+	sctx, stepID := newRoundHistoryContext(t)
+
+	initial := `{"findings":[{"id":"review-1","severity":"error","file":"loader.go","line":10,"description":"unsafe loader","action":"ask-user"}]}`
+	r1, err := sctx.DB.InsertStepRound(stepID, 1, "initial", &initial, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	none := `[]`
+	if err := sctx.DB.SetStepRoundSelection(r1.ID, &none, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	later := `{"findings":[{"id":"review-9","severity":"error","file":"loader.go","line":25,"description":"unsafe loader","action":"ask-user"}]}`
+	r2, err := sctx.DB.InsertStepRound(stepID, 2, "recovery", &later, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := `["review-9"]`
+	if err := sctx.DB.SetStepRoundSelection(r2.ID, &selected, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	got := roundHistoryPromptSection(sctx)
+	if strings.Contains(got, "user_chose_to_ignore:") {
+		t.Fatalf("unique legacy continuation remained ignored:\n%s", got)
+	}
+}
+
+func TestRoundHistoryPromptSection_AmbiguousLegacyStructurePreservesHistory(t *testing.T) {
+	sctx, stepID := newRoundHistoryContext(t)
+
+	initial := `{"findings":[{"id":"review-1","severity":"error","file":"loader.go","line":10,"description":"unsafe loader","action":"ask-user"},{"id":"review-2","severity":"error","file":"loader.go","line":20,"description":"unsafe loader","action":"ask-user"}]}`
+	r1, err := sctx.DB.InsertStepRound(stepID, 1, "initial", &initial, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	none := `[]`
+	if err := sctx.DB.SetStepRoundSelection(r1.ID, &none, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	later := `{"findings":[{"id":"review-9","severity":"error","file":"loader.go","line":30,"description":"unsafe loader","action":"ask-user"}]}`
+	r2, err := sctx.DB.InsertStepRound(stepID, 2, "recovery", &later, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := `["review-9"]`
+	if err := sctx.DB.SetStepRoundSelection(r2.ID, &selected, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	got := roundHistoryPromptSection(sctx)
+	if !strings.Contains(got, "user_chose_to_ignore:") || strings.Count(got, `"description":"unsafe loader"`) < 3 {
+		t.Fatalf("ambiguous legacy history was collapsed:\n%s", got)
+	}
+}
+
 func TestRoundHistoryPromptSection_IncludesSourceAndUserInstructions(t *testing.T) {
 	sctx, stepID := newRoundHistoryContext(t)
 	round1 := `{"findings":[{"id":"review-1","severity":"error","description":"panic risk","action":"auto-fix"},{"id":"review-2","severity":"warning","description":"secondary","action":"auto-fix"}],"summary":"2"}`
