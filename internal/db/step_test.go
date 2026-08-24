@@ -520,7 +520,7 @@ func TestCompleteReviewStepIsAtomic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := d.CompleteReviewStep(step.ID, "missing-run", "approved", 0, 10, "review.log"); err == nil {
+	if err := d.CompleteReviewStep(step.ID, "missing-run", "approved", 0, 10, "review.log", nil); err == nil {
 		t.Fatal("expected missing run to roll back review completion")
 	}
 	gotStep, _ := d.GetStepResult(step.ID)
@@ -532,13 +532,43 @@ func TestCompleteReviewStepIsAtomic(t *testing.T) {
 		t.Fatalf("failed transaction created review authority: %#v", gotRun.ReviewApprovedHeadSHA)
 	}
 
-	if err := d.CompleteReviewStep(step.ID, run.ID, "approved", 0, 10, "review.log"); err != nil {
+	if err := d.CompleteReviewStep(step.ID, run.ID, "approved", 0, 10, "review.log", nil); err != nil {
 		t.Fatal(err)
 	}
 	gotStep, _ = d.GetStepResult(step.ID)
 	gotRun, _ = d.GetRun(run.ID)
 	if gotStep.Status != types.StepStatusCompleted || gotRun.ReviewApprovedHeadSHA == nil || *gotRun.ReviewApprovedHeadSHA != "approved" {
 		t.Fatalf("atomic review completion = step %#v run %#v", gotStep, gotRun)
+	}
+}
+
+func TestCompleteReviewStepRollsBackWhenCertifiedRangeCannotClear(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/tmp/review-range-atomic", "https://example.com/repo.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feature", "approved", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepReview)
+	if err := d.StartStep(step.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, "from", "approved", run.ID); err != nil {
+		t.Fatal(err)
+	}
+	certifiedRange, err := d.GetUncertifiedPipelineRange(repo.ID, run.Branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.sql.Exec(`CREATE TRIGGER refuse_certified_range_delete BEFORE DELETE ON uncertified_pipeline_ranges BEGIN SELECT RAISE(ABORT, 'refuse delete'); END`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := d.CompleteReviewStep(step.ID, run.ID, "approved", 0, 10, "review.log", certifiedRange); err == nil {
+		t.Fatal("expected certified range deletion to roll back review completion")
+	}
+	gotStep, _ := d.GetStepResult(step.ID)
+	gotRun, _ := d.GetRun(run.ID)
+	gotRange, _ := d.GetUncertifiedPipelineRange(repo.ID, run.Branch)
+	if gotStep.Status != types.StepStatusRunning || gotStep.CompletedAt != nil || gotRun.ReviewApprovedHeadSHA != nil || gotRange == nil {
+		t.Fatalf("failed transaction persisted partial certification: step=%#v run=%#v range=%#v", gotStep, gotRun, gotRange)
 	}
 }
 

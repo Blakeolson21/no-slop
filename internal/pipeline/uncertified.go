@@ -107,38 +107,31 @@ func PersistUncertifiedPipelineRangeWithRollback(sctx *StepContext, fromSHA, toS
 	return rollback, nil
 }
 
-// ClearUncertifiedPipelineRangeIfCertified drops the branch marker once a
-// full review has completed. A completed review of the current head certifies
-// the previously uncertified fixer commits on this branch.
-func ClearUncertifiedPipelineRangeIfCertified(ctx context.Context, database *db.DB, repoID, branch, approvedHead, workDir string) {
+func certifiedUncertifiedPipelineRange(ctx context.Context, database *db.DB, repoID, branch, approvedHead, workDir string) (*db.UncertifiedPipelineRange, error) {
 	if database == nil {
-		return
+		return nil, nil
 	}
 	rng, err := database.GetUncertifiedPipelineRange(repoID, branch)
 	if err != nil {
-		slog.Warn("failed to read uncertified pipeline range before clear", "repo_id", repoID, "error", err)
-		return
+		return nil, fmt.Errorf("read uncertified pipeline range before certification: %w", err)
 	}
 	if rng == nil {
-		return
+		return nil, nil
 	}
 	approvedHead = strings.TrimSpace(approvedHead)
 	if approvedHead == "" {
-		return
+		return nil, fmt.Errorf("certify uncertified pipeline range: missing approved head")
 	}
 	if rng.ToSHA != approvedHead {
 		inLineage, err := commitIsSelfOrAncestor(ctx, workDir, rng.ToSHA, approvedHead)
 		if err != nil {
-			slog.Warn("failed to verify uncertified pipeline range before clear", "repo_id", repoID, "error", err)
-			return
+			return nil, fmt.Errorf("verify uncertified pipeline range before certification: %w", err)
 		}
 		if !inLineage {
-			return
+			return nil, nil
 		}
 	}
-	if err := database.DeleteUncertifiedPipelineRange(repoID, branch); err != nil {
-		slog.Warn("failed to clear uncertified pipeline range after certified review", "repo_id", repoID, "error", err)
-	}
+	return rng, nil
 }
 
 // RemapUncertifiedPipelineRangeAfterRebase rewrites a persisted uncertified

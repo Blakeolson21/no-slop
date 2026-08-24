@@ -254,11 +254,9 @@ func (d *DB) CompleteStepWithStatusAtHead(id string, status types.StepStatus, ce
 	return nil
 }
 
-// CompleteReviewStep atomically completes a successful review and replaces
-// the run's exact review-approved head. Neither write survives if the other
-// fails, so a failed completion cannot create approval authority and a
-// completed review cannot lack it.
-func (d *DB) CompleteReviewStep(id, runID, approvedHeadSHA string, exitCode int, durationMS int64, logPath string) error {
+// CompleteReviewStep atomically completes a successful review, replaces the
+// run's exact review-approved head, and retires the certified recovery range.
+func (d *DB) CompleteReviewStep(id, runID, approvedHeadSHA string, exitCode int, durationMS int64, logPath string, certifiedRange *UncertifiedPipelineRange) error {
 	tx, err := d.sql.Begin()
 	if err != nil {
 		return fmt.Errorf("begin complete review step: %w", err)
@@ -282,6 +280,22 @@ func (d *DB) CompleteReviewStep(id, runID, approvedHeadSHA string, exitCode int,
 	}
 	if rows, err := result.RowsAffected(); err != nil || rows != 1 {
 		return fmt.Errorf("record review-approved head: run row not found")
+	}
+	if certifiedRange != nil {
+		result, err = tx.Exec(
+			`DELETE FROM uncertified_pipeline_ranges
+			 WHERE repo_id = ? AND branch = ? AND from_sha = ? AND to_sha = ? AND source_run_id = ?
+			   AND repo_id = (SELECT repo_id FROM runs WHERE id = ?)
+			   AND branch = (SELECT branch FROM runs WHERE id = ?)`,
+			certifiedRange.RepoID, certifiedRange.Branch, certifiedRange.FromSHA, certifiedRange.ToSHA, certifiedRange.SourceRunID,
+			runID, runID,
+		)
+		if err != nil {
+			return fmt.Errorf("clear certified uncertified pipeline range: %w", err)
+		}
+		if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+			return fmt.Errorf("clear certified uncertified pipeline range: range changed")
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit completed review: %w", err)

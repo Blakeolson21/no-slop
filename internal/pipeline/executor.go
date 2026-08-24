@@ -450,12 +450,15 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 			if gate.reviewedHeadSHA == "" {
 				return fmt.Errorf("recovered review has no durable reviewed head candidate")
 			}
-			if err := e.db.CompleteReviewStep(gate.stepResult.ID, run.ID, gate.reviewedHeadSHA, recoveredExitCode(gate.stepResult), duration, recoveredLogPath(gate.stepResult)); err != nil {
+			certifiedRange, err := certifiedUncertifiedPipelineRange(ctx, e.db, repo.ID, run.Branch, gate.reviewedHeadSHA, workDir)
+			if err != nil {
+				return err
+			}
+			if err := e.db.CompleteReviewStep(gate.stepResult.ID, run.ID, gate.reviewedHeadSHA, recoveredExitCode(gate.stepResult), duration, recoveredLogPath(gate.stepResult), certifiedRange); err != nil {
 				return err
 			}
 			reviewedHead := gate.reviewedHeadSHA
 			run.ReviewApprovedHeadSHA = &reviewedHead
-			ClearUncertifiedPipelineRangeIfCertified(ctx, e.db, repo.ID, run.Branch, reviewedHead, workDir)
 			return nil
 		}
 		return e.db.CompleteStepWithStatusAtHead(gate.stepResult.ID, types.StepStatusCompleted, run.HeadSHA, recoveredExitCode(gate.stepResult), duration, recoveredLogPath(gate.stepResult))
@@ -1295,12 +1298,15 @@ done:
 	// return earlier, and skipped reviews deliberately leave the binding empty.
 	// Completion and authority replacement are one DB transaction.
 	if stepName == types.StepReview && status == types.StepStatusCompleted && reviewApprovedHeadSHA != "" {
-		if err := e.db.CompleteReviewStep(sr.ID, run.ID, reviewApprovedHeadSHA, finalExitCode, durationMS, logPath); err != nil {
+		certifiedRange, err := certifiedUncertifiedPipelineRange(ctx, e.db, repo.ID, run.Branch, reviewApprovedHeadSHA, workDir)
+		if err != nil {
+			return false, "", fmt.Errorf("complete step %s: %w", stepName, err)
+		}
+		if err := e.db.CompleteReviewStep(sr.ID, run.ID, reviewApprovedHeadSHA, finalExitCode, durationMS, logPath, certifiedRange); err != nil {
 			return false, "", fmt.Errorf("complete step %s: %w", stepName, err)
 		}
 		reviewedHead := reviewApprovedHeadSHA
 		run.ReviewApprovedHeadSHA = &reviewedHead
-		ClearUncertifiedPipelineRangeIfCertified(ctx, e.db, repo.ID, run.Branch, reviewedHead, workDir)
 	} else if err := e.db.CompleteStepWithStatusAtHead(sr.ID, status, run.HeadSHA, finalExitCode, durationMS, logPath); err != nil {
 		return false, "", fmt.Errorf("complete step %s: %w", stepName, err)
 	}

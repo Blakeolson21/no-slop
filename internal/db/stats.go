@@ -141,35 +141,25 @@ func stepFindingStats(step *StepResult, rounds []*StepRound) StepStats {
 		stats.ReportedFindings = count
 		return stats
 	}
+	if step.StepName != types.StepReview {
+		return structuralStepFindingStats(step, rounds)
+	}
 
 	reportedLineages := make(map[string]bool)
-	reportedLegacy := make(map[types.FindingIdentity]bool)
-	reportedLegacyCounts := make(map[types.FindingIdentity]int)
-	lineageStats := step.StepName == types.StepReview
+	var reportedLegacy []types.Finding
 	var current []types.Finding
 	for _, round := range rounds {
 		items := findingItems(round.FindingsJSON)
-		itemCounts := types.CountFindingFingerprints(items)
-		for _, item := range items {
-			if key, ok := findingStatsLineageKey(item, lineageStats); ok {
+		current = appendPendingUserFindings(items, round.UserFindingsJSON, true)
+		legacy := make([]types.Finding, 0, len(current))
+		for _, item := range current {
+			if key, ok := findingStatsLineageKey(item, true); ok {
 				reportedLineages[key] = true
 				continue
 			}
-			if reportedLegacy[item.Identity()] || (itemCounts[item.Fingerprint()] == 1 && reportedLegacyCounts[item.Fingerprint()] == 1) {
-				continue
-			}
-			reportedLegacy[findingStatsKey(item)] = true
-			reportedLegacyCounts[item.Fingerprint()]++
+			legacy = append(legacy, item)
 		}
-		if lineageStats {
-			for _, item := range findingItems(round.UserFindingsJSON) {
-				if item.Source != types.FindingSourceUser || !item.HasLineage() {
-					continue
-				}
-				reportedLineages[findingLineageStatsKey(item)] = true
-			}
-		}
-		current = appendPendingUserFindings(items, round.UserFindingsJSON, lineageStats)
+		reportedLegacy = mergeLegacyFindingOccurrences(reportedLegacy, legacy)
 	}
 
 	stats.ReportedFindings = len(reportedLineages) + len(reportedLegacy)
@@ -184,14 +174,34 @@ func stepFindingStats(step *StepResult, rounds []*StepRound) StepStats {
 	return stats
 }
 
+func structuralStepFindingStats(step *StepResult, rounds []*StepRound) StepStats {
+	reported := make(map[types.FindingIdentity]bool)
+	reportedCounts := make(map[types.FindingIdentity]int)
+	var current []types.Finding
+	for _, round := range rounds {
+		current = findingItems(round.FindingsJSON)
+		currentCounts := types.CountFindingFingerprints(current)
+		for _, item := range current {
+			if reported[item.Identity()] || (currentCounts[item.Fingerprint()] == 1 && reportedCounts[item.Fingerprint()] == 1) {
+				continue
+			}
+			reported[item.Identity()] = true
+			reportedCounts[item.Fingerprint()]++
+		}
+	}
+	stats := StepStats{StepName: step.StepName, ReportedFindings: len(reported)}
+	stats.FixedFindings = stats.ReportedFindings - len(current)
+	if stats.FixedFindings < 0 {
+		stats.FixedFindings = 0
+	}
+	return stats
+}
+
 func findingStatsLineageKey(item types.Finding, lineageStats bool) (string, bool) {
-	if !lineageStats || item.ID == "" || !item.IDGenerated {
+	if !lineageStats || !item.HasLineage() {
 		return "", false
 	}
-	if item.HasLineage() {
-		return findingLineageStatsKey(item), true
-	}
-	return "generated\x00" + item.ID, true
+	return findingLineageStatsKey(item), true
 }
 
 func findingLineageStatsKey(item types.Finding) string {
@@ -220,6 +230,53 @@ func appendPendingUserFindings(current []types.Finding, raw *string, lineageStat
 		current = append(current, item)
 	}
 	return current
+}
+
+func mergeLegacyFindingOccurrences(reported, current []types.Finding) []types.Finding {
+	reportedMatched := make([]bool, len(reported))
+	currentMatched := make([]bool, len(current))
+	reportedExact := make(map[types.FindingIdentity][]int, len(reported))
+	currentExact := make(map[types.FindingIdentity][]int, len(current))
+	for i, item := range reported {
+		reportedExact[item.Identity()] = append(reportedExact[item.Identity()], i)
+	}
+	for i, item := range current {
+		currentExact[item.Identity()] = append(currentExact[item.Identity()], i)
+	}
+	for identity, currentIndexes := range currentExact {
+		reportedIndexes := reportedExact[identity]
+		matches := min(len(currentIndexes), len(reportedIndexes))
+		for i := 0; i < matches; i++ {
+			currentMatched[currentIndexes[i]] = true
+			reportedMatched[reportedIndexes[i]] = true
+		}
+	}
+
+	reportedFingerprint := make(map[types.FindingIdentity][]int)
+	currentFingerprint := make(map[types.FindingIdentity][]int)
+	for i, item := range reported {
+		if !reportedMatched[i] {
+			reportedFingerprint[item.Fingerprint()] = append(reportedFingerprint[item.Fingerprint()], i)
+		}
+	}
+	for i, item := range current {
+		if !currentMatched[i] {
+			currentFingerprint[item.Fingerprint()] = append(currentFingerprint[item.Fingerprint()], i)
+		}
+	}
+	for fingerprint, currentIndexes := range currentFingerprint {
+		reportedIndexes := reportedFingerprint[fingerprint]
+		if len(currentIndexes) == 1 && len(reportedIndexes) == 1 {
+			currentMatched[currentIndexes[0]] = true
+			reportedMatched[reportedIndexes[0]] = true
+		}
+	}
+	for i, item := range current {
+		if !currentMatched[i] {
+			reported = append(reported, item)
+		}
+	}
+	return reported
 }
 
 // FixedFindingsByStep returns how many findings were resolved for a single step.
@@ -260,10 +317,6 @@ func findingItems(raw *string) []types.Finding {
 		return nil
 	}
 	return findings.Items
-}
-
-func findingStatsKey(item types.Finding) types.FindingIdentity {
-	return item.Identity()
 }
 
 func sortStepStats(stats []StepStats) {

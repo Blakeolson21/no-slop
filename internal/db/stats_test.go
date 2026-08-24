@@ -249,7 +249,7 @@ func TestStepFindingStatsTreatsUniqueLineShiftAsSameFinding(t *testing.T) {
 	}
 }
 
-func TestStepFindingStatsTreatsRephrasedStableIDAsSameFinding(t *testing.T) {
+func TestStepFindingStatsDoesNotTrustTokenlessGeneratedID(t *testing.T) {
 	d := openTestDB(t)
 	repo, _ := d.InsertRepo("/repo/rephrased", "git@example.com:rephrased.git", "main")
 	run, _ := d.InsertRun(repo.ID, "rephrased", "head", "base")
@@ -267,7 +267,29 @@ func TestStepFindingStatsTreatsRephrasedStableIDAsSameFinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.ReportedFindings != 1 || stats.FixedFindings != 0 {
+	if stats.ReportedFindings != 2 || stats.FixedFindings != 1 {
+		t.Fatalf("stats = reported %d fixed %d", stats.ReportedFindings, stats.FixedFindings)
+	}
+}
+
+func TestStepFindingStatsPreservesIdenticalLegacyMultiplicity(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/repo/legacy-multiplicity", "git@example.com:legacy-multiplicity.git", "main")
+	run, _ := d.InsertRun(repo.ID, "legacy-multiplicity", "head", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepReview)
+	findings := `{"findings":[{"id":"legacy-a","severity":"warning","file":"loader.go","line":8,"description":"unsafe loader"},{"id":"legacy-b","severity":"warning","file":"loader.go","line":8,"description":"unsafe loader"}]}`
+	if _, err := d.InsertStepRound(step.ID, 1, "initial", &findings, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.InsertStepRound(step.ID, 2, "auto_fix", &findings, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := d.StepFindingStats(step)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ReportedFindings != 2 || stats.FixedFindings != 0 {
 		t.Fatalf("stats = reported %d fixed %d", stats.ReportedFindings, stats.FixedFindings)
 	}
 }
