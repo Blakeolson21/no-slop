@@ -133,13 +133,29 @@ func TestNoSlopRequiredWorkflowEnforcesCompletedPipelineAttestation(t *testing.T
 // TestNoSlopRequiredWorkflowAcceptsInitialLegacyV1Publication exercises the
 // rollout boundary where the installed no-slop binary opens the PR that first
 // introduces publication nonces. That binary can emit only the original v1
-// attestation: one current-head payload with completed step statuses. The
+// attestation: one SHA-bound payload with completed step statuses. The
 // allowance is deliberately limited to the canonical marker on publication
-// events produced by an installed pre-nonce binary. Body edits must use the
-// nonce-bearing format.
+// events produced by an installed pre-nonce binary. Synchronize may carry the
+// pre-repair head because that older daemon cannot republish after its CI fix;
+// opened events stay head-bound and body edits require the nonce-bearing format.
 func TestNoSlopRequiredWorkflowAcceptsInitialLegacyV1Publication(t *testing.T) {
 	workflow := loadRequiredWorkflow(t)
 	legacyBody := legacyV1PipelineBody(t, generatedPipelineBody(t))
+	malformedHeadLegacyBody := strings.Replace(
+		legacyBody,
+		`"head_sha":"`+requiredWorkflowTestHeadSHA+`"`,
+		`"head_sha":"not-a-sha"`,
+		1,
+	)
+	if malformedHeadLegacyBody == legacyBody {
+		t.Fatal("legacy body fixture did not contain its generated head")
+	}
+	incompleteLegacyBody := legacyV1PipelineBody(t, generatedPipelineBodyWithStatuses(
+		t,
+		types.StepStatusCompleted,
+		types.StepStatusFailed,
+		types.StepStatusCompleted,
+	))
 	historicalBody := strings.Replace(
 		legacyBody,
 		"Updates from [git push no-slop](https://github.com/Blakeolson21/no-slop)",
@@ -150,16 +166,26 @@ func TestNoSlopRequiredWorkflowAcceptsInitialLegacyV1Publication(t *testing.T) {
 	got := executeRequiredWorkflowFixture(t, workflow, []requiredWorkflowEvent{
 		{Action: "opened", Body: legacyBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 5, RunID: 500, RunNumber: 50},
 		{Action: "synchronize", Body: legacyBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 6, RunID: 600, RunNumber: 60},
-		{Action: "edited", Body: legacyBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 7, RunID: 700, RunNumber: 70},
-		{Action: "opened", Body: legacyBody, HeadSHA: "ffffffffffffffffffffffffffffffffffffffff", PRNumber: 8, RunID: 800, RunNumber: 80},
-		{Action: "opened", Body: historicalBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 9, RunID: 900, RunNumber: 90},
+		{Action: "synchronize", Body: legacyBody, HeadSHA: "ffffffffffffffffffffffffffffffffffffffff", PRNumber: 7, RunID: 700, RunNumber: 70},
+		{Action: "edited", Body: legacyBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 8, RunID: 800, RunNumber: 80},
+		{Action: "opened", Body: legacyBody, HeadSHA: "ffffffffffffffffffffffffffffffffffffffff", PRNumber: 9, RunID: 900, RunNumber: 90},
+		{Action: "opened", Body: historicalBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 10, RunID: 1000, RunNumber: 100},
+		{Action: "synchronize", Body: incompleteLegacyBody, HeadSHA: "ffffffffffffffffffffffffffffffffffffffff", PRNumber: 11, RunID: 1100, RunNumber: 110},
+		{Action: "synchronize", Body: generatedPipelineBody(t), HeadSHA: "ffffffffffffffffffffffffffffffffffffffff", PRNumber: 12, RunID: 1200, RunNumber: 120},
+		{Action: "synchronize", Body: historicalBody, HeadSHA: "ffffffffffffffffffffffffffffffffffffffff", PRNumber: 13, RunID: 1300, RunNumber: 130},
+		{Action: "synchronize", Body: malformedHeadLegacyBody, HeadSHA: "ffffffffffffffffffffffffffffffffffffffff", PRNumber: 14, RunID: 1400, RunNumber: 140},
 	})
 	want := []requiredWorkflowResult{
 		{RunID: 500, RunNumber: 50, Action: "opened", Executed: true, Conclusion: "success"},
 		{RunID: 600, RunNumber: 60, Action: "synchronize", Executed: true, Conclusion: "success"},
-		{RunID: 700, RunNumber: 70, Action: "edited", Executed: true, Conclusion: "failure"},
-		{RunID: 800, RunNumber: 80, Action: "opened", Executed: true, Conclusion: "failure"},
+		{RunID: 700, RunNumber: 70, Action: "synchronize", Executed: true, Conclusion: "success"},
+		{RunID: 800, RunNumber: 80, Action: "edited", Executed: true, Conclusion: "failure"},
 		{RunID: 900, RunNumber: 90, Action: "opened", Executed: true, Conclusion: "failure"},
+		{RunID: 1000, RunNumber: 100, Action: "opened", Executed: true, Conclusion: "failure"},
+		{RunID: 1100, RunNumber: 110, Action: "synchronize", Executed: true, Conclusion: "failure"},
+		{RunID: 1200, RunNumber: 120, Action: "synchronize", Executed: true, Conclusion: "failure"},
+		{RunID: 1300, RunNumber: 130, Action: "synchronize", Executed: true, Conclusion: "failure"},
+		{RunID: 1400, RunNumber: 140, Action: "synchronize", Executed: true, Conclusion: "failure"},
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("legacy v1 publication results =\n  %v\nwant\n  %v", got, want)

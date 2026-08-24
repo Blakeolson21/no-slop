@@ -97,7 +97,20 @@ jobs:
                       return False
               elif parsed.get("publication_nonce") != expected_publication_nonce:
                   return False
-              if parsed.get("head_sha") != pr_head_sha or not isinstance(parsed.get("steps"), list):
+              if not isinstance(parsed.get("steps"), list):
+                  return False
+              # An installed pre-nonce daemon cannot republish the PR body
+              # after committing a CI repair. Permit that legacy tuple only
+              # on the resulting synchronize event; opened events must still
+              # describe their current head, and every nonce-bearing body is
+              # always bound to the current head below.
+              stale_legacy_repair = (
+                  legacy_initial_publication
+                  and pr_action == "synchronize"
+                  and parsed.get("head_sha") != pr_head_sha
+                  and re.fullmatch(r"[0-9a-f]{40}", parsed.get("head_sha", "")) is not None
+              )
+              if parsed.get("head_sha") != pr_head_sha and not stale_legacy_repair:
                   return False
               statuses = {}
               for item in parsed["steps"]:
