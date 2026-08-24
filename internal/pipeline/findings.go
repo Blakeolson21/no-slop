@@ -272,7 +272,7 @@ func mergeReappearedFindingsJSON(freshRaw, priorRaw string) string {
 		if current.UserInstructions == "" {
 			current.UserInstructions = old.UserInstructions
 		}
-		if current.ReviewScope == "" {
+		if current.ReviewScope == "" || (current.ReviewScope == types.FindingReviewScopePipelineOwnedDelivery && old.ReviewScope != "") {
 			current.ReviewScope = old.ReviewScope
 		}
 		if current.Category == "" {
@@ -302,6 +302,62 @@ func mergeReappearedFindingsJSON(freshRaw, priorRaw string) string {
 		return freshRaw
 	}
 	return encoded
+}
+
+func ReconcileReviewFindings(findings types.Findings, priorRaw string) (types.Findings, int, error) {
+	raw, err := types.MarshalFindingsJSON(findings)
+	if err != nil {
+		return types.Findings{}, 0, err
+	}
+	normalized, err := normalizeFindingsJSON(raw, string(types.StepReview), priorRaw)
+	if err != nil {
+		return types.Findings{}, 0, err
+	}
+	merged := mergeReappearedFindingsJSON(normalized, priorRaw)
+	reconciled, err := types.ParseFindingsJSON(merged)
+	if err != nil {
+		return types.Findings{}, 0, err
+	}
+	filtered, dropped := FilterDeferredPipelineOwnedDeliveryFindings(reconciled)
+	return filtered, dropped, nil
+}
+
+func FilterDeferredPipelineOwnedDeliveryFindings(findings types.Findings) (types.Findings, int) {
+	if len(findings.Items) == 0 {
+		return findings, 0
+	}
+	kept := make([]types.Finding, 0, len(findings.Items))
+	dropped := 0
+	for _, item := range findings.Items {
+		if item.ReviewScope == types.FindingReviewScopePipelineOwnedDelivery {
+			dropped++
+			continue
+		}
+		kept = append(kept, item)
+	}
+	if dropped == 0 {
+		return findings, 0
+	}
+	out := findings
+	out.Items = kept
+	switch len(kept) {
+	case 0:
+		out.Summary = "no review findings remain"
+	case 1:
+		out.Summary = "1 review finding remains"
+	default:
+		out.Summary = fmt.Sprintf("%d review findings remain", len(kept))
+	}
+	switch findings.RiskScope {
+	case types.FindingsRiskScopePipelineOwnedDelivery:
+		out.RiskLevel = "low"
+		out.RiskRationale = "no delivery-independent review risk was reported"
+		out.RiskScope = types.FindingsRiskScopeSourceOrExternal
+	case types.FindingsRiskScopeSourceOrExternal:
+	default:
+		out.RiskRationale = "review risk retained after deferred delivery filtering"
+	}
+	return out, dropped
 }
 
 func countFindingIdentities(items []types.Finding) map[types.FindingIdentity]int {

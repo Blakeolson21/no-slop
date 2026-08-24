@@ -108,7 +108,8 @@ func TestNoSlopRequiredWorkflowEnforcesCompletedPipelineAttestation(t *testing.T
 		{name: "document skipped", body: generatedPipelineBodyWithStatuses(t, types.StepStatusCompleted, types.StepStatusCompleted, types.StepStatusSkipped), want: "failure"},
 		{name: "stale head", body: generatedPipelineBody(t), headSHA: "ffffffffffffffffffffffffffffffffffffffff", want: "failure"},
 		{name: "review certified stale head", body: generatedPipelineBodyWithStaleReviewCertification(t), want: "failure"},
-		{name: "quoted malformed attestation before owned pipeline", body: "## Intent\n\nQuoted legacy data: <!-- no-slop-pipeline-attestation:v1 { -->\n\n" + generatedPipelineBody(t), want: "success"},
+		{name: "quoted malformed attestation before owned pipeline", body: insertAfterPublicationMarker(t, generatedPipelineBody(t), "## Intent\n\nQuoted legacy data: <!-- no-slop-pipeline-attestation:v1 { -->"), want: "success"},
+		{name: "quoted semantically invalid owned tuple before owned pipeline", body: generatedPipelineBodyWithQuotedInvalidAttestation(t), want: "success"},
 		{name: "pipeline heading in generated detail", body: generatedPipelineBody(t) + "\n\nFinding detail\n## Pipeline\n\nnot an owned attestation", want: "success"},
 		{name: "all required steps completed", body: generatedPipelineBody(t), want: "success"},
 	}
@@ -241,6 +242,18 @@ func TestNoSlopRequiredWorkflowPublishesStableEventIdentity(t *testing.T) {
 	if !strings.HasPrefix(latestName, "<!-- no-slop-publication:v1 "+latestNonce+" -->") {
 		t.Fatalf("latest event run name = %q, want publication identity prefix", latestName)
 	}
+	for label, rendered := range map[string]string{"first": firstName, "latest": latestName} {
+		for field, want := range map[string]string{
+			"PR number":    "PR #549",
+			"event action": "edited",
+			"run number":   "event " + strconv.FormatInt(map[string]int64{"first": first.RunNumber, "latest": latest.RunNumber}[label], 10),
+			"run ID":       "run " + strconv.FormatInt(map[string]int64{"first": first.RunID, "latest": latest.RunID}[label], 10),
+		} {
+			if !strings.Contains(rendered, want) {
+				t.Fatalf("%s event run name = %q, want %s %q", label, rendered, field, want)
+			}
+		}
+	}
 	if firstName == latestName {
 		t.Fatalf("distinct body events have ambiguous run name %q", firstName)
 	}
@@ -360,7 +373,68 @@ func generatedPipelineBodyWithStatuses(t *testing.T, review, testStep, document 
 	if strings.TrimSpace(body) == "" {
 		t.Fatal("pipeline summary builder returned an empty PR body")
 	}
-	return body
+	return publicationMarkerForPipelineBody(t, body) + "\n\n" + body
+}
+
+func publicationMarkerForPipelineBody(t *testing.T, body string) string {
+	t.Helper()
+	const prefix = "<!-- no-slop-pipeline-attestation:v1 "
+	const closing = " -->"
+	start := strings.Index(body, prefix)
+	if start < 0 {
+		t.Fatal("generated body has no pipeline attestation")
+	}
+	start += len(prefix)
+	end := strings.Index(body[start:], closing)
+	if end < 0 {
+		t.Fatal("generated body has malformed pipeline attestation")
+	}
+	var attestation struct {
+		PublicationNonce string `json:"publication_nonce"`
+	}
+	if err := json.Unmarshal([]byte(body[start:start+end]), &attestation); err != nil {
+		t.Fatal(err)
+	}
+	if attestation.PublicationNonce == "" {
+		t.Fatal("generated body has no publication nonce")
+	}
+	return "<!-- no-slop-publication:v1 " + attestation.PublicationNonce + " -->"
+}
+
+func generatedPipelineBodyWithQuotedInvalidAttestation(t *testing.T) string {
+	t.Helper()
+	body := generatedPipelineBody(t)
+	const prefix = "<!-- no-slop-pipeline-attestation:v1 "
+	const closing = " -->"
+	start := strings.Index(body, prefix)
+	if start < 0 {
+		t.Fatal("generated body has no pipeline attestation")
+	}
+	start += len(prefix)
+	end := strings.Index(body[start:], closing)
+	if end < 0 {
+		t.Fatal("generated body has malformed pipeline attestation")
+	}
+	var attestation map[string]any
+	if err := json.Unmarshal([]byte(body[start:start+end]), &attestation); err != nil {
+		t.Fatal(err)
+	}
+	attestation["steps"] = []any{}
+	invalid, err := json.Marshal(attestation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quoted := "## Intent\n\nQuoted historical data:\n\n## Pipeline\n\nUpdates from [git push no-slop](https://github.com/Blakeolson21/no-slop)\n\n" + prefix + string(invalid) + closing
+	return insertAfterPublicationMarker(t, body, quoted)
+}
+
+func insertAfterPublicationMarker(t *testing.T, body, text string) string {
+	t.Helper()
+	markerEnd := strings.Index(body, "\n\n")
+	if markerEnd < 0 {
+		t.Fatal("generated body has no publication marker separator")
+	}
+	return body[:markerEnd+2] + text + "\n\n" + body[markerEnd+2:]
 }
 
 func testCertifiedWorkflowHead(status types.StepStatus) *string {

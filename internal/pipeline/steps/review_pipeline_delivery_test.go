@@ -192,3 +192,85 @@ func TestReviewStep_StripsOnlyDeferredAmongMixedFindings(t *testing.T) {
 		t.Fatalf("real finding must be kept: %s", outcome.Findings)
 	}
 }
+
+func TestReviewStep_ReconcilesSourceLineageBeforeDeliveryFiltering(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+
+	const priorID = "review-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const priorToken = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	prior := Findings{
+		Items: []Finding{{
+			ID:              priorID,
+			IDGenerated:     true,
+			ContinuityToken: priorToken,
+			Severity:        "error",
+			File:            "loader.go",
+			Line:            42,
+			Description:     "unsafe loader can expose credentials",
+			Action:          types.ActionAskUser,
+			ReviewScope:     types.FindingReviewScopeSource,
+		}},
+		Tested:         []string{"reproduced credential exposure"},
+		TestingSummary: "The source defect is reproducible.",
+		RiskLevel:      "high",
+		RiskRationale:  "Credentials can be exposed.",
+		RiskScope:      types.FindingsRiskScopeSourceOrExternal,
+	}
+	priorRaw, err := json.Marshal(prior)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ag := &mockAgent{
+		name: "test",
+		runFn: func(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+			fresh := Findings{
+				Items: []Finding{{
+					PriorID:              priorID,
+					PriorContinuityToken: priorToken,
+					Severity:             "info",
+					File:                 "loader.go",
+					Line:                 44,
+					Description:          "unsafe loader can expose credentials",
+					Action:               types.ActionNoOp,
+					ReviewScope:          types.FindingReviewScopePipelineOwnedDelivery,
+				}},
+				Tested:         []string{"narrow loader check"},
+				TestingSummary: "The narrow path passed.",
+				RiskLevel:      "low",
+				RiskRationale:  "No delivery risk remains.",
+				RiskScope:      types.FindingsRiskScopePipelineOwnedDelivery,
+			}
+			encoded, _ := json.Marshal(fresh)
+			return &agent.Result{Output: encoded}, nil
+		},
+	}
+
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.KnownReviewLineages = string(priorRaw)
+	outcome, err := (&ReviewStep{}).Execute(sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !outcome.NeedsApproval {
+		t.Fatal("reappeared source lineage must retain its blocking gate")
+	}
+	merged, err := types.ParseFindingsJSON(outcome.Findings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged.Items) != 1 {
+		t.Fatalf("findings = %#v, want one reconciled source lineage", merged.Items)
+	}
+	got := merged.Items[0]
+	if got.ID != priorID || got.ContinuityToken != priorToken || got.Action != types.ActionAskUser || got.Severity != "error" || got.ReviewScope != types.FindingReviewScopeSource {
+		t.Fatalf("reconciled finding = %#v", got)
+	}
+	if merged.RiskLevel != "high" || merged.RiskScope != types.FindingsRiskScopeSourceOrExternal {
+		t.Fatalf("reconciled risk = %q/%q", merged.RiskLevel, merged.RiskScope)
+	}
+	if !strings.Contains(merged.TestingSummary, "source defect is reproducible") || !strings.Contains(merged.TestingSummary, "narrow path passed") || len(merged.Tested) != 2 {
+		t.Fatalf("reconciled evidence = tested %#v, summary %q", merged.Tested, merged.TestingSummary)
+	}
+}

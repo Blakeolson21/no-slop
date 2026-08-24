@@ -1,8 +1,7 @@
 package steps
 
 import (
-	"fmt"
-
+	"github.com/Blakeolson21/no-slop/internal/pipeline"
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
@@ -21,44 +20,7 @@ func pipelineDeliveryPhaseClause() string {
 //
 // Returns the filtered findings and how many items were dropped.
 func stripDeferredPipelineOwnedDeliveryFindings(findings Findings) (Findings, int) {
-	if len(findings.Items) == 0 {
-		return findings, 0
-	}
-	kept := make([]Finding, 0, len(findings.Items))
-	dropped := 0
-	for _, item := range findings.Items {
-		if isDeferredPipelineOwnedDeliveryFinding(item) {
-			dropped++
-			continue
-		}
-		kept = append(kept, item)
-	}
-	if dropped == 0 {
-		return findings, 0
-	}
-	out := findings
-	out.Items = kept
-	out.Summary = filteredReviewSummary(kept)
-	switch findings.RiskScope {
-	case types.FindingsRiskScopePipelineOwnedDelivery:
-		out.RiskLevel = "low"
-		out.RiskRationale = "no delivery-independent review risk was reported"
-		out.RiskScope = types.FindingsRiskScopeSourceOrExternal
-	case types.FindingsRiskScopeSourceOrExternal:
-	default:
-		out.RiskRationale = "review risk retained after deferred delivery filtering"
-	}
-	return out, dropped
-}
-
-func filteredReviewSummary(items []Finding) string {
-	if len(items) == 0 {
-		return "no review findings remain"
-	}
-	if len(items) == 1 {
-		return "1 review finding remains"
-	}
-	return fmt.Sprintf("%d review findings remain", len(items))
+	return pipeline.FilterDeferredPipelineOwnedDeliveryFindings(findings)
 }
 
 // isDeferredPipelineOwnedDeliveryFinding reports whether a finding's claim is

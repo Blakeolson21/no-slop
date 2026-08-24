@@ -28,6 +28,7 @@ type StepContext struct {
 	SkipFixExecution      bool         // replay an already-completed fix round's review turn only
 	ReviewStartingHeadSHA string
 	PreviousFindings      string // JSON findings from the previous execution (set during fix loop)
+	KnownReviewLineages   string
 	// StepResultID is the DB row ID of the current step's step_results record.
 	// Steps use it to query their own round history for multi-round prompts.
 	StepResultID string
@@ -90,13 +91,14 @@ func (sctx *StepContext) RunAgentSession(role SessionRole, opts agent.RunOpts) (
 
 // StepOutcome is the result of executing a pipeline step.
 type StepOutcome struct {
-	NeedsApproval bool // whether the step pauses for user action
-	AutoFixable   bool
-	Findings      string // JSON findings for TUI display (optional)
-	ExitCode      int    // process exit code (0 = success)
-	PRURL         string // PR/MR URL if this step created or found one
-	Skipped       bool   // mark the step as skipped without failing the run
-	SkipRemaining bool   // skip all subsequent steps (e.g. empty diff after rebase)
+	NeedsApproval      bool // whether the step pauses for user action
+	AutoFixable        bool
+	Findings           string // JSON findings for TUI display (optional)
+	FindingsNormalized bool
+	ExitCode           int    // process exit code (0 = success)
+	PRURL              string // PR/MR URL if this step created or found one
+	Skipped            bool   // mark the step as skipped without failing the run
+	SkipRemaining      bool   // skip all subsequent steps (e.g. empty diff after rebase)
 	// RestartFrom asks the executor to re-run validation from this earlier step.
 	// CI repairs use it to send the new local head back through review before push.
 	RestartFrom types.StepName

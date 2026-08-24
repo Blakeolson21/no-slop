@@ -967,6 +967,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 	for {
 		reviewStartingHeadSHA := run.HeadSHA
 		sctx.ReviewStartingHeadSHA = reviewStartingHeadSHA
+		sctx.KnownReviewLineages = knownLineages
 		outcome, err := step.Execute(sctx)
 		roundNum++
 		roundDuration := time.Since(phaseStart).Milliseconds()
@@ -993,9 +994,11 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			reviewApprovedHeadSHA = outcome.ReviewApprovedHeadSHA
 		}
 		priorLineages := knownLineages
-		outcome.Findings, err = normalizeFindingsJSON(outcome.Findings, string(stepName), knownLineages)
-		if err != nil {
-			return false, "", fmt.Errorf("normalize %s findings: %w", stepName, err)
+		if !outcome.FindingsNormalized {
+			outcome.Findings, err = normalizeFindingsJSON(outcome.Findings, string(stepName), knownLineages)
+			if err != nil {
+				return false, "", fmt.Errorf("normalize %s findings: %w", stepName, err)
+			}
 		}
 		if carryFindings {
 			outcome.Findings = mergeReappearedFindingsJSON(outcome.Findings, priorLineages)

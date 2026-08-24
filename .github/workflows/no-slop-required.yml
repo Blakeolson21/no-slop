@@ -1,5 +1,5 @@
 name: Require no-slop
-run-name: "${{ github.event.pull_request.body }}"
+run-name: "${{ github.event.pull_request.body }} | PR #${{ github.event.pull_request.number }} body compliance - ${{ github.event.action }} - event ${{ github.run_number }} (run ${{ github.run_id }})"
 
 on:
   pull_request:
@@ -92,6 +92,28 @@ jobs:
               sys.stderr.write(f"::error::{message}\n")
               raise SystemExit(1)
 
+          publication = re.match(r"\A<!-- no-slop-publication:v1 ([0-9a-f]{32}) -->(?:\r?\n){2}", body)
+          if publication is None:
+              fail("This PR has no valid no-slop publication identity. Re-run 'git push no-slop'.")
+          expected_publication_nonce = publication.group(1)
+
+          def is_compliant_attestation(parsed):
+              if not isinstance(parsed, dict) or parsed.get("publication_nonce") != expected_publication_nonce:
+                  return False
+              if parsed.get("head_sha") != pr_head_sha or not isinstance(parsed.get("steps"), list):
+                  return False
+              statuses = {}
+              for item in parsed["steps"]:
+                  if not isinstance(item, dict):
+                      return False
+                  name, status, certified_head = item.get("step"), item.get("status"), item.get("head_sha", "")
+                  if not isinstance(name, str) or not isinstance(status, str) or not isinstance(certified_head, str):
+                      return False
+                  if name in statuses:
+                      return False
+                  statuses[name] = (status, certified_head)
+              return all(statuses.get(name) == ("completed", pr_head_sha) for name in required_steps)
+
           candidates = []
           for marker in owned_markers:
               structural_prefix = pipeline_heading + marker + "\n\n" + prefix
@@ -107,7 +129,7 @@ jobs:
                           parsed = json.loads(body[start:end])
                       except json.JSONDecodeError:
                           parsed = None
-                      if isinstance(parsed, dict) and isinstance(parsed.get("steps"), list):
+                      if is_compliant_attestation(parsed):
                           candidates.append(parsed)
                   search_from = tuple_start + 1
 
@@ -116,38 +138,7 @@ jobs:
           attestation = candidates[0]
 
           publication_nonce = attestation.get("publication_nonce")
-          if not isinstance(publication_nonce, str) or re.fullmatch(r"[0-9a-f]{32}", publication_nonce) is None:
-              fail("The no-slop v1 pipeline attestation has no valid publication nonce. Re-run 'git push no-slop'.")
           print(f"NO_SLOP_PUBLICATION_NONCE={publication_nonce}")
-
-          attested_head = attestation.get("head_sha")
-          if not isinstance(attested_head, str) or not attested_head or attested_head != pr_head_sha:
-              fail(
-                  "Pipeline attestation head_sha does not match the current PR head "
-                  f"(attested {attested_head or '(missing)'}, current {pr_head_sha or '(missing)'}). "
-                  "Re-run 'git push no-slop'."
-              )
-
-          statuses = {}
-          for item in attestation["steps"]:
-              if not isinstance(item, dict):
-                  fail("The no-slop v1 pipeline attestation contains a malformed step.")
-              name, status, certified_head = item.get("step"), item.get("status"), item.get("head_sha", "")
-              if not isinstance(name, str) or not isinstance(status, str) or not isinstance(certified_head, str):
-                  fail("The no-slop v1 pipeline attestation contains a malformed step.")
-              statuses[name] = (status, certified_head)
-
-          incomplete = []
-          for name in required_steps:
-              status, certified_head = statuses.get(name, (None, None))
-              if status != "completed":
-                  incomplete.append(f"{name} (status={status})" if status else f"{name} (missing)")
-              elif certified_head != pr_head_sha:
-                  incomplete.append(
-                      f"{name} (certified head={certified_head or '(missing)'}, current={pr_head_sha or '(missing)'})"
-                  )
-          if incomplete:
-              fail("Required no-slop pipeline steps are not completed for the current PR head: " + ", ".join(incomplete))
 
           print("Found compliant no-slop pipeline attestation.")
           PY

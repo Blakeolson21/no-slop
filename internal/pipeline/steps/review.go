@@ -277,23 +277,24 @@ Risk assessment (after listing all findings):
 		}
 	}
 
-	// Phase ownership boundary: drop findings that only claim later pipeline-
-	// owned delivery (push/PR/CI for this run) has not happened yet. Prompt
-	// guidance alone is not enough - models still emit these under
-	// authoritative intent criteria like "Open PR A unmerged".
-	if stripped, n := stripDeferredPipelineOwnedDeliveryFindings(findings); n > 0 {
-		sctx.Log(fmt.Sprintf("dropped %d deferred pipeline-owned delivery finding(s) (owned by later push/PR/CI steps)", n))
-		findings = stripped
+	reconciled, dropped, err := pipeline.ReconcileReviewFindings(findings, sctx.KnownReviewLineages)
+	if err != nil {
+		return nil, fmt.Errorf("reconcile review findings: %w", err)
 	}
+	if dropped > 0 {
+		sctx.Log(fmt.Sprintf("dropped %d deferred pipeline-owned delivery finding(s) (owned by later push/PR/CI steps)", dropped))
+	}
+	findings = reconciled
 
 	needsApproval := hasBlockingFindings(findings.Items)
 	findingsJSON, _ := json.Marshal(findings)
 
 	return approvedReviewOutcome(reviewTargetSHA, &pipeline.StepOutcome{
-		NeedsApproval: needsApproval,
-		AutoFixable:   len(findings.Items) > 0,
-		Findings:      string(findingsJSON),
-		FixSummary:    fixSummary,
+		NeedsApproval:      needsApproval,
+		AutoFixable:        len(findings.Items) > 0,
+		Findings:           string(findingsJSON),
+		FindingsNormalized: true,
+		FixSummary:         fixSummary,
 	})
 }
 
