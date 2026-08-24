@@ -212,6 +212,7 @@ func TestExecutor_CarriedFindingKeepsIdentityAndStricterAction(t *testing.T) {
 
 	initial := `{"findings":[{"id":"review-1","severity":"error","file":"loader.go","line":8,"description":"unsafe loader","action":"ask-user"},{"id":"review-2","severity":"warning","description":"selected first","action":"ask-user"}],"summary":"2 findings"}`
 	unsafeID := ""
+	unsafeToken := ""
 	calls := 0
 	step := &scopeLimitedAdaptiveCallStep{adaptiveCallStep: adaptiveCallStep{
 		name: types.StepReview,
@@ -220,7 +221,7 @@ func TestExecutor_CarriedFindingKeepsIdentityAndStricterAction(t *testing.T) {
 			if calls == 1 {
 				return &StepOutcome{NeedsApproval: true, Findings: initial}, nil
 			}
-			rereview := `{"findings":[{"id":"` + unsafeID + `","severity":"error","file":"loader.go","line":9,"description":"unsafe loader","action":"no-op"},{"severity":"warning","description":"new concern","action":"ask-user"}],"summary":"2 findings"}`
+			rereview := `{"findings":[{"prior_id":"` + unsafeID + `","prior_continuity_token":"` + unsafeToken + `","severity":"error","file":"loader.go","line":9,"description":"unsafe loader","action":"no-op"},{"severity":"warning","description":"new concern","action":"ask-user"}],"summary":"2 findings"}`
 			return &StepOutcome{NeedsApproval: true, Findings: rereview}, nil
 		},
 	}}
@@ -229,6 +230,22 @@ func TestExecutor_CarriedFindingKeepsIdentityAndStricterAction(t *testing.T) {
 	done, _ := startExecutor(t, exec, run, repo, workDir)
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
 	unsafeID = findingIDByDescription(t, database, run.ID, types.StepReview, "unsafe loader")
+	parkedSteps, err := database.GetStepsByRun(run.ID)
+	if err != nil || parkedSteps[0].FindingsJSON == nil {
+		t.Fatalf("read initial findings: %v", err)
+	}
+	parkedFindings, err := types.ParseFindingsJSON(*parkedSteps[0].FindingsJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, finding := range parkedFindings.Items {
+		if finding.ID == unsafeID {
+			unsafeToken = finding.ContinuityToken
+		}
+	}
+	if unsafeToken == "" {
+		t.Fatalf("finding %q has no continuity token", unsafeID)
+	}
 	selectedID := findingIDByDescription(t, database, run.ID, types.StepReview, "selected first")
 	if err := exec.Respond(types.StepReview, types.ActionFix, []string{selectedID}); err != nil {
 		t.Fatal(err)
