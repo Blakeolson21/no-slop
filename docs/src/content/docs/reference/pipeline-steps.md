@@ -93,7 +93,7 @@ AI code review of your diff.
 **Auto-fix:** the agent receives the selected previous findings plus any per-finding user notes, any selected user-authored findings from the TUI or AXI interface, and a sanitized history of prior rounds for that step, including earlier fix summaries and which findings the user left unselected.
 The fixer applies all selected fixes before running one focused verification limited to the changed area, and it is instructed not to run the complete repository test or lint suite during the fix round.
 The dedicated Test and Lint steps after review remain the authoritative gates, although their coverage may be focused when commands are unconfigured.
-Follow-up review passes use the history to avoid re-reporting user-ignored findings unless the code now has a materially different problem.
+Follow-up review passes use the history to avoid re-reporting findings that were left unselected unless the code now has a materially different problem. That reviewer guidance does not remove them from the effective gate: no-slop carries the unresolved findings until a later fix selection clears them through rereview or the operator explicitly approves the gate.
 
 **Default auto-fix limit:** `0`.
 
@@ -221,7 +221,13 @@ Stores the PR URL in the database and streams it to the TUI.
 
 ### Pipeline step attestation
 
-Immediately after the existing `Updates from [git push no-slop](https://github.com/Blakeolson21/no-slop)` signature, no-slop writes one stable HTML comment:
+Every generated PR body starts with a publication marker whose nonce identifies that exact body publication:
+
+```html
+<!-- no-slop-publication:v1 00112233445566778899aabbccddeeff -->
+```
+
+Inside `## Pipeline`, immediately after the existing `Updates from [git push no-slop](https://github.com/Blakeolson21/no-slop)` signature, no-slop writes one stable HTML comment carrying the same nonce:
 
 ```html
 <!-- no-slop-pipeline-attestation:v1 {"head_sha":"0123456789abcdef0123456789abcdef01234567","publication_nonce":"00112233445566778899aabbccddeeff","steps":[{"step":"review","status":"completed","head_sha":"0123456789abcdef0123456789abcdef01234567"},{"step":"test","status":"completed","head_sha":"0123456789abcdef0123456789abcdef01234567"},{"step":"document","status":"completed","head_sha":"0123456789abcdef0123456789abcdef01234567"}]} -->
@@ -237,7 +243,7 @@ The `v1` payload is compact JSON with these required fields:
 - `status`: the raw [step status](#step-statuses) recorded for that step, such as `completed`, `skipped`, or `failed`
 - `head_sha`: the commit SHA that the recorded step status certifies, or an empty string while the step has not certified a commit
 
-Items are ordered by the fixed pipeline order and represent the exact database snapshot when no-slop creates or updates the PR body. The attestation includes `pr` and `ci` records even though their human-readable details are not shown in `## Pipeline`; at the normal PR write point those records are commonly `running` and `pending`. The top-level `head_sha` identifies the current published PR head, while each item's `head_sha` identifies the commit that step actually certified. If later pipeline work creates or adopts a different head after a required gate completes, no-slop invalidates stale required-step results and automatically reruns review, test, and document before publishing a compliant attestation for the new commit. The same publication nonce appears in a leading hidden PR-body marker that GitHub copies into immutable workflow-run metadata. After creating or updating a GitHub PR, no-slop learns and records the earliest Actions run number carrying that nonce together with its immutable run ID, without depending on job output. CI suppresses only required-check attempts with an older provider run number; cancelled publication attempts and checks from later PR edits remain authoritative.
+Items are ordered by the fixed pipeline order and represent the exact database snapshot when no-slop creates or updates the PR body. The attestation includes `pr` and `ci` records even though their human-readable details are not shown in `## Pipeline`; at the normal PR write point those records are commonly `running` and `pending`. The top-level `head_sha` identifies the current published PR head, while each item's `head_sha` identifies the commit that step actually certified. If later pipeline work creates or adopts a different head after a required gate completes, no-slop invalidates stale required-step results and automatically reruns review, test, and document before publishing a compliant attestation for the new commit. GitHub copies the leading publication marker into immutable workflow-run metadata. After creating or updating a GitHub PR, no-slop learns and records the earliest Actions run number carrying that nonce together with its immutable run ID, without depending on job output. CI suppresses only required-check attempts with an older provider run number; cancelled publication attempts and checks from later PR edits remain authoritative.
 
 The comment is intentionally data only. It does not declare any step required, passed for a policy, compliant, or mergeable. Consumers can parse the versioned JSON without scraping prose and apply their own policy. The comment stays with the Pipeline header when no-slop truncates older human-readable update details to fit a PR-body limit.
 
