@@ -130,6 +130,39 @@ func TestNoSlopRequiredWorkflowEnforcesCompletedPipelineAttestation(t *testing.T
 	}
 }
 
+// TestNoSlopRequiredWorkflowAcceptsInitialLegacyV1Publication exercises the
+// rollout boundary where the installed no-slop binary opens the PR that first
+// introduces publication nonces. That binary can emit only the original v1
+// attestation: one current-head payload with completed step statuses. The
+// allowance is deliberately limited to the canonical marker on the immutable
+// opened event; subsequent events must use the nonce-bearing format.
+func TestNoSlopRequiredWorkflowAcceptsInitialLegacyV1Publication(t *testing.T) {
+	workflow := loadRequiredWorkflow(t)
+	legacyBody := legacyV1PipelineBody(t, generatedPipelineBody(t))
+	historicalBody := strings.Replace(
+		legacyBody,
+		"Updates from [git push no-slop](https://github.com/Blakeolson21/no-slop)",
+		"Updates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)",
+		1,
+	)
+
+	got := executeRequiredWorkflowFixture(t, workflow, []requiredWorkflowEvent{
+		{Action: "opened", Body: legacyBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 5, RunID: 500, RunNumber: 50},
+		{Action: "edited", Body: legacyBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 6, RunID: 600, RunNumber: 60},
+		{Action: "opened", Body: legacyBody, HeadSHA: "ffffffffffffffffffffffffffffffffffffffff", PRNumber: 7, RunID: 700, RunNumber: 70},
+		{Action: "opened", Body: historicalBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 8, RunID: 800, RunNumber: 80},
+	})
+	want := []requiredWorkflowResult{
+		{RunID: 500, RunNumber: 50, Action: "opened", Executed: true, Conclusion: "success"},
+		{RunID: 600, RunNumber: 60, Action: "edited", Executed: true, Conclusion: "failure"},
+		{RunID: 700, RunNumber: 70, Action: "opened", Executed: true, Conclusion: "failure"},
+		{RunID: 800, RunNumber: 80, Action: "opened", Executed: true, Conclusion: "failure"},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("legacy v1 publication results =\n  %v\nwant\n  %v", got, want)
+	}
+}
+
 // TestNoSlopRequiredWorkflowReadsPRBodyViaEnv pins the shell-injection-safe
 // pattern: the PR body must be piped through an env var, not interpolated
 // directly into the shell script body.
@@ -141,6 +174,9 @@ func TestNoSlopRequiredWorkflowReadsPRBodyViaEnv(t *testing.T) {
 	}
 	if got := step.Env["PR_HEAD_SHA"]; got != "${{ github.event.pull_request.head.sha }}" {
 		t.Fatalf("PR_HEAD_SHA env expression = %q, want pull request head expression", got)
+	}
+	if got := step.Env["PR_ACTION"]; got != "${{ github.event.action }}" {
+		t.Fatalf("PR_ACTION env expression = %q, want pull request action expression", got)
 	}
 	if strings.Contains(step.Run, "github.event.pull_request.body") {
 		t.Fatalf("workflow must not interpolate the PR body expression directly into run script")
@@ -428,6 +464,41 @@ func generatedPipelineBodyWithQuotedInvalidAttestation(t *testing.T) string {
 	return insertAfterPublicationMarker(t, body, quoted)
 }
 
+func legacyV1PipelineBody(t *testing.T, body string) string {
+	t.Helper()
+	markerEnd := strings.Index(body, "\n\n")
+	if markerEnd < 0 {
+		t.Fatal("generated body has no publication marker separator")
+	}
+	body = body[markerEnd+2:]
+	const prefix = "<!-- no-slop-pipeline-attestation:v1 "
+	const closing = " -->"
+	start := strings.Index(body, prefix)
+	if start < 0 {
+		t.Fatal("generated body has no pipeline attestation")
+	}
+	start += len(prefix)
+	end := strings.Index(body[start:], closing)
+	if end < 0 {
+		t.Fatal("generated body has malformed pipeline attestation")
+	}
+	var attestation struct {
+		HeadSHA string `json:"head_sha"`
+		Steps   []struct {
+			Step   types.StepName   `json:"step"`
+			Status types.StepStatus `json:"status"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal([]byte(body[start:start+end]), &attestation); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(attestation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body[:start] + string(payload) + body[start+end:]
+}
+
 func insertAfterPublicationMarker(t *testing.T, body, text string) string {
 	t.Helper()
 	markerEnd := strings.Index(body, "\n\n")
@@ -605,6 +676,7 @@ func executeRequiredWorkflowFixture(t *testing.T, workflow requiredWorkflow, eve
 		cmd.Env = append(os.Environ(),
 			"PR_BODY="+event.Body,
 			"PR_HEAD_SHA="+event.HeadSHA,
+			"PR_ACTION="+event.Action,
 			"PR_AUTHOR=first-time-fork-contributor",
 			"PR_NUMBER="+strconv.FormatInt(event.PRNumber, 10),
 		)

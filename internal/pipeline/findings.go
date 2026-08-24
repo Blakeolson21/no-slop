@@ -480,7 +480,11 @@ func FilterDeferredPipelineOwnedDeliveryFindings(findings types.Findings) (types
 		rank = riskRank("low")
 	}
 	out.RiskLevel = riskLevel(rank)
-	out.RiskRationale = "review risk recomputed after deferred delivery filtering"
+	if findings.RiskScope != types.FindingsRiskScopePipelineOwnedDelivery && strings.TrimSpace(findings.RiskRationale) != "" {
+		out.RiskRationale = findings.RiskRationale
+	} else {
+		out.RiskRationale = "review risk recomputed after deferred delivery filtering"
+	}
 	out.RiskScope = types.FindingsRiskScopeSourceOrExternal
 	return out, dropped
 }

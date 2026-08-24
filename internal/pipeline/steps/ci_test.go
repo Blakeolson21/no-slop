@@ -416,7 +416,9 @@ func TestCIStep_CIWarningAllowsChecksPassedToBeReannounced(t *testing.T) {
 	sctx := newTestContext(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Env = env
 	sctx.Run.PRURL = &prURL
-	sctx.Config.CITimeout = 10 * time.Second
+	// This test owns termination through waitForNextPoll below. A wall-clock
+	// timeout would make the warning sequence depend on subprocess speed.
+	sctx.Config.CITimeout = -1
 
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
