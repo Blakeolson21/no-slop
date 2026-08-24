@@ -589,14 +589,68 @@ func TestReviewSelectionAttributesSharedLegacyEvidenceToSurvivors(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(remaining.Items) != 1 || remaining.Items[0].ID != "legacy-b" || remaining.Items[0].Evidence == nil {
+	if len(remaining.Items) != 1 || remaining.Items[0].ID != "legacy-b" {
 		t.Fatalf("remaining finding = %#v", remaining.Items)
+	}
+	if remaining.Items[0].Evidence != nil || remaining.SharedEvidence == nil {
+		t.Fatalf("shared evidence ownership = item %#v shared %#v", remaining.Items[0].Evidence, remaining.SharedEvidence)
 	}
 	if len(remaining.Tested) != 1 || remaining.Tested[0] != "reproduce shared failure" || remaining.TestingSummary != "Shared reproduction remains relevant." {
 		t.Fatalf("remaining evidence = tested %#v summary %q", remaining.Tested, remaining.TestingSummary)
 	}
 	if len(remaining.Artifacts) != 1 || remaining.Artifacts[0].Label != "shared trace" {
 		t.Fatalf("remaining artifacts = %#v", remaining.Artifacts)
+	}
+}
+
+func TestReviewSelectionDoesNotTransferItemEvidenceToLegacySurvivor(t *testing.T) {
+	raw := `{"findings":[{"id":"legacy-a","severity":"error","description":"selected defect","action":"auto-fix","evidence":{"tested":["reproduce A"],"testing_summary":"A-only reproduction.","artifacts":[{"kind":"log","label":"A trace"}]}},{"id":"legacy-b","severity":"warning","description":"remaining defect","action":"ask-user"}],"tested":["reproduce A"],"testing_summary":"A-only reproduction.","artifacts":[{"kind":"log","label":"A trace"}]}`
+	attributed, err := prepareReviewSelectionTruth(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remainingRaw := excludeFindingsJSON(attributed, []string{"legacy-a"})
+	remaining, err := types.ParseFindingsJSON(remainingRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining.Items) != 1 || remaining.Items[0].ID != "legacy-b" {
+		t.Fatalf("remaining findings = %#v", remaining.Items)
+	}
+	if remaining.Items[0].Evidence != nil || remaining.SharedEvidence == nil {
+		t.Fatalf("evidence ownership = item %#v shared %#v", remaining.Items[0].Evidence, remaining.SharedEvidence)
+	}
+	if len(remaining.Tested) != 0 || remaining.TestingSummary != "" || len(remaining.Artifacts) != 0 {
+		t.Fatalf("A-only aggregate survived: %#v", remaining)
+	}
+}
+
+func TestReviewSelectionPersistsOnlyUnownedSharedEvidence(t *testing.T) {
+	raw := `{"findings":[{"id":"legacy-a","severity":"error","description":"selected defect","action":"auto-fix","evidence":{"tested":["reproduce A"],"testing_summary":"A-only reproduction.","artifacts":[{"kind":"log","label":"A trace"}]}},{"id":"legacy-b","severity":"warning","description":"remaining defect","action":"ask-user"}],"tested":["reproduce A","exercise shared path"],"testing_summary":"A-only reproduction.\n\nShared environment details.","artifacts":[{"kind":"log","label":"A trace"},{"kind":"log","label":"shared trace"}]}`
+	attributed, err := prepareReviewSelectionTruth(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTripped, err := types.ParseFindingsJSON(attributed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if roundTripped.SharedEvidence == nil || len(roundTripped.SharedEvidence.Tested) != 1 || roundTripped.SharedEvidence.Tested[0] != "exercise shared path" || roundTripped.SharedEvidence.TestingSummary != "Shared environment details." {
+		t.Fatalf("persisted shared evidence = %#v", roundTripped.SharedEvidence)
+	}
+	if len(roundTripped.SharedEvidence.Artifacts) != 1 || roundTripped.SharedEvidence.Artifacts[0].Label != "shared trace" {
+		t.Fatalf("persisted shared artifacts = %#v", roundTripped.SharedEvidence.Artifacts)
+	}
+
+	remaining, err := types.ParseFindingsJSON(excludeFindingsJSON(attributed, []string{"legacy-a"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining.Tested) != 1 || remaining.Tested[0] != "exercise shared path" || remaining.TestingSummary != "Shared environment details." {
+		t.Fatalf("surviving aggregate evidence = tested %#v summary %q", remaining.Tested, remaining.TestingSummary)
+	}
+	if len(remaining.Artifacts) != 1 || remaining.Artifacts[0].Label != "shared trace" {
+		t.Fatalf("surviving aggregate artifacts = %#v", remaining.Artifacts)
 	}
 }
 

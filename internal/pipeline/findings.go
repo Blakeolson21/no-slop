@@ -136,19 +136,10 @@ func prepareReviewSelectionTruth(raw string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if len(findings.Tested) > 0 || findings.TestingSummary != "" || len(findings.Artifacts) > 0 {
-		for i := range findings.Items {
-			if !findings.Items[i].HasOccurrence() || findings.Items[i].Evidence != nil {
-				continue
-			}
-			findings.Items[i].Evidence = &types.FindingEvidence{
-				Tested:         append([]string(nil), findings.Tested...),
-				TestingSummary: findings.TestingSummary,
-				Artifacts:      append([]types.TestArtifact(nil), findings.Artifacts...),
-			}
-		}
-		rebuildAttributedEvidence(&findings)
+	if findings.SharedEvidence == nil {
+		findings.SharedEvidence = residualSharedEvidence(findings)
 	}
+	rebuildAttributedEvidence(&findings)
 	return types.MarshalFindingsJSON(findings)
 }
 
@@ -172,6 +163,7 @@ func mergeCarriedFindingsJSON(freshRaw, carriedRaw, prefix string) string {
 		return freshRaw
 	}
 	merged := fresh
+	merged.SharedEvidence = mergeFindingEvidence(sharedEvidenceOwner(fresh), sharedEvidenceOwner(carried))
 	freshCounts := types.CountFindingFingerprints(fresh.Items)
 	carriedCounts := types.CountFindingFingerprints(carried.Items)
 	freshIdentityCounts := countFindingIdentities(fresh.Items)
@@ -372,6 +364,7 @@ func mergeReappearedFindingsJSON(freshRaw, priorRaw string) string {
 		}
 		return encoded
 	}
+	fresh.SharedEvidence = mergeFindingEvidence(sharedEvidenceOwner(fresh), sharedEvidenceOwner(prior))
 	fresh.Summary = fmt.Sprintf("%d outstanding %s", len(fresh.Items), pluralize(len(fresh.Items), "finding", "findings"))
 	allPriorSurvived := true
 	for _, survived := range matchedPrior {
@@ -568,12 +561,94 @@ func rebuildAttributedEvidence(findings *types.Findings) bool {
 		testingSummary = mergeEvidenceSummary(testingSummary, item.Evidence.TestingSummary)
 		artifacts = mergeComparable(artifacts, item.Evidence.Artifacts)
 	}
+	if findings.SharedEvidence != nil {
+		attributed = true
+		tested = mergeComparable(tested, findings.SharedEvidence.Tested)
+		testingSummary = mergeEvidenceSummary(testingSummary, findings.SharedEvidence.TestingSummary)
+		artifacts = mergeComparable(artifacts, findings.SharedEvidence.Artifacts)
+	}
 	if attributed {
 		findings.Tested = tested
 		findings.TestingSummary = testingSummary
 		findings.Artifacts = artifacts
 	}
 	return attributed
+}
+
+func residualSharedEvidence(findings types.Findings) *types.FindingEvidence {
+	owned := &types.FindingEvidence{}
+	for _, item := range findings.Items {
+		owned = mergeFindingEvidence(owned, item.Evidence)
+	}
+	shared := &types.FindingEvidence{
+		Tested:         subtractComparable(findings.Tested, owned.Tested),
+		TestingSummary: subtractEvidenceSummary(findings.TestingSummary, owned.TestingSummary),
+		Artifacts:      subtractComparable(findings.Artifacts, owned.Artifacts),
+	}
+	if len(shared.Tested) == 0 && shared.TestingSummary == "" && len(shared.Artifacts) == 0 {
+		return &types.FindingEvidence{}
+	}
+	return shared
+}
+
+func sharedEvidenceOwner(findings types.Findings) *types.FindingEvidence {
+	if findings.SharedEvidence != nil {
+		return findings.SharedEvidence
+	}
+	if len(findings.Tested) == 0 && findings.TestingSummary == "" && len(findings.Artifacts) == 0 {
+		return nil
+	}
+	return residualSharedEvidence(findings)
+}
+
+func subtractComparable[T comparable](aggregate, owned []T) []T {
+	ownedSet := make(map[T]bool, len(owned))
+	for _, value := range owned {
+		ownedSet[value] = true
+	}
+	remaining := make([]T, 0, len(aggregate))
+	for _, value := range aggregate {
+		if !ownedSet[value] {
+			remaining = append(remaining, value)
+		}
+	}
+	return remaining
+}
+
+func subtractEvidenceSummary(aggregate, owned string) string {
+	aggregate = strings.TrimSpace(aggregate)
+	owned = strings.TrimSpace(owned)
+	if aggregate == "" || aggregate == owned {
+		return ""
+	}
+	if owned == "" {
+		return aggregate
+	}
+	ownedBlocks := make(map[string]int)
+	for _, block := range strings.Split(owned, "\n\n") {
+		block = strings.TrimSpace(block)
+		if block != "" {
+			ownedBlocks[block]++
+		}
+	}
+	var remaining []string
+	for _, block := range strings.Split(aggregate, "\n\n") {
+		block = strings.TrimSpace(block)
+		if block == "" {
+			continue
+		}
+		if ownedBlocks[block] > 0 {
+			ownedBlocks[block]--
+			continue
+		}
+		remaining = append(remaining, block)
+	}
+	for _, count := range ownedBlocks {
+		if count > 0 {
+			return ""
+		}
+	}
+	return strings.Join(remaining, "\n\n")
 }
 
 func effectiveFindingsRisk(items []types.Finding, fresh, carried types.Findings, carriedCount int) (string, string, string) {
@@ -700,7 +775,7 @@ func mergeFindingsJSON(existingRaw, additionalRaw string) string {
 	additionalCounts := types.CountFindingFingerprints(additional.Items)
 	existingIdentityCounts := countFindingIdentities(existing.Items)
 	additionalIdentityCounts := countFindingIdentities(additional.Items)
-	merged := types.Findings{Summary: existing.Summary, Tested: existing.Tested, TestingSummary: existing.TestingSummary, Artifacts: existing.Artifacts, RiskLevel: existing.RiskLevel, RiskRationale: existing.RiskRationale, RiskScope: existing.RiskScope}
+	merged := types.Findings{Summary: existing.Summary, Tested: existing.Tested, TestingSummary: existing.TestingSummary, Artifacts: existing.Artifacts, SharedEvidence: mergeFindingEvidence(sharedEvidenceOwner(existing), sharedEvidenceOwner(additional)), RiskLevel: existing.RiskLevel, RiskRationale: existing.RiskRationale, RiskScope: existing.RiskScope}
 	for _, item := range existing.Items {
 		merged.Items = append(merged.Items, item)
 	}
@@ -746,7 +821,7 @@ func removeMatchingFindingsJSON(existingRaw, removeRaw string) string {
 	removeCounts := types.CountFindingFingerprints(remove.Items)
 	existingIdentityCounts := countFindingIdentities(existing.Items)
 	removeIdentityCounts := countFindingIdentities(remove.Items)
-	filtered := types.Findings{Summary: existing.Summary, Tested: existing.Tested, TestingSummary: existing.TestingSummary, RiskLevel: existing.RiskLevel, RiskRationale: existing.RiskRationale, RiskScope: existing.RiskScope}
+	filtered := types.Findings{Summary: existing.Summary, Tested: existing.Tested, TestingSummary: existing.TestingSummary, Artifacts: existing.Artifacts, SharedEvidence: existing.SharedEvidence, RiskLevel: existing.RiskLevel, RiskRationale: existing.RiskRationale, RiskScope: existing.RiskScope}
 	for _, item := range existing.Items {
 		if hasFindingMatch(item, removeIDs, existingOccurrences, removeOccurrences, existingIdentityCounts, removeIdentityCounts, existingCounts, removeCounts) {
 			continue
@@ -787,7 +862,7 @@ func retainMatchingFindingsJSON(existingRaw, keepRaw string) string {
 	keepCounts := types.CountFindingFingerprints(keep.Items)
 	existingIdentityCounts := countFindingIdentities(existing.Items)
 	keepIdentityCounts := countFindingIdentities(keep.Items)
-	filtered := types.Findings{Summary: existing.Summary, Tested: existing.Tested, TestingSummary: existing.TestingSummary, RiskLevel: existing.RiskLevel, RiskRationale: existing.RiskRationale, RiskScope: existing.RiskScope}
+	filtered := types.Findings{Summary: existing.Summary, Tested: existing.Tested, TestingSummary: existing.TestingSummary, Artifacts: existing.Artifacts, SharedEvidence: existing.SharedEvidence, RiskLevel: existing.RiskLevel, RiskRationale: existing.RiskRationale, RiskScope: existing.RiskScope}
 	for _, item := range existing.Items {
 		if !hasFindingMatch(item, keepIDs, existingOccurrences, keepOccurrences, existingIdentityCounts, keepIdentityCounts, existingCounts, keepCounts) {
 			continue
@@ -933,6 +1008,8 @@ func filterFindingsJSON(raw string, ids []string) string {
 			Summary:        "0 selected findings",
 			Tested:         findings.Tested,
 			TestingSummary: findings.TestingSummary,
+			Artifacts:      findings.Artifacts,
+			SharedEvidence: findings.SharedEvidence,
 			RiskLevel:      findings.RiskLevel,
 			RiskRationale:  findings.RiskRationale,
 			RiskScope:      findings.RiskScope,

@@ -295,7 +295,12 @@ func findingSelectedLater(item types.Finding, roundItems []roundFindingLine, rou
 	candidateCounts := types.CountFindingFingerprints(candidates)
 	currentIdentityCounts := countRoundFindingIdentities(current)
 	candidateIdentityCounts := countRoundFindingIdentities(candidates)
+	currentOccurrenceCounts := types.CountFindingOccurrences(current)
+	candidateOccurrenceCounts := types.CountFindingOccurrences(candidates)
 	for _, candidate := range candidates {
+		if types.FindingOccurrenceCorroborates(item, candidate) && currentOccurrenceCounts[item.OccurrenceToken] == 1 && candidateOccurrenceCounts[candidate.OccurrenceToken] == 1 {
+			return true
+		}
 		if item.HasLineage() && candidate.HasLineage() {
 			if types.FindingIDCorroborates(item, candidate) {
 				return true
