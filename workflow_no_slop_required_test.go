@@ -66,6 +66,26 @@ func TestNoSlopRequiredWorkflowChecksSignatureMarker(t *testing.T) {
 	}
 }
 
+// TestNoSlopRequiredWorkflowAcceptsHistoricalLegacyMarker executes the
+// required check against a fully attested body written before the project and
+// repository were renamed. Existing PRs can legitimately retain that marker
+// while a current no-slop run refreshes their attestation.
+func TestNoSlopRequiredWorkflowAcceptsHistoricalLegacyMarker(t *testing.T) {
+	workflow := loadRequiredWorkflow(t)
+	body := strings.Replace(
+		generatedPipelineBody(t),
+		"Updates from [git push no-slop](https://github.com/Blakeolson21/no-slop)",
+		"Updates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)",
+		1,
+	)
+	got := executeRequiredWorkflowFixture(t, workflow, []requiredWorkflowEvent{{
+		Action: "edited", Body: body, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 4, RunID: 4, RunNumber: 4,
+	}})
+	if got[0].Conclusion != "success" {
+		t.Fatalf("historical legacy body concluded %q, want success", got[0].Conclusion)
+	}
+}
+
 // TestNoSlopRequiredWorkflowEnforcesCompletedPipelineAttestation executes the
 // repository's required-check script as GitHub would. A signature proves only
 // which tool wrote the body; merge authority additionally requires a v1
@@ -73,6 +93,7 @@ func TestNoSlopRequiredWorkflowChecksSignatureMarker(t *testing.T) {
 func TestNoSlopRequiredWorkflowEnforcesCompletedPipelineAttestation(t *testing.T) {
 	workflow := loadRequiredWorkflow(t)
 	signatureOnly := "## Pipeline\n\nUpdates from [git push no-slop](https://github.com/Blakeolson21/no-slop)\n"
+	historicalSignatureOnly := "## Pipeline\n\nUpdates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)\n"
 
 	tests := []struct {
 		name    string
@@ -81,6 +102,7 @@ func TestNoSlopRequiredWorkflowEnforcesCompletedPipelineAttestation(t *testing.T
 		want    string
 	}{
 		{name: "signature only", body: signatureOnly, want: "failure"},
+		{name: "historical signature only", body: historicalSignatureOnly, want: "failure"},
 		{name: "review missing", body: generatedPipelineBodyWithStatuses(t, "", types.StepStatusCompleted, types.StepStatusCompleted), want: "failure"},
 		{name: "test failed", body: generatedPipelineBodyWithStatuses(t, types.StepStatusCompleted, types.StepStatusFailed, types.StepStatusCompleted), want: "failure"},
 		{name: "document skipped", body: generatedPipelineBodyWithStatuses(t, types.StepStatusCompleted, types.StepStatusCompleted, types.StepStatusSkipped), want: "failure"},

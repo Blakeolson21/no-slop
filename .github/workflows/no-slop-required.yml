@@ -47,8 +47,10 @@ jobs:
           set -eu
           canonical_marker='Updates from [git push no-slop](https://github.com/Blakeolson21/no-slop)'
           legacy_marker='Updates from [git push no-mistakes](https://github.com/Blakeolson21/no-slop)'
+          historical_legacy_marker='Updates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)'
           if ! printf '%s' "${PR_BODY:-}" | grep -qF -- "$canonical_marker" &&
-             ! printf '%s' "${PR_BODY:-}" | grep -qF -- "$legacy_marker"; then
+             ! printf '%s' "${PR_BODY:-}" | grep -qF -- "$legacy_marker" &&
+             ! printf '%s' "${PR_BODY:-}" | grep -qF -- "$historical_legacy_marker"; then
             {
               echo "::error::This PR was not raised through no-slop."
               echo
@@ -58,6 +60,7 @@ jobs:
               echo
               echo "    $canonical_marker"
               echo "    $legacy_marker"
+              echo "    $historical_legacy_marker"
               echo
               echo "See CONTRIBUTING.md for setup and the full workflow."
               echo
