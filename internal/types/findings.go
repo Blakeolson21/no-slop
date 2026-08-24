@@ -41,19 +41,20 @@ const (
 
 // Finding represents a single review, test, lint, or PR comment finding.
 type Finding struct {
-	ID                   string `json:"id,omitempty"`
-	IDGenerated          bool   `json:"id_generated,omitempty"`
-	ContinuityToken      string `json:"continuity_token,omitempty"`
-	PriorID              string `json:"prior_id,omitempty"`
-	PriorContinuityToken string `json:"prior_continuity_token,omitempty"`
-	Severity             string `json:"severity"`
-	File                 string `json:"file,omitempty"`
-	Line                 int    `json:"line,omitempty"`
-	Description          string `json:"description"`
-	Action               string `json:"action"`
-	Source               string `json:"source,omitempty"`
-	UserInstructions     string `json:"user_instructions,omitempty"`
-	ReviewScope          string `json:"review_scope,omitempty"`
+	ID                   string           `json:"id,omitempty"`
+	IDGenerated          bool             `json:"id_generated,omitempty"`
+	ContinuityToken      string           `json:"continuity_token,omitempty"`
+	PriorID              string           `json:"prior_id,omitempty"`
+	PriorContinuityToken string           `json:"prior_continuity_token,omitempty"`
+	Severity             string           `json:"severity"`
+	File                 string           `json:"file,omitempty"`
+	Line                 int              `json:"line,omitempty"`
+	Description          string           `json:"description"`
+	Action               string           `json:"action"`
+	Source               string           `json:"source,omitempty"`
+	UserInstructions     string           `json:"user_instructions,omitempty"`
+	ReviewScope          string           `json:"review_scope,omitempty"`
+	Evidence             *FindingEvidence `json:"evidence,omitempty"`
 	// Category separates the combined document+lint housekeeping pass's
 	// findings into their owning gates. Empty everywhere else.
 	Category string `json:"category,omitempty"`
@@ -126,22 +127,29 @@ type TestArtifact struct {
 	Content string `json:"content,omitempty"`
 }
 
+type FindingEvidence struct {
+	Tested         []string       `json:"tested,omitempty"`
+	TestingSummary string         `json:"testing_summary,omitempty"`
+	Artifacts      []TestArtifact `json:"artifacts,omitempty"`
+}
+
 type findingWire struct {
-	ID                   string `json:"id,omitempty"`
-	IDGenerated          bool   `json:"id_generated,omitempty"`
-	ContinuityToken      string `json:"continuity_token,omitempty"`
-	PriorID              string `json:"prior_id,omitempty"`
-	PriorContinuityToken string `json:"prior_continuity_token,omitempty"`
-	Severity             string `json:"severity"`
-	File                 string `json:"file,omitempty"`
-	Line                 int    `json:"line,omitempty"`
-	Description          string `json:"description"`
-	Action               string `json:"action"`
-	Source               string `json:"source,omitempty"`
-	UserInstructions     string `json:"user_instructions,omitempty"`
-	ReviewScope          string `json:"review_scope,omitempty"`
-	Category             string `json:"category,omitempty"`
-	RequiresHumanReview  *bool  `json:"requires_human_review,omitempty"`
+	ID                   string           `json:"id,omitempty"`
+	IDGenerated          bool             `json:"id_generated,omitempty"`
+	ContinuityToken      string           `json:"continuity_token,omitempty"`
+	PriorID              string           `json:"prior_id,omitempty"`
+	PriorContinuityToken string           `json:"prior_continuity_token,omitempty"`
+	Severity             string           `json:"severity"`
+	File                 string           `json:"file,omitempty"`
+	Line                 int              `json:"line,omitempty"`
+	Description          string           `json:"description"`
+	Action               string           `json:"action"`
+	Source               string           `json:"source,omitempty"`
+	UserInstructions     string           `json:"user_instructions,omitempty"`
+	ReviewScope          string           `json:"review_scope,omitempty"`
+	Evidence             *FindingEvidence `json:"evidence,omitempty"`
+	Category             string           `json:"category,omitempty"`
+	RequiresHumanReview  *bool            `json:"requires_human_review,omitempty"`
 }
 
 // Findings is the structured findings payload exchanged across pipeline, IPC, and TUI.
@@ -570,6 +578,7 @@ func (f *Finding) UnmarshalJSON(data []byte) error {
 	f.Source = wire.Source
 	f.UserInstructions = wire.UserInstructions
 	f.ReviewScope = wire.ReviewScope
+	f.Evidence = wire.Evidence
 	f.Category = wire.Category
 	if f.Action == "" && wire.RequiresHumanReview != nil {
 		if *wire.RequiresHumanReview {

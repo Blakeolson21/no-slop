@@ -65,6 +65,14 @@ func normalizeFindingsJSON(raw string, prefix string, existingRaw string) (strin
 	if err != nil {
 		return raw, nil
 	}
+	if prefix == string(types.StepReview) && len(findings.Items) == 1 && findings.Items[0].Evidence == nil &&
+		(len(findings.Tested) > 0 || findings.TestingSummary != "" || len(findings.Artifacts) > 0) {
+		findings.Items[0].Evidence = &types.FindingEvidence{
+			Tested:         append([]string(nil), findings.Tested...),
+			TestingSummary: findings.TestingSummary,
+			Artifacts:      append([]types.TestArtifact(nil), findings.Artifacts...),
+		}
+	}
 	var existing []types.Finding
 	if existingRaw != "" {
 		parsed, parseErr := types.ParseFindingsJSON(existingRaw)
@@ -100,6 +108,11 @@ func excludeFindingsJSON(raw string, ids []string) string {
 		return ""
 	}
 	if len(excluded.Items) != len(findings.Items) {
+		if !rebuildAttributedEvidence(&excluded) {
+			excluded.Tested = nil
+			excluded.TestingSummary = ""
+			excluded.Artifacts = nil
+		}
 		excluded.RiskLevel = ""
 		excluded.RiskRationale = ""
 		excluded.RiskScope = ""
@@ -131,9 +144,6 @@ func mergeCarriedFindingsJSON(freshRaw, carriedRaw, prefix string) string {
 		return freshRaw
 	}
 	merged := fresh
-	merged.Tested = mergeComparable(merged.Tested, carried.Tested)
-	merged.Artifacts = mergeComparable(merged.Artifacts, carried.Artifacts)
-	merged.TestingSummary = mergeEvidenceSummary(fresh.TestingSummary, carried.TestingSummary)
 	freshCounts := types.CountFindingFingerprints(fresh.Items)
 	carriedCounts := types.CountFindingFingerprints(carried.Items)
 	freshIdentityCounts := countFindingIdentities(fresh.Items)
@@ -152,6 +162,7 @@ func mergeCarriedFindingsJSON(freshRaw, carriedRaw, prefix string) string {
 			}
 		}
 		if match >= 0 {
+			merged.Items[match].Evidence = mergeFindingEvidence(merged.Items[match].Evidence, old.Evidence)
 			merged.Items[match].ID = old.ID
 			merged.Items[match].IDGenerated = old.IDGenerated
 			merged.Items[match].ContinuityToken = old.ContinuityToken
@@ -194,6 +205,11 @@ func mergeCarriedFindingsJSON(freshRaw, carriedRaw, prefix string) string {
 	}
 
 	merged.Summary = fmt.Sprintf("%d outstanding %s", len(merged.Items), pluralize(len(merged.Items), "finding", "findings"))
+	if !rebuildAttributedEvidence(&merged) {
+		merged.Tested = mergeComparable(fresh.Tested, carried.Tested)
+		merged.Artifacts = mergeComparable(fresh.Artifacts, carried.Artifacts)
+		merged.TestingSummary = mergeEvidenceSummary(fresh.TestingSummary, carried.TestingSummary)
+	}
 	if carriedCount > 0 {
 		merged.RiskLevel, merged.RiskRationale, merged.RiskScope = effectiveFindingsRisk(merged.Items, fresh, carried, carriedCount)
 	}
@@ -266,6 +282,7 @@ func mergeReappearedFindingsJSON(freshRaw, priorRaw string) string {
 		}
 		old := prior.Items[match]
 		matchedPrior[match] = true
+		current.Evidence = mergeFindingEvidence(current.Evidence, old.Evidence)
 		current.ID = old.ID
 		current.IDGenerated = old.IDGenerated
 		current.ContinuityToken = old.ContinuityToken
@@ -320,10 +337,13 @@ func mergeReappearedFindingsJSON(freshRaw, priorRaw string) string {
 			break
 		}
 	}
+	attributedEvidence := rebuildAttributedEvidence(&fresh)
 	if allPriorSurvived {
-		fresh.Tested = mergeComparable(fresh.Tested, prior.Tested)
-		fresh.Artifacts = mergeComparable(fresh.Artifacts, prior.Artifacts)
-		fresh.TestingSummary = mergeEvidenceSummary(fresh.TestingSummary, prior.TestingSummary)
+		if !attributedEvidence {
+			fresh.Tested = mergeComparable(fresh.Tested, prior.Tested)
+			fresh.Artifacts = mergeComparable(fresh.Artifacts, prior.Artifacts)
+			fresh.TestingSummary = mergeEvidenceSummary(fresh.TestingSummary, prior.TestingSummary)
+		}
 		fresh.RiskLevel, fresh.RiskRationale, fresh.RiskScope = effectiveFindingsRisk(fresh.Items, fresh, prior, matched)
 	} else {
 		fresh.RiskLevel, fresh.RiskRationale, fresh.RiskScope = survivingFindingsRisk(fresh)
@@ -393,6 +413,7 @@ func FilterDeferredPipelineOwnedDeliveryFindings(findings types.Findings) (types
 	}
 	out := findings
 	out.Items = kept
+	rebuildAttributedEvidence(&out)
 	switch len(kept) {
 	case 0:
 		out.Summary = "no review findings remain"
@@ -470,6 +491,46 @@ func mergeEvidenceSummary(fresh, carried string) string {
 	default:
 		return fresh + "\n\n" + carried
 	}
+}
+
+func mergeFindingEvidence(fresh, carried *types.FindingEvidence) *types.FindingEvidence {
+	if fresh == nil && carried == nil {
+		return nil
+	}
+	merged := &types.FindingEvidence{}
+	if fresh != nil {
+		merged.Tested = append(merged.Tested, fresh.Tested...)
+		merged.TestingSummary = fresh.TestingSummary
+		merged.Artifacts = append(merged.Artifacts, fresh.Artifacts...)
+	}
+	if carried != nil {
+		merged.Tested = mergeComparable(merged.Tested, carried.Tested)
+		merged.TestingSummary = mergeEvidenceSummary(merged.TestingSummary, carried.TestingSummary)
+		merged.Artifacts = mergeComparable(merged.Artifacts, carried.Artifacts)
+	}
+	return merged
+}
+
+func rebuildAttributedEvidence(findings *types.Findings) bool {
+	attributed := false
+	var tested []string
+	var testingSummary string
+	var artifacts []types.TestArtifact
+	for _, item := range findings.Items {
+		if item.Evidence == nil {
+			continue
+		}
+		attributed = true
+		tested = mergeComparable(tested, item.Evidence.Tested)
+		testingSummary = mergeEvidenceSummary(testingSummary, item.Evidence.TestingSummary)
+		artifacts = mergeComparable(artifacts, item.Evidence.Artifacts)
+	}
+	if attributed {
+		findings.Tested = tested
+		findings.TestingSummary = testingSummary
+		findings.Artifacts = artifacts
+	}
+	return attributed
 }
 
 func effectiveFindingsRisk(items []types.Finding, fresh, carried types.Findings, carriedCount int) (string, string, string) {
@@ -593,13 +654,19 @@ func mergeFindingsJSON(existingRaw, additionalRaw string) string {
 	existingIDs := types.StableFindingIDs(existing.Items)
 	existingCounts := types.CountFindingFingerprints(existing.Items)
 	additionalCounts := types.CountFindingFingerprints(additional.Items)
-	merged := types.Findings{Summary: existing.Summary, Tested: existing.Tested, TestingSummary: existing.TestingSummary, RiskLevel: existing.RiskLevel, RiskRationale: existing.RiskRationale, RiskScope: existing.RiskScope}
+	merged := types.Findings{Summary: existing.Summary, Tested: existing.Tested, TestingSummary: existing.TestingSummary, Artifacts: existing.Artifacts, RiskLevel: existing.RiskLevel, RiskRationale: existing.RiskRationale, RiskScope: existing.RiskScope}
 	for _, item := range existing.Items {
 		merged.Items = append(merged.Items, item)
 		seen[findingKey(item)] = true
 	}
 	for _, item := range additional.Items {
 		if hasFindingMatch(item, existingIDs, seen, additionalCounts, existingCounts) {
+			for i := range merged.Items {
+				if types.FindingIDCorroborates(merged.Items[i], item) {
+					merged.Items[i].Evidence = mergeFindingEvidence(merged.Items[i].Evidence, item.Evidence)
+					break
+				}
+			}
 			continue
 		}
 		key := findingKey(item)
@@ -609,6 +676,7 @@ func mergeFindingsJSON(existingRaw, additionalRaw string) string {
 	if len(merged.Items) == 0 {
 		return ""
 	}
+	rebuildAttributedEvidence(&merged)
 	mergedRaw, err := types.MarshalFindingsJSON(merged)
 	if err != nil {
 		return existingRaw
@@ -644,6 +712,11 @@ func removeMatchingFindingsJSON(existingRaw, removeRaw string) string {
 	}
 	if len(filtered.Items) == 0 {
 		return ""
+	}
+	if len(filtered.Items) != len(existing.Items) && !rebuildAttributedEvidence(&filtered) {
+		filtered.Tested = nil
+		filtered.TestingSummary = ""
+		filtered.Artifacts = nil
 	}
 	filteredRaw, err := types.MarshalFindingsJSON(filtered)
 	if err != nil {
@@ -681,6 +754,11 @@ func retainMatchingFindingsJSON(existingRaw, keepRaw string) string {
 	if len(filtered.Items) == 0 {
 		return ""
 	}
+	if len(filtered.Items) != len(existing.Items) && !rebuildAttributedEvidence(&filtered) {
+		filtered.Tested = nil
+		filtered.TestingSummary = ""
+		filtered.Artifacts = nil
+	}
 	filteredRaw, err := types.MarshalFindingsJSON(filtered)
 	if err != nil {
 		return ""
@@ -699,6 +777,9 @@ func autoFixableFindingsJSON(raw string) string {
 	fixable := types.AutoFixableFindings(findings)
 	if len(fixable.Items) == 0 {
 		return ""
+	}
+	if len(fixable.Items) != len(findings.Items) {
+		rebuildAttributedEvidence(&fixable)
 	}
 	fixableRaw, err := types.MarshalFindingsJSON(fixable)
 	if err != nil {
@@ -801,6 +882,9 @@ func filterFindingsJSON(raw string, ids []string) string {
 		return raw
 	}
 	filtered := types.FilterFindings(findings, ids)
+	if len(filtered.Items) != len(findings.Items) {
+		rebuildAttributedEvidence(&filtered)
+	}
 	if len(ids) == 0 {
 		filtered = types.Findings{
 			Summary:        "0 selected findings",

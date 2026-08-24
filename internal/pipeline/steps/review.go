@@ -357,6 +357,20 @@ func sanitizedPreviousFindingsForPrompt(raw string) string {
 		findings.Items[i].Source = sanitizePromptText(findings.Items[i].Source)
 		findings.Items[i].UserInstructions = sanitizePromptMultilineText(findings.Items[i].UserInstructions)
 		findings.Items[i].ReviewScope = sanitizePromptText(findings.Items[i].ReviewScope)
+		if findings.Items[i].Evidence != nil {
+			for j := range findings.Items[i].Evidence.Tested {
+				findings.Items[i].Evidence.Tested[j] = sanitizePromptMultilineText(findings.Items[i].Evidence.Tested[j])
+			}
+			findings.Items[i].Evidence.TestingSummary = sanitizePromptMultilineText(findings.Items[i].Evidence.TestingSummary)
+			for j := range findings.Items[i].Evidence.Artifacts {
+				artifact := &findings.Items[i].Evidence.Artifacts[j]
+				artifact.Kind = sanitizePromptText(artifact.Kind)
+				artifact.Label = sanitizePromptText(artifact.Label)
+				artifact.Path = sanitizePromptText(artifact.Path)
+				artifact.URL = sanitizePromptText(artifact.URL)
+				artifact.Content = sanitizePromptMultilineText(artifact.Content)
+			}
+		}
 	}
 	findings.Summary = sanitizePromptMultilineText(findings.Summary)
 	findings.RiskLevel = sanitizePromptText(findings.RiskLevel)

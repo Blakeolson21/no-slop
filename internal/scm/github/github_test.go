@@ -183,6 +183,26 @@ func TestFindAttestationPublicationIdentityDoesNotRequireJobCheck(t *testing.T) 
 	}
 }
 
+func TestFindAttestationPublicationIdentityUsesEarliestMatchingRun(t *testing.T) {
+	t.Parallel()
+
+	const nonce = "00112233445566778899aabbccddeeff"
+	const head = "abc123"
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh run list --workflow no-slop-required.yml --commit abc123 --limit 1000 --repo test/repo --json databaseId,number,attempt,event,headSha,displayTitle": {
+			stdout: `[{"databaseId":902,"number":44,"attempt":1,"event":"pull_request","headSha":"abc123","displayTitle":"no-slop-required|edited|PR #42 event 44 (run 902)|<!-- no-slop-publication:v1 ` + nonce + ` --> later mutation"},{"databaseId":901,"number":43,"attempt":1,"event":"pull_request","headSha":"abc123","displayTitle":"no-slop-required|edited|PR #42 event 43 (run 901)|<!-- no-slop-publication:v1 ` + nonce + ` --> publication"}]` + "\n",
+		},
+	}), nil, "", "test/repo")
+
+	identity, found, err := host.FindAttestationPublicationIdentity(context.Background(), head, nonce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || identity.RunID != 901 || identity.RunNumber != 43 {
+		t.Fatalf("publication identity = (%#v, %v), want earliest run", identity, found)
+	}
+}
+
 func TestGetPRStatePassesRepoFlag(t *testing.T) {
 	t.Parallel()
 

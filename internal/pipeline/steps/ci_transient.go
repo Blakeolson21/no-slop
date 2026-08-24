@@ -515,14 +515,16 @@ func (s *CIStep) loadExpectedAttestationState(sctx *pipeline.StepContext) error 
 	}
 	if strings.TrimSpace(encoded) == "" {
 		legacyEncoded, legacyErr := sctx.DB.GetRunCIRerunState(sctx.Run.ID)
-		if legacyErr != nil || strings.TrimSpace(legacyEncoded) == "" {
+		if legacyErr != nil {
+			return fmt.Errorf("read legacy persisted CI attestation state: %w", legacyErr)
+		}
+		if strings.TrimSpace(legacyEncoded) == "" {
 			s.expectedAttestation = expectedAttestationState{}
 			return nil
 		}
 		var legacy legacyExpectedAttestationState
 		if err := json.Unmarshal([]byte(legacyEncoded), &legacy); err != nil {
-			s.expectedAttestation = expectedAttestationState{}
-			return nil
+			return fmt.Errorf("restore legacy persisted CI attestation state: %w", err)
 		}
 		if legacy.HeadSHA == "" && legacy.UpdatedAt == "" {
 			s.expectedAttestation = expectedAttestationState{}

@@ -546,6 +546,98 @@ func TestExcludeFindingsJSON_DropsAggregateRiskForSubset(t *testing.T) {
 	}
 }
 
+func TestReviewEvidenceFollowsSurvivingLineagesAcrossSelection(t *testing.T) {
+	prior := types.Findings{
+		Items: []types.Finding{
+			{
+				ID:              "review-a",
+				IDGenerated:     true,
+				ContinuityToken: "token-a",
+				Severity:        "error",
+				File:            "a.go",
+				Line:            10,
+				Description:     "defect A",
+				Action:          types.ActionAutoFix,
+				ReviewScope:     types.FindingReviewScopeSource,
+				Evidence: &types.FindingEvidence{
+					Tested:         []string{"reproduce A"},
+					TestingSummary: "A remains reproducible.",
+					Artifacts:      []types.TestArtifact{{Kind: "log", Label: "A trace", Content: "A"}},
+				},
+			},
+			{
+				ID:              "review-b",
+				IDGenerated:     true,
+				ContinuityToken: "token-b",
+				Severity:        "error",
+				File:            "b.go",
+				Line:            20,
+				Description:     "defect B",
+				Action:          types.ActionAutoFix,
+				ReviewScope:     types.FindingReviewScopeSource,
+				Evidence: &types.FindingEvidence{
+					Tested:         []string{"reproduce B"},
+					TestingSummary: "B remains reproducible.",
+					Artifacts:      []types.TestArtifact{{Kind: "log", Label: "B trace", Content: "B"}},
+				},
+			},
+		},
+		Tested:         []string{"reproduce A", "reproduce B"},
+		TestingSummary: "A remains reproducible.\n\nB remains reproducible.",
+		Artifacts:      []types.TestArtifact{{Kind: "log", Label: "A trace", Content: "A"}, {Kind: "log", Label: "B trace", Content: "B"}},
+	}
+	priorRaw, err := types.MarshalFindingsJSON(prior)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := types.Findings{Items: []types.Finding{{
+		PriorID:              "review-b",
+		PriorContinuityToken: "token-b",
+		Severity:             "error",
+		File:                 "b.go",
+		Line:                 20,
+		Description:          "defect B",
+		Action:               types.ActionAutoFix,
+		ReviewScope:          types.FindingReviewScopeSource,
+		Evidence:             &types.FindingEvidence{},
+	}}}
+	freshRaw, err := types.MarshalFindingsJSON(fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshRaw, err = normalizeFindingsJSON(freshRaw, "review", priorRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshRaw = mergeReappearedFindingsJSON(freshRaw, priorRaw)
+
+	for _, tc := range []struct {
+		name     string
+		selected []string
+	}{
+		{name: "selected subset", selected: []string{"review-a"}},
+		{name: "selected all", selected: []string{"review-a", "review-b"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			carriedRaw := excludeFindingsJSON(priorRaw, tc.selected)
+			effectiveRaw := mergeCarriedFindingsJSON(freshRaw, carriedRaw, "review")
+			effective, err := types.ParseFindingsJSON(effectiveRaw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(effective.Items) != 1 || effective.Items[0].ID != "review-b" {
+				t.Fatalf("surviving findings = %#v", effective.Items)
+			}
+			if len(effective.Tested) != 1 || effective.Tested[0] != "reproduce B" || effective.TestingSummary != "B remains reproducible." {
+				t.Fatalf("surviving tested evidence = %#v, %q", effective.Tested, effective.TestingSummary)
+			}
+			if len(effective.Artifacts) != 1 || effective.Artifacts[0].Label != "B trace" {
+				t.Fatalf("surviving artifacts = %#v", effective.Artifacts)
+			}
+		})
+	}
+}
+
 func TestFilterFindingsJSON_EmptySelectionReturnsEmptyFindings(t *testing.T) {
 	raw := `{"findings":[{"id":"review-1","severity":"error","description":"first"}],"summary":"1 finding"}`
 

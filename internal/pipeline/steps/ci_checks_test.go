@@ -51,7 +51,7 @@ func TestCIStepFailsClosedWhenAttestationStateCannotBeRead(t *testing.T) {
 func TestCIStepKeepsLegacyRerunRestorationBestEffort(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
-	if err := sctx.DB.SetRunCIRerunState(sctx.Run.ID, `{`); err != nil {
+	if err := sctx.DB.SetRunCIRerunState(sctx.Run.ID, `{"spent":[]}`); err != nil {
 		t.Fatal(err)
 	}
 	var logs []string
@@ -66,6 +66,19 @@ func TestCIStepKeepsLegacyRerunRestorationBestEffort(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(logs, "\n"), "could not restore the persisted rerun budget") {
 		t.Fatalf("logs = %q", logs)
+	}
+}
+
+func TestCIStepFailsClosedOnMalformedLegacyAttestationState(t *testing.T) {
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	if err := sctx.DB.SetRunCIRerunState(sctx.Run.ID, `{`); err != nil {
+		t.Fatal(err)
+	}
+	sctx.Run.PRURL = nil
+	outcome, err := (&CIStep{}).Execute(sctx)
+	if err == nil || !strings.Contains(err.Error(), "restore legacy persisted CI attestation state") {
+		t.Fatalf("Execute() = (%#v, %v), want legacy restoration error", outcome, err)
 	}
 }
 

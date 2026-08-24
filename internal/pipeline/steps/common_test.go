@@ -1472,6 +1472,31 @@ func TestReviewFindingsSchema_AllowsTestingMetadata(t *testing.T) {
 	}
 }
 
+func TestReviewFindingsSchemaRequiresLineageEvidence(t *testing.T) {
+	t.Parallel()
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(reviewFindingsSchema, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	props := parsed["properties"].(map[string]interface{})
+	items := props["findings"].(map[string]interface{})["items"].(map[string]interface{})
+	itemProps := items["properties"].(map[string]interface{})
+	evidence := itemProps["evidence"].(map[string]interface{})
+	evidenceProps := evidence["properties"].(map[string]interface{})
+	for _, name := range []string{"tested", "testing_summary", "artifacts"} {
+		if _, ok := evidenceProps[name]; !ok {
+			t.Fatalf("review finding evidence missing %s", name)
+		}
+	}
+	required := items["required"].([]interface{})
+	for _, value := range required {
+		if value == "evidence" {
+			return
+		}
+	}
+	t.Fatal("review finding schema does not require evidence")
+}
+
 func TestSanitizedPreviousFindingsForPrompt_PreservesMultilineDescriptions(t *testing.T) {
 	t.Parallel()
 	raw, err := types.MarshalFindingsJSON(types.Findings{
