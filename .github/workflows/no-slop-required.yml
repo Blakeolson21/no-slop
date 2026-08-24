@@ -80,19 +80,19 @@ jobs:
           print(f"Found no-slop signature in PR #{pr_number} body.")
 
           publication = re.match(r"\A<!-- no-slop-publication:v1 ([0-9a-f]{32}) -->(?:\r?\n){2}", body)
-          legacy_opened_publication = publication is None and pr_action == "opened"
-          if publication is None and not legacy_opened_publication:
+          legacy_initial_publication = publication is None and pr_action in ("opened", "synchronize")
+          if publication is None and not legacy_initial_publication:
               fail("This PR has no valid no-slop publication identity. Re-run 'git push no-slop'.")
           expected_publication_nonce = publication.group(1) if publication is not None else None
 
           def is_compliant_attestation(parsed, marker):
               if not isinstance(parsed, dict):
                   return False
-              if legacy_opened_publication:
+              if legacy_initial_publication:
                   # Bootstrap only the canonical original-v1 body emitted by
-                  # the installed binary opening the PR that adds publication
-                  # nonces. Every later event and renamed historical marker
-                  # must use the nonce-bearing format.
+                  # an installed pre-nonce binary opening or synchronizing the
+                  # PR that adds publication nonces. Body edits and renamed
+                  # historical markers must use the nonce-bearing format.
                   if marker != owned_markers[0] or "publication_nonce" in parsed:
                       return False
               elif parsed.get("publication_nonce") != expected_publication_nonce:
@@ -109,7 +109,7 @@ jobs:
                   if name in statuses:
                       return False
                   statuses[name] = (status, certified_head)
-              if legacy_opened_publication:
+              if legacy_initial_publication:
                   return all(statuses.get(name, (None,))[0] == "completed" for name in required_steps)
               return all(statuses.get(name) == ("completed", pr_head_sha) for name in required_steps)
 

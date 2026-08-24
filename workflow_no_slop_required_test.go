@@ -134,8 +134,9 @@ func TestNoSlopRequiredWorkflowEnforcesCompletedPipelineAttestation(t *testing.T
 // rollout boundary where the installed no-slop binary opens the PR that first
 // introduces publication nonces. That binary can emit only the original v1
 // attestation: one current-head payload with completed step statuses. The
-// allowance is deliberately limited to the canonical marker on the immutable
-// opened event; subsequent events must use the nonce-bearing format.
+// allowance is deliberately limited to the canonical marker on publication
+// events produced by an installed pre-nonce binary. Body edits must use the
+// nonce-bearing format.
 func TestNoSlopRequiredWorkflowAcceptsInitialLegacyV1Publication(t *testing.T) {
 	workflow := loadRequiredWorkflow(t)
 	legacyBody := legacyV1PipelineBody(t, generatedPipelineBody(t))
@@ -148,15 +149,17 @@ func TestNoSlopRequiredWorkflowAcceptsInitialLegacyV1Publication(t *testing.T) {
 
 	got := executeRequiredWorkflowFixture(t, workflow, []requiredWorkflowEvent{
 		{Action: "opened", Body: legacyBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 5, RunID: 500, RunNumber: 50},
-		{Action: "edited", Body: legacyBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 6, RunID: 600, RunNumber: 60},
-		{Action: "opened", Body: legacyBody, HeadSHA: "ffffffffffffffffffffffffffffffffffffffff", PRNumber: 7, RunID: 700, RunNumber: 70},
-		{Action: "opened", Body: historicalBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 8, RunID: 800, RunNumber: 80},
+		{Action: "synchronize", Body: legacyBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 6, RunID: 600, RunNumber: 60},
+		{Action: "edited", Body: legacyBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 7, RunID: 700, RunNumber: 70},
+		{Action: "opened", Body: legacyBody, HeadSHA: "ffffffffffffffffffffffffffffffffffffffff", PRNumber: 8, RunID: 800, RunNumber: 80},
+		{Action: "opened", Body: historicalBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 9, RunID: 900, RunNumber: 90},
 	})
 	want := []requiredWorkflowResult{
 		{RunID: 500, RunNumber: 50, Action: "opened", Executed: true, Conclusion: "success"},
-		{RunID: 600, RunNumber: 60, Action: "edited", Executed: true, Conclusion: "failure"},
-		{RunID: 700, RunNumber: 70, Action: "opened", Executed: true, Conclusion: "failure"},
+		{RunID: 600, RunNumber: 60, Action: "synchronize", Executed: true, Conclusion: "success"},
+		{RunID: 700, RunNumber: 70, Action: "edited", Executed: true, Conclusion: "failure"},
 		{RunID: 800, RunNumber: 80, Action: "opened", Executed: true, Conclusion: "failure"},
+		{RunID: 900, RunNumber: 90, Action: "opened", Executed: true, Conclusion: "failure"},
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("legacy v1 publication results =\n  %v\nwant\n  %v", got, want)
