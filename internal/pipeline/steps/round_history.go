@@ -296,9 +296,18 @@ func findingSelectedLater(item types.Finding, roundItems []roundFindingLine, rou
 	currentIdentityCounts := countRoundFindingIdentities(current)
 	candidateIdentityCounts := countRoundFindingIdentities(candidates)
 	currentOccurrenceCounts := types.CountFindingOccurrences(current)
-	candidateOccurrenceCounts := types.CountFindingOccurrences(candidates)
+	candidateOccurrenceCounts := make(map[string]map[int]int)
+	for _, selected := range selectedLater {
+		if selected.Round <= round || !selected.Finding.HasOccurrence() {
+			continue
+		}
+		if candidateOccurrenceCounts[selected.Finding.OccurrenceToken] == nil {
+			candidateOccurrenceCounts[selected.Finding.OccurrenceToken] = make(map[int]int)
+		}
+		candidateOccurrenceCounts[selected.Finding.OccurrenceToken][selected.Round]++
+	}
 	for _, candidate := range candidates {
-		if types.FindingOccurrenceCorroborates(item, candidate) && currentOccurrenceCounts[item.OccurrenceToken] == 1 && candidateOccurrenceCounts[candidate.OccurrenceToken] == 1 {
+		if types.FindingOccurrenceCorroborates(item, candidate) && currentOccurrenceCounts[item.OccurrenceToken] == 1 && occurrenceUniqueWithinLaterRounds(candidateOccurrenceCounts[candidate.OccurrenceToken]) {
 			return true
 		}
 		if item.HasLineage() && candidate.HasLineage() {
@@ -317,6 +326,18 @@ func findingSelectedLater(item types.Finding, roundItems []roundFindingLine, rou
 		}
 	}
 	return false
+}
+
+func occurrenceUniqueWithinLaterRounds(counts map[int]int) bool {
+	if len(counts) == 0 {
+		return false
+	}
+	for _, count := range counts {
+		if count != 1 {
+			return false
+		}
+	}
+	return true
 }
 
 func countRoundFindingIdentities(items []types.Finding) map[types.FindingIdentity]int {

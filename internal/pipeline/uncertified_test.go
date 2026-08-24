@@ -98,14 +98,14 @@ func TestLoadUncertifiedPriorReviewFailsWhenSelectionCannotBeRead(t *testing.T) 
 	}
 }
 
-func TestLoadUncertifiedPriorReviewPreservesSelectedTruthAtSameHeadBoundary(t *testing.T) {
+func TestLoadUncertifiedPriorReviewPreservesSelectedTruthBeforeFixAdoption(t *testing.T) {
 	findings := `{"findings":[{"id":"review-a","severity":"error","description":"selected defect","action":"auto-fix"},{"id":"review-b","severity":"warning","description":"unselected defect","action":"ask-user"}]}`
 	selection := `["review-a"]`
 	store := &failingUncertifiedReviewStore{
 		steps:     []*db.StepResult{{ID: "review-step", StepName: types.StepReview, FindingsJSON: &findings}},
 		selection: &selection,
 	}
-	_, got, _, err := loadUncertifiedPriorReview(store, "source-run", true)
+	_, got, _, err := loadUncertifiedPriorReview(store, "source-run", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,6 +115,78 @@ func TestLoadUncertifiedPriorReviewPreservesSelectedTruthAtSameHeadBoundary(t *t
 	}
 	if len(parsed.Items) != 2 {
 		t.Fatalf("same-head recovery findings = %#v, want selected and unselected truth", parsed.Items)
+	}
+}
+
+func TestBindUncertifiedPipelineRangeUsesDurableSelectionProgress(t *testing.T) {
+	database, _, source, repo := setupTest(t)
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	h0 := currentSHA(t, dir)
+	writeTestFile(t, dir, "fix.txt", "first\n")
+	execGit(t, dir, "add", ".")
+	execGit(t, dir, "commit", "-m", "first fix")
+	h1 := currentSHA(t, dir)
+	writeTestFile(t, dir, "fix.txt", "second\n")
+	execGit(t, dir, "add", ".")
+	execGit(t, dir, "commit", "-m", "second fix")
+	h2 := currentSHA(t, dir)
+	if err := database.UpdateRunHeadSHA(source.ID, h1); err != nil {
+		t.Fatal(err)
+	}
+	source.HeadSHA = h1
+
+	review, err := database.InsertStepResult(source.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings := `{"findings":[{"id":"review-a","severity":"error","description":"selected defect","action":"auto-fix"},{"id":"review-b","severity":"warning","description":"unselected defect","action":"ask-user"}]}`
+	round, err := database.InsertEffectiveReviewStepRoundWithProvenance(review.ID, 1, "initial", &findings, nil, h1, h1, "", nil, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := `["review-a"]`
+	if err := database.PersistReviewFixSelection(db.ReviewFixSelection{
+		RoundID: round.ID, StepResultID: review.ID, RepoID: repo.ID, Branch: source.Branch,
+		FromSHA: h0, HeadSHA: h1, SourceRunID: source.ID, RoundFindingsJSON: findings,
+		StepFindingsJSON: findings, SelectedFindingIDs: &selected, SelectionSource: db.RoundSelectionSourceAutoFix,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	beforeRun, err := database.InsertRun(repo.ID, source.Branch, h1, source.BaseSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := &StepContext{Ctx: context.Background(), DB: database, Repo: repo, Run: beforeRun, WorkDir: dir}
+	if err := BindUncertifiedPipelineRange(before); err != nil {
+		t.Fatal(err)
+	}
+	beforeFindings, err := types.ParseFindingsJSON(before.UncertifiedPriorFindings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(beforeFindings.Items) != 2 {
+		t.Fatalf("pre-adoption recovery findings = %#v", beforeFindings.Items)
+	}
+
+	if err := PersistUncertifiedPipelineRange(&StepContext{Ctx: context.Background(), DB: database, Repo: repo, Run: source, WorkDir: dir}, h1, h2); err != nil {
+		t.Fatal(err)
+	}
+	afterRun, err := database.InsertRun(repo.ID, source.Branch, h2, source.BaseSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := &StepContext{Ctx: context.Background(), DB: database, Repo: repo, Run: afterRun, WorkDir: dir}
+	if err := BindUncertifiedPipelineRange(after); err != nil {
+		t.Fatal(err)
+	}
+	afterFindings, err := types.ParseFindingsJSON(after.UncertifiedPriorFindings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(afterFindings.Items) != 1 || afterFindings.Items[0].ID != "review-b" {
+		t.Fatalf("post-adoption recovery findings = %#v", afterFindings.Items)
 	}
 }
 

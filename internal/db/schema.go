@@ -144,15 +144,16 @@ CREATE TABLE IF NOT EXISTS intent_cache (
 );
 
 -- Per-branch boundary for durable review truth whose verification did not
--- complete. A same-head boundary records a pre-fixer selection; a wider one
--- also identifies pipeline-authored commits. PRIMARY KEY per branch: the
--- latest uncertified HEAD replaces an older boundary.
+-- complete. selection_applied records whether a selected fix reached the
+-- branch. PRIMARY KEY per branch: the latest uncertified HEAD replaces an
+-- older boundary.
 CREATE TABLE IF NOT EXISTS uncertified_pipeline_ranges (
     repo_id       TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
     branch        TEXT NOT NULL,
     from_sha      TEXT NOT NULL,
     to_sha        TEXT NOT NULL,
     source_run_id TEXT NOT NULL,
+    selection_applied INTEGER NOT NULL DEFAULT 0,
     created_at    INTEGER NOT NULL,
     PRIMARY KEY (repo_id, branch)
 );
@@ -187,6 +188,7 @@ var migrationStatements = []string{
 	// budget rather than silently granting a free retry.
 	`ALTER TABLE runs ADD COLUMN ci_rerun_state TEXT`,
 	`ALTER TABLE runs ADD COLUMN ci_attestation_state TEXT`,
+	`ALTER TABLE uncertified_pipeline_ranges ADD COLUMN selection_applied INTEGER NOT NULL DEFAULT 0`,
 	// Branch synchronization provenance is intentionally nullable. Historical
 	// rows stay unbound because mutable head_sha cannot prove a successful push.
 	`ALTER TABLE runs ADD COLUMN submitted_head_sha TEXT`,

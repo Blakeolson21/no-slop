@@ -654,6 +654,24 @@ func TestReviewSelectionPersistsOnlyUnownedSharedEvidence(t *testing.T) {
 	}
 }
 
+func TestReviewSelectionRetainsAmbiguousAggregateSummary(t *testing.T) {
+	raw := `{"findings":[{"id":"legacy-a","severity":"error","description":"selected defect","action":"auto-fix","evidence":{"testing_summary":"A reproduced"}},{"id":"legacy-b","severity":"warning","description":"remaining defect","action":"ask-user"}],"testing_summary":"A and B reproduced"}`
+	attributed, err := prepareReviewSelectionTruth(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remaining, err := types.ParseFindingsJSON(excludeFindingsJSON(attributed, []string{"legacy-a"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining.Items) != 1 || remaining.Items[0].ID != "legacy-b" {
+		t.Fatalf("remaining findings = %#v", remaining.Items)
+	}
+	if remaining.SharedEvidence == nil || remaining.SharedEvidence.TestingSummary != "A and B reproduced" || remaining.TestingSummary != "A and B reproduced" {
+		t.Fatalf("ambiguous shared summary was lost: %#v", remaining)
+	}
+}
+
 func TestReviewEvidenceFollowsSurvivingLineagesAcrossSelection(t *testing.T) {
 	prior := types.Findings{
 		Items: []types.Finding{

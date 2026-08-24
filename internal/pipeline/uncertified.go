@@ -42,7 +42,7 @@ func BindUncertifiedPipelineRange(sctx *StepContext) error {
 		warnUncertifiedRangeSkipped(sctx, rng, "uncertified range %s..%s not in gate; not applying provenance")
 		return nil
 	}
-	priorRounds, priorFindings, priorLineages, err := loadUncertifiedPriorReview(sctx.DB, rng.SourceRunID, rng.FromSHA == rng.ToSHA)
+	priorRounds, priorFindings, priorLineages, err := loadUncertifiedPriorReview(sctx.DB, rng.SourceRunID, rng.SelectionApplied)
 	if err != nil {
 		return err
 	}
@@ -88,11 +88,12 @@ func PersistUncertifiedPipelineRangeWithRollback(sctx *StepContext, fromSHA, toS
 		return nil, err
 	}
 	current := db.UncertifiedPipelineRange{
-		RepoID:      sctx.Repo.ID,
-		Branch:      sctx.Run.Branch,
-		FromSHA:     fromSHA,
-		ToSHA:       toSHA,
-		SourceRunID: sctx.Run.ID,
+		RepoID:           sctx.Repo.ID,
+		Branch:           sctx.Run.Branch,
+		FromSHA:          fromSHA,
+		ToSHA:            toSHA,
+		SourceRunID:      sctx.Run.ID,
+		SelectionApplied: true,
 	}
 	rollback := func() error {
 		restored, err := sctx.DB.RestoreUncertifiedPipelineRangeIfCurrent(current, existing)
@@ -189,10 +190,10 @@ func RemapUncertifiedPipelineRangeAfterRebase(sctx *StepContext, oldHead, newHea
 	if err != nil || newFrom == "" || newTo == "" || newFrom == newTo {
 		return nil, fmt.Errorf("resolve remapped uncertified range end after rebase")
 	}
-	if err := sctx.DB.UpsertUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch, newFrom, newTo, rng.SourceRunID); err != nil {
+	if err := sctx.DB.UpsertUncertifiedPipelineRangeState(sctx.Repo.ID, sctx.Run.Branch, newFrom, newTo, rng.SourceRunID, rng.SelectionApplied); err != nil {
 		return nil, fmt.Errorf("persist remapped uncertified pipeline range: %w", err)
 	}
-	current := db.UncertifiedPipelineRange{RepoID: rng.RepoID, Branch: rng.Branch, FromSHA: newFrom, ToSHA: newTo, SourceRunID: rng.SourceRunID}
+	current := db.UncertifiedPipelineRange{RepoID: rng.RepoID, Branch: rng.Branch, FromSHA: newFrom, ToSHA: newTo, SourceRunID: rng.SourceRunID, SelectionApplied: rng.SelectionApplied}
 	rollback := func() error {
 		restored, err := sctx.DB.RestoreUncertifiedPipelineRangeIfCurrent(current, rng)
 		if err != nil {
@@ -301,7 +302,7 @@ type uncertifiedReviewStore interface {
 	GetLatestStepRoundSelection(string) (*string, error)
 }
 
-func loadUncertifiedPriorReview(database uncertifiedReviewStore, sourceRunID string, preserveSelected bool) ([]*db.StepRound, string, string, error) {
+func loadUncertifiedPriorReview(database uncertifiedReviewStore, sourceRunID string, selectionApplied bool) ([]*db.StepRound, string, string, error) {
 	sourceRunID = strings.TrimSpace(sourceRunID)
 	if database == nil || sourceRunID == "" {
 		return nil, "", "", fmt.Errorf("load uncertified review: missing source run")
@@ -327,7 +328,7 @@ func loadUncertifiedPriorReview(database uncertifiedReviewStore, sourceRunID str
 		if err != nil {
 			return nil, "", "", fmt.Errorf("read uncertified source-run selection: %w", err)
 		}
-		if selectedRaw != nil && !preserveSelected {
+		if selectedRaw != nil && selectionApplied {
 			var selected []string
 			if err := json.Unmarshal([]byte(*selectedRaw), &selected); err != nil {
 				return nil, "", "", fmt.Errorf("read uncertified source-run selection: %w", err)

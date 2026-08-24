@@ -28,7 +28,7 @@ func TestUncertifiedPipelineRangeUpsertGetDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got == nil || got.FromSHA != "from-a" || got.ToSHA != "to-a" || got.SourceRunID != run.ID {
+	if got == nil || got.FromSHA != "from-a" || got.ToSHA != "to-a" || got.SourceRunID != run.ID || !got.SelectionApplied {
 		t.Fatalf("first upsert = %#v", got)
 	}
 
@@ -43,7 +43,7 @@ func TestUncertifiedPipelineRangeUpsertGetDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got == nil || got.FromSHA != "from-b" || got.ToSHA != "to-b" || got.SourceRunID != run2.ID {
+	if got == nil || got.FromSHA != "from-b" || got.ToSHA != "to-b" || got.SourceRunID != run2.ID || !got.SelectionApplied {
 		t.Fatalf("replacement upsert = %#v, want latest range only", got)
 	}
 

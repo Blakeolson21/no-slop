@@ -645,7 +645,7 @@ func subtractEvidenceSummary(aggregate, owned string) string {
 	}
 	for _, count := range ownedBlocks {
 		if count > 0 {
-			return ""
+			return aggregate
 		}
 	}
 	return strings.Join(remaining, "\n\n")

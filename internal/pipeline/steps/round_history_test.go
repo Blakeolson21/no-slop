@@ -342,6 +342,47 @@ func TestRoundHistoryPromptSection_OccurrenceTokenSupersedesOnlySelectedLegacyIg
 	}
 }
 
+func TestRoundHistoryPromptSection_RepeatedOccurrenceSelectionsRemainAuthoritative(t *testing.T) {
+	sctx, stepID := newRoundHistoryContext(t)
+
+	initial := `{"findings":[{"id":"legacy-a","occurrence_token":"occurrence-a","severity":"error","file":"loader.go","line":10,"description":"unsafe loader","action":"ask-user"},{"id":"legacy-b","occurrence_token":"occurrence-b","severity":"error","file":"loader.go","line":10,"description":"unsafe loader","action":"ask-user"}]}`
+	r1, err := sctx.DB.InsertStepRound(stepID, 1, "initial", &initial, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	none := `[]`
+	if err := sctx.DB.SetStepRoundSelection(r1.ID, &none, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	for round := 2; round <= 3; round++ {
+		later := `{"findings":[{"id":"later-a","occurrence_token":"occurrence-a","severity":"error","file":"loader.go","line":10,"description":"unsafe loader","action":"ask-user"}]}`
+		record, err := sctx.DB.InsertStepRound(stepID, round, "recovery", &later, nil, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		selected := `["later-a"]`
+		if err := sctx.DB.SetStepRoundSelection(record.ID, &selected, db.RoundSelectionSourceUser); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := roundHistoryPromptSection(sctx)
+	roundOneEnd := strings.Index(got, "\n\nRound 2")
+	if roundOneEnd < 0 {
+		t.Fatalf("missing later rounds:\n%s", got)
+	}
+	roundOne := got[:roundOneEnd]
+	ignoreAt := strings.Index(roundOne, "user_chose_to_ignore:")
+	if ignoreAt < 0 {
+		t.Fatalf("missing first-round ignore list:\n%s", got)
+	}
+	ignored := roundOne[ignoreAt:]
+	if strings.Contains(ignored, `"id":"legacy-a"`) || !strings.Contains(ignored, `"id":"legacy-b"`) {
+		t.Fatalf("repeated selection corrupted occurrence history:\n%s", got)
+	}
+}
+
 func TestUncertifiedRoundHistoryPromptSection_ReconcilesLaterSelections(t *testing.T) {
 	initial := `{"findings":[{"id":"review-1","severity":"error","description":"unsafe loader","action":"ask-user"},{"id":"review-2","severity":"warning","description":"hardcoded timeout","action":"ask-user"}]}`
 	selectedFirst := `["review-1"]`

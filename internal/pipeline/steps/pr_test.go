@@ -350,7 +350,7 @@ func TestPRStep_CreatesNewPR(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	step := &PRStep{}
+	step := &PRStep{publicationNonceReader: bytes.NewReader([]byte{0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff})}
 	outcome, err := step.Execute(sctx)
 	if err != nil {
 		t.Fatal(err)
@@ -388,6 +388,32 @@ func TestPRStep_CreatesNewPR(t *testing.T) {
 	}
 	if run.PRURL == nil || *run.PRURL != "https://github.com/test/repo/pull/99" {
 		t.Errorf("PR URL = %v, want https://github.com/test/repo/pull/99", run.PRURL)
+	}
+	encoded, err := sctx.DB.GetRunCIAttestationState(sctx.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attestation expectedAttestationState
+	if err := json.Unmarshal([]byte(encoded), &attestation); err != nil {
+		t.Fatal(err)
+	}
+	if attestation.HeadSHA != headSHA || attestation.PublicationNonce != testPublicationNonce {
+		t.Fatalf("created PR attestation expectation = %#v", attestation)
+	}
+	ci := &CIStep{}
+	if err := ci.loadExpectedAttestationState(sctx); err != nil {
+		t.Fatal(err)
+	}
+	stale := scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketFail, State: "FAILURE", Link: "other-pr"}
+	host := &attestationIdentityHost{identities: map[string]scm.CheckAttemptIdentity{
+		"other-pr": {RunID: 1001, HeadSHA: headSHA, PublicationNonce: "ffeeddccbbaa99887766554433221100"},
+	}}
+	filtered, err := ci.filterExpectedStaleAttestationChecks(sctx, host, []scm.Check{stale})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered) != 1 || filtered[0].Bucket != scm.CheckBucketPending {
+		t.Fatalf("stale same-head check from another PR was accepted: %#v", filtered)
 	}
 }
 

@@ -308,12 +308,13 @@ func (d *DB) PersistReviewFixSelection(selection ReviewFixSelection) error {
 		return err
 	}
 	_, err = tx.Exec(
-		`INSERT INTO uncertified_pipeline_ranges (repo_id, branch, from_sha, to_sha, source_run_id, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)
+		`INSERT INTO uncertified_pipeline_ranges (repo_id, branch, from_sha, to_sha, source_run_id, selection_applied, created_at)
+		 VALUES (?, ?, ?, ?, ?, 0, ?)
 		 ON CONFLICT(repo_id, branch) DO UPDATE SET
 		   from_sha = excluded.from_sha,
 		   to_sha = excluded.to_sha,
 		   source_run_id = excluded.source_run_id,
+		   selection_applied = 0,
 		   created_at = excluded.created_at`,
 		selection.RepoID, selection.Branch, selection.FromSHA, selection.HeadSHA, selection.SourceRunID, now(),
 	)

@@ -98,11 +98,6 @@ func (s *PRStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 		if err != nil {
 			return nil, fmt.Errorf("update pull request: %w", err)
 		}
-		if provider == scm.ProviderGitHub {
-			if err := persistExpectedAttestationPublication(sctx, content.PublicationNonce); err != nil {
-				return nil, fmt.Errorf("persist expected attestation boundary: %w", err)
-			}
-		}
 		prURL := existing.URL
 		if updated != nil && updated.URL != "" {
 			prURL = updated.URL
@@ -110,7 +105,7 @@ func (s *PRStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 		if strings.TrimSpace(prURL) == "" {
 			return nil, fmt.Errorf("updated pull request has no URL")
 		}
-		if err := sctx.DB.UpdateRunPRURL(sctx.Run.ID, prURL); err != nil {
+		if err := persistPublishedPR(sctx, provider, content.PublicationNonce, prURL); err != nil {
 			return nil, fmt.Errorf("persist updated pull request: %w", err)
 		}
 		return &pipeline.StepOutcome{PRURL: prURL}, nil
@@ -125,10 +120,19 @@ func (s *PRStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 		return nil, fmt.Errorf("created pull request has no URL")
 	}
 	sctx.Log(fmt.Sprintf("created pull request: %s", created.URL))
-	if err := sctx.DB.UpdateRunPRURL(sctx.Run.ID, created.URL); err != nil {
+	if err := persistPublishedPR(sctx, provider, content.PublicationNonce, created.URL); err != nil {
 		return nil, fmt.Errorf("persist created pull request: %w", err)
 	}
 	return &pipeline.StepOutcome{PRURL: created.URL}, nil
+}
+
+func persistPublishedPR(sctx *pipeline.StepContext, provider scm.Provider, publicationNonce, prURL string) error {
+	if provider == scm.ProviderGitHub {
+		if err := persistExpectedAttestationPublication(sctx, publicationNonce); err != nil {
+			return fmt.Errorf("persist expected attestation boundary: %w", err)
+		}
+	}
+	return sctx.DB.UpdateRunPRURL(sctx.Run.ID, prURL)
 }
 
 func describePR(pr *scm.PR) string {
