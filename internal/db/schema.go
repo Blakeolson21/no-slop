@@ -143,10 +143,10 @@ CREATE TABLE IF NOT EXISTS intent_cache (
     created_at  INTEGER NOT NULL
 );
 
--- Per-branch range of pipeline-authored commits whose re-review did not
--- complete. The next run's initial review reads this so it is not cold on
--- uncertified fixer commits. PRIMARY KEY per branch: the latest uncertified
--- HEAD replaces an older range.
+-- Per-branch boundary for durable review truth whose verification did not
+-- complete. A same-head boundary records a pre-fixer selection; a wider one
+-- also identifies pipeline-authored commits. PRIMARY KEY per branch: the
+-- latest uncertified HEAD replaces an older boundary.
 CREATE TABLE IF NOT EXISTS uncertified_pipeline_ranges (
     repo_id       TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
     branch        TEXT NOT NULL,

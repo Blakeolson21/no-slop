@@ -62,6 +62,21 @@ type StepRoundStats struct {
 	PendingFixSource   string
 }
 
+type ReviewFixSelection struct {
+	RoundID            string
+	StepResultID       string
+	RepoID             string
+	Branch             string
+	FromSHA            string
+	HeadSHA            string
+	SourceRunID        string
+	RoundFindingsJSON  string
+	StepFindingsJSON   string
+	SelectedFindingIDs *string
+	SelectionSource    string
+	UserFindingsJSON   *string
+}
+
 // IsFixRound reports whether this round was a fix attempt. Legacy "user_fix"
 // rounds count: they were fix rounds dispatched by an explicit user selection.
 func (r *StepRound) IsFixRound() bool {
@@ -248,6 +263,67 @@ func (d *DB) SetStepRoundSelection(id string, selectedFindingIDs *string, source
 		return fmt.Errorf("set step round selection: %w", err)
 	}
 	return requireStepRoundUpdated(result, id)
+}
+
+func (d *DB) PersistReviewFixSelection(selection ReviewFixSelection) error {
+	if selection.RoundID == "" || selection.StepResultID == "" || selection.RepoID == "" || selection.Branch == "" || selection.FromSHA == "" || selection.HeadSHA == "" || selection.SourceRunID == "" || selection.RoundFindingsJSON == "" || selection.StepFindingsJSON == "" {
+		return fmt.Errorf("persist review fix selection: incomplete durable selection")
+	}
+	var selectionSource *string
+	if selection.SelectedFindingIDs != nil && *selection.SelectedFindingIDs != "" && selection.SelectionSource != "" {
+		selectionSource = &selection.SelectionSource
+	}
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return fmt.Errorf("begin review fix selection: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(
+		`UPDATE step_results SET findings_json = ?
+		 WHERE id = ? AND run_id = ? AND EXISTS (
+		   SELECT 1 FROM step_rounds WHERE id = ? AND step_result_id = step_results.id
+		 )`,
+		selection.StepFindingsJSON, selection.StepResultID, selection.SourceRunID, selection.RoundID,
+	)
+	if err != nil {
+		return fmt.Errorf("set durable review gate truth: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read durable review gate truth result: %w", err)
+	}
+	if rows != 1 {
+		return fmt.Errorf("step result %s not found", selection.StepResultID)
+	}
+	result, err = tx.Exec(
+		`UPDATE step_rounds
+		 SET findings_json = ?, selected_finding_ids = ?, selection_source = ?, user_findings_json = ?
+		 WHERE id = ? AND step_result_id = ?`,
+		selection.RoundFindingsJSON, selection.SelectedFindingIDs, selectionSource, selection.UserFindingsJSON, selection.RoundID, selection.StepResultID,
+	)
+	if err != nil {
+		return fmt.Errorf("set durable review round selection: %w", err)
+	}
+	if err := requireStepRoundUpdated(result, selection.RoundID); err != nil {
+		return err
+	}
+	_, err = tx.Exec(
+		`INSERT INTO uncertified_pipeline_ranges (repo_id, branch, from_sha, to_sha, source_run_id, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(repo_id, branch) DO UPDATE SET
+		   from_sha = excluded.from_sha,
+		   to_sha = excluded.to_sha,
+		   source_run_id = excluded.source_run_id,
+		   created_at = excluded.created_at`,
+		selection.RepoID, selection.Branch, selection.FromSHA, selection.HeadSHA, selection.SourceRunID, now(),
+	)
+	if err != nil {
+		return fmt.Errorf("set durable review recovery marker: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit review fix selection: %w", err)
+	}
+	return nil
 }
 
 func (d *DB) SetStepRoundUserDecision(id string, selectedFindingIDs *string, source string, userFindingsJSON *string) error {

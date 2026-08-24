@@ -53,8 +53,8 @@ func findingFingerprint(item types.Finding) types.FindingIdentity {
 	return item.Fingerprint()
 }
 
-func hasFindingMatch(item types.Finding, stableIDs map[string][]types.Finding, exact map[types.FindingIdentity]bool, itemCounts, candidateCounts map[types.FindingIdentity]int) bool {
-	return types.FindingMatches(item, stableIDs, exact, itemCounts, candidateCounts)
+func hasFindingMatch(item types.Finding, stableIDs map[string][]types.Finding, itemOccurrenceCounts, candidateOccurrenceCounts map[string]int, itemIdentityCounts, candidateIdentityCounts, itemFingerprintCounts, candidateFingerprintCounts map[types.FindingIdentity]int) bool {
+	return types.FindingMatches(item, stableIDs, itemOccurrenceCounts, candidateOccurrenceCounts, itemIdentityCounts, candidateIdentityCounts, itemFingerprintCounts, candidateFingerprintCounts)
 }
 
 func normalizeFindingsJSON(raw string, prefix string, existingRaw string) (string, error) {
@@ -124,6 +124,34 @@ func excludeFindingsJSON(raw string, ids []string) string {
 	return excludedRaw
 }
 
+func prepareReviewSelectionTruth(raw string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	findings, err := types.ParseFindingsJSON(raw)
+	if err != nil {
+		return "", err
+	}
+	findings, err = types.EnsureFindingOccurrenceTokens(findings)
+	if err != nil {
+		return "", err
+	}
+	if len(findings.Tested) > 0 || findings.TestingSummary != "" || len(findings.Artifacts) > 0 {
+		for i := range findings.Items {
+			if !findings.Items[i].HasOccurrence() || findings.Items[i].Evidence != nil {
+				continue
+			}
+			findings.Items[i].Evidence = &types.FindingEvidence{
+				Tested:         append([]string(nil), findings.Tested...),
+				TestingSummary: findings.TestingSummary,
+				Artifacts:      append([]types.TestArtifact(nil), findings.Artifacts...),
+			}
+		}
+		rebuildAttributedEvidence(&findings)
+	}
+	return types.MarshalFindingsJSON(findings)
+}
+
 // mergeCarriedFindingsJSON forms the effective gate truth for a scope-limited
 // round. Already-shown findings keep their stable IDs and cannot have their
 // action relaxed by a later restatement. New-ID collisions are reassigned
@@ -148,6 +176,8 @@ func mergeCarriedFindingsJSON(freshRaw, carriedRaw, prefix string) string {
 	carriedCounts := types.CountFindingFingerprints(carried.Items)
 	freshIdentityCounts := countFindingIdentities(fresh.Items)
 	carriedIdentityCounts := countFindingIdentities(carried.Items)
+	freshOccurrenceCounts := types.CountFindingOccurrences(fresh.Items)
+	carriedOccurrenceCounts := types.CountFindingOccurrences(carried.Items)
 	carriedIdentity := make(map[int]bool, len(carried.Items))
 	carriedCount := 0
 	for _, old := range carried.Items {
@@ -156,7 +186,8 @@ func mergeCarriedFindingsJSON(freshRaw, carriedRaw, prefix string) string {
 			identity := findingKey(current)
 			legacyMatch := (!current.HasLineage() || !old.HasLineage()) && ((identity == findingKey(old) && freshIdentityCounts[identity] == 1 && carriedIdentityCounts[identity] == 1) ||
 				(findingFingerprint(current) == findingFingerprint(old) && freshCounts[findingFingerprint(current)] == 1 && carriedCounts[findingFingerprint(old)] == 1))
-			if types.FindingIDCorroborates(current, old) || legacyMatch {
+			occurrenceMatch := types.FindingOccurrenceCorroborates(current, old) && freshOccurrenceCounts[current.OccurrenceToken] == 1 && carriedOccurrenceCounts[old.OccurrenceToken] == 1
+			if occurrenceMatch || types.FindingIDCorroborates(current, old) || legacyMatch {
 				match = i
 				break
 			}
@@ -236,12 +267,14 @@ func mergeReappearedFindingsJSON(freshRaw, priorRaw string) string {
 	priorCounts := types.CountFindingFingerprints(prior.Items)
 	freshIdentityCounts := countFindingIdentities(fresh.Items)
 	priorIdentityCounts := countFindingIdentities(prior.Items)
+	freshOccurrenceCounts := types.CountFindingOccurrences(fresh.Items)
 	matched := 0
 	ambiguousPrior := make([]bool, len(prior.Items))
 	matchedPrior := make([]bool, len(prior.Items))
 	for i := range fresh.Items {
 		current := &fresh.Items[i]
 		lineageMatches := make([]int, 0, 1)
+		occurrenceMatches := make([]int, 0, 1)
 		structuralMatches := make([]int, 0, 1)
 		for j := range prior.Items {
 			old := prior.Items[j]
@@ -253,15 +286,25 @@ func mergeReappearedFindingsJSON(freshRaw, priorRaw string) string {
 				lineageMatches = append(lineageMatches, j)
 				continue
 			}
+			if types.FindingOccurrenceCorroborates(*current, old) {
+				occurrenceMatches = append(occurrenceMatches, j)
+				continue
+			}
 			if findingKey(*current) == findingKey(old) || findingFingerprint(*current) == findingFingerprint(old) {
 				structuralMatches = append(structuralMatches, j)
 			}
 		}
 		match := -1
-		switch len(lineageMatches) {
-		case 1:
+		switch {
+		case len(occurrenceMatches) == 1 && freshOccurrenceCounts[current.OccurrenceToken] == 1:
+			match = occurrenceMatches[0]
+		case len(occurrenceMatches) > 1:
+			for _, j := range occurrenceMatches {
+				ambiguousPrior[j] = true
+			}
+		case len(lineageMatches) == 1:
 			match = lineageMatches[0]
-		case 0:
+		case len(lineageMatches) == 0:
 			identity := findingKey(*current)
 			fingerprint := findingFingerprint(*current)
 			if len(structuralMatches) == 1 && ((identity == findingKey(prior.Items[structuralMatches[0]]) && freshIdentityCounts[identity] == 1 && priorIdentityCounts[identity] == 1) ||
@@ -650,28 +693,28 @@ func mergeFindingsJSON(existingRaw, additionalRaw string) string {
 	if err != nil {
 		return existingRaw
 	}
-	seen := make(map[types.FindingIdentity]bool, len(existing.Items)+len(additional.Items))
 	existingIDs := types.StableFindingIDs(existing.Items)
+	existingOccurrences := types.CountFindingOccurrences(existing.Items)
+	additionalOccurrences := types.CountFindingOccurrences(additional.Items)
 	existingCounts := types.CountFindingFingerprints(existing.Items)
 	additionalCounts := types.CountFindingFingerprints(additional.Items)
+	existingIdentityCounts := countFindingIdentities(existing.Items)
+	additionalIdentityCounts := countFindingIdentities(additional.Items)
 	merged := types.Findings{Summary: existing.Summary, Tested: existing.Tested, TestingSummary: existing.TestingSummary, Artifacts: existing.Artifacts, RiskLevel: existing.RiskLevel, RiskRationale: existing.RiskRationale, RiskScope: existing.RiskScope}
 	for _, item := range existing.Items {
 		merged.Items = append(merged.Items, item)
-		seen[findingKey(item)] = true
 	}
 	for _, item := range additional.Items {
-		if hasFindingMatch(item, existingIDs, seen, additionalCounts, existingCounts) {
+		if hasFindingMatch(item, existingIDs, additionalOccurrences, existingOccurrences, additionalIdentityCounts, existingIdentityCounts, additionalCounts, existingCounts) {
 			for i := range merged.Items {
-				if types.FindingIDCorroborates(merged.Items[i], item) {
+				if types.FindingIDCorroborates(merged.Items[i], item) || types.FindingOccurrenceCorroborates(merged.Items[i], item) {
 					merged.Items[i].Evidence = mergeFindingEvidence(merged.Items[i].Evidence, item.Evidence)
 					break
 				}
 			}
 			continue
 		}
-		key := findingKey(item)
 		merged.Items = append(merged.Items, item)
-		seen[key] = true
 	}
 	if len(merged.Items) == 0 {
 		return ""
@@ -696,16 +739,16 @@ func removeMatchingFindingsJSON(existingRaw, removeRaw string) string {
 	if err != nil {
 		return existingRaw
 	}
-	toRemove := make(map[types.FindingIdentity]bool, len(remove.Items))
 	removeIDs := types.StableFindingIDs(remove.Items)
+	removeOccurrences := types.CountFindingOccurrences(remove.Items)
+	existingOccurrences := types.CountFindingOccurrences(existing.Items)
 	existingCounts := types.CountFindingFingerprints(existing.Items)
 	removeCounts := types.CountFindingFingerprints(remove.Items)
-	for _, item := range remove.Items {
-		toRemove[findingKey(item)] = true
-	}
+	existingIdentityCounts := countFindingIdentities(existing.Items)
+	removeIdentityCounts := countFindingIdentities(remove.Items)
 	filtered := types.Findings{Summary: existing.Summary, Tested: existing.Tested, TestingSummary: existing.TestingSummary, RiskLevel: existing.RiskLevel, RiskRationale: existing.RiskRationale, RiskScope: existing.RiskScope}
 	for _, item := range existing.Items {
-		if hasFindingMatch(item, removeIDs, toRemove, existingCounts, removeCounts) {
+		if hasFindingMatch(item, removeIDs, existingOccurrences, removeOccurrences, existingIdentityCounts, removeIdentityCounts, existingCounts, removeCounts) {
 			continue
 		}
 		filtered.Items = append(filtered.Items, item)
@@ -737,16 +780,16 @@ func retainMatchingFindingsJSON(existingRaw, keepRaw string) string {
 	if err != nil {
 		return ""
 	}
-	allowed := make(map[types.FindingIdentity]bool, len(keep.Items))
 	keepIDs := types.StableFindingIDs(keep.Items)
+	keepOccurrences := types.CountFindingOccurrences(keep.Items)
+	existingOccurrences := types.CountFindingOccurrences(existing.Items)
 	existingCounts := types.CountFindingFingerprints(existing.Items)
 	keepCounts := types.CountFindingFingerprints(keep.Items)
-	for _, item := range keep.Items {
-		allowed[findingKey(item)] = true
-	}
+	existingIdentityCounts := countFindingIdentities(existing.Items)
+	keepIdentityCounts := countFindingIdentities(keep.Items)
 	filtered := types.Findings{Summary: existing.Summary, Tested: existing.Tested, TestingSummary: existing.TestingSummary, RiskLevel: existing.RiskLevel, RiskRationale: existing.RiskRationale, RiskScope: existing.RiskScope}
 	for _, item := range existing.Items {
-		if !hasFindingMatch(item, keepIDs, allowed, existingCounts, keepCounts) {
+		if !hasFindingMatch(item, keepIDs, existingOccurrences, keepOccurrences, existingIdentityCounts, keepIdentityCounts, existingCounts, keepCounts) {
 			continue
 		}
 		filtered.Items = append(filtered.Items, item)

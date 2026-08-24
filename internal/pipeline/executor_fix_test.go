@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -151,6 +152,40 @@ func TestExecutor_UnselectedReviewFindingSurvivesSilentRereview(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("review did not park again on the unresolved carried finding")
+}
+
+func TestExecutor_ReviewUserFixPersistsRecoveryTruthBeforeFixer(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+	calls := 0
+	step := &scopeLimitedAdaptiveCallStep{adaptiveCallStep: adaptiveCallStep{
+		name: types.StepReview,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			calls++
+			if calls == 1 {
+				return &StepOutcome{NeedsApproval: true, Findings: `{"findings":[{"id":"legacy-a","severity":"error","description":"unsafe loader","action":"ask-user"}]}`}, nil
+			}
+			marker, err := database.GetUncertifiedPipelineRange(repo.ID, run.Branch)
+			if err != nil {
+				return nil, err
+			}
+			if marker == nil || marker.FromSHA != run.HeadSHA || marker.ToSHA != run.HeadSHA || marker.SourceRunID != run.ID {
+				return nil, fmt.Errorf("recovery marker = %#v", marker)
+			}
+			return &StepOutcome{ReviewApprovedHeadSHA: run.HeadSHA}, nil
+		},
+	}}
+	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
+	done, _ := startExecutor(t, exec, run, repo, workDir)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	id := findingIDByDescription(t, database, run.ID, types.StepReview, "unsafe loader")
+	if err := exec.Respond(types.StepReview, types.ActionFix, []string{id}); err != nil {
+		t.Fatal(err)
+	}
+	waitExecutorDone(t, done)
+	if calls != 2 {
+		t.Fatalf("step calls = %d, want 2", calls)
+	}
 }
 
 func TestExecutor_LaterSelectedCarriedFindingClearsAfterVerification(t *testing.T) {

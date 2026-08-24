@@ -408,3 +408,47 @@ func TestStepRoundSelectionUpdatesRequireExistingRound(t *testing.T) {
 		t.Fatal("missing user-decision round update succeeded")
 	}
 }
+
+func TestPersistReviewFixSelectionRollsBackWhenRecoveryMarkerFails(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/tmp/review-selection", "https://example.com/repo.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feature", "head", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepReview)
+	initial := `{"findings":[{"id":"review-a","severity":"warning","description":"initial"}]}`
+	round, err := d.InsertStepRound(step.ID, 1, "initial", &initial, nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetStepFindings(step.ID, initial); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.sql.Exec(`CREATE TRIGGER refuse_review_recovery BEFORE INSERT ON uncertified_pipeline_ranges BEGIN SELECT RAISE(ABORT, 'refuse recovery'); END`); err != nil {
+		t.Fatal(err)
+	}
+	selected := `["review-a"]`
+	updated := `{"findings":[{"id":"review-a","severity":"error","description":"updated"}]}`
+	err = d.PersistReviewFixSelection(ReviewFixSelection{
+		RoundID:            round.ID,
+		StepResultID:       step.ID,
+		RepoID:             repo.ID,
+		Branch:             run.Branch,
+		FromSHA:            run.HeadSHA,
+		HeadSHA:            run.HeadSHA,
+		SourceRunID:        run.ID,
+		RoundFindingsJSON:  updated,
+		StepFindingsJSON:   updated,
+		SelectedFindingIDs: &selected,
+		SelectionSource:    RoundSelectionSourceAutoFix,
+	})
+	if err == nil {
+		t.Fatal("review selection persisted without its recovery marker")
+	}
+	gotStep, err := d.GetStepResult(step.ID)
+	if err != nil || gotStep.FindingsJSON == nil || *gotStep.FindingsJSON != initial {
+		t.Fatalf("step gate truth changed after rollback: step=%#v err=%v", gotStep, err)
+	}
+	rounds, err := d.GetRoundsByStep(step.ID)
+	if err != nil || len(rounds) != 1 || rounds[0].FindingsJSON == nil || *rounds[0].FindingsJSON != initial || rounds[0].SelectedFindingIDs != nil {
+		t.Fatalf("round selection changed after rollback: rounds=%#v err=%v", rounds, err)
+	}
+}

@@ -569,13 +569,24 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 		return e.failRun(run, repo, fmt.Errorf("step %s: aborted by user", gate.step.Name()), ctx)
 	case types.ActionFix:
 		telemetry.Track("fix", e.fixTelemetryFields("user", gate.step.Name(), selectedFindingCount(gate.findings, response.findingIDs), 0))
-		selected := filterFindingsJSON(gate.findings, response.findingIDs)
+		selectionTruth := gate.findings
+		if findingsMayBeScopeLimited(gate.step) {
+			selectionTruth, err = prepareReviewSelectionTruth(selectionTruth)
+			if err != nil {
+				return e.failRun(run, repo, fmt.Errorf("prepare recovered %s gate truth: %w", gate.step.Name(), err), ctx)
+			}
+		}
+		selected := filterFindingsJSON(selectionTruth, response.findingIDs)
 		registerLineages := findingsMayBeScopeLimited(gate.step)
-		merged, registered, err := prepareUserFixFindingsJSON(selected, gate.findings, response.instructions, response.addedFindings, registerLineages)
+		merged, registered, err := prepareUserFixFindingsJSON(selected, selectionTruth, response.instructions, response.addedFindings, registerLineages)
 		if err != nil {
 			return e.failRun(run, repo, fmt.Errorf("normalize recovered %s user findings: %w", gate.step.Name(), err), ctx)
 		}
-		if err := e.persistUserFixDecision(gate.lastRoundID, gate.stepResult.ID, response.findingIDs, selected, merged, registered); err != nil {
+		if registerLineages {
+			if err := e.persistReviewFixSelection(ctx, workDir, run, repo, gate.lastRoundID, gate.stepResult.ID, selectionTruth, registered, response.findingIDs, db.RoundSelectionSourceUser, persistedUserFindings(selected, merged)); err != nil {
+				return e.failRun(run, repo, fmt.Errorf("record recovered %s user decision: %w", gate.step.Name(), err), ctx)
+			}
+		} else if err := e.persistUserFixDecision(gate.lastRoundID, gate.stepResult.ID, response.findingIDs, selected, merged, registered); err != nil {
 			if findingsMayBeScopeLimited(gate.step) {
 				return e.failRun(run, repo, fmt.Errorf("record recovered %s user decision: %w", gate.step.Name(), err), ctx)
 			}
@@ -587,7 +598,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 		e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, gate.step.Name(), string(types.StepStatusFixing), "", "", nil)
 		carried := ""
 		if registerLineages {
-			carried = excludeFindingsJSON(gate.findings, response.findingIDs)
+			carried = excludeFindingsJSON(selectionTruth, response.findingIDs)
 			gate.stepResult.FindingsJSON = &registered
 		}
 		previousHeadSHA := run.HeadSHA
@@ -1103,9 +1114,16 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		// This runs before the NeedsApproval check so that all severity
 		// levels (including "info") get a chance at automatic fixing.
 		if outcome.AutoFixable && autoFixLimit > 0 && autoFixAttempts < autoFixLimit && !convergenceTripped {
+			selectionTruth := effectiveFindings
+			if carryFindings {
+				selectionTruth, err = prepareReviewSelectionTruth(effectiveFindings)
+				if err != nil {
+					return false, "", fmt.Errorf("prepare %s auto-fix gate truth: %w", stepName, err)
+				}
+			}
 			roundOwnFindings := effectiveFindings
 			if carryFindings {
-				roundOwnFindings = retainMatchingFindingsJSON(effectiveFindings, outcome.Findings)
+				roundOwnFindings = retainMatchingFindingsJSON(selectionTruth, outcome.Findings)
 			}
 			fixableFindings := autoFixableFindingsJSON(roundOwnFindings)
 			if fixableFindings != "" {
@@ -1115,10 +1133,14 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 				executionMS += time.Since(phaseStart).Milliseconds()
 				fixCount := findingsCount(fixableFindings)
 				writeLog(fmt.Sprintf("auto-fix round %d/%d starting after round %d (%d %s)", autoFixAttempts, autoFixLimit, roundNum, fixCount, pluralize(fixCount, "finding", "findings")))
-				if err := e.persistAutoFixSelection(currentRoundID, fixableFindings); err != nil {
-					if carryFindings {
+				if carryFindings {
+					if err := e.persistReviewFixSelection(ctx, workDir, run, repo, currentRoundID, sr.ID, selectionTruth, selectionTruth, findingIDList(fixableFindings), db.RoundSelectionSourceAutoFix, ""); err != nil {
 						return false, "", fmt.Errorf("record %s auto-fix selection: %w", stepName, err)
 					}
+					effectiveFindings = selectionTruth
+					knownLineages = selectionTruth
+					sr.FindingsJSON = &selectionTruth
+				} else if err := e.persistAutoFixSelection(currentRoundID, fixableFindings); err != nil {
 					slog.Warn("failed to record selected finding ids", "step", stepName, "round", roundNum, "error", err)
 				}
 				if dbErr := e.db.UpdateStepStatus(sr.ID, types.StepStatusFixing); dbErr != nil {
@@ -1130,7 +1152,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 				sctx.PreviousFindings = fixableFindings
 				nextTrigger = "auto_fix"
 				if carryFindings {
-					carriedFindings = excludeFindingsJSON(effectiveFindings, findingIDList(fixableFindings))
+					carriedFindings = excludeFindingsJSON(selectionTruth, findingIDList(fixableFindings))
 				}
 				continue
 			}
@@ -1255,12 +1277,23 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			phaseStart = time.Now()
 			selectedCount := selectedFindingCount(effectiveFindings, response.findingIDs)
 			writeLog(fmt.Sprintf("user-fix round starting after round %d (%d %s selected)", roundNum, selectedCount, pluralize(selectedCount, "finding", "findings")))
-			selectedFindings := filterFindingsJSON(effectiveFindings, response.findingIDs)
-			mergedFindings, registeredLineages, err := prepareUserFixFindingsJSON(selectedFindings, knownLineages, response.instructions, response.addedFindings, carryFindings)
+			selectionTruth := effectiveFindings
+			if carryFindings {
+				selectionTruth, err = prepareReviewSelectionTruth(selectionTruth)
+				if err != nil {
+					return false, "", fmt.Errorf("prepare %s user-fix gate truth: %w", stepName, err)
+				}
+			}
+			selectedFindings := filterFindingsJSON(selectionTruth, response.findingIDs)
+			mergedFindings, registeredLineages, err := prepareUserFixFindingsJSON(selectedFindings, selectionTruth, response.instructions, response.addedFindings, carryFindings)
 			if err != nil {
 				return false, "", fmt.Errorf("normalize %s user findings: %w", stepName, err)
 			}
-			if err := e.persistUserFixDecision(currentRoundID, sr.ID, response.findingIDs, selectedFindings, mergedFindings, registeredLineages); err != nil {
+			if carryFindings {
+				if err := e.persistReviewFixSelection(ctx, workDir, run, repo, currentRoundID, sr.ID, selectionTruth, registeredLineages, response.findingIDs, db.RoundSelectionSourceUser, persistedUserFindings(selectedFindings, mergedFindings)); err != nil {
+					return false, "", fmt.Errorf("record %s user decision: %w", stepName, err)
+				}
+			} else if err := e.persistUserFixDecision(currentRoundID, sr.ID, response.findingIDs, selectedFindings, mergedFindings, registeredLineages); err != nil {
 				if carryFindings {
 					return false, "", fmt.Errorf("record %s user decision: %w", stepName, err)
 				}
@@ -1274,7 +1307,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			if carryFindings {
 				knownLineages = registeredLineages
 				sr.FindingsJSON = &registeredLineages
-				carriedFindings = excludeFindingsJSON(effectiveFindings, response.findingIDs)
+				carriedFindings = excludeFindingsJSON(selectionTruth, response.findingIDs)
 			}
 			nextTrigger = "auto_fix"
 			e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusFixing), "", "", nil)
@@ -1341,6 +1374,52 @@ func (e *Executor) persistUserFixDecision(roundID, stepResultID string, selected
 		return e.db.SetStepRoundUserDecisionAndFindings(roundID, stepResultID, &idsJSON, db.RoundSelectionSourceUser, userFindingsJSON, registeredLineages)
 	}
 	return e.db.SetStepRoundUserDecision(roundID, &idsJSON, db.RoundSelectionSourceUser, userFindingsJSON)
+}
+
+func (e *Executor) persistReviewFixSelection(ctx context.Context, workDir string, run *db.Run, repo *db.Repo, roundID, stepResultID, roundFindings, stepFindings string, selectedIDs []string, source, userFindings string) error {
+	idsJSON := marshalFindingIDs(combineSelectedFindingIDs(selectedIDs, userFindings))
+	if idsJSON == "" {
+		return nil
+	}
+	fromSHA := strings.TrimSpace(run.HeadSHA)
+	existing, err := e.db.GetUncertifiedPipelineRange(repo.ID, run.Branch)
+	if err != nil {
+		return fmt.Errorf("read existing review recovery marker: %w", err)
+	}
+	if existing != nil {
+		inLineage, lineageErr := commitIsSelfOrAncestor(ctx, workDir, existing.ToSHA, run.HeadSHA)
+		if lineageErr != nil {
+			return fmt.Errorf("verify existing review recovery marker: %w", lineageErr)
+		}
+		if inLineage {
+			fromSHA = existing.FromSHA
+		}
+	}
+	var userFindingsJSON *string
+	if userFindings != "" {
+		userFindingsJSON = &userFindings
+	}
+	return e.db.PersistReviewFixSelection(db.ReviewFixSelection{
+		RoundID:            roundID,
+		StepResultID:       stepResultID,
+		RepoID:             repo.ID,
+		Branch:             run.Branch,
+		FromSHA:            fromSHA,
+		HeadSHA:            run.HeadSHA,
+		SourceRunID:        run.ID,
+		RoundFindingsJSON:  roundFindings,
+		StepFindingsJSON:   stepFindings,
+		SelectedFindingIDs: &idsJSON,
+		SelectionSource:    source,
+		UserFindingsJSON:   userFindingsJSON,
+	})
+}
+
+func persistedUserFindings(selected, merged string) string {
+	if merged == selected {
+		return ""
+	}
+	return merged
 }
 
 func roundInsertID(_ string, inserted *db.StepRound, err error) string {

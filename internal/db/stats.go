@@ -147,6 +147,7 @@ func stepFindingStats(step *StepResult, rounds []*StepRound) StepStats {
 
 	reportedLineages := make(map[string]bool)
 	var reportedLegacy []types.Finding
+	var activeLegacy []types.Finding
 	var current []types.Finding
 	for _, round := range rounds {
 		items := findingItems(round.FindingsJSON)
@@ -159,7 +160,8 @@ func stepFindingStats(step *StepResult, rounds []*StepRound) StepStats {
 			}
 			legacy = append(legacy, item)
 		}
-		reportedLegacy = mergeLegacyFindingOccurrences(reportedLegacy, legacy)
+		reportedLegacy = mergeLegacyFindingOccurrences(reportedLegacy, activeLegacy, legacy)
+		activeLegacy = legacy
 	}
 
 	stats.ReportedFindings = len(reportedLineages) + len(reportedLegacy)
@@ -232,31 +234,54 @@ func appendPendingUserFindings(current []types.Finding, raw *string, lineageStat
 	return current
 }
 
-func mergeLegacyFindingOccurrences(reported, current []types.Finding) []types.Finding {
-	reportedMatched := make([]bool, len(reported))
+func mergeLegacyFindingOccurrences(reported, active, current []types.Finding) []types.Finding {
+	activeMatched := make([]bool, len(active))
 	currentMatched := make([]bool, len(current))
-	reportedExact := make(map[types.FindingIdentity][]int, len(reported))
-	currentExact := make(map[types.FindingIdentity][]int, len(current))
-	for i, item := range reported {
-		reportedExact[item.Identity()] = append(reportedExact[item.Identity()], i)
+	activeOccurrences := make(map[string][]int, len(active))
+	currentOccurrences := make(map[string][]int, len(current))
+	for i, item := range active {
+		if item.HasOccurrence() {
+			activeOccurrences[item.OccurrenceToken] = append(activeOccurrences[item.OccurrenceToken], i)
+		}
 	}
 	for i, item := range current {
-		currentExact[item.Identity()] = append(currentExact[item.Identity()], i)
+		if item.HasOccurrence() {
+			currentOccurrences[item.OccurrenceToken] = append(currentOccurrences[item.OccurrenceToken], i)
+		}
 	}
-	for identity, currentIndexes := range currentExact {
-		reportedIndexes := reportedExact[identity]
-		matches := min(len(currentIndexes), len(reportedIndexes))
-		for i := 0; i < matches; i++ {
-			currentMatched[currentIndexes[i]] = true
-			reportedMatched[reportedIndexes[i]] = true
+	for token, currentIndexes := range currentOccurrences {
+		activeIndexes := activeOccurrences[token]
+		if len(currentIndexes) == 1 && len(activeIndexes) == 1 {
+			currentMatched[currentIndexes[0]] = true
+			activeMatched[activeIndexes[0]] = true
 		}
 	}
 
-	reportedFingerprint := make(map[types.FindingIdentity][]int)
+	activeExact := make(map[types.FindingIdentity][]int, len(active))
+	currentExact := make(map[types.FindingIdentity][]int, len(current))
+	for i, item := range active {
+		if !activeMatched[i] {
+			activeExact[item.Identity()] = append(activeExact[item.Identity()], i)
+		}
+	}
+	for i, item := range current {
+		if !currentMatched[i] {
+			currentExact[item.Identity()] = append(currentExact[item.Identity()], i)
+		}
+	}
+	for identity, currentIndexes := range currentExact {
+		activeIndexes := activeExact[identity]
+		if len(currentIndexes) == 1 && len(activeIndexes) == 1 {
+			currentMatched[currentIndexes[0]] = true
+			activeMatched[activeIndexes[0]] = true
+		}
+	}
+
+	activeFingerprint := make(map[types.FindingIdentity][]int)
 	currentFingerprint := make(map[types.FindingIdentity][]int)
-	for i, item := range reported {
-		if !reportedMatched[i] {
-			reportedFingerprint[item.Fingerprint()] = append(reportedFingerprint[item.Fingerprint()], i)
+	for i, item := range active {
+		if !activeMatched[i] {
+			activeFingerprint[item.Fingerprint()] = append(activeFingerprint[item.Fingerprint()], i)
 		}
 	}
 	for i, item := range current {
@@ -265,10 +290,10 @@ func mergeLegacyFindingOccurrences(reported, current []types.Finding) []types.Fi
 		}
 	}
 	for fingerprint, currentIndexes := range currentFingerprint {
-		reportedIndexes := reportedFingerprint[fingerprint]
-		if len(currentIndexes) == 1 && len(reportedIndexes) == 1 {
+		activeIndexes := activeFingerprint[fingerprint]
+		if len(currentIndexes) == 1 && len(activeIndexes) == 1 {
 			currentMatched[currentIndexes[0]] = true
-			reportedMatched[reportedIndexes[0]] = true
+			activeMatched[activeIndexes[0]] = true
 		}
 	}
 	for i, item := range current {

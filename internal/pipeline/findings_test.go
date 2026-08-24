@@ -154,6 +154,39 @@ func TestMergeReappearedFindingsJSONPreservesAmbiguousGeneratedLineages(t *testi
 	}
 }
 
+func TestRetainMatchingFindingsJSONRejectsAmbiguousExactLegacyMatch(t *testing.T) {
+	existing := `{"findings":[{"id":"legacy-a","severity":"warning","file":"loader.go","line":12,"description":"unsafe loader","action":"auto-fix"},{"id":"legacy-b","severity":"warning","file":"loader.go","line":12,"description":"unsafe loader","action":"auto-fix"}]}`
+	keep := `{"findings":[{"id":"legacy-c","severity":"warning","file":"loader.go","line":12,"description":"unsafe loader","action":"auto-fix"}]}`
+
+	if retained := retainMatchingFindingsJSON(existing, keep); retained != "" {
+		t.Fatalf("ambiguous exact match retained findings: %s", retained)
+	}
+}
+
+func TestOccurrenceTokensPreventComposedAmbiguousCarryMultiplication(t *testing.T) {
+	prior := `{"findings":[{"id":"legacy-a","severity":"warning","file":"loader.go","line":12,"description":"unsafe loader","action":"ask-user"},{"id":"legacy-b","severity":"warning","file":"loader.go","line":12,"description":"unsafe loader","action":"ask-user"}]}`
+	prior, err := prepareReviewSelectionTruth(prior)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := `{"findings":[{"id":"legacy-c","severity":"warning","file":"loader.go","line":12,"description":"unsafe loader","action":"ask-user"}]}`
+	reappeared := mergeReappearedFindingsJSON(fresh, prior)
+	merged, err := types.ParseFindingsJSON(mergeCarriedFindingsJSON(reappeared, prior, "review"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged.Items) != 3 {
+		t.Fatalf("composed ambiguous findings = %#v, want three occurrences", merged.Items)
+	}
+	ids := map[string]int{}
+	for _, item := range merged.Items {
+		ids[item.ID]++
+	}
+	if ids["legacy-a"] != 1 || ids["legacy-b"] != 1 || ids["legacy-c"] != 1 {
+		t.Fatalf("occurrence multiplicity = %#v", ids)
+	}
+}
+
 func TestReconcileReviewFindingsPreservesRejectedSelectedClaim(t *testing.T) {
 	prior, err := types.NormalizeFindings(types.Findings{Items: []types.Finding{{
 		Severity:    "error",
@@ -543,6 +576,27 @@ func TestExcludeFindingsJSON_DropsAggregateRiskForSubset(t *testing.T) {
 	}
 	if excluded.RiskLevel != "" || excluded.RiskRationale != "" || excluded.RiskScope != "" {
 		t.Fatalf("subset retained aggregate risk: %#v", excluded)
+	}
+}
+
+func TestReviewSelectionAttributesSharedLegacyEvidenceToSurvivors(t *testing.T) {
+	raw := `{"findings":[{"id":"legacy-a","severity":"error","description":"selected defect","action":"auto-fix"},{"id":"legacy-b","severity":"warning","description":"remaining defect","action":"ask-user"}],"tested":["reproduce shared failure"],"testing_summary":"Shared reproduction remains relevant.","artifacts":[{"kind":"log","label":"shared trace"}]}`
+	attributed, err := prepareReviewSelectionTruth(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remaining, err := types.ParseFindingsJSON(excludeFindingsJSON(attributed, []string{"legacy-a"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining.Items) != 1 || remaining.Items[0].ID != "legacy-b" || remaining.Items[0].Evidence == nil {
+		t.Fatalf("remaining finding = %#v", remaining.Items)
+	}
+	if len(remaining.Tested) != 1 || remaining.Tested[0] != "reproduce shared failure" || remaining.TestingSummary != "Shared reproduction remains relevant." {
+		t.Fatalf("remaining evidence = tested %#v summary %q", remaining.Tested, remaining.TestingSummary)
+	}
+	if len(remaining.Artifacts) != 1 || remaining.Artifacts[0].Label != "shared trace" {
+		t.Fatalf("remaining artifacts = %#v", remaining.Artifacts)
 	}
 }
 

@@ -15,7 +15,7 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
-// BindUncertifiedPipelineRange copies a persisted uncertified fixer range
+// BindUncertifiedPipelineRange copies a persisted uncertified recovery boundary
 // onto the review step context when this run's head is that range's tip or a
 // descendant of it. Unreadable commit ancestry or persisted review truth
 // blocks replacement review.
@@ -42,7 +42,7 @@ func BindUncertifiedPipelineRange(sctx *StepContext) error {
 		warnUncertifiedRangeSkipped(sctx, rng, "uncertified range %s..%s not in gate; not applying provenance")
 		return nil
 	}
-	priorRounds, priorFindings, priorLineages, err := loadUncertifiedPriorReview(sctx.DB, rng.SourceRunID)
+	priorRounds, priorFindings, priorLineages, err := loadUncertifiedPriorReview(sctx.DB, rng.SourceRunID, rng.FromSHA == rng.ToSHA)
 	if err != nil {
 		return err
 	}
@@ -301,7 +301,7 @@ type uncertifiedReviewStore interface {
 	GetLatestStepRoundSelection(string) (*string, error)
 }
 
-func loadUncertifiedPriorReview(database uncertifiedReviewStore, sourceRunID string) ([]*db.StepRound, string, string, error) {
+func loadUncertifiedPriorReview(database uncertifiedReviewStore, sourceRunID string, preserveSelected bool) ([]*db.StepRound, string, string, error) {
 	sourceRunID = strings.TrimSpace(sourceRunID)
 	if database == nil || sourceRunID == "" {
 		return nil, "", "", fmt.Errorf("load uncertified review: missing source run")
@@ -327,7 +327,7 @@ func loadUncertifiedPriorReview(database uncertifiedReviewStore, sourceRunID str
 		if err != nil {
 			return nil, "", "", fmt.Errorf("read uncertified source-run selection: %w", err)
 		}
-		if selectedRaw != nil {
+		if selectedRaw != nil && !preserveSelected {
 			var selected []string
 			if err := json.Unmarshal([]byte(*selectedRaw), &selected); err != nil {
 				return nil, "", "", fmt.Errorf("read uncertified source-run selection: %w", err)

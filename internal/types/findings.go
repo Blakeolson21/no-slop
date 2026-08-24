@@ -44,6 +44,7 @@ type Finding struct {
 	ID                   string           `json:"id,omitempty"`
 	IDGenerated          bool             `json:"id_generated,omitempty"`
 	ContinuityToken      string           `json:"continuity_token,omitempty"`
+	OccurrenceToken      string           `json:"occurrence_token,omitempty"`
 	PriorID              string           `json:"prior_id,omitempty"`
 	PriorContinuityToken string           `json:"prior_continuity_token,omitempty"`
 	Severity             string           `json:"severity"`
@@ -94,7 +95,7 @@ func StableFindingIDs(items []Finding) map[string][]Finding {
 	return ids
 }
 
-func FindingMatches(item Finding, stableIDs map[string][]Finding, exact map[FindingIdentity]bool, itemCounts, candidateCounts map[FindingIdentity]int) bool {
+func FindingMatches(item Finding, stableIDs map[string][]Finding, itemOccurrenceCounts, candidateOccurrenceCounts map[string]int, itemIdentityCounts, candidateIdentityCounts, itemFingerprintCounts, candidateFingerprintCounts map[FindingIdentity]int) bool {
 	if item.HasLineage() {
 		for _, candidate := range stableIDs[item.ID] {
 			if FindingIDCorroborates(item, candidate) {
@@ -103,11 +104,15 @@ func FindingMatches(item Finding, stableIDs map[string][]Finding, exact map[Find
 		}
 		return false
 	}
-	if exact[item.Identity()] {
+	if item.HasOccurrence() && itemOccurrenceCounts[item.OccurrenceToken] == 1 && candidateOccurrenceCounts[item.OccurrenceToken] == 1 {
+		return true
+	}
+	identity := item.Identity()
+	if itemIdentityCounts[identity] == 1 && candidateIdentityCounts[identity] == 1 {
 		return true
 	}
 	fingerprint := item.Fingerprint()
-	return itemCounts[fingerprint] == 1 && candidateCounts[fingerprint] == 1
+	return itemFingerprintCounts[fingerprint] == 1 && candidateFingerprintCounts[fingerprint] == 1
 }
 
 func FindingIDCorroborates(item, candidate Finding) bool {
@@ -116,6 +121,50 @@ func FindingIDCorroborates(item, candidate Finding) bool {
 
 func (f Finding) HasLineage() bool {
 	return f.IDGenerated && f.ID != "" && f.ContinuityToken != ""
+}
+
+func (f Finding) HasOccurrence() bool {
+	return !f.HasLineage() && f.OccurrenceToken != ""
+}
+
+func FindingOccurrenceCorroborates(item, candidate Finding) bool {
+	return item.HasOccurrence() && candidate.HasOccurrence() && item.OccurrenceToken == candidate.OccurrenceToken
+}
+
+func CountFindingOccurrences(items []Finding) map[string]int {
+	counts := make(map[string]int, len(items))
+	for _, item := range items {
+		if item.HasOccurrence() {
+			counts[item.OccurrenceToken]++
+		}
+	}
+	return counts
+}
+
+func EnsureFindingOccurrenceTokens(findings Findings) (Findings, error) {
+	used := make(map[string]bool, len(findings.Items))
+	counts := make(map[string]int, len(findings.Items))
+	for _, item := range findings.Items {
+		if item.OccurrenceToken != "" {
+			used[item.OccurrenceToken] = true
+			counts[item.OccurrenceToken]++
+			if counts[item.OccurrenceToken] > 1 {
+				return Findings{}, fmt.Errorf("duplicate finding occurrence token")
+			}
+		}
+	}
+	for i := range findings.Items {
+		item := &findings.Items[i]
+		if item.HasLineage() || item.OccurrenceToken != "" {
+			continue
+		}
+		token, err := newFindingContinuityToken(used)
+		if err != nil {
+			return Findings{}, err
+		}
+		item.OccurrenceToken = token
+	}
+	return findings, nil
 }
 
 // TestArtifact describes evidence produced by the test step for human review.
@@ -137,6 +186,7 @@ type findingWire struct {
 	ID                   string           `json:"id,omitempty"`
 	IDGenerated          bool             `json:"id_generated,omitempty"`
 	ContinuityToken      string           `json:"continuity_token,omitempty"`
+	OccurrenceToken      string           `json:"occurrence_token,omitempty"`
 	PriorID              string           `json:"prior_id,omitempty"`
 	PriorContinuityToken string           `json:"prior_continuity_token,omitempty"`
 	Severity             string           `json:"severity"`
@@ -231,6 +281,7 @@ func NormalizeFindings(findings Findings, prefix string, existing []Finding) (Fi
 			item.ID = matches[0].ID
 			item.IDGenerated = true
 			item.ContinuityToken = matches[0].ContinuityToken
+			item.OccurrenceToken = ""
 			item.PriorID = ""
 			item.PriorContinuityToken = ""
 			continue
@@ -246,6 +297,7 @@ func NormalizeFindings(findings Findings, prefix string, existing []Finding) (Fi
 		item.ID = id
 		item.IDGenerated = true
 		item.ContinuityToken = token
+		item.OccurrenceToken = ""
 	}
 	return findings, nil
 }
@@ -274,6 +326,11 @@ func NormalizeUserFindings(findings Findings, existing []Finding) (Findings, err
 			usedTokens[item.ContinuityToken] = true
 		}
 	}
+	for i := range findings.Items {
+		if findings.Items[i].HasLineage() {
+			findings.Items[i].OccurrenceToken = ""
+		}
+	}
 	counter := 0
 	for i := range findings.Items {
 		item := &findings.Items[i]
@@ -290,6 +347,7 @@ func NormalizeUserFindings(findings Findings, existing []Finding) (Findings, err
 			item.ID = continuations[0].ID
 			item.IDGenerated = true
 			item.ContinuityToken = continuations[0].ContinuityToken
+			item.OccurrenceToken = ""
 		}
 		if item.ID == "" || (usedIDs[item.ID] && len(continuations) != 1) {
 			item.ID, counter = nextUserFindingID(usedIDs, counter)
@@ -304,6 +362,7 @@ func NormalizeUserFindings(findings Findings, existing []Finding) (Findings, err
 			item.ContinuityToken = token
 		}
 		item.IDGenerated = true
+		item.OccurrenceToken = ""
 		item.PriorID = ""
 		item.PriorContinuityToken = ""
 	}
@@ -321,6 +380,7 @@ func normalizeNonReviewFindings(findings Findings, prefix string, _ []Finding) (
 		}
 		findings.Items[i].IDGenerated = false
 		findings.Items[i].ContinuityToken = ""
+		findings.Items[i].OccurrenceToken = ""
 		findings.Items[i].PriorID = ""
 		findings.Items[i].PriorContinuityToken = ""
 	}
@@ -568,6 +628,7 @@ func (f *Finding) UnmarshalJSON(data []byte) error {
 	f.ID = wire.ID
 	f.IDGenerated = wire.IDGenerated
 	f.ContinuityToken = wire.ContinuityToken
+	f.OccurrenceToken = wire.OccurrenceToken
 	f.PriorID = wire.PriorID
 	f.PriorContinuityToken = wire.PriorContinuityToken
 	f.Severity = wire.Severity

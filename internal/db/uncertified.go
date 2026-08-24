@@ -6,10 +6,10 @@ import (
 	"strings"
 )
 
-// UncertifiedPipelineRange is the per-branch span of pipeline-authored
-// commits whose re-review did not complete. The next run on that branch
-// feeds this range into the initial review so the replacement reviewer is
-// not cold. The database range is the authority; commit messages are not.
+// UncertifiedPipelineRange is the per-branch recovery boundary for review
+// truth whose verification did not complete. A same-head boundary records a
+// durable selection before its fixer runs; a wider boundary also identifies
+// pipeline-authored commits. The database boundary is authoritative.
 type UncertifiedPipelineRange struct {
 	RepoID      string
 	Branch      string
@@ -19,8 +19,8 @@ type UncertifiedPipelineRange struct {
 	CreatedAt   int64
 }
 
-// UpsertUncertifiedPipelineRange records or replaces the uncertified fixer
-// range for one repo+branch. A newer uncertified HEAD replaces an older one.
+// UpsertUncertifiedPipelineRange records or replaces the uncertified recovery
+// boundary for one repo+branch. A newer uncertified HEAD replaces an older one.
 func (d *DB) UpsertUncertifiedPipelineRange(repoID, branch, fromSHA, toSHA, sourceRunID string) error {
 	repoID = strings.TrimSpace(repoID)
 	branch = strings.TrimSpace(branch)

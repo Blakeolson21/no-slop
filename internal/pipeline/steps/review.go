@@ -325,6 +325,14 @@ Fix-round provenance:
 	}
 	fromSHA := strings.TrimSpace(sctx.UncertifiedFromSHA)
 	toSHA := strings.TrimSpace(sctx.UncertifiedToSHA)
+	if fromSHA == toSHA {
+		return fmt.Sprintf(`
+
+Fix-round recovery:
+- A previous run selected unresolved findings at %s but did not complete their verification. Treat the carried findings and prior round history as unresolved gate truth and verify them against the current code.
+- Prior findings and fix summaries are claims, not evidence. Verify each claimed fix against the current code, and independently judge whether behavior the fix rounds introduced is correct, not merely whether it implements what was prescribed.
+`, toSHA)
+	}
 	return fmt.Sprintf(`
 
 Fix-round provenance:

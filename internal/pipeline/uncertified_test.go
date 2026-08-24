@@ -71,7 +71,7 @@ func TestLoadUncertifiedPriorReviewKeepsEffectiveFindingsWhenRoundsFail(t *testi
 		steps:     []*db.StepResult{{ID: "review-step", StepName: types.StepReview, FindingsJSON: &findings}},
 		roundsErr: errors.New("round history unavailable"),
 	}
-	rounds, got, lineages, err := loadUncertifiedPriorReview(store, "source-run")
+	rounds, got, lineages, err := loadUncertifiedPriorReview(store, "source-run", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestLoadUncertifiedPriorReviewKeepsEffectiveFindingsWhenRoundsFail(t *testi
 
 func TestLoadUncertifiedPriorReviewFailsWhenEffectiveTruthCannotBeRead(t *testing.T) {
 	store := &failingUncertifiedReviewStore{stepsErr: errors.New("step truth unavailable")}
-	if _, _, _, err := loadUncertifiedPriorReview(store, "source-run"); err == nil || !strings.Contains(err.Error(), "source-run steps") {
+	if _, _, _, err := loadUncertifiedPriorReview(store, "source-run", false); err == nil || !strings.Contains(err.Error(), "source-run steps") {
 		t.Fatalf("loadUncertifiedPriorReview() error = %v, want critical read failure", err)
 	}
 }
@@ -93,8 +93,28 @@ func TestLoadUncertifiedPriorReviewFailsWhenSelectionCannotBeRead(t *testing.T) 
 		steps:     []*db.StepResult{{ID: "review-step", StepName: types.StepReview, FindingsJSON: &findings}},
 		selectErr: errors.New("selection unavailable"),
 	}
-	if _, _, _, err := loadUncertifiedPriorReview(store, "source-run"); err == nil || !strings.Contains(err.Error(), "source-run selection") {
+	if _, _, _, err := loadUncertifiedPriorReview(store, "source-run", false); err == nil || !strings.Contains(err.Error(), "source-run selection") {
 		t.Fatalf("loadUncertifiedPriorReview() error = %v, want critical selection failure", err)
+	}
+}
+
+func TestLoadUncertifiedPriorReviewPreservesSelectedTruthAtSameHeadBoundary(t *testing.T) {
+	findings := `{"findings":[{"id":"review-a","severity":"error","description":"selected defect","action":"auto-fix"},{"id":"review-b","severity":"warning","description":"unselected defect","action":"ask-user"}]}`
+	selection := `["review-a"]`
+	store := &failingUncertifiedReviewStore{
+		steps:     []*db.StepResult{{ID: "review-step", StepName: types.StepReview, FindingsJSON: &findings}},
+		selection: &selection,
+	}
+	_, got, _, err := loadUncertifiedPriorReview(store, "source-run", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := types.ParseFindingsJSON(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Items) != 2 {
+		t.Fatalf("same-head recovery findings = %#v, want selected and unselected truth", parsed.Items)
 	}
 }
 
