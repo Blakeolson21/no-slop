@@ -9,23 +9,24 @@ import (
 
 // StepResult represents the result of a pipeline step execution.
 type StepResult struct {
-	ID             string
-	RunID          string
-	StepName       types.StepName
-	StepOrder      int
-	Status         types.StepStatus
-	ExitCode       *int
-	DurationMS     *int64
-	LogPath        *string
-	FindingsJSON   *string
-	Error          *string
-	StartedAt      *int64
-	CompletedAt    *int64
-	LastActivityAt *int64
-	LastActivity   *string
-	AgentPID       *int
-	AutoFixLimit   *int
-	CIFixAttempts  int
+	ID               string
+	RunID            string
+	StepName         types.StepName
+	StepOrder        int
+	Status           types.StepStatus
+	ExitCode         *int
+	DurationMS       *int64
+	LogPath          *string
+	FindingsJSON     *string
+	Error            *string
+	StartedAt        *int64
+	CompletedAt      *int64
+	LastActivityAt   *int64
+	LastActivity     *string
+	AgentPID         *int
+	AutoFixLimit     *int
+	CertifiedHeadSHA *string
+	CIFixAttempts    int
 	// ConvergenceJSON is the review step's persisted convergence report
 	// (internal/convergence.Report). The executor overwrites it once per
 	// review round; nil means no report was ever computed (non-review steps,
@@ -36,11 +37,17 @@ type StepResult struct {
 const stepResultColumns = `id, run_id, step_name, step_order, status, exit_code, duration_ms, log_path, findings_json, error, started_at, completed_at, last_activity_at, last_activity, agent_pid, auto_fix_limit, convergence_json`
 
 func (d *DB) readableStepResultColumns() string {
+	columns := stepResultColumns
+	if d.hasColumn("step_results", "certified_head_sha") {
+		columns += ", certified_head_sha"
+	} else {
+		columns += ", NULL AS certified_head_sha"
+	}
 	if d.hasColumn("step_results", "ci_fix_attempts") {
-		return stepResultColumns + ", ci_fix_attempts"
+		return columns + ", ci_fix_attempts"
 	}
 	// Read-only authorization may inspect the database before migrations run.
-	return stepResultColumns + ", 0 AS ci_fix_attempts"
+	return columns + ", 0 AS ci_fix_attempts"
 }
 
 func (d *DB) hasColumn(table, column string) bool {
@@ -76,7 +83,7 @@ func (d *DB) GetStepResult(id string) (*StepResult, error) {
 	s := &StepResult{}
 	err := d.sql.QueryRow(
 		`SELECT `+d.readableStepResultColumns()+` FROM step_results WHERE id = ?`, id,
-	).Scan(&s.ID, &s.RunID, &s.StepName, &s.StepOrder, &s.Status, &s.ExitCode, &s.DurationMS, &s.LogPath, &s.FindingsJSON, &s.Error, &s.StartedAt, &s.CompletedAt, &s.LastActivityAt, &s.LastActivity, &s.AgentPID, &s.AutoFixLimit, &s.ConvergenceJSON, &s.CIFixAttempts)
+	).Scan(&s.ID, &s.RunID, &s.StepName, &s.StepOrder, &s.Status, &s.ExitCode, &s.DurationMS, &s.LogPath, &s.FindingsJSON, &s.Error, &s.StartedAt, &s.CompletedAt, &s.LastActivityAt, &s.LastActivity, &s.AgentPID, &s.AutoFixLimit, &s.ConvergenceJSON, &s.CertifiedHeadSHA, &s.CIFixAttempts)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -98,7 +105,7 @@ func (d *DB) GetStepsByRun(runID string) ([]*StepResult, error) {
 	var steps []*StepResult
 	for rows.Next() {
 		s := &StepResult{}
-		if err := rows.Scan(&s.ID, &s.RunID, &s.StepName, &s.StepOrder, &s.Status, &s.ExitCode, &s.DurationMS, &s.LogPath, &s.FindingsJSON, &s.Error, &s.StartedAt, &s.CompletedAt, &s.LastActivityAt, &s.LastActivity, &s.AgentPID, &s.AutoFixLimit, &s.ConvergenceJSON, &s.CIFixAttempts); err != nil {
+		if err := rows.Scan(&s.ID, &s.RunID, &s.StepName, &s.StepOrder, &s.Status, &s.ExitCode, &s.DurationMS, &s.LogPath, &s.FindingsJSON, &s.Error, &s.StartedAt, &s.CompletedAt, &s.LastActivityAt, &s.LastActivity, &s.AgentPID, &s.AutoFixLimit, &s.ConvergenceJSON, &s.CertifiedHeadSHA, &s.CIFixAttempts); err != nil {
 			return nil, fmt.Errorf("scan step result: %w", err)
 		}
 		steps = append(steps, s)
@@ -114,7 +121,8 @@ func (d *DB) ResetStepsFrom(runID string, stepOrder int) error {
 		SET status = ?, exit_code = NULL, duration_ms = NULL, log_path = NULL,
 			findings_json = NULL, error = NULL, started_at = NULL,
 			completed_at = NULL, last_activity_at = NULL, last_activity = NULL,
-			agent_pid = NULL, auto_fix_limit = NULL, convergence_json = NULL
+			agent_pid = NULL, auto_fix_limit = NULL, convergence_json = NULL,
+			certified_head_sha = NULL
 		WHERE run_id = ? AND step_order >= ? AND status != ?`, types.StepStatusPending, runID, stepOrder, types.StepStatusSkipped)
 	if err != nil {
 		return fmt.Errorf("reset steps for revalidation: %w", err)
@@ -228,9 +236,17 @@ func (d *DB) CompleteStep(id string, exitCode int, durationMS int64, logPath str
 
 // CompleteStepWithStatus marks a step as finished with timing and result info.
 func (d *DB) CompleteStepWithStatus(id string, status types.StepStatus, exitCode int, durationMS int64, logPath string) error {
+	return d.CompleteStepWithStatusAtHead(id, status, "", exitCode, durationMS, logPath)
+}
+
+func (d *DB) CompleteStepWithStatusAtHead(id string, status types.StepStatus, certifiedHeadSHA string, exitCode int, durationMS int64, logPath string) error {
+	var certifiedHead *string
+	if certifiedHeadSHA != "" {
+		certifiedHead = &certifiedHeadSHA
+	}
 	_, err := d.sql.Exec(
-		`UPDATE step_results SET status = ?, exit_code = ?, duration_ms = ?, log_path = ?, completed_at = ?, last_activity_at = ?, last_activity = ?, agent_pid = NULL WHERE id = ?`,
-		status, exitCode, durationMS, logPath, now(), now(), fmt.Sprintf("status: %s", status), id,
+		`UPDATE step_results SET status = ?, exit_code = ?, duration_ms = ?, log_path = ?, certified_head_sha = ?, completed_at = ?, last_activity_at = ?, last_activity = ?, agent_pid = NULL WHERE id = ?`,
+		status, exitCode, durationMS, logPath, certifiedHead, now(), now(), fmt.Sprintf("status: %s", status), id,
 	)
 	if err != nil {
 		return fmt.Errorf("complete step: %w", err)
@@ -238,11 +254,9 @@ func (d *DB) CompleteStepWithStatus(id string, status types.StepStatus, exitCode
 	return nil
 }
 
-// CompleteReviewStep atomically completes a successful review and replaces
-// the run's exact review-approved head. Neither write survives if the other
-// fails, so a failed completion cannot create approval authority and a
-// completed review cannot lack it.
-func (d *DB) CompleteReviewStep(id, runID, approvedHeadSHA string, exitCode int, durationMS int64, logPath string) error {
+// CompleteReviewStep atomically completes a successful review, replaces the
+// run's exact review-approved head, and retires the certified recovery range.
+func (d *DB) CompleteReviewStep(id, runID, approvedHeadSHA string, exitCode int, durationMS int64, logPath string, certifiedRange *UncertifiedPipelineRange) error {
 	tx, err := d.sql.Begin()
 	if err != nil {
 		return fmt.Errorf("begin complete review step: %w", err)
@@ -251,8 +265,8 @@ func (d *DB) CompleteReviewStep(id, runID, approvedHeadSHA string, exitCode int,
 
 	ts := now()
 	result, err := tx.Exec(
-		`UPDATE step_results SET status = ?, exit_code = ?, duration_ms = ?, log_path = ?, completed_at = ?, last_activity_at = ?, last_activity = ?, agent_pid = NULL WHERE id = ?`,
-		types.StepStatusCompleted, exitCode, durationMS, logPath, ts, ts, fmt.Sprintf("status: %s", types.StepStatusCompleted), id,
+		`UPDATE step_results SET status = ?, exit_code = ?, duration_ms = ?, log_path = ?, certified_head_sha = ?, completed_at = ?, last_activity_at = ?, last_activity = ?, agent_pid = NULL WHERE id = ?`,
+		types.StepStatusCompleted, exitCode, durationMS, logPath, approvedHeadSHA, ts, ts, fmt.Sprintf("status: %s", types.StepStatusCompleted), id,
 	)
 	if err != nil {
 		return fmt.Errorf("complete review step: %w", err)
@@ -267,8 +281,47 @@ func (d *DB) CompleteReviewStep(id, runID, approvedHeadSHA string, exitCode int,
 	if rows, err := result.RowsAffected(); err != nil || rows != 1 {
 		return fmt.Errorf("record review-approved head: run row not found")
 	}
+	if certifiedRange != nil {
+		result, err = tx.Exec(
+			`DELETE FROM uncertified_pipeline_ranges
+			 WHERE repo_id = ? AND branch = ? AND from_sha = ? AND to_sha = ? AND source_run_id = ?
+			   AND repo_id = (SELECT repo_id FROM runs WHERE id = ?)
+			   AND branch = (SELECT branch FROM runs WHERE id = ?)`,
+			certifiedRange.RepoID, certifiedRange.Branch, certifiedRange.FromSHA, certifiedRange.ToSHA, certifiedRange.SourceRunID,
+			runID, runID,
+		)
+		if err != nil {
+			return fmt.Errorf("clear certified uncertified pipeline range: %w", err)
+		}
+		if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+			return fmt.Errorf("clear certified uncertified pipeline range: range changed")
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit completed review: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) ResetStepsFromOrder(runID string, stepOrder int) error {
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return fmt.Errorf("begin reset steps from order %d: %w", stepOrder, err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(
+		`UPDATE step_results SET status = ?, exit_code = NULL, duration_ms = NULL, log_path = NULL, findings_json = CASE WHEN step_name = ? THEN findings_json ELSE NULL END, error = NULL, started_at = NULL, completed_at = NULL, last_activity_at = ?, last_activity = ?, agent_pid = NULL, auto_fix_limit = CASE WHEN step_name = ? THEN auto_fix_limit ELSE NULL END, convergence_json = CASE WHEN step_name = ? THEN convergence_json ELSE NULL END, certified_head_sha = NULL WHERE run_id = ? AND step_order >= ? AND status != ?`,
+		types.StepStatusPending, types.StepReview, now(), "invalidated by head change", types.StepReview, types.StepReview, runID, stepOrder, types.StepStatusSkipped,
+	); err != nil {
+		return fmt.Errorf("reset steps from order %d: %w", stepOrder, err)
+	}
+	if stepOrder <= types.StepReview.Order() {
+		if _, err := tx.Exec(`UPDATE runs SET review_approved_head_sha = NULL, ci_ready_at = NULL, ci_ready_no_ci = 0, updated_at = ? WHERE id = ?`, now(), runID); err != nil {
+			return fmt.Errorf("invalidate run gate evidence: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit reset steps from order %d: %w", stepOrder, err)
 	}
 	return nil
 }

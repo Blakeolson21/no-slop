@@ -516,3 +516,151 @@ func TestFinding_Action_Values(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeFindingsPersistsGeneratedIDProvenance(t *testing.T) {
+	findings, err := NormalizeFindings(Findings{Items: []Finding{
+		{Severity: "error", Description: "generated"},
+		{ID: "stable-defect", Severity: "warning", Description: "explicit"},
+	}}, "review", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !findings.Items[0].IDGenerated || !strings.HasPrefix(findings.Items[0].ID, "review-") {
+		t.Fatalf("first lineage = %#v", findings.Items[0])
+	}
+	if !findings.Items[1].IDGenerated || !strings.HasPrefix(findings.Items[1].ID, "review-") || findings.Items[1].ID == "stable-defect" || findings.Items[1].ID == findings.Items[0].ID {
+		t.Fatalf("second lineage = %#v", findings.Items[1])
+	}
+	if findings.Items[0].ContinuityToken == "" || findings.Items[1].ContinuityToken == "" || findings.Items[0].ContinuityToken == findings.Items[1].ContinuityToken {
+		t.Fatalf("continuity tokens = %#v", findings.Items)
+	}
+	raw, err := MarshalFindingsJSON(findings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseFindingsJSON(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !parsed.Items[0].HasLineage() || !parsed.Items[1].HasLineage() {
+		t.Fatalf("round-trip provenance = %#v", parsed.Items)
+	}
+}
+
+func TestNormalizeFindingsKeepsNonReviewIdentitySemantics(t *testing.T) {
+	findings, err := NormalizeFindings(Findings{Items: []Finding{
+		{Severity: "error", Description: "generated"},
+		{ID: "stable-test", Severity: "warning", Description: "explicit"},
+	}}, "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if findings.Items[0].ID != "test-1" || findings.Items[1].ID != "stable-test" {
+		t.Fatalf("non-review IDs = %#v", findings.Items)
+	}
+	for _, item := range findings.Items {
+		if item.HasLineage() || item.ContinuityToken != "" || item.IDGenerated {
+			t.Fatalf("non-review finding acquired review lineage: %#v", item)
+		}
+	}
+}
+
+func TestNormalizeFindingsRequiresCorroboratedPriorLineageClaim(t *testing.T) {
+	prior, err := NormalizeFindings(Findings{Items: []Finding{{ID: "review-1", File: "manager.go", Line: 80, Description: "credentials are invalidated prematurely"}}}, "review", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lineage := prior.Items[0].ID
+	token := prior.Items[0].ContinuityToken
+	fresh, err := NormalizeFindings(Findings{Items: []Finding{
+		{PriorID: lineage, PriorContinuityToken: token, File: "manager.go", Line: 88, Description: "credentials are invalidated prematurely"},
+		{ID: lineage, PriorID: lineage, PriorContinuityToken: "wrong", File: "auth.go", Line: 12, Description: "authentication token leaks in logs"},
+	}}, "review", prior.Items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Items[0].ID != lineage || !FindingIDCorroborates(fresh.Items[0], prior.Items[0]) {
+		t.Fatalf("continued lineage = %#v, want %q", fresh.Items[0], lineage)
+	}
+	if fresh.Items[1].ID == lineage || fresh.Items[1].ID == fresh.Items[0].ID {
+		t.Fatalf("uncorroborated lineage claim was accepted: %#v", fresh.Items)
+	}
+}
+
+func TestNormalizeFindingsPreservesUnrelatedClaimAsNewLineage(t *testing.T) {
+	prior, err := NormalizeFindings(Findings{Items: []Finding{{File: "loader.go", Description: "unsafe loader"}}}, "review", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := NormalizeFindings(Findings{Items: []Finding{{
+		PriorID:              prior.Items[0].ID,
+		PriorContinuityToken: prior.Items[0].ContinuityToken,
+		File:                 "auth.go",
+		Description:          "authentication token leaks in logs",
+	}}}, "review", prior.Items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Items[0].ID == prior.Items[0].ID || FindingIDCorroborates(fresh.Items[0], prior.Items[0]) {
+		t.Fatalf("unrelated finding inherited prior lineage: %#v", fresh.Items[0])
+	}
+}
+
+func TestNormalizeFindingsPreservesRewordingAtSameLocation(t *testing.T) {
+	prior, err := NormalizeFindings(Findings{Items: []Finding{{File: "loader.go", Line: 42, Description: "unsafe loader"}}}, "review", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := NormalizeFindings(Findings{Items: []Finding{{
+		PriorID:              prior.Items[0].ID,
+		PriorContinuityToken: prior.Items[0].ContinuityToken,
+		File:                 "loader.go",
+		Line:                 42,
+		Description:          "loader permits traversal outside its root",
+	}}}, "review", prior.Items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if FindingIDCorroborates(fresh.Items[0], prior.Items[0]) {
+		t.Fatalf("description change inherited prior lineage: %#v", fresh.Items[0])
+	}
+	if fresh.Items[0].PriorID != prior.Items[0].ID || fresh.Items[0].PriorContinuityToken != prior.Items[0].ContinuityToken {
+		t.Fatalf("rejected claim provenance was lost: %#v", fresh.Items[0])
+	}
+}
+
+func TestNormalizeFindingsPreservesAmbiguousDuplicateClaims(t *testing.T) {
+	prior, err := NormalizeFindings(Findings{Items: []Finding{{File: "loader.go", Description: "unsafe loader"}}}, "review", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := Finding{PriorID: prior.Items[0].ID, PriorContinuityToken: prior.Items[0].ContinuityToken, File: "loader.go", Description: "unsafe loader"}
+	fresh, err := NormalizeFindings(Findings{Items: []Finding{claim, claim}}, "review", prior.Items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Items[0].ID == prior.Items[0].ID || fresh.Items[1].ID == prior.Items[0].ID || fresh.Items[0].ID == fresh.Items[1].ID {
+		t.Fatalf("ambiguous claims reused lineage: %#v", fresh.Items)
+	}
+}
+
+func TestNormalizeUserFindingsAssignsDurableLineage(t *testing.T) {
+	findings, err := NormalizeUserFindings(Findings{Items: []Finding{{
+		ID:               "user-1",
+		Severity:         "error",
+		Description:      "operator-added defect",
+		Action:           ActionAskUser,
+		Source:           FindingSourceUser,
+		UserInstructions: "preserve the compatibility path",
+	}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := findings.Items[0]
+	if item.ID != "user-1" || !item.HasLineage() || len(item.ContinuityToken) != 32 {
+		t.Fatalf("user finding lineage = %#v", item)
+	}
+	if item.Source != FindingSourceUser || item.UserInstructions != "preserve the compatibility path" || item.Action != ActionAskUser {
+		t.Fatalf("user finding semantics changed: %#v", item)
+	}
+}

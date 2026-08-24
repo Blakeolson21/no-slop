@@ -28,6 +28,7 @@ type StepContext struct {
 	SkipFixExecution      bool         // replay an already-completed fix round's review turn only
 	ReviewStartingHeadSHA string
 	PreviousFindings      string // JSON findings from the previous execution (set during fix loop)
+	KnownReviewLineages   string
 	// StepResultID is the DB row ID of the current step's step_results record.
 	// Steps use it to query their own round history for multi-round prompts.
 	StepResultID string
@@ -60,7 +61,9 @@ type StepContext struct {
 	UncertifiedSourceRunID string
 	// UncertifiedPriorRounds are review rounds from the source run that left
 	// the uncertified range. Nil when none apply.
-	UncertifiedPriorRounds []*db.StepRound
+	UncertifiedPriorRounds   []*db.StepRound
+	UncertifiedPriorFindings string
+	UncertifiedPriorLineages string
 	// Sessions manages the run's durable review-fixer session. The session
 	// machinery remains role-generic for legacy recovery; nil runs every
 	// invocation cold.
@@ -88,13 +91,14 @@ func (sctx *StepContext) RunAgentSession(role SessionRole, opts agent.RunOpts) (
 
 // StepOutcome is the result of executing a pipeline step.
 type StepOutcome struct {
-	NeedsApproval bool // whether the step pauses for user action
-	AutoFixable   bool
-	Findings      string // JSON findings for TUI display (optional)
-	ExitCode      int    // process exit code (0 = success)
-	PRURL         string // PR/MR URL if this step created or found one
-	Skipped       bool   // mark the step as skipped without failing the run
-	SkipRemaining bool   // skip all subsequent steps (e.g. empty diff after rebase)
+	NeedsApproval      bool // whether the step pauses for user action
+	AutoFixable        bool
+	Findings           string // JSON findings for TUI display (optional)
+	FindingsNormalized bool
+	ExitCode           int    // process exit code (0 = success)
+	PRURL              string // PR/MR URL if this step created or found one
+	Skipped            bool   // mark the step as skipped without failing the run
+	SkipRemaining      bool   // skip all subsequent steps (e.g. empty diff after rebase)
 	// RestartFrom asks the executor to re-run validation from this earlier step.
 	// CI repairs use it to send the new local head back through review before push.
 	RestartFrom types.StepName
@@ -123,6 +127,18 @@ type Step interface {
 	// A step that returns NeedsApproval=true will pause the pipeline
 	// until the user responds with an approval action.
 	Execute(sctx *StepContext) (*StepOutcome, error)
+}
+
+// ScopeLimitedFindingsStep marks a step whose later rounds may reassess only
+// the work selected for that round. For such a step, silence in a later round
+// cannot retract an unresolved finding that the operator was already shown.
+type ScopeLimitedFindingsStep interface {
+	FindingsMayBeScopeLimited() bool
+}
+
+func findingsMayBeScopeLimited(step Step) bool {
+	scopeLimited, ok := step.(ScopeLimitedFindingsStep)
+	return ok && scopeLimited.FindingsMayBeScopeLimited()
 }
 
 // ApprovalGateReconciler is implemented by a step whose parked approval gate

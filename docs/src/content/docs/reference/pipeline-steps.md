@@ -83,7 +83,8 @@ AI code review of your diff.
 - Agent returns findings with severity (`error`, `warning`, `info`), file location, description, and an `action` (`no-op`, `auto-fix`, `ask-user`)
 - Also returns a `risk_level` (`low`, `medium`, `high`) and `risk_rationale`
 - Runs every review turn - the initial review and every full rereview - as a fresh, session-free invocation, so the rereview that certifies a fix round never resumes the session whose findings prescribed those fixes; the rereview prompt additionally reframes fix-round changes as pipeline-authored code to review under the same adversarial standard as the author's changes, with prior findings, fix summaries, and same-round tests treated as claims rather than evidence
-- When a review-step fixer round commits and its re-review does not complete, persists that branch's uncertified commit range (lint and document fixer commits do not); the next run's initial review of that range receives the same pipeline-authored provenance framing so the replacement reviewer is not cold. A later rebase remaps the persisted SHAs onto the rewritten head. The range is cleared only after a completed review whose approved head equals or descends from the range tip; parked, failed, skipped, and aborted reviews leave it in place
+- Carries every shown-but-unselected review finding into the next effective gate, preserving its pipeline-owned lineage, stricter action, evidence, and effective risk even if a later rereview is silent or restates it more weakly. The durable round record stores that effective gate truth, so restart recovery, statistics, later ID selection, and the operator-visible gate agree. A finding selected only on a later carried gate is recorded as selected there and its earlier non-selection is suppressed from verifier ignore guidance; only the rereview after that selected fix may clear it
+- Before Review, Test, Document, Lint, or CI adopts a post-review commit, persists the unresolved review gate truth and its uncertified source-run range; persistence failure refuses the head adoption. The next run's initial review restores that truth and receives the same pipeline-authored provenance framing so the replacement reviewer is not cold. A later rebase remaps the persisted SHAs onto the rewritten head. The range is cleared only after a completed review whose approved head equals or descends from the range tip; parked, failed, skipped, and aborted reviews leave it in place
 - With the default `session_reuse: true`, Claude and Codex reuse one durable fixer session across review-fix turns; a resume failure retries the same fix turn in a fresh fixer session, and unsupported agents run cold
 - Atomically records the exact commit examined when a full review completes successfully; a parked review retains its candidate only for recovery, while failed, skipped, superseded, and legacy reviews grant no inferred approval authority
 
@@ -92,7 +93,7 @@ AI code review of your diff.
 **Auto-fix:** the agent receives the selected previous findings plus any per-finding user notes, any selected user-authored findings from the TUI or AXI interface, and a sanitized history of prior rounds for that step, including earlier fix summaries and which findings the user left unselected.
 The fixer applies all selected fixes before running one focused verification limited to the changed area, and it is instructed not to run the complete repository test or lint suite during the fix round.
 The dedicated Test and Lint steps after review remain the authoritative gates, although their coverage may be focused when commands are unconfigured.
-Follow-up review passes use the history to avoid re-reporting user-ignored findings unless the code now has a materially different problem.
+Follow-up review passes use the history to avoid re-reporting findings that were left unselected unless the code now has a materially different problem. That reviewer guidance does not remove them from the effective gate: no-slop carries the unresolved findings until a later fix selection clears them through rereview or the operator explicitly approves the gate.
 
 **Default auto-fix limit:** `0`.
 
@@ -220,23 +221,33 @@ Stores the PR URL in the database and streams it to the TUI.
 
 ### Pipeline step attestation
 
-Immediately after the existing `Updates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)` signature, no-mistakes writes one stable HTML comment:
+Every generated PR body starts with a publication marker whose nonce identifies that exact body publication:
 
 ```html
-<!-- no-slop-pipeline-attestation:v1 {"head_sha":"0123456789abcdef0123456789abcdef01234567","steps":[{"step":"review","status":"completed"}]} -->
+<!-- no-slop-publication:v1 00112233445566778899aabbccddeeff -->
+```
+
+Inside `## Pipeline`, immediately after the existing `Updates from [git push no-slop](https://github.com/Blakeolson21/no-slop)` signature, no-slop writes one stable HTML comment carrying the same nonce:
+
+```html
+<!-- no-slop-pipeline-attestation:v1 {"head_sha":"0123456789abcdef0123456789abcdef01234567","publication_nonce":"00112233445566778899aabbccddeeff","steps":[{"step":"review","status":"completed","head_sha":"0123456789abcdef0123456789abcdef01234567"},{"step":"test","status":"completed","head_sha":"0123456789abcdef0123456789abcdef01234567"},{"step":"document","status":"completed","head_sha":"0123456789abcdef0123456789abcdef01234567"}]} -->
 ```
 
 The `v1` payload is compact JSON with these required fields:
 
-- `head_sha`: the exact git commit SHA recorded for the run when no-mistakes writes the PR body
+- `head_sha`: the exact git commit SHA recorded for the run when no-slop writes the PR body
+- `publication_nonce`: a unique identity generated for this exact PR-body publication
 - `steps`: the ordered pipeline step snapshot; every item has exactly the fields below
 
 - `step`: the raw pipeline step name, such as `intent`, `rebase`, `review`, `test`, `document`, `lint`, `push`, `pr`, or `ci`
 - `status`: the raw [step status](#step-statuses) recorded for that step, such as `completed`, `skipped`, or `failed`
+- `head_sha`: the commit SHA that the recorded step status certifies, or an empty string while the step has not certified a commit
 
-Items are ordered by the fixed pipeline order and represent the exact database snapshot when no-mistakes creates or updates the PR body. The attestation includes `pr` and `ci` records even though their human-readable details are not shown in `## Pipeline`; at the normal PR write point those records are commonly `running` and `pending`. The `head_sha` binds that snapshot to the commit it describes, so consumers can detect when a later push has made the comment stale. It is not refreshed after the PR step unless no-mistakes writes the body again.
+Items are ordered by the fixed pipeline order and represent the exact database snapshot when no-slop creates or updates the PR body. The attestation includes `pr` and `ci` records even though their human-readable details are not shown in `## Pipeline`; at the normal PR write point those records are commonly `running` and `pending`. The top-level `head_sha` identifies the current published PR head, while each item's `head_sha` identifies the commit that step actually certified. If later pipeline work creates or adopts a different head after a required gate completes, no-slop invalidates stale required-step results and automatically reruns review, test, and document before publishing a compliant attestation for the new commit. GitHub copies the leading publication marker into immutable workflow-run metadata. After creating or updating a GitHub PR, no-slop learns and records the earliest Actions run number carrying that nonce together with its immutable run ID, without depending on job output. CI suppresses only required-check attempts with an older provider run number; cancelled publication attempts and checks from later PR edits remain authoritative.
 
-The comment is intentionally data only. It does not declare any step required, passed for a policy, compliant, or mergeable. Consumers can parse the versioned JSON without scraping prose and apply their own policy. The comment stays with the Pipeline header when no-mistakes truncates older human-readable update details to fit a PR-body limit.
+The comment is intentionally data only. It does not declare any step required, passed for a policy, compliant, or mergeable. Consumers can parse the versioned JSON without scraping prose and apply their own policy. The comment stays with the Pipeline header when no-slop truncates older human-readable update details to fit a PR-body limit.
+
+This repository's own `Require no-slop` workflow is one such consumer. Its exact merge policy is owned by the [contribution guide](https://github.com/Blakeolson21/no-slop/blob/main/CONTRIBUTING.md).
 
 ## CI
 

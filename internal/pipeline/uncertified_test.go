@@ -2,18 +2,28 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Blakeolson21/no-slop/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/db"
 	"github.com/Blakeolson21/no-slop/internal/git"
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestExecutor_BindsUncertifiedRangeOntoInitialReview(t *testing.T) {
 	database, p, run, repo := setupTest(t)
-	if err := database.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, "from-sha", run.HeadSHA, "source-run"); err != nil {
+	source, err := database.InsertRun(repo.ID, run.Branch, "older", "base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.InsertStepResult(source.ID, types.StepReview); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, "from-sha", run.HeadSHA, source.ID); err != nil {
 		t.Fatal(err)
 	}
 	var gotFrom, gotTo, gotSource string
@@ -30,8 +40,153 @@ func TestExecutor_BindsUncertifiedRangeOntoInitialReview(t *testing.T) {
 	if fixing {
 		t.Fatal("initial review ran in fix mode")
 	}
-	if gotFrom != "from-sha" || gotTo != run.HeadSHA || gotSource != "source-run" {
+	if gotFrom != "from-sha" || gotTo != run.HeadSHA || gotSource != source.ID {
 		t.Fatalf("initial review bound from=%q to=%q source=%q", gotFrom, gotTo, gotSource)
+	}
+}
+
+type failingUncertifiedReviewStore struct {
+	steps     []*db.StepResult
+	stepsErr  error
+	roundsErr error
+	selection *string
+	selectErr error
+}
+
+func (s *failingUncertifiedReviewStore) GetStepsByRun(string) ([]*db.StepResult, error) {
+	return s.steps, s.stepsErr
+}
+
+func (s *failingUncertifiedReviewStore) GetRoundsByStep(string) ([]*db.StepRound, error) {
+	return nil, s.roundsErr
+}
+
+func (s *failingUncertifiedReviewStore) GetLatestStepRoundSelection(string) (*string, error) {
+	return s.selection, s.selectErr
+}
+
+func TestLoadUncertifiedPriorReviewKeepsEffectiveFindingsWhenRoundsFail(t *testing.T) {
+	findings := `{"findings":[{"id":"review-b","severity":"error","description":"unresolved defect","action":"ask-user"}]}`
+	store := &failingUncertifiedReviewStore{
+		steps:     []*db.StepResult{{ID: "review-step", StepName: types.StepReview, FindingsJSON: &findings}},
+		roundsErr: errors.New("round history unavailable"),
+	}
+	rounds, got, lineages, err := loadUncertifiedPriorReview(store, "source-run", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rounds != nil || got != findings || lineages != findings {
+		t.Fatalf("loadUncertifiedPriorReview() = (%#v, %q, %q), want nil rounds and effective findings", rounds, got, lineages)
+	}
+}
+
+func TestLoadUncertifiedPriorReviewFailsWhenEffectiveTruthCannotBeRead(t *testing.T) {
+	store := &failingUncertifiedReviewStore{stepsErr: errors.New("step truth unavailable")}
+	if _, _, _, err := loadUncertifiedPriorReview(store, "source-run", false); err == nil || !strings.Contains(err.Error(), "source-run steps") {
+		t.Fatalf("loadUncertifiedPriorReview() error = %v, want critical read failure", err)
+	}
+}
+
+func TestLoadUncertifiedPriorReviewFailsWhenSelectionCannotBeRead(t *testing.T) {
+	findings := `{"findings":[{"id":"review-a","severity":"error","description":"selected defect","action":"auto-fix"}]}`
+	store := &failingUncertifiedReviewStore{
+		steps:     []*db.StepResult{{ID: "review-step", StepName: types.StepReview, FindingsJSON: &findings}},
+		selectErr: errors.New("selection unavailable"),
+	}
+	if _, _, _, err := loadUncertifiedPriorReview(store, "source-run", false); err == nil || !strings.Contains(err.Error(), "source-run selection") {
+		t.Fatalf("loadUncertifiedPriorReview() error = %v, want critical selection failure", err)
+	}
+}
+
+func TestLoadUncertifiedPriorReviewPreservesSelectedTruthBeforeFixAdoption(t *testing.T) {
+	findings := `{"findings":[{"id":"review-a","severity":"error","description":"selected defect","action":"auto-fix"},{"id":"review-b","severity":"warning","description":"unselected defect","action":"ask-user"}]}`
+	selection := `["review-a"]`
+	store := &failingUncertifiedReviewStore{
+		steps:     []*db.StepResult{{ID: "review-step", StepName: types.StepReview, FindingsJSON: &findings}},
+		selection: &selection,
+	}
+	_, got, _, err := loadUncertifiedPriorReview(store, "source-run", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := types.ParseFindingsJSON(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Items) != 2 {
+		t.Fatalf("same-head recovery findings = %#v, want selected and unselected truth", parsed.Items)
+	}
+}
+
+func TestBindUncertifiedPipelineRangeUsesDurableSelectionProgress(t *testing.T) {
+	database, _, source, repo := setupTest(t)
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	h0 := currentSHA(t, dir)
+	writeTestFile(t, dir, "fix.txt", "first\n")
+	execGit(t, dir, "add", ".")
+	execGit(t, dir, "commit", "-m", "first fix")
+	h1 := currentSHA(t, dir)
+	writeTestFile(t, dir, "fix.txt", "second\n")
+	execGit(t, dir, "add", ".")
+	execGit(t, dir, "commit", "-m", "second fix")
+	h2 := currentSHA(t, dir)
+	if err := database.UpdateRunHeadSHA(source.ID, h1); err != nil {
+		t.Fatal(err)
+	}
+	source.HeadSHA = h1
+
+	review, err := database.InsertStepResult(source.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings := `{"findings":[{"id":"review-a","severity":"error","description":"selected defect","action":"auto-fix"},{"id":"review-b","severity":"warning","description":"unselected defect","action":"ask-user"}]}`
+	round, err := database.InsertEffectiveReviewStepRoundWithProvenance(review.ID, 1, "initial", &findings, nil, h1, h1, "", nil, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := `["review-a"]`
+	if err := database.PersistReviewFixSelection(db.ReviewFixSelection{
+		RoundID: round.ID, StepResultID: review.ID, RepoID: repo.ID, Branch: source.Branch,
+		FromSHA: h0, HeadSHA: h1, SourceRunID: source.ID, RoundFindingsJSON: findings,
+		StepFindingsJSON: findings, SelectedFindingIDs: &selected, SelectionSource: db.RoundSelectionSourceAutoFix,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	beforeRun, err := database.InsertRun(repo.ID, source.Branch, h1, source.BaseSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := &StepContext{Ctx: context.Background(), DB: database, Repo: repo, Run: beforeRun, WorkDir: dir}
+	if err := BindUncertifiedPipelineRange(before); err != nil {
+		t.Fatal(err)
+	}
+	beforeFindings, err := types.ParseFindingsJSON(before.UncertifiedPriorFindings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(beforeFindings.Items) != 2 {
+		t.Fatalf("pre-adoption recovery findings = %#v", beforeFindings.Items)
+	}
+
+	if err := PersistUncertifiedPipelineRange(&StepContext{Ctx: context.Background(), DB: database, Repo: repo, Run: source, WorkDir: dir}, h1, h2); err != nil {
+		t.Fatal(err)
+	}
+	afterRun, err := database.InsertRun(repo.ID, source.Branch, h2, source.BaseSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := &StepContext{Ctx: context.Background(), DB: database, Repo: repo, Run: afterRun, WorkDir: dir}
+	if err := BindUncertifiedPipelineRange(after); err != nil {
+		t.Fatal(err)
+	}
+	afterFindings, err := types.ParseFindingsJSON(after.UncertifiedPriorFindings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(afterFindings.Items) != 1 || afterFindings.Items[0].ID != "review-b" {
+		t.Fatalf("post-adoption recovery findings = %#v", afterFindings.Items)
 	}
 }
 
@@ -72,27 +227,89 @@ func TestBindUncertifiedPipelineRange_CopiesOntoStepContext(t *testing.T) {
 	}
 }
 
-func TestBindUncertifiedPipelineRange_MissingFromGateWarnsAndContinues(t *testing.T) {
+func TestExecutor_RestoresUncertifiedPriorRunEffectiveFindings(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	source, err := database.InsertRun(repo.ID, run.Branch, "older", "base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceReview, err := database.InsertStepResult(source.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior := `{"findings":[{"id":"review-a","id_generated":true,"continuity_token":"token-a","severity":"error","description":"selected defect","action":"auto-fix"},{"id":"review-b","id_generated":true,"continuity_token":"token-b","severity":"error","description":"unresolved defect","action":"ask-user"}]}`
+	round, err := database.InsertEffectiveReviewStepRoundWithProvenance(sourceReview.ID, 1, "initial", &prior, nil, "older", "older", "", nil, nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := `["review-a"]`
+	if err := database.SetStepRoundSelection(round.ID, &selected, db.RoundSelectionSourceAutoFix); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, "from-sha", run.HeadSHA, source.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	step := &scopeLimitedAdaptiveCallStep{adaptiveCallStep{name: types.StepReview, fn: func(*StepContext) (*StepOutcome, error) {
+		return &StepOutcome{ReviewApprovedHeadSHA: run.HeadSHA}, nil
+	}}}
+	exec := NewExecutor(database, p, &config.Config{}, nil, []Step{step}, nil)
+	done := make(chan error, 1)
+	go func() { done <- exec.Execute(context.Background(), run, repo, t.TempDir()) }()
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	if err := exec.Respond(types.StepReview, types.ActionApprove, nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("executor timed out")
+	}
+
+	steps, err := database.GetStepsByRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(steps) != 1 || steps[0].FindingsJSON == nil {
+		t.Fatalf("replacement review = %#v", steps)
+	}
+	got, err := types.ParseFindingsJSON(*steps[0].FindingsJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Items) != 1 || got.Items[0].ID != "review-b" || got.Items[0].Description != "unresolved defect" {
+		t.Fatalf("restored findings = %#v", got.Items)
+	}
+}
+
+func TestBindUncertifiedPipelineRange_MissingCommitFailsClosed(t *testing.T) {
 	database, _, run, repo := setupTest(t)
 	if err := database.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, "from-missing", "to-missing", "source-run"); err != nil {
 		t.Fatal(err)
 	}
-	var logs []string
 	sctx := &StepContext{
 		Ctx:     context.Background(),
 		DB:      database,
 		Repo:    repo,
 		Run:     run,
 		WorkDir: t.TempDir(),
-		Log:     func(line string) { logs = append(logs, line) },
 	}
-	BindUncertifiedPipelineRange(sctx)
+	err := BindUncertifiedPipelineRange(sctx)
+	if err == nil || !strings.Contains(err.Error(), "verify uncertified pipeline range ancestry") {
+		t.Fatalf("BindUncertifiedPipelineRange() error = %v, want ancestry failure", err)
+	}
 	if sctx.UncertifiedToSHA != "" || sctx.UncertifiedFromSHA != "" {
 		t.Fatalf("missing range was applied: from=%q to=%q", sctx.UncertifiedFromSHA, sctx.UncertifiedToSHA)
 	}
-	joined := strings.Join(logs, "\n")
-	if !strings.Contains(joined, "uncertified range from-missing..to-missing not in gate; not applying provenance") {
-		t.Fatalf("logs = %q, want skip warning", joined)
+	got, getErr := database.GetUncertifiedPipelineRange(repo.ID, run.Branch)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if got == nil || got.FromSHA != "from-missing" || got.ToSHA != "to-missing" {
+		t.Fatalf("failed ancestry probe changed range: %#v", got)
 	}
 }
 
@@ -378,6 +595,34 @@ func TestPersistUncertifiedPipelineRange_ReplacesRangeWhenHistoryDiverged(t *tes
 	}
 }
 
+func TestPersistUncertifiedPipelineRange_IndeterminateLineagePreservesRange(t *testing.T) {
+	database, _, run, repo := setupTest(t)
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	h0 := currentSHA(t, dir)
+	writeTestFile(t, dir, "fix.txt", "fix\n")
+	execGit(t, dir, "add", ".")
+	execGit(t, dir, "commit", "-m", "fix")
+	h1 := currentSHA(t, dir)
+	if err := database.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, h0, h1, run.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	err := PersistUncertifiedPipelineRange(&StepContext{
+		Ctx: context.Background(), DB: database, Repo: repo, Run: run, WorkDir: dir,
+	}, "missing-object", h0)
+	if err == nil || !strings.Contains(err.Error(), "verify uncertified pipeline range lineage") {
+		t.Fatalf("PersistUncertifiedPipelineRange() error = %v, want indeterminate lineage failure", err)
+	}
+	got, getErr := database.GetUncertifiedPipelineRange(repo.ID, run.Branch)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if got == nil || got.FromSHA != h0 || got.ToSHA != h1 || got.SourceRunID != run.ID {
+		t.Fatalf("indeterminate lineage overwrote range: %#v", got)
+	}
+}
+
 func TestRemapUncertifiedPipelineRangeAfterRebase_RewrittenHeadStaysBindable(t *testing.T) {
 	database, _, run, repo := setupTest(t)
 	dir := t.TempDir()
@@ -392,6 +637,9 @@ func TestRemapUncertifiedPipelineRangeAfterRebase_RewrittenHeadStaysBindable(t *
 	execGit(t, dir, "add", ".")
 	execGit(t, dir, "commit", "-m", "fixer")
 	toSHA := currentSHA(t, dir)
+	if _, err := database.InsertStepResult(run.ID, types.StepReview); err != nil {
+		t.Fatal(err)
+	}
 	if err := database.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, fromSHA, toSHA, run.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +664,9 @@ func TestRemapUncertifiedPipelineRangeAfterRebase_RewrittenHeadStaysBindable(t *
 		WorkDir: dir,
 	}
 	sctx.Run.HeadSHA = newHead
-	RemapUncertifiedPipelineRangeAfterRebase(sctx, toSHA, newHead)
+	if _, err := RemapUncertifiedPipelineRangeAfterRebase(sctx, toSHA, newHead); err != nil {
+		t.Fatal(err)
+	}
 
 	got, err := database.GetUncertifiedPipelineRange(repo.ID, run.Branch)
 	if err != nil {
@@ -435,7 +685,7 @@ func TestRemapUncertifiedPipelineRangeAfterRebase_RewrittenHeadStaysBindable(t *
 	}
 }
 
-func TestRemapUncertifiedPipelineRangeAfterRebase_LeavesRangeWhenOldHeadDidNotContainIt(t *testing.T) {
+func TestRemapUncertifiedPipelineRangeAfterRebase_MissingRangeCommitFailsClosed(t *testing.T) {
 	database, _, run, repo := setupTest(t)
 	dir := t.TempDir()
 	initGitRepo(t, dir)
@@ -454,13 +704,15 @@ func TestRemapUncertifiedPipelineRangeAfterRebase_LeavesRangeWhenOldHeadDidNotCo
 	execGit(t, dir, "commit", "-m", "rewrite")
 	newHead := currentSHA(t, dir)
 
-	RemapUncertifiedPipelineRangeAfterRebase(&StepContext{
+	if _, err := RemapUncertifiedPipelineRangeAfterRebase(&StepContext{
 		Ctx:     context.Background(),
 		DB:      database,
 		Repo:    repo,
 		Run:     run,
 		WorkDir: dir,
-	}, oldHead, newHead)
+	}, oldHead, newHead); err == nil || !strings.Contains(err.Error(), "verify uncertified range against pre-rebase head") {
+		t.Fatalf("RemapUncertifiedPipelineRangeAfterRebase() error = %v, want missing-object failure", err)
+	}
 
 	got, err := database.GetUncertifiedPipelineRange(repo.ID, run.Branch)
 	if err != nil {

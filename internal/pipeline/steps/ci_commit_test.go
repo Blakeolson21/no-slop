@@ -1,16 +1,343 @@
 package steps
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/Blakeolson21/no-slop/internal/agent"
 	"github.com/Blakeolson21/no-slop/internal/branchsync"
 	"github.com/Blakeolson21/no-slop/internal/config"
 	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/scm"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
+
+type recordingPRUpdateHost struct {
+	updates []scm.PRContent
+}
+
+func (h *recordingPRUpdateHost) UpdatePR(_ context.Context, _ *scm.PR, content scm.PRContent) (*scm.PR, error) {
+	h.updates = append(h.updates, content)
+	return &scm.PR{Number: "42"}, nil
+}
+
+func (h *recordingPRUpdateHost) Provider() scm.Provider { return scm.ProviderGitHub }
+func (h *recordingPRUpdateHost) Capabilities() scm.Capabilities {
+	return scm.Capabilities{}
+}
+func (h *recordingPRUpdateHost) Available(context.Context) error { return nil }
+func (h *recordingPRUpdateHost) FindPR(context.Context, string, string) (*scm.PR, error) {
+	return nil, nil
+}
+func (h *recordingPRUpdateHost) CreatePR(context.Context, string, string, scm.PRContent) (*scm.PR, error) {
+	return nil, nil
+}
+func (h *recordingPRUpdateHost) GetPRState(context.Context, *scm.PR) (scm.PRState, error) {
+	return scm.PRStateOpen, nil
+}
+func (h *recordingPRUpdateHost) GetChecks(context.Context, *scm.PR) ([]scm.Check, error) {
+	return nil, nil
+}
+func (h *recordingPRUpdateHost) GetMergeableState(context.Context, *scm.PR) (scm.MergeableState, error) {
+	return scm.MergeableUnknown, scm.ErrUnsupported
+}
+func (h *recordingPRUpdateHost) FetchFailedCheckLogs(context.Context, *scm.PR, string, string, []string) (string, error) {
+	return "", scm.ErrUnsupported
+}
+
+func TestCIStep_AutoFixWithoutPushDoesNotUpdatePR(t *testing.T) {
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	host := &recordingPRUpdateHost{}
+
+	result, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.HeadChanged() {
+		t.Fatal("no-change CI fix reported a push")
+	}
+	if len(host.updates) != 0 {
+		t.Fatalf("no-change CI fix updated PR content: %d calls", len(host.updates))
+	}
+}
+
+func TestCIStep_AutoFixDefersPRUpdateAfterAdoptingLocalHead(t *testing.T) {
+	upstream := t.TempDir()
+	gitCmd(t, upstream, "init", "--bare")
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "remote", "add", "origin", upstream)
+	gitCmd(t, dir, "push", "origin", "feature")
+	if err := os.WriteFile(filepath.Join(dir, "already-published.txt"), []byte("published"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, dir, "add", "-A")
+	gitCmd(t, dir, "commit", "-m", "already published")
+	newHeadSHA := gitCmd(t, dir, "rev-parse", "HEAD")
+	gitCmd(t, dir, "push", "origin", "feature")
+
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Repo.UpstreamURL = upstream
+	sctx.Run.Branch = "refs/heads/feature"
+	for _, name := range []types.StepName{types.StepReview, types.StepTest, types.StepDocument} {
+		step, err := sctx.DB.InsertStepResult(sctx.Run.ID, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sctx.DB.CompleteStepWithStatusAtHead(step.ID, types.StepStatusCompleted, headSHA, 0, 1, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	host := &recordingPRUpdateHost{}
+
+	result, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.HeadChanged() {
+		t.Fatalf("adopted-head result = %#v", result)
+	}
+	if result.HeadSHA != newHeadSHA || sctx.Run.HeadSHA != newHeadSHA {
+		t.Fatalf("adopted head = %q / %q, want %q", result.HeadSHA, sctx.Run.HeadSHA, newHeadSHA)
+	}
+	if len(host.updates) != 0 {
+		t.Fatalf("local repair updated PR content before revalidation: %d calls", len(host.updates))
+	}
+}
+
+func TestCIStep_AutoFixLocalRepairDoesNotUpdatePR(t *testing.T) {
+	upstream := t.TempDir()
+	gitCmd(t, upstream, "init", "--bare")
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "remote", "add", "origin", upstream)
+	gitCmd(t, dir, "push", "origin", "feature")
+	agent := &mockAgent{name: "test", runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
+		if err := os.WriteFile(filepath.Join(opts.CWD, "ci-fix.txt"), []byte("fixed"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return &agent.Result{}, nil
+	}}
+	sctx := newTestContextWithDBRecords(t, agent, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Repo.UpstreamURL = upstream
+	sctx.Run.Branch = "refs/heads/feature"
+	host := &recordingPRUpdateHost{}
+
+	result, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.HeadChanged() || !result.HeadPersisted {
+		t.Fatalf("local repair result = %#v", result)
+	}
+	if len(host.updates) != 0 {
+		t.Fatalf("local repair updated PR content: %d calls", len(host.updates))
+	}
+	rng, err := sctx.DB.GetUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rng == nil || rng.FromSHA != headSHA || rng.ToSHA != result.HeadSHA || rng.SourceRunID != sctx.Run.ID {
+		t.Fatalf("CI repair uncertified range = %#v", rng)
+	}
+	if got := gitCmd(t, upstream, "rev-parse", "refs/heads/feature"); got != headSHA {
+		t.Fatalf("CI repair published before revalidation: remote head = %s, want %s", got, headSHA)
+	}
+}
+
+func TestCIStep_RefusesLocalHeadWhenUncertifiedRangePersistenceFails(t *testing.T) {
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+	if err := os.WriteFile(filepath.Join(dir, "ci-fix.txt"), []byte("fixed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	originalRunID := sctx.Run.ID
+	sctx.Repo.ID = "missing-repo"
+
+	changed, err := (&CIStep{}).commitRepair(sctx, "repair checks")
+	if err == nil || !strings.Contains(err.Error(), "persist uncertified review range before CI head adoption") {
+		t.Fatalf("commitRepair() = (%v, %v), want persistence refusal", changed, err)
+	}
+	if changed {
+		t.Fatal("failed CI persistence reported an adopted head")
+	}
+	if got := gitCmd(t, dir, "rev-parse", "refs/heads/feature"); got != headSHA {
+		t.Fatalf("branch head = %s, want unchanged %s", got, headSHA)
+	}
+	if sctx.Run.HeadSHA != headSHA {
+		t.Fatalf("in-memory head = %s, want %s", sctx.Run.HeadSHA, headSHA)
+	}
+	stored, getErr := sctx.DB.GetRun(originalRunID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if stored.HeadSHA != headSHA {
+		t.Fatalf("stored head = %s, want %s", stored.HeadSHA, headSHA)
+	}
+}
+
+func TestCIStep_AutoFixDoesNotPersistLocalHeadWhenRefAdoptionFails(t *testing.T) {
+	upstream := t.TempDir()
+	gitCmd(t, upstream, "init", "--bare")
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "remote", "add", "origin", upstream)
+	gitCmd(t, dir, "push", "origin", "feature")
+	gitCmd(t, dir, "checkout", "--detach", headSHA)
+	tree := gitCmd(t, dir, "rev-parse", headSHA+"^{tree}")
+	unrelated := gitCmd(t, dir, "commit-tree", tree, "-m", "unrelated branch head")
+	gitCmd(t, dir, "update-ref", "refs/heads/feature", unrelated)
+	agent := &mockAgent{name: "test", runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
+		if err := os.WriteFile(filepath.Join(opts.CWD, "ci-fix.txt"), []byte("fixed"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return &agent.Result{}, nil
+	}}
+	sctx := newTestContextWithDBRecords(t, agent, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Repo.UpstreamURL = upstream
+	sctx.Run.Branch = "refs/heads/feature"
+	if err := sctx.DB.UpsertUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch, baseSHA, headSHA, sctx.Run.ID); err != nil {
+		t.Fatal(err)
+	}
+	host := &recordingPRUpdateHost{}
+
+	result, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)
+	if err == nil || !strings.Contains(err.Error(), "refusing to move branch ref") {
+		t.Fatalf("autoFixCI error = %v", err)
+	}
+	if result.HeadChanged() || result.HeadPersisted {
+		t.Fatalf("failed local adoption changed durable head: %#v", result)
+	}
+	remoteHead := gitCmd(t, upstream, "rev-parse", "refs/heads/feature")
+	if remoteHead != headSHA {
+		t.Fatalf("failed local adoption published remote head %q, want %q", remoteHead, headSHA)
+	}
+	persisted, getErr := sctx.DB.GetRun(sctx.Run.ID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if persisted.HeadSHA != headSHA {
+		t.Fatalf("persisted head = %q, want original %q", persisted.HeadSHA, headSHA)
+	}
+	rng, rangeErr := sctx.DB.GetUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch)
+	if rangeErr != nil {
+		t.Fatal(rangeErr)
+	}
+	if rng == nil || rng.FromSHA != baseSHA || rng.ToSHA != headSHA || rng.SourceRunID != sctx.Run.ID {
+		t.Fatalf("failed CI adoption left rewritten uncertified range: %#v", rng)
+	}
+}
+
+func TestCIStep_AutoFixLocalRepairDoesNotVerifyOrPublishRemote(t *testing.T) {
+	upstream := t.TempDir()
+	gitCmd(t, upstream, "init", "--bare")
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "remote", "add", "origin", upstream)
+	gitCmd(t, dir, "push", "origin", "feature")
+
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binDir := fakeCLIBinDir(t)
+	linkTestBinary(t, binDir, "git")
+	marker := filepath.Join(t.TempDir(), "pushed")
+	env := fakeCLIEnv(binDir, map[string]string{
+		"FAKE_CLI_MODE":        "git-fail-verify-after-push",
+		"FAKE_CLI_REAL_GIT":    realGit,
+		"FAKE_CLI_PUSH_MARKER": marker,
+	})
+	agent := &mockAgent{name: "test", runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
+		if err := os.WriteFile(filepath.Join(opts.CWD, "ci-fix.txt"), []byte("fixed"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return &agent.Result{}, nil
+	}}
+	sctx := newTestContextWithDBRecords(t, agent, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Env = env
+	sctx.Repo.UpstreamURL = upstream
+	sctx.Run.Branch = "refs/heads/feature"
+	host := &recordingPRUpdateHost{}
+
+	result, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.HeadChanged() || !result.HeadPersisted {
+		t.Fatalf("local repair result = %#v", result)
+	}
+	remoteHead := gitCmd(t, upstream, "rev-parse", "refs/heads/feature")
+	if remoteHead != headSHA {
+		t.Fatalf("local repair published remote head %q, want %q", remoteHead, headSHA)
+	}
+	persisted, getErr := sctx.DB.GetRun(sctx.Run.ID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if persisted.HeadSHA != result.HeadSHA {
+		t.Fatalf("persisted head = %q, want local repair %q", persisted.HeadSHA, result.HeadSHA)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("local repair unexpectedly invoked push; marker error = %v", err)
+	}
+}
+
+func TestCIStep_AutoFixLocalRepairDoesNotInvokeAmbiguousPush(t *testing.T) {
+	upstream := t.TempDir()
+	gitCmd(t, upstream, "init", "--bare")
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	gitCmd(t, dir, "remote", "add", "origin", upstream)
+	gitCmd(t, dir, "push", "origin", "feature")
+
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binDir := fakeCLIBinDir(t)
+	linkTestBinary(t, binDir, "git")
+	marker := filepath.Join(t.TempDir(), "pushed")
+	env := fakeCLIEnv(binDir, map[string]string{
+		"FAKE_CLI_MODE":        "git-fail-after-push",
+		"FAKE_CLI_REAL_GIT":    realGit,
+		"FAKE_CLI_PUSH_MARKER": marker,
+	})
+	agent := &mockAgent{name: "test", runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
+		if err := os.WriteFile(filepath.Join(opts.CWD, "ci-fix.txt"), []byte("fixed"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return &agent.Result{}, nil
+	}}
+	sctx := newTestContextWithDBRecords(t, agent, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Env = env
+	sctx.Repo.UpstreamURL = upstream
+	sctx.Run.Branch = "refs/heads/feature"
+	host := &recordingPRUpdateHost{}
+
+	result, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.HeadChanged() || !result.HeadPersisted {
+		t.Fatalf("local repair result = %#v", result)
+	}
+	remoteHead := gitCmd(t, upstream, "rev-parse", "refs/heads/feature")
+	if remoteHead != headSHA {
+		t.Fatalf("local repair published remote head %q, want %q", remoteHead, headSHA)
+	}
+	persisted, getErr := sctx.DB.GetRun(sctx.Run.ID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if persisted.HeadSHA != result.HeadSHA {
+		t.Fatalf("persisted head = %q, want local repair %q", persisted.HeadSHA, result.HeadSHA)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("local repair unexpectedly invoked push; marker error = %v", err)
+	}
+}
 
 func TestCIStep_CommitAndPush(t *testing.T) {
 	t.Parallel()

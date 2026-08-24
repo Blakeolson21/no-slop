@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"slices"
@@ -19,6 +20,7 @@ import (
 )
 
 const requiredWorkflowStepTimeout = 10 * time.Second
+const requiredWorkflowTestHeadSHA = "0123456789abcdef0123456789abcdef01234567"
 
 // TestNoSlopRequiredWorkflowExemptsReleaseAutomation pins the exemption
 // logic so the release pipeline (release-please via GITHUB_TOKEN) and
@@ -50,9 +52,9 @@ func TestNoSlopRequiredWorkflowChecksSignatureMarker(t *testing.T) {
 		t.Fatal("generated pipeline body fixture did not contain canonical signature")
 	}
 	got := executeRequiredWorkflowFixture(t, workflow, []requiredWorkflowEvent{
-		{Action: "opened", Body: pipelineBody, HeadSHA: "head", PRNumber: 1, RunID: 1, RunNumber: 1},
-		{Action: "edited", Body: legacyPipelineBody, HeadSHA: "head", PRNumber: 1, RunID: 2, RunNumber: 2},
-		{Action: "edited", Body: "body without a generated pipeline section", HeadSHA: "head", PRNumber: 1, RunID: 3, RunNumber: 3},
+		{Action: "opened", Body: pipelineBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 1, RunID: 1, RunNumber: 1},
+		{Action: "edited", Body: legacyPipelineBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 1, RunID: 2, RunNumber: 2},
+		{Action: "edited", Body: "body without a generated pipeline section", HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 1, RunID: 3, RunNumber: 3},
 	})
 	want := []requiredWorkflowResult{
 		{RunID: 1, RunNumber: 1, Action: "opened", Executed: true, Conclusion: "success"},
@@ -61,6 +63,132 @@ func TestNoSlopRequiredWorkflowChecksSignatureMarker(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("workflow check results =\n  %v\nwant\n  %v", got, want)
+	}
+}
+
+// TestNoSlopRequiredWorkflowAcceptsHistoricalLegacyMarker executes the
+// required check against a fully attested body written before the project and
+// repository were renamed. Existing PRs can legitimately retain that marker
+// while a current no-slop run refreshes their attestation.
+func TestNoSlopRequiredWorkflowAcceptsHistoricalLegacyMarker(t *testing.T) {
+	workflow := loadRequiredWorkflow(t)
+	body := strings.Replace(
+		generatedPipelineBody(t),
+		"Updates from [git push no-slop](https://github.com/Blakeolson21/no-slop)",
+		"Updates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)",
+		1,
+	)
+	got := executeRequiredWorkflowFixture(t, workflow, []requiredWorkflowEvent{{
+		Action: "edited", Body: body, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 4, RunID: 4, RunNumber: 4,
+	}})
+	if got[0].Conclusion != "success" {
+		t.Fatalf("historical legacy body concluded %q, want success", got[0].Conclusion)
+	}
+}
+
+// TestNoSlopRequiredWorkflowEnforcesCompletedPipelineAttestation executes the
+// repository's required-check script as GitHub would. A signature proves only
+// which tool wrote the body; merge authority additionally requires a v1
+// attestation bound to this head with every required pre-publication gate done.
+func TestNoSlopRequiredWorkflowEnforcesCompletedPipelineAttestation(t *testing.T) {
+	workflow := loadRequiredWorkflow(t)
+	signatureOnly := "## Pipeline\n\nUpdates from [git push no-slop](https://github.com/Blakeolson21/no-slop)\n"
+	historicalSignatureOnly := "## Pipeline\n\nUpdates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)\n"
+
+	tests := []struct {
+		name    string
+		body    string
+		headSHA string
+		want    string
+	}{
+		{name: "signature only", body: signatureOnly, want: "failure"},
+		{name: "historical signature only", body: historicalSignatureOnly, want: "failure"},
+		{name: "review missing", body: generatedPipelineBodyWithStatuses(t, "", types.StepStatusCompleted, types.StepStatusCompleted), want: "failure"},
+		{name: "test failed", body: generatedPipelineBodyWithStatuses(t, types.StepStatusCompleted, types.StepStatusFailed, types.StepStatusCompleted), want: "failure"},
+		{name: "document skipped", body: generatedPipelineBodyWithStatuses(t, types.StepStatusCompleted, types.StepStatusCompleted, types.StepStatusSkipped), want: "failure"},
+		{name: "stale head", body: generatedPipelineBody(t), headSHA: "ffffffffffffffffffffffffffffffffffffffff", want: "failure"},
+		{name: "review certified stale head", body: generatedPipelineBodyWithStaleReviewCertification(t), want: "failure"},
+		{name: "quoted malformed attestation before owned pipeline", body: insertAfterPublicationMarker(t, generatedPipelineBody(t), "## Intent\n\nQuoted legacy data: <!-- no-slop-pipeline-attestation:v1 { -->"), want: "success"},
+		{name: "quoted semantically invalid owned tuple before owned pipeline", body: generatedPipelineBodyWithQuotedInvalidAttestation(t), want: "success"},
+		{name: "pipeline heading in generated detail", body: generatedPipelineBody(t) + "\n\nFinding detail\n## Pipeline\n\nnot an owned attestation", want: "success"},
+		{name: "all required steps completed", body: generatedPipelineBody(t), want: "success"},
+	}
+
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			headSHA := tc.headSHA
+			if headSHA == "" {
+				headSHA = requiredWorkflowTestHeadSHA
+			}
+			got := executeRequiredWorkflowFixture(t, workflow, []requiredWorkflowEvent{{
+				Action: "opened", Body: tc.body, HeadSHA: headSHA, PRNumber: 797, RunID: int64(100 + i), RunNumber: int64(100 + i),
+			}})
+			if got[0].Conclusion != tc.want {
+				t.Fatalf("conclusion = %q, want %q", got[0].Conclusion, tc.want)
+			}
+		})
+	}
+}
+
+// TestNoSlopRequiredWorkflowAcceptsInitialLegacyV1Publication exercises the
+// rollout boundary where the installed no-slop binary opens the PR that first
+// introduces publication nonces. That binary can emit only the original v1
+// attestation: one SHA-bound payload with completed step statuses. The
+// allowance is deliberately limited to the canonical marker on publication
+// events produced by an installed pre-nonce binary. Synchronize may carry the
+// pre-repair head because that older daemon cannot republish after its CI fix;
+// opened events stay head-bound and body edits require the nonce-bearing format.
+func TestNoSlopRequiredWorkflowAcceptsInitialLegacyV1Publication(t *testing.T) {
+	workflow := loadRequiredWorkflow(t)
+	legacyBody := legacyV1PipelineBody(t, generatedPipelineBody(t))
+	malformedHeadLegacyBody := strings.Replace(
+		legacyBody,
+		`"head_sha":"`+requiredWorkflowTestHeadSHA+`"`,
+		`"head_sha":"not-a-sha"`,
+		1,
+	)
+	if malformedHeadLegacyBody == legacyBody {
+		t.Fatal("legacy body fixture did not contain its generated head")
+	}
+	incompleteLegacyBody := legacyV1PipelineBody(t, generatedPipelineBodyWithStatuses(
+		t,
+		types.StepStatusCompleted,
+		types.StepStatusFailed,
+		types.StepStatusCompleted,
+	))
+	historicalBody := strings.Replace(
+		legacyBody,
+		"Updates from [git push no-slop](https://github.com/Blakeolson21/no-slop)",
+		"Updates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)",
+		1,
+	)
+
+	got := executeRequiredWorkflowFixture(t, workflow, []requiredWorkflowEvent{
+		{Action: "opened", Body: legacyBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 5, RunID: 500, RunNumber: 50},
+		{Action: "synchronize", Body: legacyBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 6, RunID: 600, RunNumber: 60},
+		{Action: "synchronize", Body: legacyBody, HeadSHA: "ffffffffffffffffffffffffffffffffffffffff", PRNumber: 7, RunID: 700, RunNumber: 70},
+		{Action: "edited", Body: legacyBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 8, RunID: 800, RunNumber: 80},
+		{Action: "opened", Body: legacyBody, HeadSHA: "ffffffffffffffffffffffffffffffffffffffff", PRNumber: 9, RunID: 900, RunNumber: 90},
+		{Action: "opened", Body: historicalBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 10, RunID: 1000, RunNumber: 100},
+		{Action: "synchronize", Body: incompleteLegacyBody, HeadSHA: "ffffffffffffffffffffffffffffffffffffffff", PRNumber: 11, RunID: 1100, RunNumber: 110},
+		{Action: "synchronize", Body: generatedPipelineBody(t), HeadSHA: "ffffffffffffffffffffffffffffffffffffffff", PRNumber: 12, RunID: 1200, RunNumber: 120},
+		{Action: "synchronize", Body: historicalBody, HeadSHA: "ffffffffffffffffffffffffffffffffffffffff", PRNumber: 13, RunID: 1300, RunNumber: 130},
+		{Action: "synchronize", Body: malformedHeadLegacyBody, HeadSHA: "ffffffffffffffffffffffffffffffffffffffff", PRNumber: 14, RunID: 1400, RunNumber: 140},
+	})
+	want := []requiredWorkflowResult{
+		{RunID: 500, RunNumber: 50, Action: "opened", Executed: true, Conclusion: "success"},
+		{RunID: 600, RunNumber: 60, Action: "synchronize", Executed: true, Conclusion: "success"},
+		{RunID: 700, RunNumber: 70, Action: "synchronize", Executed: true, Conclusion: "success"},
+		{RunID: 800, RunNumber: 80, Action: "edited", Executed: true, Conclusion: "failure"},
+		{RunID: 900, RunNumber: 90, Action: "opened", Executed: true, Conclusion: "failure"},
+		{RunID: 1000, RunNumber: 100, Action: "opened", Executed: true, Conclusion: "failure"},
+		{RunID: 1100, RunNumber: 110, Action: "synchronize", Executed: true, Conclusion: "failure"},
+		{RunID: 1200, RunNumber: 120, Action: "synchronize", Executed: true, Conclusion: "failure"},
+		{RunID: 1300, RunNumber: 130, Action: "synchronize", Executed: true, Conclusion: "failure"},
+		{RunID: 1400, RunNumber: 140, Action: "synchronize", Executed: true, Conclusion: "failure"},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("legacy v1 publication results =\n  %v\nwant\n  %v", got, want)
 	}
 }
 
@@ -73,12 +201,18 @@ func TestNoSlopRequiredWorkflowReadsPRBodyViaEnv(t *testing.T) {
 	if got := step.Env["PR_BODY"]; got != "${{ github.event.pull_request.body }}" {
 		t.Fatalf("PR_BODY env expression = %q, want pull request body expression", got)
 	}
+	if got := step.Env["PR_HEAD_SHA"]; got != "${{ github.event.pull_request.head.sha }}" {
+		t.Fatalf("PR_HEAD_SHA env expression = %q, want pull request head expression", got)
+	}
+	if got := step.Env["PR_ACTION"]; got != "${{ github.event.action }}" {
+		t.Fatalf("PR_ACTION env expression = %q, want pull request action expression", got)
+	}
 	if strings.Contains(step.Run, "github.event.pull_request.body") {
 		t.Fatalf("workflow must not interpolate the PR body expression directly into run script")
 	}
 
 	got := executeRequiredWorkflowFixture(t, workflow, []requiredWorkflowEvent{
-		{Action: "opened", Body: generatedPipelineBody(t) + "\n$(exit 42)\n`exit 42`", HeadSHA: "head", PRNumber: 1, RunID: 10, RunNumber: 10},
+		{Action: "opened", Body: generatedPipelineBody(t) + "\n$(exit 42)\n`exit 42`", HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 1, RunID: 10, RunNumber: 10},
 	})
 	if got[0].Conclusion != "success" {
 		t.Fatalf("env-carried PR body with shell metacharacters concluded %q, want success", got[0].Conclusion)
@@ -113,9 +247,9 @@ func TestNoSlopRequiredWorkflowExecutesEveryBodyEvent(t *testing.T) {
 	workflow := loadRequiredWorkflow(t)
 	pipelineBody := generatedPipelineBody(t)
 	events := []requiredWorkflowEvent{
-		{Action: "opened", Body: pipelineBody, HeadSHA: "same-head", PRNumber: 549, RunID: 29962844999, RunNumber: 586},
-		{Action: "edited", Body: "signature removed", HeadSHA: "same-head", PRNumber: 549, RunID: 29962943078, RunNumber: 587},
-		{Action: "edited", Body: pipelineBody, HeadSHA: "same-head", PRNumber: 549, RunID: 29965243268, RunNumber: 588},
+		{Action: "opened", Body: pipelineBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 549, RunID: 29962844999, RunNumber: 586},
+		{Action: "edited", Body: "signature removed", HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 549, RunID: 29962943078, RunNumber: 587},
+		{Action: "edited", Body: pipelineBody, HeadSHA: requiredWorkflowTestHeadSHA, PRNumber: 549, RunID: 29965243268, RunNumber: 588},
 	}
 
 	got := executeRequiredWorkflowFixture(t, workflow, events)
@@ -161,18 +295,28 @@ func TestNoSlopRequiredWorkflowPublishesStableEventIdentity(t *testing.T) {
 		t.Fatalf("required check name changed to %q", workflow.Jobs["check"].Name)
 	}
 
-	first := requiredWorkflowEvent{Action: "edited", PRNumber: 549, RunID: 29962943078, RunNumber: 587}
-	latest := requiredWorkflowEvent{Action: "edited", PRNumber: 549, RunID: 29965243268, RunNumber: 588}
+	firstNonce := "00112233445566778899aabbccddeeff"
+	latestNonce := "ffeeddccbbaa99887766554433221100"
+	first := requiredWorkflowEvent{Action: "edited", Body: "<!-- no-slop-publication:v1 " + firstNonce + " -->\n\nfirst body quoting <!-- no-slop-publication:v1 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -->", PRNumber: 549, RunID: 29962943078, RunNumber: 587}
+	latest := requiredWorkflowEvent{Action: "edited", Body: "<!-- no-slop-publication:v1 " + latestNonce + " -->\n\nlatest body", PRNumber: 549, RunID: 29965243268, RunNumber: 588}
 	firstName := renderRequiredWorkflowTemplate(t, workflow.RunName, first)
 	latestName := renderRequiredWorkflowTemplate(t, workflow.RunName, latest)
-	for _, want := range []string{"#549", "edited", "587", "29962943078"} {
-		if !strings.Contains(firstName, want) {
-			t.Errorf("first event run name %q does not expose %q", firstName, want)
-		}
+	if !strings.HasPrefix(firstName, "no-slop-required|edited|PR #549 event 587 (run 29962943078)|<!-- no-slop-publication:v1 "+firstNonce+" -->") {
+		t.Fatalf("first event run name = %q, want publication identity prefix", firstName)
 	}
-	for _, want := range []string{"#549", "edited", "588", "29965243268"} {
-		if !strings.Contains(latestName, want) {
-			t.Errorf("latest event run name %q does not expose %q", latestName, want)
+	if !strings.HasPrefix(latestName, "no-slop-required|edited|PR #549 event 588 (run 29965243268)|<!-- no-slop-publication:v1 "+latestNonce+" -->") {
+		t.Fatalf("latest event run name = %q, want publication identity prefix", latestName)
+	}
+	for label, rendered := range map[string]string{"first": firstName, "latest": latestName} {
+		for field, want := range map[string]string{
+			"PR number":    "PR #549",
+			"event action": "edited",
+			"run number":   "event " + strconv.FormatInt(map[string]int64{"first": first.RunNumber, "latest": latest.RunNumber}[label], 10),
+			"run ID":       "run " + strconv.FormatInt(map[string]int64{"first": first.RunID, "latest": latest.RunID}[label], 10),
+		} {
+			if !strings.Contains(rendered, want) {
+				t.Fatalf("%s event run name = %q, want %s %q", label, rendered, field, want)
+			}
 		}
 	}
 	if firstName == latestName {
@@ -243,6 +387,7 @@ type requiredWorkflowEvent struct {
 	Action    string
 	Body      string
 	HeadSHA   string
+	UpdatedAt string
 	PRNumber  int64
 	RunID     int64
 	RunNumber int64
@@ -270,16 +415,172 @@ func loadRequiredWorkflow(t *testing.T) requiredWorkflow {
 }
 
 func generatedPipelineBody(t *testing.T) string {
+	return generatedPipelineBodyWithStatuses(t, types.StepStatusCompleted, types.StepStatusCompleted, types.StepStatusCompleted)
+}
+
+func generatedPipelineBodyWithStatuses(t *testing.T, review, testStep, document types.StepStatus) string {
 	t.Helper()
-	body, _ := pipelinesteps.BuildPipelineSummary([]*db.StepResult{
-		{ID: "review", StepName: types.StepReview, Status: types.StepStatusCompleted},
-	}, map[string][]*db.StepRound{
-		"review": []*db.StepRound{{Round: 1, Trigger: "initial"}},
-	}, "0123456789abcdef0123456789abcdef01234567")
+	results := []*db.StepResult{
+		{ID: "review", StepName: types.StepReview, Status: review, CertifiedHeadSHA: testCertifiedWorkflowHead(review)},
+		{ID: "test", StepName: types.StepTest, Status: testStep, CertifiedHeadSHA: testCertifiedWorkflowHead(testStep)},
+		{ID: "document", StepName: types.StepDocument, Status: document, CertifiedHeadSHA: testCertifiedWorkflowHead(document)},
+		{ID: "pr", StepName: types.StepPR, Status: types.StepStatusRunning},
+		{ID: "ci", StepName: types.StepCI, Status: types.StepStatusPending},
+	}
+	if review == "" {
+		results = results[1:]
+	}
+	rounds := make(map[string][]*db.StepRound, len(results))
+	for _, result := range results {
+		rounds[result.ID] = []*db.StepRound{{Round: 1, Trigger: "initial"}}
+	}
+	body, _ := pipelinesteps.BuildPipelineSummary(results, rounds, requiredWorkflowTestHeadSHA)
 	if strings.TrimSpace(body) == "" {
 		t.Fatal("pipeline summary builder returned an empty PR body")
 	}
-	return body
+	return publicationMarkerForPipelineBody(t, body) + "\n\n" + body
+}
+
+func publicationMarkerForPipelineBody(t *testing.T, body string) string {
+	t.Helper()
+	const prefix = "<!-- no-slop-pipeline-attestation:v1 "
+	const closing = " -->"
+	start := strings.Index(body, prefix)
+	if start < 0 {
+		t.Fatal("generated body has no pipeline attestation")
+	}
+	start += len(prefix)
+	end := strings.Index(body[start:], closing)
+	if end < 0 {
+		t.Fatal("generated body has malformed pipeline attestation")
+	}
+	var attestation struct {
+		PublicationNonce string `json:"publication_nonce"`
+	}
+	if err := json.Unmarshal([]byte(body[start:start+end]), &attestation); err != nil {
+		t.Fatal(err)
+	}
+	if attestation.PublicationNonce == "" {
+		t.Fatal("generated body has no publication nonce")
+	}
+	return "<!-- no-slop-publication:v1 " + attestation.PublicationNonce + " -->"
+}
+
+func generatedPipelineBodyWithQuotedInvalidAttestation(t *testing.T) string {
+	t.Helper()
+	body := generatedPipelineBody(t)
+	const prefix = "<!-- no-slop-pipeline-attestation:v1 "
+	const closing = " -->"
+	start := strings.Index(body, prefix)
+	if start < 0 {
+		t.Fatal("generated body has no pipeline attestation")
+	}
+	start += len(prefix)
+	end := strings.Index(body[start:], closing)
+	if end < 0 {
+		t.Fatal("generated body has malformed pipeline attestation")
+	}
+	var attestation map[string]any
+	if err := json.Unmarshal([]byte(body[start:start+end]), &attestation); err != nil {
+		t.Fatal(err)
+	}
+	attestation["steps"] = []any{}
+	invalid, err := json.Marshal(attestation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quoted := "## Intent\n\nQuoted historical data:\n\n## Pipeline\n\nUpdates from [git push no-slop](https://github.com/Blakeolson21/no-slop)\n\n" + prefix + string(invalid) + closing
+	return insertAfterPublicationMarker(t, body, quoted)
+}
+
+func legacyV1PipelineBody(t *testing.T, body string) string {
+	t.Helper()
+	markerEnd := strings.Index(body, "\n\n")
+	if markerEnd < 0 {
+		t.Fatal("generated body has no publication marker separator")
+	}
+	body = body[markerEnd+2:]
+	const prefix = "<!-- no-slop-pipeline-attestation:v1 "
+	const closing = " -->"
+	start := strings.Index(body, prefix)
+	if start < 0 {
+		t.Fatal("generated body has no pipeline attestation")
+	}
+	start += len(prefix)
+	end := strings.Index(body[start:], closing)
+	if end < 0 {
+		t.Fatal("generated body has malformed pipeline attestation")
+	}
+	var attestation struct {
+		HeadSHA string `json:"head_sha"`
+		Steps   []struct {
+			Step   types.StepName   `json:"step"`
+			Status types.StepStatus `json:"status"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal([]byte(body[start:start+end]), &attestation); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(attestation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body[:start] + string(payload) + body[start+end:]
+}
+
+func insertAfterPublicationMarker(t *testing.T, body, text string) string {
+	t.Helper()
+	markerEnd := strings.Index(body, "\n\n")
+	if markerEnd < 0 {
+		t.Fatal("generated body has no publication marker separator")
+	}
+	return body[:markerEnd+2] + text + "\n\n" + body[markerEnd+2:]
+}
+
+func testCertifiedWorkflowHead(status types.StepStatus) *string {
+	if status != types.StepStatusCompleted {
+		return nil
+	}
+	head := requiredWorkflowTestHeadSHA
+	return &head
+}
+
+func generatedPipelineBodyWithStaleReviewCertification(t *testing.T) string {
+	t.Helper()
+	body := generatedPipelineBody(t)
+	const prefix = "<!-- no-slop-pipeline-attestation:v1 "
+	const closing = " -->"
+	start := strings.Index(body, prefix)
+	if start < 0 {
+		t.Fatal("generated body has no pipeline attestation")
+	}
+	start += len(prefix)
+	end := strings.Index(body[start:], closing)
+	if end < 0 {
+		t.Fatal("generated body has malformed pipeline attestation")
+	}
+	var attestation struct {
+		HeadSHA          string `json:"head_sha"`
+		PublicationNonce string `json:"publication_nonce"`
+		Steps            []struct {
+			Step    types.StepName   `json:"step"`
+			Status  types.StepStatus `json:"status"`
+			HeadSHA string           `json:"head_sha"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal([]byte(body[start:start+end]), &attestation); err != nil {
+		t.Fatal(err)
+	}
+	for i := range attestation.Steps {
+		if attestation.Steps[i].Step == types.StepReview {
+			attestation.Steps[i].HeadSHA = "ffffffffffffffffffffffffffffffffffffffff"
+		}
+	}
+	payload, err := json.Marshal(attestation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body[:start] + string(payload) + body[start+end:]
 }
 
 func requiredWorkflowCheckStep(t *testing.T, workflow requiredWorkflow) requiredWorkflowStep {
@@ -403,6 +704,8 @@ func executeRequiredWorkflowFixture(t *testing.T, workflow requiredWorkflow, eve
 		shellenv.ConfigureShellCommand(cmd)
 		cmd.Env = append(os.Environ(),
 			"PR_BODY="+event.Body,
+			"PR_HEAD_SHA="+event.HeadSHA,
+			"PR_ACTION="+event.Action,
 			"PR_AUTHOR=first-time-fork-contributor",
 			"PR_NUMBER="+strconv.FormatInt(event.PRNumber, 10),
 		)
@@ -441,8 +744,10 @@ func renderRequiredWorkflowTemplate(t *testing.T, template string, event require
 		value      string
 	}{
 		{expression: "github.event.action", value: event.Action},
+		{expression: "github.event.pull_request.body", value: event.Body},
 		{expression: "github.event.pull_request.number", value: strconv.FormatInt(event.PRNumber, 10)},
 		{expression: "github.event.pull_request.head.sha", value: event.HeadSHA},
+		{expression: "github.event.pull_request.updated_at", value: event.UpdatedAt},
 		{expression: "github.run_id", value: strconv.FormatInt(event.RunID, 10)},
 		{expression: "github.run_number", value: strconv.FormatInt(event.RunNumber, 10)},
 	}

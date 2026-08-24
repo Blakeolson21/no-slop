@@ -677,8 +677,8 @@ func recoveryExclusionClause(preserved map[string]struct{}) (string, []any) {
 
 // GetRunCIRerunState returns the CI step's persisted rerun budget for a run, or
 // the empty string when the run has never spent one. The payload is opaque
-// here: the CI step owns its shape, and the database only guarantees that what
-// was written survives a restart.
+// here: pipeline CI state owns its shape, and the database only guarantees
+// that what was written survives a restart.
 func (d *DB) GetRunCIRerunState(id string) (string, error) {
 	var state sql.NullString
 	err := d.sql.QueryRow(`SELECT ci_rerun_state FROM runs WHERE id = ?`, id).Scan(&state)
@@ -691,14 +691,33 @@ func (d *DB) GetRunCIRerunState(id string) (string, error) {
 	return state.String, nil
 }
 
-// SetRunCIRerunState persists the CI step's rerun budget. The CI step calls
-// this before asking the provider to re-run a check, so a crash between the
-// reservation and the request costs the budget instead of handing the recovered
-// run a rerun the limit already accounted for.
+// SetRunCIRerunState persists CI monitoring state before the corresponding
+// provider mutation, so recovery cannot lose a consumed rerun or an expected
+// attestation attempt.
 func (d *DB) SetRunCIRerunState(id, state string) error {
 	_, err := d.sql.Exec(`UPDATE runs SET ci_rerun_state = ?, updated_at = ? WHERE id = ?`, state, now(), id)
 	if err != nil {
 		return fmt.Errorf("set run ci rerun state: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) GetRunCIAttestationState(id string) (string, error) {
+	var state sql.NullString
+	err := d.sql.QueryRow(`SELECT ci_attestation_state FROM runs WHERE id = ?`, id).Scan(&state)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get run ci attestation state: %w", err)
+	}
+	return state.String, nil
+}
+
+func (d *DB) SetRunCIAttestationState(id, state string) error {
+	_, err := d.sql.Exec(`UPDATE runs SET ci_attestation_state = ?, updated_at = ? WHERE id = ?`, state, now(), id)
+	if err != nil {
+		return fmt.Errorf("set run ci attestation state: %w", err)
 	}
 	return nil
 }

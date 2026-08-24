@@ -41,7 +41,8 @@ type CIStep struct {
 	lastFixedCompletedAt map[string]time.Time // terminally failed check completion times seen before the last fix attempt
 	ciFixAttempts        int                  // number of CI auto-fix attempts made
 	transientReruns      checkRerunBudget     // per-check rerun budget spent on provider-reported transient failures
-	pollIntervalOverride time.Duration        // if set, overrides computed poll interval (for testing)
+	expectedAttestation  expectedAttestationState
+	pollIntervalOverride time.Duration // if set, overrides computed poll interval (for testing)
 	waitForNextPoll      func(context.Context, time.Duration) error
 	now                  func() time.Time
 	// baseBranchTip resolves the current tip SHA of the upstream default
@@ -137,6 +138,9 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 	// spent. Without this the fresh in-memory budget would grant reruns the
 	// documented limit already accounted for.
 	s.loadRerunBudget(sctx)
+	if err := s.loadExpectedAttestationState(sctx); err != nil {
+		return nil, err
+	}
 	ctx := sctx.Ctx
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -315,6 +319,10 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 			lastMonitorLog = ""
 			sctx.Log(fmt.Sprintf("warning: could not check CI: %v", err))
 		} else {
+			checks, err = s.filterExpectedStaleAttestationChecks(sctx, host, checks)
+			if err != nil {
+				return nil, err
+			}
 			// checksPending is the narrow execution state: only checks that are
 			// actively running or queued block a rerun or issue escalation. A
 			// provider-cancelled check is terminal enough to enter the transient
@@ -458,12 +466,12 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 					manualFixAttempted = true
 					sctx.Log(fmt.Sprintf("issues detected: %s - manual fix requested...", issueDesc))
 					previousHeadSHA := sctx.Run.HeadSHA
-					changed, err := s.autoFixCI(sctx, host, pr, fixTargets, mergeConflict)
+					result, err := s.autoFixCI(sctx, host, pr, fixTargets, mergeConflict)
 					if err != nil {
 						if fatalErr := s.handleCIRepairError(sctx, previousHeadSHA, "manual fix", err); fatalErr != nil {
 							return nil, fatalErr
 						}
-					} else if changed || sctx.Run.HeadSHA != previousHeadSHA {
+					} else if result.HeadChanged() {
 						s.lastFixedChecks = fixKey
 						s.lastFixedCompletedAt = fixCompletedAt
 						return s.restartValidationOutcome(), nil
@@ -491,12 +499,12 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 					s.ciFixAttempts = nextAttempt
 					sctx.Log(fmt.Sprintf("issues detected: %s - auto-fixing (attempt %d/%d)...", issueDesc, s.ciFixAttempts, ciFixLimit))
 					previousHeadSHA := sctx.Run.HeadSHA
-					changed, err := s.autoFixCI(sctx, host, pr, fixTargets, mergeConflict)
+					result, err := s.autoFixCI(sctx, host, pr, fixTargets, mergeConflict)
 					if err != nil {
 						if fatalErr := s.handleCIRepairError(sctx, previousHeadSHA, "auto-fix", err); fatalErr != nil {
 							return nil, fatalErr
 						}
-					} else if changed || sctx.Run.HeadSHA != previousHeadSHA {
+					} else if result.HeadChanged() {
 						s.lastFixedChecks = fixKey
 						s.lastFixedCompletedAt = fixCompletedAt
 						return s.restartValidationOutcome(), nil

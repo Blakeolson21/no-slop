@@ -218,6 +218,7 @@ func TestCIStep_PersistenceFailureAfterRepairDoesNotResumePolling(t *testing.T) 
 	t.Parallel()
 
 	dir, baseSHA, approvedHead := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", approvedHead)
 	var sctx *pipeline.StepContext
 	ag := &mockAgent{
 		name: "test",
@@ -249,15 +250,18 @@ func TestCIStep_PersistenceFailureAfterRepairDoesNotResumePolling(t *testing.T) 
 	}}
 
 	outcome, err := step.Execute(sctx)
-	if err == nil || !strings.Contains(err.Error(), "update run head sha for revalidation") {
+	if err == nil || !strings.Contains(err.Error(), "persist uncertified review range before CI head adoption") {
 		t.Fatalf("CI outcome = %#v, error = %v, want actionable persistence failure", outcome, err)
 	}
 	if waitCalls != 0 {
 		t.Fatalf("CI resumed polling %d times after the repaired head advanced", waitCalls)
 	}
 	repairedHead := gitCmd(t, dir, "rev-parse", "HEAD")
-	if repairedHead == approvedHead || sctx.Run.HeadSHA != repairedHead {
-		t.Fatalf("repaired head = %s, in-memory head = %s, approved head = %s", repairedHead, sctx.Run.HeadSHA, approvedHead)
+	if repairedHead == approvedHead || sctx.Run.HeadSHA != approvedHead {
+		t.Fatalf("unadopted repair head = %s, in-memory head = %s, approved head = %s", repairedHead, sctx.Run.HeadSHA, approvedHead)
+	}
+	if branchHead := gitCmd(t, dir, "rev-parse", "refs/heads/feature"); branchHead != approvedHead {
+		t.Fatalf("branch adopted repair despite failed recovery persistence: got %s, want %s", branchHead, approvedHead)
 	}
 	if sctx.Run.ReviewApprovedHeadSHA == nil || *sctx.Run.ReviewApprovedHeadSHA != approvedHead {
 		t.Fatalf("review authority = %#v, want stale authority retained only on the aborted path", sctx.Run.ReviewApprovedHeadSHA)

@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -162,6 +161,15 @@ func (a *adaptiveCallStep) Execute(sctx *StepContext) (*StepOutcome, error) {
 	return a.fn(sctx)
 }
 
+// scopeLimitedAdaptiveCallStep models a step whose later rounds may report
+// only what they reassessed. The executor must therefore retain unresolved
+// findings that a later round does not mention.
+type scopeLimitedAdaptiveCallStep struct {
+	adaptiveCallStep
+}
+
+func (s *scopeLimitedAdaptiveCallStep) FindingsMayBeScopeLimited() bool { return true }
+
 // waitForStepEvent polls the event collector until an event with the given type and step name appears.
 func waitForStepEvent(t *testing.T, ec *eventCollector, eventType ipc.EventType, stepName types.StepName) *ipc.Event {
 	t.Helper()
@@ -217,30 +225,64 @@ func waitForStepStatus(t *testing.T, database *db.DB, runID string, stepName typ
 	t.Fatalf("step %s did not reach status %q within timeout; last seen %v", stepName, expected, last)
 }
 
+func findingIDByDescription(t *testing.T, database *db.DB, runID string, stepName types.StepName, description string) string {
+	t.Helper()
+	steps, err := database.GetStepsByRun(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range steps {
+		if step.StepName != stepName || step.FindingsJSON == nil {
+			continue
+		}
+		findings, err := types.ParseFindingsJSON(*step.FindingsJSON)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, finding := range findings.Items {
+			if finding.Description == description {
+				return finding.ID
+			}
+		}
+	}
+	t.Fatalf("finding %q not found for %s", description, stepName)
+	return ""
+}
+
 // startExecutor runs Execute in a goroutine and cancels it during cleanup so a
 // parked step closes its log file before t.TempDir removes the tree. Windows
 // refuses unlinkat on a still-open handle; leaving Execute running after a
 // failed wait was the lint.log leak in TestExecutor_AutoFixRespectsMaxAttempts.
 func startExecutor(t *testing.T, exec *Executor, run *db.Run, repo *db.Repo, workDir string) (<-chan error, context.CancelFunc) {
 	t.Helper()
+	return startExecutorOperation(t, func(ctx context.Context) error {
+		return exec.Execute(ctx, run, repo, workDir)
+	})
+}
+
+func startResumeExecutor(t *testing.T, exec *Executor, run *db.Run, repo *db.Repo, workDir string) (<-chan error, context.CancelFunc) {
+	t.Helper()
+	return startExecutorOperation(t, func(ctx context.Context) error {
+		return exec.Resume(ctx, run, repo, workDir)
+	})
+}
+
+func startExecutorOperation(t *testing.T, run func(context.Context) error) (<-chan error, context.CancelFunc) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	var finished atomic.Bool
+	exited := make(chan struct{})
 	t.Cleanup(func() {
 		cancel()
-		if finished.Load() {
-			return
-		}
 		select {
-		case <-done:
+		case <-exited:
 		case <-time.After(10 * time.Second):
 			t.Error("executor did not return after cancel")
 		}
 	})
 	go func() {
-		err := exec.Execute(ctx, run, repo, workDir)
-		finished.Store(true)
-		done <- err
+		defer close(exited)
+		done <- run(ctx)
 	}()
 	return done, cancel
 }
@@ -267,6 +309,7 @@ func dirExists(path string) bool {
 
 type findingJSON struct {
 	ID               string `json:"id"`
+	IDGenerated      bool   `json:"id_generated"`
 	Severity         string `json:"severity"`
 	Description      string `json:"description"`
 	Source           string `json:"source"`

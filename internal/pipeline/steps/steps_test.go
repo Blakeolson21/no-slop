@@ -56,6 +56,10 @@ func handleFakeCLI(mode string) {
 		fakeGitStatusErrorHandler(args)
 	case "git-remote-error":
 		fakeGitRemoteErrorHandler(args)
+	case "git-fail-verify-after-push":
+		fakeGitFailVerifyAfterPushHandler(args)
+	case "git-fail-after-push":
+		fakeGitFailAfterPushHandler(args)
 	case "ci-gh":
 		fakeCIGHHandler(args)
 	case "ci-gh-seq":
@@ -92,7 +96,7 @@ func logFakeCLIStdinBody(args []string, logFile string) {
 
 func argsUseStdinBodyFile(args []string) bool {
 	for i := 0; i+1 < len(args); i++ {
-		if args[i] == "--body-file" && args[i+1] == "-" {
+		if (args[i] == "--body-file" || args[i] == "--input") && args[i+1] == "-" {
 			return true
 		}
 	}
@@ -126,13 +130,31 @@ func fakeGHHandler(args []string) {
 		os.Exit(0)
 	}
 	if len(args) >= 2 && args[0] == "pr" && args[1] == "view" {
+		if strings.Contains(strings.Join(args, " "), "updatedAt") {
+			updatedAt := os.Getenv("FAKE_CLI_GH_PR_UPDATED_AT")
+			if updatedAt == "" {
+				os.Exit(1)
+			}
+			fmt.Println(updatedAt)
+			os.Exit(0)
+		}
 		if prURL != "" {
 			fmt.Println(prURL)
 			os.Exit(0)
 		}
 		os.Exit(1)
 	}
-	if len(args) >= 2 && args[0] == "pr" && args[1] == "edit" {
+	if len(args) >= 2 && args[0] == "api" && args[1] == "--method" {
+		if os.Getenv("FAKE_CLI_GH_EDIT_ERROR") != "" {
+			fmt.Fprintln(os.Stderr, "injected PR update failure")
+			os.Exit(1)
+		}
+		updatedAt := os.Getenv("FAKE_CLI_GH_UPDATE_RESPONSE_AT")
+		if updatedAt == "" {
+			os.Exit(1)
+		}
+		number := extractTrailingNumber(prURL)
+		fmt.Printf("{\"number\":%d,\"html_url\":%q,\"updated_at\":%q}\n", number, prURL, updatedAt)
 		os.Exit(0)
 	}
 	if len(args) >= 2 && args[0] == "pr" && args[1] == "create" {
@@ -206,6 +228,68 @@ func fakeGitRemoteErrorHandler(args []string) {
 		os.Exit(1)
 	}
 	fakeGitForward(args, realGit)
+}
+
+func fakeGitFailVerifyAfterPushHandler(args []string) {
+	realGit := os.Getenv("FAKE_CLI_REAL_GIT")
+	marker := os.Getenv("FAKE_CLI_PUSH_MARKER")
+	if len(args) > 0 && args[0] == "ls-remote" {
+		if _, err := os.Stat(marker); err == nil {
+			fmt.Fprintln(os.Stderr, "post-push verification unavailable")
+			os.Exit(1)
+		}
+	}
+	cmd := exec.Command(realGit, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() >= 0 {
+			os.Exit(exitErr.ExitCode())
+		}
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if len(args) > 0 && args[0] == "push" {
+		if err := os.WriteFile(marker, []byte("pushed"), 0o644); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
+	os.Exit(0)
+}
+
+func fakeGitFailAfterPushHandler(args []string) {
+	realGit := os.Getenv("FAKE_CLI_REAL_GIT")
+	marker := os.Getenv("FAKE_CLI_PUSH_MARKER")
+	if len(args) > 0 && args[0] == "ls-remote" {
+		if _, err := os.Stat(marker); err == nil {
+			fmt.Fprintln(os.Stderr, "push reconciliation unavailable")
+			os.Exit(1)
+		}
+	}
+	cmd := exec.Command(realGit, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() >= 0 {
+			os.Exit(exitErr.ExitCode())
+		}
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if len(args) > 0 && args[0] == "push" {
+		if err := os.WriteFile(marker, []byte("pushed"), 0o644); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Fprintln(os.Stderr, "transport closed after remote update")
+		os.Exit(1)
+	}
+	os.Exit(0)
 }
 
 func fakeGitForward(args []string, realGit string) {
@@ -328,6 +412,14 @@ func fakeCIGHHandler(args []string) {
 	if len(args) >= 2 && args[0] == "auth" && args[1] == "status" {
 		os.Exit(0)
 	}
+	if strings.Contains(joined, "pr view") && strings.Contains(joined, "--json title,body") {
+		body := "## Pipeline\n\n" + noMistakesPRSignature + "\n\n" + pipelineAttestationCommentPrefix + `{"head_sha":"stale","steps":[]}` + pipelineAttestationCommentClosingToken
+		fmt.Printf("{\"title\":\"test\",\"body\":%s}\n", strconv.Quote(body))
+		os.Exit(0)
+	}
+	if strings.Contains(joined, "pr edit") {
+		os.Exit(0)
+	}
 	if strings.Contains(joined, "pr view") && strings.Contains(joined, "--json mergeable") {
 		if mergeableErr != "" {
 			fmt.Fprintln(os.Stderr, mergeableErr)
@@ -384,6 +476,14 @@ func fakeCIGHSequenceHandler(args []string) {
 	joined := strings.Join(args, " ")
 
 	if len(args) >= 2 && args[0] == "auth" && args[1] == "status" {
+		os.Exit(0)
+	}
+	if strings.Contains(joined, "pr view") && strings.Contains(joined, "--json title,body") {
+		body := "## Pipeline\n\n" + noMistakesPRSignature + "\n\n" + pipelineAttestationCommentPrefix + `{"head_sha":"stale","steps":[]}` + pipelineAttestationCommentClosingToken
+		fmt.Printf("{\"title\":\"test\",\"body\":%s}\n", strconv.Quote(body))
+		os.Exit(0)
+	}
+	if strings.Contains(joined, "pr edit") {
 		os.Exit(0)
 	}
 	if strings.Contains(joined, "pr view") && strings.Contains(joined, "--json mergeable") {

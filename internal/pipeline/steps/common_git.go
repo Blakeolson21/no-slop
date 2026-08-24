@@ -152,9 +152,13 @@ func normalizedBranchRef(ref string) string {
 // adoptBranchRef applies the shared branch-ref adoption policy (git.AdoptBranchRef)
 // with the step's own command environment.
 func adoptBranchRef(sctx *pipeline.StepContext, newHeadSHA string) error {
+	return adoptBranchRefFrom(sctx, newHeadSHA, sctx.Run.HeadSHA)
+}
+
+func adoptBranchRefFrom(sctx *pipeline.StepContext, newHeadSHA, currentHeadSHA string) error {
 	return git.AdoptBranchRef(func(args ...string) (string, error) {
 		return stepGitRun(sctx, args...)
-	}, sctx.Run.Branch, newHeadSHA, sctx.Run.HeadSHA)
+	}, sctx.Run.Branch, newHeadSHA, currentHeadSHA)
 }
 
 // resolveUpstreamURL returns the upstream URL to push or query. Ordinarily it

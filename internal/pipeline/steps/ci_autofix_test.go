@@ -12,6 +12,7 @@ import (
 
 	"github.com/Blakeolson21/no-slop/internal/agent"
 	"github.com/Blakeolson21/no-slop/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestCIStep_CIFailureAutoFix(t *testing.T) {
@@ -54,7 +55,7 @@ func TestCIStep_CIFailureAutoFix(t *testing.T) {
 	}
 
 	prURL := "https://github.com/test/repo/pull/42"
-	sctx := newTestContext(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Env = env
 	sctx.Run.PRURL = &prURL
 	sctx.Repo.UpstreamURL = upstream
@@ -62,22 +63,23 @@ func TestCIStep_CIFailureAutoFix(t *testing.T) {
 	sctx.UserIntent = "user wanted CI autofix to preserve the extracted intent"
 	sctx.Config.CITimeout = 30 * time.Second
 	sctx.Config.AutoFix = config.AutoFix{CI: 3}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	sctx.Ctx = ctx
+	for _, name := range []types.StepName{types.StepReview, types.StepTest, types.StepDocument} {
+		result, err := sctx.DB.InsertStepResult(sctx.Run.ID, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sctx.DB.CompleteStepWithStatusAtHead(result.ID, types.StepStatusCompleted, headSHA, 0, 1, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }
 
-	pollCount := 0
 	step := &CIStep{
 		waitForNextPoll: func(ctx context.Context, interval time.Duration) error {
-			pollCount++
-			if pollCount == 2 {
-				cancel()
-			}
-			return ctx.Err()
+			t.Fatal("CI monitor polled again after making required gate evidence stale")
+			return nil
 		},
 	}
 	outcome, err := step.Execute(sctx)
@@ -86,8 +88,8 @@ func TestCIStep_CIFailureAutoFix(t *testing.T) {
 		t.Error("expected agent to be called for CI auto-fix")
 	}
 
-	if len(ag.calls) == 0 {
-		t.Fatal("expected agent call")
+	if len(ag.calls) != 1 {
+		t.Fatalf("agent calls = %d, want exactly one CI repair", len(ag.calls))
 	}
 
 	foundAutoFix := false
@@ -99,6 +101,40 @@ func TestCIStep_CIFailureAutoFix(t *testing.T) {
 	}
 	if !foundAutoFix {
 		t.Errorf("expected issue detection in logs, got: %v", logs)
+	}
+}
+
+func TestCIStep_ManualFixWithFailingCheckRestartsValidation(t *testing.T) {
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	ag := &mockAgent{name: "test", runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
+		if err := os.WriteFile(filepath.Join(opts.CWD, "manual-ci-fix.txt"), []byte("fixed"), 0o644); err != nil {
+			return nil, err
+		}
+		return &agent.Result{Output: []byte(`{"summary":"repair manual CI failure"}`)}, nil
+	}}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Fixing = true
+	prURL := "https://github.com/test/repo/pull/42"
+	sctx.Run.PRURL = &prURL
+	sctx.Env = fakeCIGH(t, "OPEN", `[{"name":"test","state":"FAILURE","bucket":"fail"}]`)
+	sctx.Config.CITimeout = 30 * time.Second
+	for _, name := range []types.StepName{types.StepReview, types.StepTest, types.StepDocument} {
+		result, err := sctx.DB.InsertStepResult(sctx.Run.ID, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sctx.DB.CompleteStepWithStatusAtHead(result.ID, types.StepStatusCompleted, headSHA, 0, 1, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	outcome, err := (&CIStep{waitForNextPoll: func(context.Context, time.Duration) error {
+		t.Fatal("CI monitor polled after a successful manual repair")
+		return nil
+	}}).Execute(sctx)
+	assertCIRestartsValidation(t, outcome, err)
+	if len(ag.calls) != 1 {
+		t.Fatalf("manual CI repair calls = %d, want 1", len(ag.calls))
 	}
 }
 
@@ -762,7 +798,7 @@ func TestCIStep_FixMode_ManualInterventionRunsCIFix(t *testing.T) {
 	}
 
 	prURL := "https://github.com/test/repo/pull/42"
-	sctx := newTestContext(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Env = env
 	sctx.Run.PRURL = &prURL
 	sctx.Repo.UpstreamURL = upstream
@@ -772,18 +808,10 @@ func TestCIStep_FixMode_ManualInterventionRunsCIFix(t *testing.T) {
 	sctx.Fixing = true
 	sctx.PreviousFindings = string(findingsJSON)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	sctx.Ctx = ctx
-
-	pollCount := 0
 	step := &CIStep{
 		waitForNextPoll: func(ctx context.Context, interval time.Duration) error {
-			pollCount++
-			if pollCount == 2 {
-				cancel()
-			}
-			return ctx.Err()
+			t.Fatal("CI monitor polled after publishing a manual-fix head")
+			return nil
 		},
 	}
 	outcome, err := step.Execute(sctx)

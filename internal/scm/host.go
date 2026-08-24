@@ -152,6 +152,23 @@ type Check struct {
 	Link string
 }
 
+type CheckAttemptIdentity struct {
+	RunID            int64
+	RunNumber        int64
+	RunAttempt       int
+	Event            string
+	HeadSHA          string
+	PublicationNonce string
+}
+
+type CheckAttemptIdentityReader interface {
+	GetCheckAttemptIdentity(ctx context.Context, check Check) (CheckAttemptIdentity, error)
+}
+
+type AttestationPublicationIdentityReader interface {
+	FindAttestationPublicationIdentity(ctx context.Context, headSHA, publicationNonce string) (CheckAttemptIdentity, bool, error)
+}
+
 // Failing reports whether the check is in a failed bucket.
 func (c Check) Failing() bool { return c.Bucket == CheckBucketFail }
 

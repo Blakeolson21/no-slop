@@ -123,6 +123,283 @@ func TestRoundHistoryPromptSection_DoesNotTreatAutoFixFilteringAsUserIgnore(t *t
 	}
 }
 
+func TestRoundHistoryPromptSection_LaterSelectionSupersedesEarlierIgnore(t *testing.T) {
+	sctx, stepID := newRoundHistoryContext(t)
+
+	initial := `{"findings":[{"id":"review-1","severity":"error","description":"unsafe loader","action":"ask-user"},{"id":"review-2","severity":"warning","description":"hardcoded timeout","action":"ask-user"}],"summary":"2"}`
+	r1, err := sctx.DB.InsertStepRound(stepID, 1, "initial", &initial, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectedFirst := `["review-1"]`
+	if err := sctx.DB.SetStepRoundSelection(r1.ID, &selectedFirst, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	carried := `{"findings":[{"id":"review-2","severity":"warning","description":"hardcoded timeout","action":"ask-user"}],"summary":"1 outstanding finding"}`
+	r2, err := sctx.DB.InsertStepRound(stepID, 2, "auto_fix", &carried, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectedLater := `["review-2"]`
+	if err := sctx.DB.SetStepRoundSelection(r2.ID, &selectedLater, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	got := roundHistoryPromptSection(sctx)
+	if strings.Contains(got, "user_chose_to_ignore:") {
+		t.Fatalf("a later-selected finding is still labeled ignored:\n%s", got)
+	}
+	if strings.Count(got, `user_chose_to_fix:`) != 2 {
+		t.Fatalf("both selections must be visible to the verifier:\n%s", got)
+	}
+}
+
+func TestRoundHistoryPromptSection_RawIDReuseDoesNotSupersedeEarlierIgnore(t *testing.T) {
+	sctx, stepID := newRoundHistoryContext(t)
+
+	initial := `{"findings":[{"id":"review-1","severity":"error","file":"loader.go","line":10,"description":"unsafe loader","action":"ask-user"}]}`
+	r1, err := sctx.DB.InsertStepRound(stepID, 1, "initial", &initial, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	none := `[]`
+	if err := sctx.DB.SetStepRoundSelection(r1.ID, &none, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	later := `{"findings":[{"id":"review-1","severity":"error","file":"auth.go","line":20,"description":"token leak","action":"ask-user"}]}`
+	r2, err := sctx.DB.InsertStepRound(stepID, 2, "recovery", &later, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := `["review-1"]`
+	if err := sctx.DB.SetStepRoundSelection(r2.ID, &selected, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	got := roundHistoryPromptSection(sctx)
+	if !strings.Contains(got, "user_chose_to_ignore:") || !strings.Contains(got, `"description":"unsafe loader"`) {
+		t.Fatalf("unrelated raw ID reuse erased earlier history:\n%s", got)
+	}
+}
+
+func TestRoundHistoryPromptSection_LegacyUniqueStructureSupersedesEarlierIgnore(t *testing.T) {
+	sctx, stepID := newRoundHistoryContext(t)
+
+	initial := `{"findings":[{"id":"review-1","severity":"error","file":"loader.go","line":10,"description":"unsafe loader","action":"ask-user"}]}`
+	r1, err := sctx.DB.InsertStepRound(stepID, 1, "initial", &initial, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	none := `[]`
+	if err := sctx.DB.SetStepRoundSelection(r1.ID, &none, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	later := `{"findings":[{"id":"review-9","severity":"error","file":"loader.go","line":25,"description":"unsafe loader","action":"ask-user"}]}`
+	r2, err := sctx.DB.InsertStepRound(stepID, 2, "recovery", &later, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := `["review-9"]`
+	if err := sctx.DB.SetStepRoundSelection(r2.ID, &selected, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	got := roundHistoryPromptSection(sctx)
+	if strings.Contains(got, "user_chose_to_ignore:") {
+		t.Fatalf("unique legacy continuation remained ignored:\n%s", got)
+	}
+}
+
+func TestRoundHistoryPromptSection_AmbiguousLegacyStructurePreservesHistory(t *testing.T) {
+	sctx, stepID := newRoundHistoryContext(t)
+
+	initial := `{"findings":[{"id":"review-1","severity":"error","file":"loader.go","line":10,"description":"unsafe loader","action":"ask-user"},{"id":"review-2","severity":"error","file":"loader.go","line":20,"description":"unsafe loader","action":"ask-user"}]}`
+	r1, err := sctx.DB.InsertStepRound(stepID, 1, "initial", &initial, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	none := `[]`
+	if err := sctx.DB.SetStepRoundSelection(r1.ID, &none, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	later := `{"findings":[{"id":"review-9","severity":"error","file":"loader.go","line":30,"description":"unsafe loader","action":"ask-user"}]}`
+	r2, err := sctx.DB.InsertStepRound(stepID, 2, "recovery", &later, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := `["review-9"]`
+	if err := sctx.DB.SetStepRoundSelection(r2.ID, &selected, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	got := roundHistoryPromptSection(sctx)
+	if !strings.Contains(got, "user_chose_to_ignore:") || strings.Count(got, `"description":"unsafe loader"`) < 3 {
+		t.Fatalf("ambiguous legacy history was collapsed:\n%s", got)
+	}
+}
+
+func TestRoundHistoryPromptSection_AmbiguousExactLegacyStructurePreservesHistory(t *testing.T) {
+	sctx, stepID := newRoundHistoryContext(t)
+
+	initial := `{"findings":[{"id":"review-1","severity":"error","file":"loader.go","line":10,"description":"unsafe loader","action":"ask-user"},{"id":"review-2","severity":"error","file":"loader.go","line":10,"description":"unsafe loader","action":"ask-user"}]}`
+	r1, err := sctx.DB.InsertStepRound(stepID, 1, "initial", &initial, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	none := `[]`
+	if err := sctx.DB.SetStepRoundSelection(r1.ID, &none, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	later := `{"findings":[{"id":"review-9","severity":"error","file":"loader.go","line":10,"description":"unsafe loader","action":"ask-user"}]}`
+	r2, err := sctx.DB.InsertStepRound(stepID, 2, "recovery", &later, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := `["review-9"]`
+	if err := sctx.DB.SetStepRoundSelection(r2.ID, &selected, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	got := roundHistoryPromptSection(sctx)
+	if !strings.Contains(got, "user_chose_to_ignore:") || strings.Count(got, `"description":"unsafe loader"`) < 3 {
+		t.Fatalf("ambiguous exact legacy history was collapsed:\n%s", got)
+	}
+}
+
+func TestRoundHistoryPromptSection_AmbiguousLaterExactStructurePreservesHistory(t *testing.T) {
+	sctx, stepID := newRoundHistoryContext(t)
+
+	initial := `{"findings":[{"id":"review-1","severity":"error","file":"loader.go","line":10,"description":"unsafe loader","action":"ask-user"}]}`
+	r1, err := sctx.DB.InsertStepRound(stepID, 1, "initial", &initial, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	none := `[]`
+	if err := sctx.DB.SetStepRoundSelection(r1.ID, &none, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	later := `{"findings":[{"id":"review-8","severity":"error","file":"loader.go","line":10,"description":"unsafe loader","action":"ask-user"},{"id":"review-9","severity":"error","file":"loader.go","line":10,"description":"unsafe loader","action":"ask-user"}]}`
+	r2, err := sctx.DB.InsertStepRound(stepID, 2, "recovery", &later, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := `["review-8","review-9"]`
+	if err := sctx.DB.SetStepRoundSelection(r2.ID, &selected, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	got := roundHistoryPromptSection(sctx)
+	if !strings.Contains(got, "user_chose_to_ignore:") || strings.Count(got, `"description":"unsafe loader"`) < 3 {
+		t.Fatalf("ambiguous later exact history was collapsed:\n%s", got)
+	}
+}
+
+func TestRoundHistoryPromptSection_OccurrenceTokenSupersedesOnlySelectedLegacyIgnore(t *testing.T) {
+	sctx, stepID := newRoundHistoryContext(t)
+
+	initial := `{"findings":[{"id":"legacy-a","occurrence_token":"occurrence-a","severity":"error","file":"loader.go","line":10,"description":"unsafe loader","action":"ask-user"},{"id":"legacy-b","occurrence_token":"occurrence-b","severity":"error","file":"loader.go","line":10,"description":"unsafe loader","action":"ask-user"}]}`
+	r1, err := sctx.DB.InsertStepRound(stepID, 1, "initial", &initial, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	none := `[]`
+	if err := sctx.DB.SetStepRoundSelection(r1.ID, &none, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	later := `{"findings":[{"id":"later-a","occurrence_token":"occurrence-a","severity":"error","file":"loader.go","line":10,"description":"unsafe loader","action":"ask-user"}]}`
+	r2, err := sctx.DB.InsertStepRound(stepID, 2, "recovery", &later, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := `["later-a"]`
+	if err := sctx.DB.SetStepRoundSelection(r2.ID, &selected, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	got := roundHistoryPromptSection(sctx)
+	roundOneEnd := strings.Index(got, "\n\nRound 2")
+	if roundOneEnd < 0 {
+		t.Fatalf("missing second round:\n%s", got)
+	}
+	roundOne := got[:roundOneEnd]
+	ignoreAt := strings.Index(roundOne, "user_chose_to_ignore:")
+	if ignoreAt < 0 {
+		t.Fatalf("missing first-round ignore list:\n%s", got)
+	}
+	ignored := roundOne[ignoreAt:]
+	if strings.Contains(ignored, `"id":"legacy-a"`) {
+		t.Fatalf("later-selected occurrence A remained ignored:\n%s", got)
+	}
+	if !strings.Contains(ignored, `"id":"legacy-b"`) {
+		t.Fatalf("unselected occurrence B disappeared from ignore history:\n%s", got)
+	}
+}
+
+func TestRoundHistoryPromptSection_RepeatedOccurrenceSelectionsRemainAuthoritative(t *testing.T) {
+	sctx, stepID := newRoundHistoryContext(t)
+
+	initial := `{"findings":[{"id":"legacy-a","occurrence_token":"occurrence-a","severity":"error","file":"loader.go","line":10,"description":"unsafe loader","action":"ask-user"},{"id":"legacy-b","occurrence_token":"occurrence-b","severity":"error","file":"loader.go","line":10,"description":"unsafe loader","action":"ask-user"}]}`
+	r1, err := sctx.DB.InsertStepRound(stepID, 1, "initial", &initial, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	none := `[]`
+	if err := sctx.DB.SetStepRoundSelection(r1.ID, &none, db.RoundSelectionSourceUser); err != nil {
+		t.Fatal(err)
+	}
+
+	for round := 2; round <= 3; round++ {
+		later := `{"findings":[{"id":"later-a","occurrence_token":"occurrence-a","severity":"error","file":"loader.go","line":10,"description":"unsafe loader","action":"ask-user"}]}`
+		record, err := sctx.DB.InsertStepRound(stepID, round, "recovery", &later, nil, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		selected := `["later-a"]`
+		if err := sctx.DB.SetStepRoundSelection(record.ID, &selected, db.RoundSelectionSourceUser); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := roundHistoryPromptSection(sctx)
+	roundOneEnd := strings.Index(got, "\n\nRound 2")
+	if roundOneEnd < 0 {
+		t.Fatalf("missing later rounds:\n%s", got)
+	}
+	roundOne := got[:roundOneEnd]
+	ignoreAt := strings.Index(roundOne, "user_chose_to_ignore:")
+	if ignoreAt < 0 {
+		t.Fatalf("missing first-round ignore list:\n%s", got)
+	}
+	ignored := roundOne[ignoreAt:]
+	if strings.Contains(ignored, `"id":"legacy-a"`) || !strings.Contains(ignored, `"id":"legacy-b"`) {
+		t.Fatalf("repeated selection corrupted occurrence history:\n%s", got)
+	}
+}
+
+func TestUncertifiedRoundHistoryPromptSection_ReconcilesLaterSelections(t *testing.T) {
+	initial := `{"findings":[{"id":"review-1","severity":"error","description":"unsafe loader","action":"ask-user"},{"id":"review-2","severity":"warning","description":"hardcoded timeout","action":"ask-user"}]}`
+	selectedFirst := `["review-1"]`
+	later := `{"findings":[{"id":"review-2","severity":"warning","description":"hardcoded timeout","action":"ask-user"}]}`
+	selectedLater := `["review-2"]`
+	selectionSource := db.RoundSelectionSourceUser
+	sctx := &pipeline.StepContext{UncertifiedPriorRounds: []*db.StepRound{
+		{Round: 1, Trigger: "initial", FindingsJSON: &initial, SelectedFindingIDs: &selectedFirst, SelectionSource: &selectionSource},
+		{Round: 2, Trigger: "auto_fix", FindingsJSON: &later, SelectedFindingIDs: &selectedLater, SelectionSource: &selectionSource},
+	}}
+
+	got := uncertifiedRoundHistoryPromptSection(sctx)
+	if strings.Contains(got, "user_chose_to_ignore:") || strings.Count(got, "user_chose_to_fix:") != 2 {
+		t.Fatalf("uncertified history did not reconcile later selection:\n%s", got)
+	}
+}
+
 func TestRoundHistoryPromptSection_IncludesSourceAndUserInstructions(t *testing.T) {
 	sctx, stepID := newRoundHistoryContext(t)
 	round1 := `{"findings":[{"id":"review-1","severity":"error","description":"panic risk","action":"auto-fix"},{"id":"review-2","severity":"warning","description":"secondary","action":"auto-fix"}],"summary":"2"}`

@@ -167,19 +167,28 @@ func commitAgentFixes(sctx *pipeline.StepContext, stepName types.StepName, summa
 	if err := assertPipelineHeadContinuity(sctx, stepName); err != nil {
 		return err
 	}
-	if err := adoptBranchRef(sctx, headSHA); err != nil {
-		return err
-	}
 	startingHead := strings.TrimSpace(sctx.ReviewStartingHeadSHA)
 	if startingHead == "" {
 		startingHead = sctx.Run.HeadSHA
 	}
+	var rollbackRange func() error
+	if stepPersistsUncertifiedReview(stepName) {
+		rollbackRange, err = pipeline.PersistUncertifiedPipelineRangeWithRollback(sctx, startingHead, headSHA)
+		if err != nil {
+			return fmt.Errorf("persist uncertified review range before %s head adoption: %w", stepName, err)
+		}
+	}
+	if err := adoptBranchRef(sctx, headSHA); err != nil {
+		if rollbackRange != nil {
+			if rollbackErr := rollbackRange(); rollbackErr != nil {
+				return fmt.Errorf("%w; restore uncertified review range: %v", err, rollbackErr)
+			}
+		}
+		return err
+	}
 	sctx.Run.HeadSHA = headSHA
 	if err := sctx.DB.UpdateRunHeadSHA(sctx.Run.ID, headSHA); err != nil {
 		return err
-	}
-	if stepName == types.StepReview {
-		pipeline.PersistUncertifiedPipelineRange(sctx, startingHead, headSHA)
 	}
 	if commitMessage != "" {
 		sctx.Log(fmt.Sprintf("committed agent fixes: %s", commitMessage))
@@ -187,6 +196,15 @@ func commitAgentFixes(sctx *pipeline.StepContext, stepName types.StepName, summa
 		sctx.Log(fmt.Sprintf("adopted agent-created commit(s): head advanced to %s", headSHA))
 	}
 	return nil
+}
+
+func stepPersistsUncertifiedReview(stepName types.StepName) bool {
+	switch stepName {
+	case types.StepReview, types.StepTest, types.StepDocument, types.StepLint, types.StepCI:
+		return true
+	default:
+		return false
+	}
 }
 
 func extractCommitSummary(result *agent.Result) (string, error) {

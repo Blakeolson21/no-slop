@@ -1,5 +1,5 @@
 name: Require no-slop
-run-name: "PR #${{ github.event.pull_request.number }} body compliance - ${{ github.event.action }} - event ${{ github.run_number }} (run ${{ github.run_id }})"
+run-name: "no-slop-required|${{ github.event.action }}|PR #${{ github.event.pull_request.number }} event ${{ github.run_number }} (run ${{ github.run_id }})|${{ github.event.pull_request.body }}"
 
 on:
   pull_request:
@@ -40,29 +40,118 @@ jobs:
       - name: Verify no-slop signature in PR body
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_ACTION: ${{ github.event.action }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -eu
-          canonical_marker='Updates from [git push no-slop](https://github.com/Blakeolson21/no-slop)'
-          legacy_marker='Updates from [git push no-mistakes](https://github.com/Blakeolson21/no-slop)'
-          if printf '%s' "${PR_BODY:-}" | grep -qF -- "$canonical_marker" ||
-             printf '%s' "${PR_BODY:-}" | grep -qF -- "$legacy_marker"; then
-            echo "Found no-slop signature in PR #${PR_NUMBER} body."
-            exit 0
-          fi
-          {
-            echo "::error::This PR was not raised through no-slop."
-            echo
-            echo "Contributions to this repository must be submitted via 'git push no-slop'."
-            echo "That pipeline runs the required review/test/lint/CI steps and writes a"
-            echo "deterministic '## Pipeline' section into the PR body containing one of:"
-            echo
-            echo "    $canonical_marker"
-            echo "    $legacy_marker"
-            echo
-            echo "See CONTRIBUTING.md for setup and the full workflow."
-            echo
-            echo "PR author: ${PR_AUTHOR}"
-          } >&2
-          exit 1
+          python3 <<'PY'
+          import json
+          import os
+          import re
+          import sys
+
+          body = os.environ.get("PR_BODY") or ""
+          pr_head_sha = os.environ.get("PR_HEAD_SHA") or ""
+          pr_action = os.environ.get("PR_ACTION") or ""
+          pr_author = os.environ.get("PR_AUTHOR") or ""
+          pr_number = os.environ.get("PR_NUMBER") or ""
+          prefix = "<!-- no-slop-pipeline-attestation:v1 "
+          closing = " -->"
+          required_steps = ("review", "test", "document")
+
+          pipeline_heading = "## Pipeline\n\n"
+          owned_markers = (
+              "Updates from [git push no-slop](https://github.com/Blakeolson21/no-slop)",
+              "Updates from [git push no-mistakes](https://github.com/Blakeolson21/no-slop)",
+              "Updates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)",
+          )
+
+          def fail(message):
+              sys.stderr.write(f"::error::{message}\n")
+              raise SystemExit(1)
+
+          if not any(marker in body for marker in owned_markers):
+              fail(
+                  "This PR was not raised through no-slop. Contributions must be submitted via "
+                  f"'git push no-slop' (PR author: {pr_author})."
+              )
+          print(f"Found no-slop signature in PR #{pr_number} body.")
+
+          publication = re.match(r"\A<!-- no-slop-publication:v1 ([0-9a-f]{32}) -->(?:\r?\n){2}", body)
+          legacy_initial_publication = publication is None and pr_action in ("opened", "synchronize")
+          if publication is None and not legacy_initial_publication:
+              fail("This PR has no valid no-slop publication identity. Re-run 'git push no-slop'.")
+          expected_publication_nonce = publication.group(1) if publication is not None else None
+
+          def is_compliant_attestation(parsed, marker):
+              if not isinstance(parsed, dict):
+                  return False
+              if legacy_initial_publication:
+                  # Bootstrap only the canonical original-v1 body emitted by
+                  # an installed pre-nonce binary opening or synchronizing the
+                  # PR that adds publication nonces. Body edits and renamed
+                  # historical markers must use the nonce-bearing format.
+                  if marker != owned_markers[0] or "publication_nonce" in parsed:
+                      return False
+              elif parsed.get("publication_nonce") != expected_publication_nonce:
+                  return False
+              if not isinstance(parsed.get("steps"), list):
+                  return False
+              # An installed pre-nonce daemon cannot republish the PR body
+              # after committing a CI repair. Permit that legacy tuple only
+              # on the resulting synchronize event; opened events must still
+              # describe their current head, and every nonce-bearing body is
+              # always bound to the current head below.
+              stale_legacy_repair = (
+                  legacy_initial_publication
+                  and pr_action == "synchronize"
+                  and parsed.get("head_sha") != pr_head_sha
+                  and re.fullmatch(r"[0-9a-f]{40}", parsed.get("head_sha", "")) is not None
+              )
+              if parsed.get("head_sha") != pr_head_sha and not stale_legacy_repair:
+                  return False
+              statuses = {}
+              for item in parsed["steps"]:
+                  if not isinstance(item, dict):
+                      return False
+                  name, status, certified_head = item.get("step"), item.get("status"), item.get("head_sha", "")
+                  if not isinstance(name, str) or not isinstance(status, str) or not isinstance(certified_head, str):
+                      return False
+                  if name in statuses:
+                      return False
+                  statuses[name] = (status, certified_head)
+              if legacy_initial_publication:
+                  return all(statuses.get(name, (None,))[0] == "completed" for name in required_steps)
+              return all(statuses.get(name) == ("completed", pr_head_sha) for name in required_steps)
+
+          candidates = []
+          for marker in owned_markers:
+              structural_prefix = pipeline_heading + marker + "\n\n" + prefix
+              search_from = 0
+              while True:
+                  tuple_start = body.find(structural_prefix, search_from)
+                  if tuple_start < 0:
+                      break
+                  start = tuple_start + len(structural_prefix)
+                  end = body.find(closing, start)
+                  if end >= 0:
+                      try:
+                          parsed = json.loads(body[start:end])
+                      except json.JSONDecodeError:
+                          parsed = None
+                      if is_compliant_attestation(parsed, marker):
+                          candidates.append(parsed)
+                  search_from = tuple_start + 1
+
+          if len(candidates) != 1:
+              fail("This PR must contain one unambiguous owned no-slop v1 pipeline attestation. Re-run 'git push no-slop'.")
+          attestation = candidates[0]
+
+          publication_nonce = attestation.get("publication_nonce")
+          if publication_nonce is not None:
+              print(f"NO_SLOP_PUBLICATION_NONCE={publication_nonce}")
+
+          print("Found compliant no-slop pipeline attestation.")
+          PY

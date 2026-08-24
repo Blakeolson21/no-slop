@@ -12,14 +12,22 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
+type ciFixResult struct {
+	PreviousHeadSHA string
+	HeadSHA         string
+	HeadPersisted   bool
+}
+
+func (r ciFixResult) HeadChanged() bool {
+	return r.HeadSHA != "" && r.HeadSHA != r.PreviousHeadSHA
+}
+
 // autoFixCI runs the agent to fix CI failures and/or merge conflicts, then
 // commits the repair locally for a new validation cycle.
-// Returns (true, nil) when the local head changed, (false, nil)
-// when the agent produced no changes, or (false, err) on failure.
-func (s *CIStep) autoFixCI(sctx *pipeline.StepContext, host scm.Host, pr *scm.PR, failingNames []string, mergeConflict bool) (bool, error) {
+func (s *CIStep) autoFixCI(sctx *pipeline.StepContext, host scm.Host, pr *scm.PR, failingNames []string, mergeConflict bool) (ciFixResult, error) {
 	ctx := sctx.Ctx
 	if err := sctx.DB.SetRunPushActive(sctx.Run.ID, true); err != nil {
-		return false, err
+		return ciFixResult{}, err
 	}
 	defer func() { _ = sctx.DB.SetRunPushActive(sctx.Run.ID, false) }()
 	baseSHA := resolveBranchBaseSHA(ctx, sctx.WorkDir, sctx.Run.BaseSHA, sctx.Repo.DefaultBranch)
@@ -110,14 +118,24 @@ CI logs:
 		OnChunk:    sctx.LogChunk,
 	})
 	if err != nil {
-		return false, fmt.Errorf("agent CI fix: %w", err)
+		return ciFixResult{}, fmt.Errorf("agent CI fix: %w", err)
 	}
 
+	previousHeadSHA := sctx.Run.HeadSHA
 	summary, summaryErr := extractCommitSummary(result)
 	if summaryErr != nil {
 		sctx.Log(fmt.Sprintf("warning: could not parse CI repair summary: %v", summaryErr))
 	}
-	return s.commitRepair(sctx, summary)
+	_, err = s.commitRepair(sctx, summary)
+	fixResult := ciFixResult{PreviousHeadSHA: previousHeadSHA, HeadSHA: sctx.Run.HeadSHA}
+	if fixResult.HeadChanged() {
+		persisted, getErr := sctx.DB.GetRun(sctx.Run.ID)
+		fixResult.HeadPersisted = getErr == nil && persisted != nil && persisted.HeadSHA == fixResult.HeadSHA
+	}
+	if err != nil {
+		return fixResult, err
+	}
+	return fixResult, nil
 }
 
 // commitAndPush retains its historical name as the narrow test seam. CI repair
@@ -163,7 +181,14 @@ func (s *CIStep) commitRepair(sctx *pipeline.StepContext, summary string) (bool,
 }
 
 func (s *CIStep) recordLocalRepair(sctx *pipeline.StepContext, newHeadSHA string) (bool, error) {
+	rollbackRange, err := pipeline.PersistUncertifiedPipelineRangeWithRollback(sctx, sctx.Run.HeadSHA, newHeadSHA)
+	if err != nil {
+		return false, fmt.Errorf("persist uncertified review range before CI head adoption: %w", err)
+	}
 	if err := adoptBranchRef(sctx, newHeadSHA); err != nil {
+		if rollbackErr := rollbackRange(); rollbackErr != nil {
+			return false, fmt.Errorf("%w; restore uncertified review range: %v", err, rollbackErr)
+		}
 		return false, err
 	}
 	sctx.Run.HeadSHA = newHeadSHA

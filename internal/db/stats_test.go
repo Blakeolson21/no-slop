@@ -97,6 +97,42 @@ func TestGetStatsFallsBackToStepFindingsWhenRoundsAreMissing(t *testing.T) {
 	}
 }
 
+func TestStepFindingStatsCountsUniqueUserLineageUntilRereview(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/repo/user-findings", "git@example.com:user-findings.git", "main")
+	run, _ := d.InsertRun(repo.ID, "user-findings", "head", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepReview)
+	initial := `{"findings":[{"id":"review-a","id_generated":true,"continuity_token":"token-a","severity":"warning","description":"agent defect","action":"auto-fix"}]}`
+	round, err := d.InsertStepRound(step.ID, 1, "initial", &initial, nil, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userSelection := `{"findings":[{"id":"review-a","id_generated":true,"continuity_token":"token-a","severity":"warning","description":"agent defect","action":"auto-fix"},{"id":"user-1","id_generated":true,"continuity_token":"token-user","severity":"error","description":"operator defect","action":"auto-fix","source":"user"}]}`
+	selected := `["review-a","user-1"]`
+	if err := d.SetStepRoundUserDecision(round.ID, &selected, RoundSelectionSourceUser, &userSelection); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := d.StepFindingStats(step)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ReportedFindings != 2 || stats.FixedFindings != 0 {
+		t.Fatalf("pre-rereview stats = reported %d fixed %d, want 2/0", stats.ReportedFindings, stats.FixedFindings)
+	}
+
+	if _, err := d.InsertStepRound(step.ID, 2, "user_fix", nil, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+	stats, err = d.StepFindingStats(step)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ReportedFindings != 2 || stats.FixedFindings != 2 {
+		t.Fatalf("post-rereview stats = reported %d fixed %d, want 2/2", stats.ReportedFindings, stats.FixedFindings)
+	}
+}
+
 func TestFixedFindingsByStepCountsResolvedRoundFindings(t *testing.T) {
 	d := openTestDB(t)
 	repo, _ := d.InsertRepo("/repo/fixes", "git@example.com:fixes.git", "main")
@@ -164,6 +200,218 @@ func TestStepFindingStatsAddsNewFindingsToTotal(t *testing.T) {
 	}
 	if stats.ReportedFindings != 4 || stats.FixedFindings != 2 {
 		t.Fatalf("stats = reported %d fixed %d, want reported 4 fixed 2", stats.ReportedFindings, stats.FixedFindings)
+	}
+}
+
+func TestStepFindingStatsTreatsReclassificationAsSameFinding(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/repo/reclassified", "git@example.com:reclassified.git", "main")
+	run, _ := d.InsertRun(repo.ID, "reclassified", "head", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepReview)
+	initial := `{"findings":[{"id":"r1","severity":"warning","file":"loader.go","line":12,"description":"unsafe loader","action":"ask-user","review_scope":"source","category":"documentation"}],"summary":"one"}`
+	final := `{"findings":[{"id":"r1","severity":"error","file":"loader.go","line":12,"description":"unsafe loader","action":"ask-user","review_scope":"external-delivery","category":"lint"}],"summary":"one"}`
+	if _, err := d.InsertStepRound(step.ID, 1, "initial", &initial, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.InsertStepRound(step.ID, 2, "auto_fix", &final, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := d.StepFindingStats(step)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ReportedFindings != 1 || stats.FixedFindings != 0 {
+		t.Fatalf("stats = reported %d fixed %d", stats.ReportedFindings, stats.FixedFindings)
+	}
+}
+
+func TestStepFindingStatsTreatsUniqueLineShiftAsSameFinding(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/repo/shifted", "git@example.com:shifted.git", "main")
+	run, _ := d.InsertRun(repo.ID, "shifted", "head", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepReview)
+	initial := `{"findings":[{"id":"r1","severity":"warning","file":"loader.go","line":8,"description":"unsafe loader"}]}`
+	final := `{"findings":[{"id":"r1","severity":"warning","file":"loader.go","line":9,"description":"unsafe loader"}]}`
+	if _, err := d.InsertStepRound(step.ID, 1, "initial", &initial, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.InsertStepRound(step.ID, 2, "auto_fix", &final, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := d.StepFindingStats(step)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ReportedFindings != 1 || stats.FixedFindings != 0 {
+		t.Fatalf("stats = reported %d fixed %d", stats.ReportedFindings, stats.FixedFindings)
+	}
+}
+
+func TestStepFindingStatsDoesNotTrustTokenlessGeneratedID(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/repo/rephrased", "git@example.com:rephrased.git", "main")
+	run, _ := d.InsertRun(repo.ID, "rephrased", "head", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepReview)
+	initial := `{"findings":[{"id":"review-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","id_generated":true,"severity":"warning","file":"loader.go","line":8,"description":"unsafe loader"}]}`
+	final := `{"findings":[{"id":"review-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","id_generated":true,"severity":"error","file":"manager.go","line":88,"description":"credentials are invalidated prematurely"}]}`
+	if _, err := d.InsertStepRound(step.ID, 1, "initial", &initial, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.InsertStepRound(step.ID, 2, "auto_fix", &final, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := d.StepFindingStats(step)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ReportedFindings != 2 || stats.FixedFindings != 1 {
+		t.Fatalf("stats = reported %d fixed %d", stats.ReportedFindings, stats.FixedFindings)
+	}
+}
+
+func TestStepFindingStatsDoesNotInventAmbiguousLegacyContinuity(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/repo/legacy-multiplicity", "git@example.com:legacy-multiplicity.git", "main")
+	run, _ := d.InsertRun(repo.ID, "legacy-multiplicity", "head", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepReview)
+	findings := `{"findings":[{"id":"legacy-a","severity":"warning","file":"loader.go","line":8,"description":"unsafe loader"},{"id":"legacy-b","severity":"warning","file":"loader.go","line":8,"description":"unsafe loader"}]}`
+	if _, err := d.InsertStepRound(step.ID, 1, "initial", &findings, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.InsertStepRound(step.ID, 2, "auto_fix", &findings, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := d.StepFindingStats(step)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ReportedFindings != 4 || stats.FixedFindings != 2 {
+		t.Fatalf("stats = reported %d fixed %d", stats.ReportedFindings, stats.FixedFindings)
+	}
+}
+
+func TestStepFindingStatsClosesLegacyOccurrencesAcrossEmptyRound(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/repo/legacy-gap", "git@example.com:legacy-gap.git", "main")
+	run, _ := d.InsertRun(repo.ID, "legacy-gap", "head", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepReview)
+	findings := `{"findings":[{"id":"legacy-a","severity":"warning","file":"loader.go","line":8,"description":"unsafe loader"},{"id":"legacy-b","severity":"warning","file":"loader.go","line":8,"description":"unsafe loader"}]}`
+	empty := `{"findings":[]}`
+	if _, err := d.InsertStepRound(step.ID, 1, "initial", &findings, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.InsertStepRound(step.ID, 2, "auto_fix", &empty, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.InsertStepRound(step.ID, 3, "auto_fix", &findings, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := d.StepFindingStats(step)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ReportedFindings != 4 || stats.FixedFindings != 2 {
+		t.Fatalf("stats = reported %d fixed %d, want 4/2", stats.ReportedFindings, stats.FixedFindings)
+	}
+}
+
+func TestStepFindingStatsDoesNotCollapseUncorroboratedExplicitID(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/repo/id-collision", "git@example.com:id-collision.git", "main")
+	run, _ := d.InsertRun(repo.ID, "id-collision", "head", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepReview)
+	initial := `{"findings":[{"id":"review-1","severity":"warning","file":"loader.go","line":8,"description":"unsafe loader"}]}`
+	final := `{"findings":[{"id":"review-1","severity":"error","file":"loader.go","line":8,"description":"cache write can deadlock"}]}`
+	if _, err := d.InsertStepRound(step.ID, 1, "initial", &initial, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.InsertStepRound(step.ID, 2, "auto_fix", &final, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := d.StepFindingStats(step)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ReportedFindings != 2 || stats.FixedFindings != 1 {
+		t.Fatalf("stats = reported %d fixed %d", stats.ReportedFindings, stats.FixedFindings)
+	}
+}
+
+func TestStepFindingStatsCountsDistinctGeneratedLineagesWithIdenticalContent(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/repo/distinct-lineages", "git@example.com:distinct.git", "main")
+	run, _ := d.InsertRun(repo.ID, "distinct", "head", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepReview)
+	initial := `{"findings":[{"id":"review-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","id_generated":true,"continuity_token":"token-a","severity":"warning","file":"loader.go","line":8,"description":"unsafe loader"},{"id":"review-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","id_generated":true,"continuity_token":"token-b","severity":"warning","file":"loader.go","line":8,"description":"unsafe loader"}]}`
+	if _, err := d.InsertStepRound(step.ID, 1, "initial", &initial, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.InsertStepRound(step.ID, 2, "auto_fix", &initial, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := d.StepFindingStats(step)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ReportedFindings != 2 || stats.FixedFindings != 0 {
+		t.Fatalf("stats = reported %d fixed %d", stats.ReportedFindings, stats.FixedFindings)
+	}
+}
+
+func TestStepFindingStatsPreservesLegacyIdentityForNonReviewSteps(t *testing.T) {
+	for _, stepName := range []types.StepName{types.StepTest, types.StepDocument, types.StepLint} {
+		t.Run(string(stepName), func(t *testing.T) {
+			d := openTestDB(t)
+			repo, _ := d.InsertRepo("/repo/non-review-"+string(stepName), "git@example.com:non-review.git", "main")
+			run, _ := d.InsertRun(repo.ID, "non-review", "head", "base")
+			step, _ := d.InsertStepResult(run.ID, stepName)
+			initial := `{"findings":[{"id":"first-generated-id","id_generated":true,"continuity_token":"token-a","severity":"warning","file":"loader.go","line":8,"description":"unsafe loader"}]}`
+			final := `{"findings":[{"id":"second-generated-id","id_generated":true,"continuity_token":"token-b","severity":"warning","file":"loader.go","line":8,"description":"unsafe loader"}]}`
+			if _, err := d.InsertStepRound(step.ID, 1, "initial", &initial, nil, 100); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := d.InsertStepRound(step.ID, 2, "auto_fix", &final, nil, 100); err != nil {
+				t.Fatal(err)
+			}
+
+			stats, err := d.StepFindingStats(step)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stats.ReportedFindings != 1 || stats.FixedFindings != 0 {
+				t.Fatalf("stats = reported %d fixed %d", stats.ReportedFindings, stats.FixedFindings)
+			}
+		})
+	}
+}
+
+func TestStepFindingStatsCountsNonReviewReclassificationAsNewFinding(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/repo/non-review-reclassification", "git@example.com:non-review.git", "main")
+	run, _ := d.InsertRun(repo.ID, "non-review", "head", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepTest)
+	initial := `{"findings":[{"id":"first-id","severity":"warning","file":"loader.go","line":8,"description":"unsafe loader","action":"auto-fix","review_scope":"source"}]}`
+	final := `{"findings":[{"id":"second-id","severity":"error","file":"loader.go","line":8,"description":"unsafe loader","action":"ask-user","review_scope":"external-delivery"}]}`
+	if _, err := d.InsertStepRound(step.ID, 1, "initial", &initial, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.InsertStepRound(step.ID, 2, "auto_fix", &final, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := d.StepFindingStats(step)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ReportedFindings != 2 || stats.FixedFindings != 1 {
+		t.Fatalf("stats = reported %d fixed %d, want 2/1", stats.ReportedFindings, stats.FixedFindings)
 	}
 }
 

@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -139,7 +140,7 @@ func TestExecutor_ResumeRestoresParkedGateAndReviewSessions(t *testing.T) {
 	if err := database.SetStepFindings(stepResult.ID, findings); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.InsertReviewStepRound(stepResult.ID, 1, "initial", &findings, nil, "1111111111111111111111111111111111111111", 25); err != nil {
+	if _, err := database.InsertReviewStepRound(stepResult.ID, 1, "initial", &findings, nil, run.HeadSHA, 25); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpdateStepStatusWithDuration(stepResult.ID, types.StepStatusAwaitingApproval, 25); err != nil {
@@ -174,7 +175,7 @@ func TestExecutor_ResumeRestoresParkedGateAndReviewSessions(t *testing.T) {
 			if _, err := sctx.Agent.Run(sctx.Ctx, agent.RunOpts{Prompt: "rereview"}); err != nil {
 				return nil, err
 			}
-			return &StepOutcome{ReviewApprovedHeadSHA: "2222222222222222222222222222222222222222"}, nil
+			return &StepOutcome{ReviewApprovedHeadSHA: run.HeadSHA}, nil
 		},
 	}
 	exec := NewExecutor(database, p, &config.Config{SessionReuse: true}, fake, []Step{step}, nil)
@@ -221,8 +222,76 @@ func TestExecutor_ResumeRestoresParkedGateAndReviewSessions(t *testing.T) {
 	if resumed.Status != types.RunCompleted || resumed.AwaitingAgentSince != nil {
 		t.Fatalf("recovered run = status %s awaiting %v, want completed and unparked", resumed.Status, resumed.AwaitingAgentSince)
 	}
-	if resumed.ReviewApprovedHeadSHA == nil || *resumed.ReviewApprovedHeadSHA != "2222222222222222222222222222222222222222" {
+	if resumed.ReviewApprovedHeadSHA == nil || *resumed.ReviewApprovedHeadSHA != run.HeadSHA {
 		t.Fatalf("recovered rereview approval = %#v", resumed.ReviewApprovedHeadSHA)
+	}
+}
+
+func TestExecutor_ResumeCarriesUnselectedReviewFinding(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	if err := database.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+	stepResult, err := database.InsertStepResult(run.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.StartStep(stepResult.ID); err != nil {
+		t.Fatal(err)
+	}
+	findings := `{"findings":[{"id":"review-1","severity":"error","description":"selected","action":"ask-user"},{"id":"review-2","severity":"warning","description":"must survive","action":"ask-user"}],"summary":"2"}`
+	if err := database.SetStepFindings(stepResult.ID, findings); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.InsertReviewStepRound(stepResult.ID, 1, "initial", &findings, nil, run.HeadSHA, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpdateStepStatusWithDuration(stepResult.ID, types.StepStatusAwaitingApproval, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetRunAwaitingAgent(run.ID); err != nil {
+		t.Fatal(err)
+	}
+	run, err = database.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	step := &scopeLimitedAdaptiveCallStep{adaptiveCallStep: adaptiveCallStep{
+		name: types.StepReview,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			return &StepOutcome{
+				Findings:              `{"findings":[],"summary":"clean rereview","risk_level":"low"}`,
+				ReviewApprovedHeadSHA: run.HeadSHA,
+			}, nil
+		},
+	}}
+	exec := NewExecutor(database, p, &config.Config{}, nil, []Step{step}, nil)
+	done, _ := startResumeExecutor(t, exec, run, repo, t.TempDir())
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if err := exec.Respond(types.StepReview, types.ActionFix, []string{"review-1"}); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("recovered gate never accepted a fix response")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusFixReview)
+	steps, err := database.GetStepsByRun(run.ID)
+	if err != nil || steps[0].FindingsJSON == nil || !strings.Contains(*steps[0].FindingsJSON, "review-2") {
+		t.Fatalf("recovered fix-review did not retain review-2: %v %#v", err, steps[0].FindingsJSON)
+	}
+	if strings.Contains(*steps[0].FindingsJSON, "review-1") {
+		t.Fatalf("selected review-1 remained outstanding: %s", *steps[0].FindingsJSON)
+	}
+	if err := exec.Respond(types.StepReview, types.ActionApprove, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 

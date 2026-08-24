@@ -354,6 +354,109 @@ func TestResetStepsFromPreservesSkippedSteps(t *testing.T) {
 	t.Logf("revalidation reset evidence: review status=%s, convergence state=cleared, push status=%s", gotReview.Status, gotPush.Status)
 }
 
+func TestResetStepsFromOrderPreservesSkippedSteps(t *testing.T) {
+	d := openTestDB(t)
+	repo, err := d.InsertRepo("/tmp/head-change", "https://example.com/head-change.git", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := d.InsertRun(repo.ID, "feature", "new-head", "base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	review, err := d.InsertStepResult(run.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	push, err := d.InsertStepResult(run.ID, types.StepPush)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testStep, err := d.InsertStepResult(run.ID, types.StepTest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewFindings := `{"findings":[{"id":"review-1","severity":"error","description":"carry review truth","action":"ask-user"}]}`
+	testFindings := `{"findings":[{"id":"test-1","severity":"error","description":"stale test truth","action":"ask-user"}]}`
+	if err := d.SetStepFindings(review.ID, reviewFindings); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetStepFindings(testStep.ID, testFindings); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetStepConvergence(review.ID, `{"round_findings":[1]}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetStepConvergence(testStep.ID, `{"stale":true}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetStepAutoFixLimit(testStep.ID, 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.CompleteStepWithStatusAtHead(review.ID, types.StepStatusCompleted, "old-head", 0, 1, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.CompleteStepWithStatusAtHead(testStep.ID, types.StepStatusCompleted, "old-head", 0, 1, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.CompleteStepWithStatus(push.ID, types.StepStatusSkipped, 0, 0, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := d.ResetStepsFromOrder(run.ID, types.StepReview.Order()); err != nil {
+		t.Fatal(err)
+	}
+	gotReview, err := d.GetStepResult(review.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotReview.Status != types.StepStatusPending || gotReview.CertifiedHeadSHA != nil || gotReview.FindingsJSON == nil || *gotReview.FindingsJSON != reviewFindings || gotReview.ConvergenceJSON == nil {
+		t.Fatalf("review after head-change reset = %#v", gotReview)
+	}
+	gotTest, err := d.GetStepResult(testStep.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotTest.Status != types.StepStatusPending || gotTest.CertifiedHeadSHA != nil || gotTest.FindingsJSON != nil || gotTest.ConvergenceJSON != nil || gotTest.AutoFixLimit != nil {
+		t.Fatalf("test after head-change reset = %#v", gotTest)
+	}
+	gotPush, err := d.GetStepResult(push.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPush.Status != types.StepStatusSkipped {
+		t.Fatalf("push status = %s, want durable skip preserved", gotPush.Status)
+	}
+}
+
+func TestCompleteStepWithStatusPersistsCertifiedHead(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/certified", "git@github.com:user/certified.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feature", "head", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepTest)
+
+	if err := d.CompleteStepWithStatusAtHead(step.ID, types.StepStatusCompleted, "certified-head", 0, 10, "test.log"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.GetStepResult(step.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CertifiedHeadSHA == nil || *got.CertifiedHeadSHA != "certified-head" {
+		t.Fatalf("certified head = %v", got.CertifiedHeadSHA)
+	}
+	if err := d.ResetStepsFrom(run.ID, types.StepReview.Order()); err != nil {
+		t.Fatal(err)
+	}
+	got, err = d.GetStepResult(step.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != types.StepStatusPending || got.CertifiedHeadSHA != nil {
+		t.Fatalf("reset step = %#v", got)
+	}
+}
+
 func TestUpdateStepStatusWithDuration(t *testing.T) {
 	d := openTestDB(t)
 	repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
@@ -417,7 +520,7 @@ func TestCompleteReviewStepIsAtomic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := d.CompleteReviewStep(step.ID, "missing-run", "approved", 0, 10, "review.log"); err == nil {
+	if err := d.CompleteReviewStep(step.ID, "missing-run", "approved", 0, 10, "review.log", nil); err == nil {
 		t.Fatal("expected missing run to roll back review completion")
 	}
 	gotStep, _ := d.GetStepResult(step.ID)
@@ -429,13 +532,43 @@ func TestCompleteReviewStepIsAtomic(t *testing.T) {
 		t.Fatalf("failed transaction created review authority: %#v", gotRun.ReviewApprovedHeadSHA)
 	}
 
-	if err := d.CompleteReviewStep(step.ID, run.ID, "approved", 0, 10, "review.log"); err != nil {
+	if err := d.CompleteReviewStep(step.ID, run.ID, "approved", 0, 10, "review.log", nil); err != nil {
 		t.Fatal(err)
 	}
 	gotStep, _ = d.GetStepResult(step.ID)
 	gotRun, _ = d.GetRun(run.ID)
 	if gotStep.Status != types.StepStatusCompleted || gotRun.ReviewApprovedHeadSHA == nil || *gotRun.ReviewApprovedHeadSHA != "approved" {
 		t.Fatalf("atomic review completion = step %#v run %#v", gotStep, gotRun)
+	}
+}
+
+func TestCompleteReviewStepRollsBackWhenCertifiedRangeCannotClear(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/tmp/review-range-atomic", "https://example.com/repo.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feature", "approved", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepReview)
+	if err := d.StartStep(step.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, "from", "approved", run.ID); err != nil {
+		t.Fatal(err)
+	}
+	certifiedRange, err := d.GetUncertifiedPipelineRange(repo.ID, run.Branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.sql.Exec(`CREATE TRIGGER refuse_certified_range_delete BEFORE DELETE ON uncertified_pipeline_ranges BEGIN SELECT RAISE(ABORT, 'refuse delete'); END`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := d.CompleteReviewStep(step.ID, run.ID, "approved", 0, 10, "review.log", certifiedRange); err == nil {
+		t.Fatal("expected certified range deletion to roll back review completion")
+	}
+	gotStep, _ := d.GetStepResult(step.ID)
+	gotRun, _ := d.GetRun(run.ID)
+	gotRange, _ := d.GetUncertifiedPipelineRange(repo.ID, run.Branch)
+	if gotStep.Status != types.StepStatusRunning || gotStep.CompletedAt != nil || gotRun.ReviewApprovedHeadSHA != nil || gotRange == nil {
+		t.Fatalf("failed transaction persisted partial certification: step=%#v run=%#v range=%#v", gotStep, gotRun, gotRange)
 	}
 }
 

@@ -18,6 +18,10 @@ type ReviewStep struct{}
 
 func (s *ReviewStep) Name() types.StepName { return types.StepReview }
 
+// FindingsMayBeScopeLimited tells the executor that a later review round's
+// silence is not authority to discard findings that were shown but not fixed.
+func (s *ReviewStep) FindingsMayBeScopeLimited() bool { return true }
+
 func (s *ReviewStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
 	ctx := sctx.Ctx
 	baseSHA := resolveBranchBaseSHA(ctx, sctx.WorkDir, sctx.Run.BaseSHA, sctx.Repo.DefaultBranch)
@@ -213,6 +217,7 @@ Rules:
 - Only comment on things that genuinely matter.
 - Do NOT report styling, formatting, linting, compilation, or type-checking issues.
 - If the change is clean, return an empty findings array.
+- For the same underlying finding from a previous round, copy both its ID and continuity token into prior_id and prior_continuity_token. Omit both fields for every new finding.
 - For each finding, set the action field to one of:
   - "ask-user": the finding is about functional requirements or product behavior, or otherwise challenges the author's deliberate intent. Even if it seems obviously wrong, we should ask the user for review. Examples: "this feature seems unnecessary", "this hardcoded value should be configurable", "this deletion looks wrong". When in doubt, default to "ask-user".
   - "auto-fix": the finding is a non-functional, non user-visible issue (correctness, error handling, security, performance, mechanical code quality) that can be safely fixed without any discussion about the author's intent.
@@ -272,23 +277,24 @@ Risk assessment (after listing all findings):
 		}
 	}
 
-	// Phase ownership boundary: drop findings that only claim later pipeline-
-	// owned delivery (push/PR/CI for this run) has not happened yet. Prompt
-	// guidance alone is not enough - models still emit these under
-	// authoritative intent criteria like "Open PR A unmerged".
-	if stripped, n := stripDeferredPipelineOwnedDeliveryFindings(findings); n > 0 {
-		sctx.Log(fmt.Sprintf("dropped %d deferred pipeline-owned delivery finding(s) (owned by later push/PR/CI steps)", n))
-		findings = stripped
+	reconciled, dropped, err := pipeline.ReconcileReviewFindings(findings, sctx.KnownReviewLineages)
+	if err != nil {
+		return nil, fmt.Errorf("reconcile review findings: %w", err)
 	}
+	if dropped > 0 {
+		sctx.Log(fmt.Sprintf("dropped %d deferred pipeline-owned delivery finding(s) (owned by later push/PR/CI steps)", dropped))
+	}
+	findings = reconciled
 
 	needsApproval := hasBlockingFindings(findings.Items)
 	findingsJSON, _ := json.Marshal(findings)
 
 	return approvedReviewOutcome(reviewTargetSHA, &pipeline.StepOutcome{
-		NeedsApproval: needsApproval,
-		AutoFixable:   len(findings.Items) > 0,
-		Findings:      string(findingsJSON),
-		FixSummary:    fixSummary,
+		NeedsApproval:      needsApproval,
+		AutoFixable:        len(findings.Items) > 0,
+		Findings:           string(findingsJSON),
+		FindingsNormalized: true,
+		FixSummary:         fixSummary,
 	})
 }
 
@@ -319,6 +325,14 @@ Fix-round provenance:
 	}
 	fromSHA := strings.TrimSpace(sctx.UncertifiedFromSHA)
 	toSHA := strings.TrimSpace(sctx.UncertifiedToSHA)
+	if fromSHA == toSHA {
+		return fmt.Sprintf(`
+
+Fix-round recovery:
+- A previous run selected unresolved findings at %s but did not complete their verification. Treat the carried findings and prior round history as unresolved gate truth and verify them against the current code.
+- Prior findings and fix summaries are claims, not evidence. Verify each claimed fix against the current code, and independently judge whether behavior the fix rounds introduced is correct, not merely whether it implements what was prescribed.
+`, toSHA)
+	}
 	return fmt.Sprintf(`
 
 Fix-round provenance:
@@ -351,6 +365,20 @@ func sanitizedPreviousFindingsForPrompt(raw string) string {
 		findings.Items[i].Source = sanitizePromptText(findings.Items[i].Source)
 		findings.Items[i].UserInstructions = sanitizePromptMultilineText(findings.Items[i].UserInstructions)
 		findings.Items[i].ReviewScope = sanitizePromptText(findings.Items[i].ReviewScope)
+		if findings.Items[i].Evidence != nil {
+			for j := range findings.Items[i].Evidence.Tested {
+				findings.Items[i].Evidence.Tested[j] = sanitizePromptMultilineText(findings.Items[i].Evidence.Tested[j])
+			}
+			findings.Items[i].Evidence.TestingSummary = sanitizePromptMultilineText(findings.Items[i].Evidence.TestingSummary)
+			for j := range findings.Items[i].Evidence.Artifacts {
+				artifact := &findings.Items[i].Evidence.Artifacts[j]
+				artifact.Kind = sanitizePromptText(artifact.Kind)
+				artifact.Label = sanitizePromptText(artifact.Label)
+				artifact.Path = sanitizePromptText(artifact.Path)
+				artifact.URL = sanitizePromptText(artifact.URL)
+				artifact.Content = sanitizePromptMultilineText(artifact.Content)
+			}
+		}
 	}
 	findings.Summary = sanitizePromptMultilineText(findings.Summary)
 	findings.RiskLevel = sanitizePromptText(findings.RiskLevel)

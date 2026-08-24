@@ -2,6 +2,7 @@ package steps
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -22,18 +23,22 @@ const (
 	maxEmbeddedArtifactBytes               = 16 * 1024
 	maxEmbeddedArtifactsTotalBytes         = 32 * 1024
 	noMistakesPRSignature                  = "Updates from [git push no-slop](https://github.com/Blakeolson21/no-slop)"
+	legacyNoMistakesPRSignature            = "Updates from [git push no-mistakes](https://github.com/Blakeolson21/no-slop)"
+	publicationEventCommentPrefix          = "<!-- no-slop-publication:v1 "
 	pipelineAttestationCommentPrefix       = "<!-- no-slop-pipeline-attestation:v1 "
 	pipelineAttestationCommentClosingToken = " -->"
 )
 
 type pipelineAttestation struct {
-	HeadSHA string                    `json:"head_sha"`
-	Steps   []pipelineAttestationStep `json:"steps"`
+	HeadSHA          string                    `json:"head_sha"`
+	PublicationNonce string                    `json:"publication_nonce"`
+	Steps            []pipelineAttestationStep `json:"steps"`
 }
 
 type pipelineAttestationStep struct {
-	Step   types.StepName   `json:"step"`
-	Status types.StepStatus `json:"status"`
+	Step    types.StepName   `json:"step"`
+	Status  types.StepStatus `json:"status"`
+	HeadSHA string           `json:"head_sha"`
 }
 
 type testingArtifactRenderState struct {
@@ -61,6 +66,11 @@ type testingSummaryOptions struct {
 
 // BuildPipelineSummary produces a deterministic markdown section from step results and rounds.
 func BuildPipelineSummary(steps []*db.StepResult, rounds map[string][]*db.StepRound, headSHA string) (string, string) {
+	digest := sha256.Sum256([]byte(strings.TrimSpace(headSHA)))
+	return buildPipelineSummary(steps, rounds, headSHA, fmt.Sprintf("%x", digest[:16]))
+}
+
+func buildPipelineSummary(steps []*db.StepResult, rounds map[string][]*db.StepRound, headSHA, publicationNonce string) (string, string) {
 	if len(steps) == 0 {
 		return "", ""
 	}
@@ -86,7 +96,7 @@ func BuildPipelineSummary(steps []*db.StepResult, rounds map[string][]*db.StepRo
 	b.WriteString("## Pipeline\n\n")
 	b.WriteString(noMistakesPRSignature)
 	b.WriteString("\n\n")
-	b.WriteString(buildPipelineAttestation(steps, headSHA))
+	b.WriteString(buildPipelineAttestation(steps, headSHA, publicationNonce))
 	b.WriteString("\n\n")
 	for i, detail := range detailBlocks {
 		if i > 0 {
@@ -100,20 +110,27 @@ func BuildPipelineSummary(steps []*db.StepResult, rounds map[string][]*db.StepRo
 }
 
 // buildPipelineAttestation records the exact step lifecycle snapshot available
-// when no-mistakes writes the PR body. Its compact JSON is deliberately data
-// only: consumers decide their own policy from the step names and statuses.
-func buildPipelineAttestation(steps []*db.StepResult, headSHA string) string {
+// when no-slop writes the PR body. Its compact JSON is deliberately data only:
+// consumers decide their own policy from step names, statuses, and certified
+// heads.
+func buildPipelineAttestation(steps []*db.StepResult, headSHA, publicationNonce string) string {
 	attestation := pipelineAttestation{
-		HeadSHA: headSHA,
-		Steps:   make([]pipelineAttestationStep, 0, len(steps)),
+		HeadSHA:          headSHA,
+		PublicationNonce: publicationNonce,
+		Steps:            make([]pipelineAttestationStep, 0, len(steps)),
 	}
 	for _, sr := range steps {
 		if sr == nil {
 			continue
 		}
+		certifiedHeadSHA := ""
+		if sr.CertifiedHeadSHA != nil {
+			certifiedHeadSHA = *sr.CertifiedHeadSHA
+		}
 		attestation.Steps = append(attestation.Steps, pipelineAttestationStep{
-			Step:   sr.StepName,
-			Status: sr.Status,
+			Step:    sr.StepName,
+			Status:  sr.Status,
+			HeadSHA: certifiedHeadSHA,
 		})
 	}
 	sort.SliceStable(attestation.Steps, func(i, j int) bool {

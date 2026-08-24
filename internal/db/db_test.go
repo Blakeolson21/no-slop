@@ -76,7 +76,7 @@ func TestOpenCreatesSchema(t *testing.T) {
 	if !hasColumn(t, d, "repos", "fork_url") {
 		t.Fatal("repos.fork_url column missing from fresh schema")
 	}
-	for _, column := range []string{"submitted_head_sha", "no_mistakes_version", "no_mistakes_build_sha", "review_approved_head_sha", "last_pushed_sha", "push_target_fingerprint", "push_ref", "last_pushed_at", "push_generation", "push_active", "terminal_head_verified_at", "pr_state", "pr_state_observed_at", "ci_ready_at", "ci_ready_no_ci", "custody_returned_at"} {
+	for _, column := range []string{"submitted_head_sha", "no_mistakes_version", "no_mistakes_build_sha", "review_approved_head_sha", "last_pushed_sha", "push_target_fingerprint", "push_ref", "last_pushed_at", "push_generation", "push_active", "terminal_head_verified_at", "pr_state", "pr_state_observed_at", "ci_ready_at", "ci_ready_no_ci", "ci_attestation_state", "custody_returned_at"} {
 		if !hasColumn(t, d, "runs", column) {
 			t.Fatalf("runs.%s column missing from fresh schema", column)
 		}
@@ -84,7 +84,10 @@ func TestOpenCreatesSchema(t *testing.T) {
 	if !hasColumn(t, d, "step_rounds", "reviewed_head_sha") {
 		t.Fatal("step_rounds.reviewed_head_sha column missing from fresh schema")
 	}
-	for _, column := range []string{"last_activity_at", "last_activity", "agent_pid", "ci_fix_attempts"} {
+	if !hasColumn(t, d, "uncertified_pipeline_ranges", "selection_applied") {
+		t.Fatal("uncertified_pipeline_ranges.selection_applied column missing from fresh schema")
+	}
+	for _, column := range []string{"last_activity_at", "last_activity", "agent_pid", "ci_fix_attempts", "certified_head_sha"} {
 		if !hasColumn(t, d, "step_results", column) {
 			t.Fatalf("step_results.%s column missing from fresh schema", column)
 		}
@@ -288,7 +291,7 @@ func TestOpenMigratesStepActivityColumns(t *testing.T) {
 	}
 	t.Cleanup(func() { d.Close() })
 
-	for _, column := range []string{"last_activity_at", "last_activity", "agent_pid", "ci_fix_attempts"} {
+	for _, column := range []string{"last_activity_at", "last_activity", "agent_pid", "ci_fix_attempts", "certified_head_sha"} {
 		if !hasColumn(t, d, "step_results", column) {
 			t.Fatalf("expected migrated column %q", column)
 		}

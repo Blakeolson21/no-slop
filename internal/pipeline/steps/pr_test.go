@@ -1,6 +1,7 @@
 package steps
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/Blakeolson21/no-slop/internal/agent"
@@ -49,8 +51,14 @@ func TestPRStep_GhNotAvailable(t *testing.T) {
 func TestPRStep_UpdatesExistingPR(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
+	boundary := time.Date(2026, 8, 23, 18, 42, 31, 0, time.UTC)
+	unrelatedMutation := boundary.Add(time.Minute)
 
 	env, logFile := fakeGH(t, "https://github.com/test/repo/pull/42")
+	env = append(env,
+		"FAKE_CLI_GH_UPDATE_RESPONSE_AT="+boundary.Format(time.RFC3339Nano),
+		"FAKE_CLI_GH_PR_UPDATED_AT="+unrelatedMutation.Format(time.RFC3339Nano),
+	)
 
 	ag := &mockAgent{name: "test"}
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
@@ -62,8 +70,25 @@ func TestPRStep_UpdatesExistingPR(t *testing.T) {
 	if err := sctx.DB.UpdateStepStatus(reviewStep.ID, types.StepStatusCompleted); err != nil {
 		t.Fatal(err)
 	}
+	budget := &checkRerunBudget{
+		spent: map[string]int{"build": 1},
+	}
+	encoded, err := budget.marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sctx.DB.SetRunCIRerunState(sctx.Run.ID, encoded); err != nil {
+		t.Fatal(err)
+	}
+	priorAttestation, err := json.Marshal(expectedAttestationState{HeadSHA: baseSHA, PublicationNonce: "ffeeddccbbaa99887766554433221100"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sctx.DB.SetRunCIAttestationState(sctx.Run.ID, string(priorAttestation)); err != nil {
+		t.Fatal(err)
+	}
 
-	step := &PRStep{}
+	step := &PRStep{publicationNonceReader: bytes.NewReader([]byte{0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff})}
 	outcome, err := step.Execute(sctx)
 	if err != nil {
 		t.Fatal(err)
@@ -72,29 +97,82 @@ func TestPRStep_UpdatesExistingPR(t *testing.T) {
 		t.Error("pr step should never need approval")
 	}
 
-	// Verify gh pr edit was called to update the PR body
 	logData, err := os.ReadFile(logFile)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ghLog := string(logData)
-	if !strings.Contains(ghLog, "pr edit") {
-		t.Errorf("expected gh pr edit to be called, got:\n%s", ghLog)
+	if !strings.Contains(ghLog, "api --method PATCH") {
+		t.Errorf("expected GitHub API update to be called, got:\n%s", ghLog)
 	}
 	if !strings.Contains(ghLog, "--body") {
-		t.Errorf("expected --body flag in gh pr edit, got:\n%s", ghLog)
+		t.Errorf("expected PR body on stdin, got:\n%s", ghLog)
 	}
 	if !strings.Contains(ghLog, noMistakesPRSignature) {
 		t.Errorf("expected updated PR body to include no-slop signature, got:\n%s", ghLog)
 	}
+	const publishedBodyMarker = "stdin --body "
+	publishedBodyAt := strings.LastIndex(ghLog, publishedBodyMarker)
+	if publishedBodyAt < 0 {
+		t.Fatalf("updated PR request body was not recorded:\n%s", ghLog)
+	}
+	var published struct {
+		Body string `json:"body"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(ghLog[publishedBodyAt+len(publishedBodyMarker):])), &published); err != nil {
+		t.Fatalf("parse updated PR request body: %v", err)
+	}
+	if nonce := parsePipelineAttestationForTest(t, published.Body).PublicationNonce; nonce != testPublicationNonce {
+		t.Fatalf("updated PR publication nonce = %q, want %q", nonce, testPublicationNonce)
+	}
+	if !strings.HasPrefix(published.Body, publicationEventCommentPrefix+testPublicationNonce+pipelineAttestationCommentClosingToken+"\n\n") {
+		t.Fatalf("updated PR body does not expose publication identity first: %q", published.Body)
+	}
+	if strings.Contains(ghLog, "pr view 42 --repo test/repo --json updatedAt") {
+		t.Fatalf("attestation publication used mutable PR state:\n%s", ghLog)
+	}
 
-	// Verify PR URL was stored
 	run, err := sctx.DB.GetRun(sctx.Run.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if run.PRURL == nil || *run.PRURL != "https://github.com/test/repo/pull/42" {
 		t.Errorf("PR URL = %v, want https://github.com/test/repo/pull/42", run.PRURL)
+	}
+	encoded, err = sctx.DB.GetRunCIRerunState(sctx.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted := &checkRerunBudget{}
+	if err := persisted.unmarshal(encoded); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.used("build") != 1 {
+		t.Fatalf("persisted rerun budget = %#v", persisted)
+	}
+	encoded, err = sctx.DB.GetRunCIAttestationState(sctx.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attestation expectedAttestationState
+	if err := json.Unmarshal([]byte(encoded), &attestation); err != nil {
+		t.Fatal(err)
+	}
+	if attestation.HeadSHA != headSHA || attestation.PublicationNonce != testPublicationNonce {
+		t.Fatalf("persisted attestation expectation = %#v", attestation)
+	}
+}
+
+func TestPRStep_FailsWhenExistingPRAttestationCannotBePublished(t *testing.T) {
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	env, _ := fakeGH(t, "https://github.com/test/repo/pull/42")
+	env = append(env, "FAKE_CLI_GH_EDIT_ERROR=1")
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Env = env
+
+	_, err := (&PRStep{}).Execute(sctx)
+	if err == nil || !strings.Contains(err.Error(), "update pull request") {
+		t.Fatalf("PR update error = %v", err)
 	}
 }
 
@@ -272,7 +350,7 @@ func TestPRStep_CreatesNewPR(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	step := &PRStep{}
+	step := &PRStep{publicationNonceReader: bytes.NewReader([]byte{0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff})}
 	outcome, err := step.Execute(sctx)
 	if err != nil {
 		t.Fatal(err)
@@ -310,6 +388,32 @@ func TestPRStep_CreatesNewPR(t *testing.T) {
 	}
 	if run.PRURL == nil || *run.PRURL != "https://github.com/test/repo/pull/99" {
 		t.Errorf("PR URL = %v, want https://github.com/test/repo/pull/99", run.PRURL)
+	}
+	encoded, err := sctx.DB.GetRunCIAttestationState(sctx.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attestation expectedAttestationState
+	if err := json.Unmarshal([]byte(encoded), &attestation); err != nil {
+		t.Fatal(err)
+	}
+	if attestation.HeadSHA != headSHA || attestation.PublicationNonce != testPublicationNonce {
+		t.Fatalf("created PR attestation expectation = %#v", attestation)
+	}
+	ci := &CIStep{}
+	if err := ci.loadExpectedAttestationState(sctx); err != nil {
+		t.Fatal(err)
+	}
+	stale := scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketFail, State: "FAILURE", Link: "other-pr"}
+	host := &attestationIdentityHost{identities: map[string]scm.CheckAttemptIdentity{
+		"other-pr": {RunID: 1001, HeadSHA: headSHA, PublicationNonce: "ffeeddccbbaa99887766554433221100"},
+	}}
+	filtered, err := ci.filterExpectedStaleAttestationChecks(sctx, host, []scm.Check{stale})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered) != 1 || filtered[0].Bucket != scm.CheckBucketPending {
+		t.Fatalf("stale same-head check from another PR was accepted: %#v", filtered)
 	}
 }
 
@@ -809,7 +913,7 @@ func TestAssemblePRBody_RetainsAttestationWhenCoreExceedsAzureCap(t *testing.T) 
 		{StepName: types.StepReview, Status: types.StepStatusCompleted},
 		{StepName: types.StepTest, Status: types.StepStatusFailed},
 	}
-	attestation := buildPipelineAttestation(steps, testPipelineHeadSHA)
+	attestation := buildPipelineAttestation(steps, testPipelineHeadSHA, testPublicationNonce)
 	pipelineMD := pipelineMarkdownForTest(strings.Repeat("review detail 😀 ", 1000))
 	pipelineMD = strings.Replace(pipelineMD, noMistakesPRSignature+"\n\n", noMistakesPRSignature+"\n\n"+attestation+"\n\n", 1)
 
@@ -916,7 +1020,7 @@ func TestAppendGeneratedSections_RetainsPipelineAttestationWhenTruncated(t *test
 		{StepName: types.StepReview, Status: types.StepStatusCompleted},
 		{StepName: types.StepTest, Status: types.StepStatusSkipped},
 	}
-	attestation := buildPipelineAttestation(steps, testPipelineHeadSHA)
+	attestation := buildPipelineAttestation(steps, testPipelineHeadSHA, testPublicationNonce)
 	pipelineMD := pipelineMarkdownForTest(strings.Repeat("review round - "+strings.Repeat("x", 1000), 100))
 	pipelineMD = strings.Replace(pipelineMD, noMistakesPRSignature+"\n\n", noMistakesPRSignature+"\n\n"+attestation+"\n\n", 1)
 
@@ -933,7 +1037,7 @@ func TestAppendGeneratedSections_RetainsAttestationWhenEssentialSectionsOverflow
 		{StepName: types.StepReview, Status: types.StepStatusCompleted},
 		{StepName: types.StepTest, Status: types.StepStatusFailed},
 	}
-	attestation := buildPipelineAttestation(steps, testPipelineHeadSHA)
+	attestation := buildPipelineAttestation(steps, testPipelineHeadSHA, testPublicationNonce)
 	pipelineMD := pipelineMarkdownForTest("review round 001")
 	pipelineMD = strings.Replace(pipelineMD, noMistakesPRSignature+"\n\n", noMistakesPRSignature+"\n\n"+attestation+"\n\n", 1)
 

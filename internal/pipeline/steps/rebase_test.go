@@ -13,6 +13,7 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/agent"
 	"github.com/Blakeolson21/no-slop/internal/config"
 	"github.com/Blakeolson21/no-slop/internal/pipeline"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestRebaseStep_ConflictTriesAllTargets(t *testing.T) {
@@ -460,6 +461,9 @@ func TestRebaseStep_RemapsUncertifiedRangeWhenHeadRewritten(t *testing.T) {
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, toSHA, config.Commands{})
 	sctx.Run.Branch = "refs/heads/feature"
 	sctx.Repo.UpstreamURL = upstream
+	if _, err := sctx.DB.InsertStepResult(sctx.Run.ID, types.StepReview); err != nil {
+		t.Fatal(err)
+	}
 	if err := sctx.DB.UpsertUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch, fromSHA, toSHA, sctx.Run.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -493,5 +497,36 @@ func TestRebaseStep_RemapsUncertifiedRangeWhenHeadRewritten(t *testing.T) {
 	pipeline.BindUncertifiedPipelineRange(bind)
 	if bind.UncertifiedFromSHA != got.FromSHA || bind.UncertifiedToSHA != got.ToSHA {
 		t.Fatalf("bind after rebase remap from=%q to=%q, want from=%q to=%q", bind.UncertifiedFromSHA, bind.UncertifiedToSHA, got.FromSHA, got.ToSHA)
+	}
+}
+
+func TestUpdateHeadSHARefusesAdoptionWhenUncertifiedRangeCannotMap(t *testing.T) {
+	dir, baseSHA, oldHead := setupGitRepo(t)
+	gitCmd(t, dir, "checkout", "--detach", baseSHA)
+	if err := os.WriteFile(filepath.Join(dir, "rewritten.txt"), []byte("rewritten\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, dir, "add", "-A")
+	gitCmd(t, dir, "commit", "-m", "rewrite feature")
+
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, oldHead, config.Commands{})
+	if err := sctx.DB.UpsertUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch, "missing-range-start", oldHead, sctx.Run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := updateHeadSHA(context.Background(), sctx); err == nil || !strings.Contains(err.Error(), "remap uncertified review range") {
+		t.Fatalf("updateHeadSHA() error = %v, want mandatory remap failure", err)
+	}
+	if got := gitCmd(t, dir, "rev-parse", "refs/heads/feature"); got != oldHead {
+		t.Fatalf("feature ref = %s, want unchanged %s", got, oldHead)
+	}
+	if sctx.Run.HeadSHA != oldHead {
+		t.Fatalf("in-memory run head = %s, want unchanged %s", sctx.Run.HeadSHA, oldHead)
+	}
+	stored, err := sctx.DB.GetRun(sctx.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.HeadSHA != oldHead {
+		t.Fatalf("persisted run head = %s, want unchanged %s", stored.HeadSHA, oldHead)
 	}
 }

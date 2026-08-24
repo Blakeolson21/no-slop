@@ -1,6 +1,7 @@
 package steps
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -9,6 +10,98 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/scm"
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
+
+const requiredAttestationCheckName = "PR must be raised via no-slop"
+
+func (s *CIStep) filterExpectedStaleAttestationChecks(sctx *pipeline.StepContext, host scm.Host, checks []scm.Check) ([]scm.Check, error) {
+	state := &s.expectedAttestation
+	if state.HeadSHA == "" || state.HeadSHA != sctx.Run.HeadSHA {
+		return checks, nil
+	}
+	if !validPublicationNonce(state.PublicationNonce) {
+		return nil, fmt.Errorf("expected attestation boundary is missing")
+	}
+	reader, ok := host.(scm.CheckAttemptIdentityReader)
+	if !ok {
+		return nil, fmt.Errorf("provider cannot identify expected stale attestation check attempts")
+	}
+	publicationReader, ok := host.(scm.AttestationPublicationIdentityReader)
+	if !ok {
+		return nil, fmt.Errorf("provider cannot identify the attestation publication workflow event")
+	}
+	identities := make(map[string]scm.CheckAttemptIdentity)
+	publicationRunID := state.PublicationRunID
+	publicationRunNumber := state.PublicationRunNumber
+	if publicationRunNumber == 0 {
+		identity, found, err := publicationReader.FindAttestationPublicationIdentity(sctx.Ctx, sctx.Run.HeadSHA, state.PublicationNonce)
+		if err != nil {
+			return nil, fmt.Errorf("identify attestation publication workflow event: %w", err)
+		}
+		if found {
+			if identity.RunID <= 0 || identity.RunNumber <= 0 || identity.HeadSHA != sctx.Run.HeadSHA || identity.PublicationNonce != state.PublicationNonce {
+				return nil, fmt.Errorf("attestation publication workflow identity is incomplete")
+			}
+			publicationRunID = identity.RunID
+			publicationRunNumber = identity.RunNumber
+		}
+	}
+	if publicationRunNumber != 0 && (state.PublicationRunID != publicationRunID || state.PublicationRunNumber != publicationRunNumber) {
+		state.PublicationRunID = publicationRunID
+		state.PublicationRunNumber = publicationRunNumber
+		if err := persistExpectedAttestationState(sctx, *state); err != nil {
+			return nil, fmt.Errorf("persist attestation publication run identity: %w", err)
+		}
+	}
+
+	filtered := make([]scm.Check, 0, len(checks)+1)
+	if publicationRunNumber == 0 {
+		for _, check := range checks {
+			if check.Name != requiredAttestationCheckName {
+				filtered = append(filtered, check)
+			}
+		}
+		filtered = append(filtered, scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketPending, State: "EXPECTED_ATTESTATION"})
+		return filtered, nil
+	}
+	currentAttemptPresent := false
+	for _, check := range checks {
+		if check.Name != requiredAttestationCheckName {
+			filtered = append(filtered, check)
+			continue
+		}
+		identity, err := readCheckAttemptIdentity(sctx.Ctx, reader, check, identities)
+		if err != nil {
+			return nil, err
+		}
+		if identity.HeadSHA != sctx.Run.HeadSHA {
+			continue
+		}
+		if identity.RunID <= 0 || identity.RunNumber <= 0 {
+			return nil, fmt.Errorf("attestation check attempt has incomplete run identity")
+		}
+		if identity.RunNumber < publicationRunNumber {
+			continue
+		}
+		filtered = append(filtered, check)
+		currentAttemptPresent = true
+	}
+	if !currentAttemptPresent {
+		filtered = append(filtered, scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketPending, State: "EXPECTED_ATTESTATION"})
+	}
+	return filtered, nil
+}
+
+func readCheckAttemptIdentity(ctx context.Context, reader scm.CheckAttemptIdentityReader, check scm.Check, cache map[string]scm.CheckAttemptIdentity) (scm.CheckAttemptIdentity, error) {
+	if identity, ok := cache[check.Link]; ok {
+		return identity, nil
+	}
+	identity, err := reader.GetCheckAttemptIdentity(ctx, check)
+	if err != nil {
+		return scm.CheckAttemptIdentity{}, fmt.Errorf("identify attestation check attempt: %w", err)
+	}
+	cache[check.Link] = identity
+	return identity, nil
+}
 
 type lastFixedIssues struct {
 	Checks        []string `json:"checks,omitempty"`

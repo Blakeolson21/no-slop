@@ -230,8 +230,8 @@ func TestCIStep_Execute_FixMode_RemoteAlreadyUpdatedDoesNotReturnManualIntervent
 
 	step := &CIStep{
 		waitForNextPoll: func(ctx context.Context, interval time.Duration) error {
-			cancel()
-			return ctx.Err()
+			t.Fatal("CI monitor polled after adopting a new published head")
+			return nil
 		},
 	}
 	outcome, err := step.Execute(sctx)
@@ -416,7 +416,9 @@ func TestCIStep_CIWarningAllowsChecksPassedToBeReannounced(t *testing.T) {
 	sctx := newTestContext(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	sctx.Env = env
 	sctx.Run.PRURL = &prURL
-	sctx.Config.CITimeout = 10 * time.Second
+	// This test owns termination through waitForNextPoll below. A wall-clock
+	// timeout would make the warning sequence depend on subprocess speed.
+	sctx.Config.CITimeout = -1
 
 	var logs []string
 	sctx.Log = func(s string) { logs = append(logs, s) }

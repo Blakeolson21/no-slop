@@ -38,7 +38,7 @@ func TestExecutor_AutoFixTriggersWithoutApproval(t *testing.T) {
 			if sctx.PreviousFindings == "" {
 				t.Error("expected PreviousFindings to be set on auto-fix")
 			}
-			return &StepOutcome{}, nil
+			return &StepOutcome{ReviewApprovedHeadSHA: run.HeadSHA}, nil
 		},
 	}
 
@@ -56,6 +56,49 @@ func TestExecutor_AutoFixTriggersWithoutApproval(t *testing.T) {
 	updated, _ := database.GetRun(run.ID)
 	if updated.Status != types.RunCompleted {
 		t.Errorf("expected run status %q, got %q", types.RunCompleted, updated.Status)
+	}
+}
+
+func TestExecutor_ReviewAutoFixPersistsRecoveryTruthBeforeFixer(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+	cfg := &config.Config{AutoFix: config.AutoFix{Review: 1}}
+	calls := 0
+	step := &scopeLimitedAdaptiveCallStep{adaptiveCallStep: adaptiveCallStep{
+		name: types.StepReview,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			calls++
+			if calls == 1 {
+				return &StepOutcome{NeedsApproval: true, AutoFixable: true, Findings: `{"findings":[{"id":"legacy-a","severity":"error","description":"unsafe loader","action":"auto-fix"}],"tested":["reproduce loader failure"]}`}, nil
+			}
+			marker, err := database.GetUncertifiedPipelineRange(repo.ID, run.Branch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if marker == nil || marker.FromSHA != run.HeadSHA || marker.ToSHA != run.HeadSHA || marker.SourceRunID != run.ID {
+				t.Fatalf("recovery marker = %#v", marker)
+			}
+			steps, err := database.GetStepsByRun(run.ID)
+			if err != nil || len(steps) != 1 || steps[0].FindingsJSON == nil {
+				t.Fatalf("durable step findings: steps=%#v err=%v", steps, err)
+			}
+			findings, err := types.ParseFindingsJSON(*steps[0].FindingsJSON)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(findings.Items) != 1 || !findings.Items[0].HasLineage() || findings.Items[0].Evidence == nil {
+				t.Fatalf("durable gate truth = %#v", findings.Items)
+			}
+			return &StepOutcome{}, nil
+		},
+	}}
+
+	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
+	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("step calls = %d, want 2", calls)
 	}
 }
 
@@ -391,10 +434,11 @@ func TestExecutor_AutoFixMixedFindings(t *testing.T) {
 				t.Errorf("expected fixable finding 'bug', got %q", parsed.Items[0].Description)
 			}
 			// Return only the ask-user finding remaining
+			designID := findingIDByDescription(t, database, run.ID, types.StepReview, "design choice")
 			return &StepOutcome{
 				NeedsApproval: true,
 				AutoFixable:   true,
-				Findings:      `{"findings":[{"id":"review-2","severity":"warning","description":"design choice","action":"ask-user"}],"summary":"1 issue"}`,
+				Findings:      `{"findings":[{"id":"` + designID + `","severity":"warning","description":"design choice","action":"ask-user"}],"summary":"1 issue"}`,
 			}, nil
 		},
 	}

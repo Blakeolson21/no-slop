@@ -59,7 +59,8 @@ CREATE TABLE IF NOT EXISTS step_results (
     agent_pid        INTEGER,
     auto_fix_limit   INTEGER,
     ci_fix_attempts  INTEGER NOT NULL DEFAULT 0,
-    convergence_json TEXT
+    convergence_json TEXT,
+    certified_head_sha TEXT
 );
 
 CREATE TABLE IF NOT EXISTS step_rounds (
@@ -142,16 +143,17 @@ CREATE TABLE IF NOT EXISTS intent_cache (
     created_at  INTEGER NOT NULL
 );
 
--- Per-branch range of pipeline-authored commits whose re-review did not
--- complete. The next run's initial review reads this so it is not cold on
--- uncertified fixer commits. PRIMARY KEY per branch: the latest uncertified
--- HEAD replaces an older range.
+-- Per-branch boundary for durable review truth whose verification did not
+-- complete. selection_applied records whether a selected fix reached the
+-- branch. PRIMARY KEY per branch: the latest uncertified HEAD replaces an
+-- older boundary.
 CREATE TABLE IF NOT EXISTS uncertified_pipeline_ranges (
     repo_id       TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
     branch        TEXT NOT NULL,
     from_sha      TEXT NOT NULL,
     to_sha        TEXT NOT NULL,
     source_run_id TEXT NOT NULL,
+    selection_applied INTEGER NOT NULL DEFAULT 0,
     created_at    INTEGER NOT NULL,
     PRIMARY KEY (repo_id, branch)
 );
@@ -185,6 +187,8 @@ var migrationStatements = []string{
 	// written before the provider call, so a crash mid-request spends the
 	// budget rather than silently granting a free retry.
 	`ALTER TABLE runs ADD COLUMN ci_rerun_state TEXT`,
+	`ALTER TABLE runs ADD COLUMN ci_attestation_state TEXT`,
+	`ALTER TABLE uncertified_pipeline_ranges ADD COLUMN selection_applied INTEGER NOT NULL DEFAULT 0`,
 	// Branch synchronization provenance is intentionally nullable. Historical
 	// rows stay unbound because mutable head_sha cannot prove a successful push.
 	`ALTER TABLE runs ADD COLUMN submitted_head_sha TEXT`,
@@ -219,6 +223,7 @@ var migrationStatements = []string{
 	// The review step's convergence report is nullable: legacy rows and
 	// non-review steps read back as "no report", never a fabricated one.
 	`ALTER TABLE step_results ADD COLUMN convergence_json TEXT`,
+	`ALTER TABLE step_results ADD COLUMN certified_head_sha TEXT`,
 	// Session-fidelity telemetry columns (all nullable so pre-existing rows read
 	// back as unknown, never a fabricated zero).
 	`ALTER TABLE agent_invocations ADD COLUMN model_provider TEXT`,

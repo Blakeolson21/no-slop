@@ -1,6 +1,7 @@
 package types
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -40,18 +41,130 @@ const (
 
 // Finding represents a single review, test, lint, or PR comment finding.
 type Finding struct {
-	ID               string `json:"id,omitempty"`
-	Severity         string `json:"severity"`
-	File             string `json:"file,omitempty"`
-	Line             int    `json:"line,omitempty"`
-	Description      string `json:"description"`
-	Action           string `json:"action"`
-	Source           string `json:"source,omitempty"`
-	UserInstructions string `json:"user_instructions,omitempty"`
-	ReviewScope      string `json:"review_scope,omitempty"`
+	ID                   string           `json:"id,omitempty"`
+	IDGenerated          bool             `json:"id_generated,omitempty"`
+	ContinuityToken      string           `json:"continuity_token,omitempty"`
+	OccurrenceToken      string           `json:"occurrence_token,omitempty"`
+	PriorID              string           `json:"prior_id,omitempty"`
+	PriorContinuityToken string           `json:"prior_continuity_token,omitempty"`
+	Severity             string           `json:"severity"`
+	File                 string           `json:"file,omitempty"`
+	Line                 int              `json:"line,omitempty"`
+	Description          string           `json:"description"`
+	Action               string           `json:"action"`
+	Source               string           `json:"source,omitempty"`
+	UserInstructions     string           `json:"user_instructions,omitempty"`
+	ReviewScope          string           `json:"review_scope,omitempty"`
+	Evidence             *FindingEvidence `json:"evidence,omitempty"`
 	// Category separates the combined document+lint housekeeping pass's
 	// findings into their owning gates. Empty everywhere else.
 	Category string `json:"category,omitempty"`
+}
+
+type FindingIdentity struct {
+	File        string
+	Line        int
+	Description string
+}
+
+func (f Finding) Identity() FindingIdentity {
+	return FindingIdentity{File: f.File, Line: f.Line, Description: f.Description}
+}
+
+func (f Finding) Fingerprint() FindingIdentity {
+	identity := f.Identity()
+	identity.Line = 0
+	return identity
+}
+
+func CountFindingFingerprints(items []Finding) map[FindingIdentity]int {
+	counts := make(map[FindingIdentity]int, len(items))
+	for _, item := range items {
+		counts[item.Fingerprint()]++
+	}
+	return counts
+}
+
+func StableFindingIDs(items []Finding) map[string][]Finding {
+	ids := make(map[string][]Finding, len(items))
+	for _, item := range items {
+		if item.HasLineage() {
+			ids[item.ID] = append(ids[item.ID], item)
+		}
+	}
+	return ids
+}
+
+func FindingMatches(item Finding, stableIDs map[string][]Finding, itemOccurrenceCounts, candidateOccurrenceCounts map[string]int, itemIdentityCounts, candidateIdentityCounts, itemFingerprintCounts, candidateFingerprintCounts map[FindingIdentity]int) bool {
+	if item.HasLineage() {
+		for _, candidate := range stableIDs[item.ID] {
+			if FindingIDCorroborates(item, candidate) {
+				return true
+			}
+		}
+		return false
+	}
+	if item.HasOccurrence() && itemOccurrenceCounts[item.OccurrenceToken] == 1 && candidateOccurrenceCounts[item.OccurrenceToken] == 1 {
+		return true
+	}
+	identity := item.Identity()
+	if itemIdentityCounts[identity] == 1 && candidateIdentityCounts[identity] == 1 {
+		return true
+	}
+	fingerprint := item.Fingerprint()
+	return itemFingerprintCounts[fingerprint] == 1 && candidateFingerprintCounts[fingerprint] == 1
+}
+
+func FindingIDCorroborates(item, candidate Finding) bool {
+	return item.HasLineage() && candidate.HasLineage() && item.ID == candidate.ID && item.ContinuityToken == candidate.ContinuityToken
+}
+
+func (f Finding) HasLineage() bool {
+	return f.IDGenerated && f.ID != "" && f.ContinuityToken != ""
+}
+
+func (f Finding) HasOccurrence() bool {
+	return !f.HasLineage() && f.OccurrenceToken != ""
+}
+
+func FindingOccurrenceCorroborates(item, candidate Finding) bool {
+	return item.HasOccurrence() && candidate.HasOccurrence() && item.OccurrenceToken == candidate.OccurrenceToken
+}
+
+func CountFindingOccurrences(items []Finding) map[string]int {
+	counts := make(map[string]int, len(items))
+	for _, item := range items {
+		if item.HasOccurrence() {
+			counts[item.OccurrenceToken]++
+		}
+	}
+	return counts
+}
+
+func EnsureFindingOccurrenceTokens(findings Findings) (Findings, error) {
+	used := make(map[string]bool, len(findings.Items))
+	counts := make(map[string]int, len(findings.Items))
+	for _, item := range findings.Items {
+		if item.OccurrenceToken != "" {
+			used[item.OccurrenceToken] = true
+			counts[item.OccurrenceToken]++
+			if counts[item.OccurrenceToken] > 1 {
+				return Findings{}, fmt.Errorf("duplicate finding occurrence token")
+			}
+		}
+	}
+	for i := range findings.Items {
+		item := &findings.Items[i]
+		if item.HasLineage() || item.OccurrenceToken != "" {
+			continue
+		}
+		token, err := newFindingContinuityToken(used)
+		if err != nil {
+			return Findings{}, err
+		}
+		item.OccurrenceToken = token
+	}
+	return findings, nil
 }
 
 // TestArtifact describes evidence produced by the test step for human review.
@@ -63,42 +176,56 @@ type TestArtifact struct {
 	Content string `json:"content,omitempty"`
 }
 
+type FindingEvidence struct {
+	Tested         []string       `json:"tested,omitempty"`
+	TestingSummary string         `json:"testing_summary,omitempty"`
+	Artifacts      []TestArtifact `json:"artifacts,omitempty"`
+}
+
 type findingWire struct {
-	ID                  string `json:"id,omitempty"`
-	Severity            string `json:"severity"`
-	File                string `json:"file,omitempty"`
-	Line                int    `json:"line,omitempty"`
-	Description         string `json:"description"`
-	Action              string `json:"action"`
-	Source              string `json:"source,omitempty"`
-	UserInstructions    string `json:"user_instructions,omitempty"`
-	ReviewScope         string `json:"review_scope,omitempty"`
-	Category            string `json:"category,omitempty"`
-	RequiresHumanReview *bool  `json:"requires_human_review,omitempty"`
+	ID                   string           `json:"id,omitempty"`
+	IDGenerated          bool             `json:"id_generated,omitempty"`
+	ContinuityToken      string           `json:"continuity_token,omitempty"`
+	OccurrenceToken      string           `json:"occurrence_token,omitempty"`
+	PriorID              string           `json:"prior_id,omitempty"`
+	PriorContinuityToken string           `json:"prior_continuity_token,omitempty"`
+	Severity             string           `json:"severity"`
+	File                 string           `json:"file,omitempty"`
+	Line                 int              `json:"line,omitempty"`
+	Description          string           `json:"description"`
+	Action               string           `json:"action"`
+	Source               string           `json:"source,omitempty"`
+	UserInstructions     string           `json:"user_instructions,omitempty"`
+	ReviewScope          string           `json:"review_scope,omitempty"`
+	Evidence             *FindingEvidence `json:"evidence,omitempty"`
+	Category             string           `json:"category,omitempty"`
+	RequiresHumanReview  *bool            `json:"requires_human_review,omitempty"`
 }
 
 // Findings is the structured findings payload exchanged across pipeline, IPC, and TUI.
 type Findings struct {
-	Items          []Finding      `json:"findings"`
-	Summary        string         `json:"summary"`
-	Tested         []string       `json:"tested,omitempty"`
-	TestingSummary string         `json:"testing_summary,omitempty"`
-	Artifacts      []TestArtifact `json:"artifacts,omitempty"`
-	RiskLevel      string         `json:"risk_level"`
-	RiskRationale  string         `json:"risk_rationale"`
-	RiskScope      string         `json:"risk_scope,omitempty"`
+	Items          []Finding        `json:"findings"`
+	Summary        string           `json:"summary"`
+	Tested         []string         `json:"tested,omitempty"`
+	TestingSummary string           `json:"testing_summary,omitempty"`
+	Artifacts      []TestArtifact   `json:"artifacts,omitempty"`
+	SharedEvidence *FindingEvidence `json:"shared_evidence,omitempty"`
+	RiskLevel      string           `json:"risk_level"`
+	RiskRationale  string           `json:"risk_rationale"`
+	RiskScope      string           `json:"risk_scope,omitempty"`
 }
 
 type findingsWire struct {
-	Items          []Finding      `json:"findings"`
-	Legacy         []Finding      `json:"items"`
-	Summary        string         `json:"summary"`
-	Tested         []string       `json:"tested"`
-	TestingSummary string         `json:"testing_summary"`
-	Artifacts      []TestArtifact `json:"artifacts"`
-	RiskLevel      string         `json:"risk_level"`
-	RiskRationale  string         `json:"risk_rationale"`
-	RiskScope      string         `json:"risk_scope"`
+	Items          []Finding        `json:"findings"`
+	Legacy         []Finding        `json:"items"`
+	Summary        string           `json:"summary"`
+	Tested         []string         `json:"tested"`
+	TestingSummary string           `json:"testing_summary"`
+	Artifacts      []TestArtifact   `json:"artifacts"`
+	SharedEvidence *FindingEvidence `json:"shared_evidence"`
+	RiskLevel      string           `json:"risk_level"`
+	RiskRationale  string           `json:"risk_rationale"`
+	RiskScope      string           `json:"risk_scope"`
 }
 
 // ParseFindingsJSON decodes findings JSON, accepting current and legacy item
@@ -112,18 +239,184 @@ func ParseFindingsJSON(raw string) (Findings, error) {
 	if len(items) == 0 && len(wire.Legacy) > 0 {
 		items = wire.Legacy
 	}
-	return Findings{Items: items, Summary: wire.Summary, Tested: wire.Tested, TestingSummary: wire.TestingSummary, Artifacts: wire.Artifacts, RiskLevel: wire.RiskLevel, RiskRationale: wire.RiskRationale, RiskScope: wire.RiskScope}, nil
+	return Findings{Items: items, Summary: wire.Summary, Tested: wire.Tested, TestingSummary: wire.TestingSummary, Artifacts: wire.Artifacts, SharedEvidence: wire.SharedEvidence, RiskLevel: wire.RiskLevel, RiskRationale: wire.RiskRationale, RiskScope: wire.RiskScope}, nil
 }
 
-// NormalizeFindings assigns deterministic IDs to findings that do not have one yet.
-func NormalizeFindings(findings Findings, prefix string) Findings {
+// NormalizeFindings replaces reviewer-local IDs with pipeline-owned lineage IDs.
+func NormalizeFindings(findings Findings, prefix string, existing []Finding) (Findings, error) {
+	if prefix != "review" {
+		return normalizeNonReviewFindings(findings, prefix, existing)
+	}
+	type lineageClaim struct {
+		id    string
+		token string
+	}
+	allowed := make(map[lineageClaim][]Finding, len(existing))
+	used := make(map[string]bool, len(existing)+len(findings.Items))
+	usedTokens := make(map[string]bool, len(existing)+len(findings.Items))
+	for _, item := range existing {
+		if item.ID != "" {
+			used[item.ID] = true
+		}
+		if item.ContinuityToken != "" {
+			usedTokens[item.ContinuityToken] = true
+		}
+		if item.HasLineage() {
+			claim := lineageClaim{id: item.ID, token: item.ContinuityToken}
+			allowed[claim] = append(allowed[claim], item)
+		}
+	}
+	corroborated := make(map[lineageClaim][]int, len(findings.Items))
 	for i := range findings.Items {
-		if findings.Items[i].ID != "" {
+		item := findings.Items[i]
+		claim := lineageClaim{id: item.PriorID, token: item.PriorContinuityToken}
+		matches := allowed[claim]
+		if claim.id != "" && claim.token != "" && len(matches) == 1 && findingSemanticallyCorroborates(item, matches[0]) {
+			corroborated[claim] = append(corroborated[claim], i)
+		}
+	}
+	for i := range findings.Items {
+		item := &findings.Items[i]
+		claim := lineageClaim{id: item.PriorID, token: item.PriorContinuityToken}
+		matches := allowed[claim]
+		if claim.id != "" && claim.token != "" && len(matches) == 1 && len(corroborated[claim]) == 1 && corroborated[claim][0] == i {
+			item.ID = matches[0].ID
+			item.IDGenerated = true
+			item.ContinuityToken = matches[0].ContinuityToken
+			item.OccurrenceToken = ""
+			item.PriorID = ""
+			item.PriorContinuityToken = ""
 			continue
 		}
-		findings.Items[i].ID = prefix + "-" + itoa(i+1)
+		id, err := newFindingLineageID(prefix, used)
+		if err != nil {
+			return Findings{}, err
+		}
+		token, err := newFindingContinuityToken(usedTokens)
+		if err != nil {
+			return Findings{}, err
+		}
+		item.ID = id
+		item.IDGenerated = true
+		item.ContinuityToken = token
+		item.OccurrenceToken = ""
 	}
-	return findings
+	return findings, nil
+}
+
+func NormalizeUserFindings(findings Findings, existing []Finding) (Findings, error) {
+	existingByID := make(map[string][]Finding, len(existing))
+	usedIDs := make(map[string]bool, len(existing)+len(findings.Items))
+	usedTokens := make(map[string]bool, len(existing)+len(findings.Items))
+	for _, item := range existing {
+		if item.ID != "" {
+			existingByID[item.ID] = append(existingByID[item.ID], item)
+			usedIDs[item.ID] = true
+		}
+		if item.ContinuityToken != "" {
+			usedTokens[item.ContinuityToken] = true
+		}
+	}
+	for _, item := range findings.Items {
+		if item.Source == FindingSourceUser && !item.HasLineage() {
+			continue
+		}
+		if item.ID != "" {
+			usedIDs[item.ID] = true
+		}
+		if item.ContinuityToken != "" {
+			usedTokens[item.ContinuityToken] = true
+		}
+	}
+	for i := range findings.Items {
+		if findings.Items[i].HasLineage() {
+			findings.Items[i].OccurrenceToken = ""
+		}
+	}
+	counter := 0
+	for i := range findings.Items {
+		item := &findings.Items[i]
+		if item.Source != FindingSourceUser || item.HasLineage() {
+			continue
+		}
+		continuations := make([]Finding, 0, 1)
+		for _, candidate := range existingByID[item.ID] {
+			if candidate.Source == FindingSourceUser && candidate.Identity() == item.Identity() {
+				continuations = append(continuations, candidate)
+			}
+		}
+		if len(continuations) == 1 {
+			item.ID = continuations[0].ID
+			item.IDGenerated = true
+			item.ContinuityToken = continuations[0].ContinuityToken
+			item.OccurrenceToken = ""
+		}
+		if item.ID == "" || (usedIDs[item.ID] && len(continuations) != 1) {
+			item.ID, counter = nextUserFindingID(usedIDs, counter)
+		} else {
+			usedIDs[item.ID] = true
+		}
+		if item.ContinuityToken == "" {
+			token, err := newFindingContinuityToken(usedTokens)
+			if err != nil {
+				return Findings{}, err
+			}
+			item.ContinuityToken = token
+		}
+		item.IDGenerated = true
+		item.OccurrenceToken = ""
+		item.PriorID = ""
+		item.PriorContinuityToken = ""
+	}
+	return findings, nil
+}
+
+func findingSemanticallyCorroborates(item, candidate Finding) bool {
+	return strings.TrimSpace(item.Description) != "" && item.Fingerprint() == candidate.Fingerprint()
+}
+
+func normalizeNonReviewFindings(findings Findings, prefix string, _ []Finding) (Findings, error) {
+	for i := range findings.Items {
+		if findings.Items[i].ID == "" {
+			findings.Items[i].ID = prefix + "-" + itoa(i+1)
+		}
+		findings.Items[i].IDGenerated = false
+		findings.Items[i].ContinuityToken = ""
+		findings.Items[i].OccurrenceToken = ""
+		findings.Items[i].PriorID = ""
+		findings.Items[i].PriorContinuityToken = ""
+	}
+	return findings, nil
+}
+
+func newFindingContinuityToken(used map[string]bool) (string, error) {
+	for {
+		var random [16]byte
+		if _, err := rand.Read(random[:]); err != nil {
+			return "", fmt.Errorf("generate finding continuity token: %w", err)
+		}
+		token := fmt.Sprintf("%x", random)
+		if used[token] {
+			continue
+		}
+		used[token] = true
+		return token, nil
+	}
+}
+
+func newFindingLineageID(prefix string, used map[string]bool) (string, error) {
+	for {
+		var random [16]byte
+		if _, err := rand.Read(random[:]); err != nil {
+			return "", fmt.Errorf("generate finding lineage: %w", err)
+		}
+		id := fmt.Sprintf("%s-%x", prefix, random)
+		if used[id] {
+			continue
+		}
+		used[id] = true
+		return id, nil
+	}
 }
 
 // FilterFindings keeps only findings whose IDs are included in ids.
@@ -135,7 +428,7 @@ func FilterFindings(findings Findings, ids []string) Findings {
 	for _, id := range ids {
 		selected[id] = true
 	}
-	filtered := Findings{Summary: findings.Summary, Tested: findings.Tested, TestingSummary: findings.TestingSummary, Artifacts: findings.Artifacts, RiskLevel: findings.RiskLevel, RiskRationale: findings.RiskRationale, RiskScope: findings.RiskScope}
+	filtered := Findings{Summary: findings.Summary, Tested: findings.Tested, TestingSummary: findings.TestingSummary, Artifacts: findings.Artifacts, SharedEvidence: findings.SharedEvidence, RiskLevel: findings.RiskLevel, RiskRationale: findings.RiskRationale, RiskScope: findings.RiskScope}
 	for _, item := range findings.Items {
 		if selected[item.ID] {
 			filtered.Items = append(filtered.Items, item)
@@ -156,7 +449,7 @@ func ExcludeFindings(findings Findings, ids []string) Findings {
 	for _, id := range ids {
 		excluded[id] = true
 	}
-	result := Findings{Summary: findings.Summary, Tested: findings.Tested, TestingSummary: findings.TestingSummary, Artifacts: findings.Artifacts, RiskLevel: findings.RiskLevel, RiskRationale: findings.RiskRationale, RiskScope: findings.RiskScope}
+	result := Findings{Summary: findings.Summary, Tested: findings.Tested, TestingSummary: findings.TestingSummary, Artifacts: findings.Artifacts, SharedEvidence: findings.SharedEvidence, RiskLevel: findings.RiskLevel, RiskRationale: findings.RiskRationale, RiskScope: findings.RiskScope}
 	for _, item := range findings.Items {
 		if !excluded[item.ID] {
 			result.Items = append(result.Items, item)
@@ -169,7 +462,7 @@ func ExcludeFindings(findings Findings, ids []string) Findings {
 // Action is "auto-fix". These are safe for automatic fixing without
 // user involvement.
 func AutoFixableFindings(findings Findings) Findings {
-	result := Findings{Summary: findings.Summary, Tested: findings.Tested, TestingSummary: findings.TestingSummary, Artifacts: findings.Artifacts, RiskLevel: findings.RiskLevel, RiskRationale: findings.RiskRationale, RiskScope: findings.RiskScope}
+	result := Findings{Summary: findings.Summary, Tested: findings.Tested, TestingSummary: findings.TestingSummary, Artifacts: findings.Artifacts, SharedEvidence: findings.SharedEvidence, RiskLevel: findings.RiskLevel, RiskRationale: findings.RiskRationale, RiskScope: findings.RiskScope}
 	for _, item := range findings.Items {
 		if item.ActionOrDefault() == ActionAutoFix {
 			result.Items = append(result.Items, item)
@@ -188,6 +481,7 @@ func MergeUserOverrides(findings Findings, instructions map[string]string, added
 		Tested:         findings.Tested,
 		TestingSummary: findings.TestingSummary,
 		Artifacts:      findings.Artifacts,
+		SharedEvidence: findings.SharedEvidence,
 		RiskLevel:      findings.RiskLevel,
 		RiskRationale:  findings.RiskRationale,
 		RiskScope:      findings.RiskScope,
@@ -335,6 +629,11 @@ func (f *Finding) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	f.ID = wire.ID
+	f.IDGenerated = wire.IDGenerated
+	f.ContinuityToken = wire.ContinuityToken
+	f.OccurrenceToken = wire.OccurrenceToken
+	f.PriorID = wire.PriorID
+	f.PriorContinuityToken = wire.PriorContinuityToken
 	f.Severity = wire.Severity
 	f.File = wire.File
 	f.Line = wire.Line
@@ -343,6 +642,7 @@ func (f *Finding) UnmarshalJSON(data []byte) error {
 	f.Source = wire.Source
 	f.UserInstructions = wire.UserInstructions
 	f.ReviewScope = wire.ReviewScope
+	f.Evidence = wire.Evidence
 	f.Category = wire.Category
 	if f.Action == "" && wire.RequiresHumanReview != nil {
 		if *wire.RequiresHumanReview {

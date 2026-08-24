@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"net/url"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/Blakeolson21/no-slop/internal/scm"
+	"github.com/Blakeolson21/no-slop/internal/shellenv"
 )
 
 // CmdFactory builds an exec.Cmd in the caller's workdir with the caller's env.
@@ -25,6 +27,8 @@ type Host struct {
 	repo         string // "owner/name" slug for --repo; empty when unknown
 	forkOwner    string // fork owner for cross-repository PR heads
 }
+
+var publicationNoncePattern = regexp.MustCompile(`^no-slop-required\|(?:opened|edited|synchronize|reopened)\|PR #[0-9]+ event [0-9]+ \(run [0-9]+\)\|<!-- no-slop-publication:v1 ([0-9a-f]{32}) -->`)
 
 // New builds a Host. cliAvailable reports whether the gh binary is
 // resolvable on the caller's PATH (possibly overridden by env). host is the
@@ -267,14 +271,67 @@ func (h *Host) UpdatePR(ctx context.Context, pr *scm.PR, content scm.PRContent) 
 	if err != nil {
 		return nil, err
 	}
-	args := append([]string{"pr", "edit", selector}, h.repoArgs()...)
-	args = append(args, "--title", content.Title, "--body-file", "-")
-	cmd := h.cmd(ctx, "gh", args...)
-	cmd.Stdin = strings.NewReader(content.Body)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("gh pr edit: %s: %w", strings.TrimSpace(string(out)), err)
+	repo, number, err := h.prAPIIdentity(pr, selector)
+	if err != nil {
+		return nil, err
 	}
-	return pr, nil
+	payload, err := json.Marshal(struct {
+		Title string `json:"title"`
+		Body  string `json:"body"`
+	}{Title: content.Title, Body: content.Body})
+	if err != nil {
+		return nil, fmt.Errorf("marshal pull request update: %w", err)
+	}
+	args := []string{"api"}
+	if h.host != "" && !strings.EqualFold(h.host, "github.com") {
+		args = append(args, "--hostname", h.host)
+	}
+	args = append(args, "--method", "PATCH", "repos/"+repo+"/pulls/"+number, "--input", "-")
+	cmd := h.cmd(ctx, "gh", args...)
+	cmd.Stdin = strings.NewReader(string(payload))
+	shellenv.ConfigureShellCommand(cmd)
+	out, err := shellenv.CombinedOutputShellCommand(cmd)
+	if err != nil {
+		return nil, fmt.Errorf("gh api update pull request: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	var response struct {
+		Number int    `json:"number"`
+		URL    string `json:"html_url"`
+	}
+	if err := json.Unmarshal(out, &response); err != nil {
+		return nil, fmt.Errorf("parse updated pull request: %w", err)
+	}
+	updated := &scm.PR{Number: number}
+	if response.Number != 0 {
+		updated.Number = fmt.Sprintf("%d", response.Number)
+	}
+	updated.URL = response.URL
+	if updated.URL == "" && pr != nil {
+		updated.URL = pr.URL
+	}
+	return updated, nil
+}
+
+func (h *Host) prAPIIdentity(pr *scm.PR, selector string) (string, string, error) {
+	number := strings.TrimSpace(selector)
+	if strings.Contains(number, "://") {
+		var err error
+		number, err = scm.ExtractPRNumber(number)
+		if err != nil {
+			return "", "", err
+		}
+	}
+	repo := strings.TrimSpace(h.repo)
+	if h.host != "" {
+		repo = strings.TrimPrefix(repo, h.host+"/")
+	}
+	if repo == "" {
+		repo = RepoSlug(pr.URL)
+	}
+	if repo == "" {
+		return "", "", errors.New("no repository known; refusing to update pull request")
+	}
+	return repo, number, nil
 }
 
 func (h *Host) GetPRState(ctx context.Context, pr *scm.PR) (scm.PRState, error) {
@@ -334,6 +391,102 @@ func (h *Host) GetChecks(ctx context.Context, pr *scm.PR) ([]scm.Check, error) {
 		})
 	}
 	return checks, nil
+}
+
+func (h *Host) GetCheckAttemptIdentity(ctx context.Context, check scm.Check) (scm.CheckAttemptIdentity, error) {
+	runID, _, ok := actionsRerunTarget(check.Link)
+	if !ok {
+		return scm.CheckAttemptIdentity{}, fmt.Errorf("check link does not identify a GitHub Actions run: %s", check.Link)
+	}
+	args := append([]string{"run", "view", runID}, h.repoArgs()...)
+	args = append(args, "--json", "databaseId,number,attempt,event,headSha,displayTitle")
+	cmd := h.cmd(ctx, "gh", args...)
+	shellenv.ConfigureShellCommand(cmd)
+	out, err := shellenv.OutputShellCommand(cmd)
+	if err != nil {
+		return scm.CheckAttemptIdentity{}, fmt.Errorf("gh run view: %w", err)
+	}
+	var raw struct {
+		RunID        int64  `json:"databaseId"`
+		RunNumber    int64  `json:"number"`
+		RunAttempt   int    `json:"attempt"`
+		Event        string `json:"event"`
+		HeadSHA      string `json:"headSha"`
+		DisplayTitle string `json:"displayTitle"`
+	}
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return scm.CheckAttemptIdentity{}, fmt.Errorf("parse GitHub Actions run identity: %w", err)
+	}
+	if raw.RunID == 0 || raw.RunNumber == 0 {
+		return scm.CheckAttemptIdentity{}, fmt.Errorf("GitHub Actions run identity is incomplete for %s", check.Link)
+	}
+	publicationNonce, err := parsePublicationNonce([]byte(raw.DisplayTitle))
+	if err != nil {
+		return scm.CheckAttemptIdentity{}, err
+	}
+	return scm.CheckAttemptIdentity{
+		RunID:            raw.RunID,
+		RunNumber:        raw.RunNumber,
+		RunAttempt:       raw.RunAttempt,
+		Event:            strings.TrimSpace(raw.Event),
+		HeadSHA:          strings.TrimSpace(raw.HeadSHA),
+		PublicationNonce: publicationNonce,
+	}, nil
+}
+
+func (h *Host) FindAttestationPublicationIdentity(ctx context.Context, headSHA, publicationNonce string) (scm.CheckAttemptIdentity, bool, error) {
+	args := append([]string{"run", "list", "--workflow", "no-slop-required.yml", "--commit", headSHA, "--limit", "1000"}, h.repoArgs()...)
+	args = append(args, "--json", "databaseId,number,attempt,event,headSha,displayTitle")
+	cmd := h.cmd(ctx, "gh", args...)
+	shellenv.ConfigureShellCommand(cmd)
+	out, err := shellenv.OutputShellCommand(cmd)
+	if err != nil {
+		return scm.CheckAttemptIdentity{}, false, fmt.Errorf("gh run list attestation publications: %w", err)
+	}
+	var runs []struct {
+		RunID        int64  `json:"databaseId"`
+		RunNumber    int64  `json:"number"`
+		RunAttempt   int    `json:"attempt"`
+		Event        string `json:"event"`
+		HeadSHA      string `json:"headSha"`
+		DisplayTitle string `json:"displayTitle"`
+	}
+	if err := json.Unmarshal(out, &runs); err != nil {
+		return scm.CheckAttemptIdentity{}, false, fmt.Errorf("parse GitHub Actions attestation publications: %w", err)
+	}
+	var found scm.CheckAttemptIdentity
+	for _, run := range runs {
+		nonce, err := parsePublicationNonce([]byte(run.DisplayTitle))
+		if err != nil {
+			return scm.CheckAttemptIdentity{}, false, err
+		}
+		if nonce != publicationNonce || strings.TrimSpace(run.HeadSHA) != strings.TrimSpace(headSHA) {
+			continue
+		}
+		if run.RunID <= 0 || run.RunNumber <= 0 {
+			return scm.CheckAttemptIdentity{}, false, fmt.Errorf("GitHub Actions publication identity is incomplete")
+		}
+		if found.RunNumber != 0 && found.RunNumber <= run.RunNumber {
+			continue
+		}
+		found = scm.CheckAttemptIdentity{
+			RunID:            run.RunID,
+			RunNumber:        run.RunNumber,
+			RunAttempt:       run.RunAttempt,
+			Event:            strings.TrimSpace(run.Event),
+			HeadSHA:          strings.TrimSpace(run.HeadSHA),
+			PublicationNonce: nonce,
+		}
+	}
+	return found, found.RunID != 0, nil
+}
+
+func parsePublicationNonce(providerIdentity []byte) (string, error) {
+	match := publicationNoncePattern.FindSubmatch(providerIdentity)
+	if len(match) == 0 {
+		return "", nil
+	}
+	return string(match[1]), nil
 }
 
 // RerunCheck re-runs the Actions job behind check for the same commit, so a

@@ -1,6 +1,9 @@
 package db
 
-import "fmt"
+import (
+	"database/sql"
+	"fmt"
+)
 
 const (
 	RoundSelectionSourceUser    = "user"
@@ -9,11 +12,13 @@ const (
 
 // StepRound represents one execution round within a pipeline step.
 type StepRound struct {
-	ID               string
-	StepResultID     string
-	Round            int
-	Trigger          string  // "initial", "auto_fix"; legacy "user_fix" is treated as "auto_fix"
-	FindingsJSON     *string // nullable - findings produced by this round
+	ID           string
+	StepResultID string
+	Round        int
+	Trigger      string // "initial", "auto_fix"; legacy "user_fix" is treated as "auto_fix"
+	// FindingsJSON is the nullable finding set shown at this round's gate.
+	// Review rounds persist the effective set, including unresolved carry.
+	FindingsJSON     *string
 	ReviewedHeadSHA  *string // non-authoritative commit candidate captured by a review round
 	StartingHeadSHA  *string
 	TrustedConfigSHA *string
@@ -55,6 +60,21 @@ type StepRoundStats struct {
 	SelectedForFix     bool
 	AutoSelectedForFix bool
 	PendingFixSource   string
+}
+
+type ReviewFixSelection struct {
+	RoundID            string
+	StepResultID       string
+	RepoID             string
+	Branch             string
+	FromSHA            string
+	HeadSHA            string
+	SourceRunID        string
+	RoundFindingsJSON  string
+	StepFindingsJSON   string
+	SelectedFindingIDs *string
+	SelectionSource    string
+	UserFindingsJSON   *string
 }
 
 // IsFixRound reports whether this round was a fix attempt. Legacy "user_fix"
@@ -119,6 +139,21 @@ func (d *DB) StepRoundStats(stepResultID string) (StepRoundStats, error) {
 	return stats, nil
 }
 
+func (d *DB) GetLatestStepRoundSelection(stepResultID string) (*string, error) {
+	row := d.sql.QueryRow(`SELECT selected_finding_ids FROM step_rounds WHERE step_result_id = ? ORDER BY round DESC LIMIT 1`, stepResultID)
+	var selected sql.NullString
+	if err := row.Scan(&selected); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get latest step round selection: %w", err)
+	}
+	if !selected.Valid || selected.String == "" {
+		return nil, nil
+	}
+	return &selected.String, nil
+}
+
 // InsertStepRound creates a new round record for a step result. fixSummary may
 // be nil for non-fix rounds or when the agent produced no summary.
 func (d *DB) InsertStepRound(stepResultID string, round int, trigger string, findingsJSON *string, fixSummary *string, durationMS int64) (*StepRound, error) {
@@ -133,6 +168,41 @@ func (d *DB) InsertReviewStepRound(stepResultID string, round int, trigger strin
 }
 
 func (d *DB) InsertReviewStepRoundWithProvenance(stepResultID string, round int, trigger string, findingsJSON *string, fixSummary *string, reviewedHeadSHA, startingHeadSHA, trustedConfigSHA string, globalConfigYAML, repoConfigYAML []byte, durationMS int64) (*StepRound, error) {
+	return d.insertReviewStepRoundWithProvenance(d.sql, stepResultID, round, trigger, findingsJSON, fixSummary, reviewedHeadSHA, startingHeadSHA, trustedConfigSHA, globalConfigYAML, repoConfigYAML, durationMS)
+}
+
+func (d *DB) InsertEffectiveReviewStepRoundWithProvenance(stepResultID string, round int, trigger string, findingsJSON *string, fixSummary *string, reviewedHeadSHA, startingHeadSHA, trustedConfigSHA string, globalConfigYAML, repoConfigYAML []byte, durationMS int64) (*StepRound, error) {
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin effective review round: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`UPDATE step_results SET findings_json = ? WHERE id = ?`, findingsJSON, stepResultID)
+	if err != nil {
+		return nil, fmt.Errorf("set effective review findings: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("set effective review findings result: %w", err)
+	}
+	if rows != 1 {
+		return nil, fmt.Errorf("set effective review findings: updated %d rows", rows)
+	}
+	roundRecord, err := d.insertReviewStepRoundWithProvenance(tx, stepResultID, round, trigger, findingsJSON, fixSummary, reviewedHeadSHA, startingHeadSHA, trustedConfigSHA, globalConfigYAML, repoConfigYAML, durationMS)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit effective review round: %w", err)
+	}
+	return roundRecord, nil
+}
+
+type stepRoundExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func (d *DB) insertReviewStepRoundWithProvenance(execer stepRoundExecer, stepResultID string, round int, trigger string, findingsJSON *string, fixSummary *string, reviewedHeadSHA, startingHeadSHA, trustedConfigSHA string, globalConfigYAML, repoConfigYAML []byte, durationMS int64) (*StepRound, error) {
 	var reviewed, starting, trusted *string
 	if reviewedHeadSHA != "" {
 		reviewed = &reviewedHeadSHA
@@ -143,10 +213,14 @@ func (d *DB) InsertReviewStepRoundWithProvenance(stepResultID string, round int,
 	if trustedConfigSHA != "" {
 		trusted = &trustedConfigSHA
 	}
-	return d.insertStepRound(stepResultID, round, trigger, findingsJSON, fixSummary, reviewed, starting, trusted, globalConfigYAML, repoConfigYAML, durationMS)
+	return d.insertStepRoundWith(execer, stepResultID, round, trigger, findingsJSON, fixSummary, reviewed, starting, trusted, globalConfigYAML, repoConfigYAML, durationMS)
 }
 
 func (d *DB) insertStepRound(stepResultID string, round int, trigger string, findingsJSON *string, fixSummary, reviewedHeadSHA, startingHeadSHA, trustedConfigSHA *string, globalConfigYAML, repoConfigYAML []byte, durationMS int64) (*StepRound, error) {
+	return d.insertStepRoundWith(d.sql, stepResultID, round, trigger, findingsJSON, fixSummary, reviewedHeadSHA, startingHeadSHA, trustedConfigSHA, globalConfigYAML, repoConfigYAML, durationMS)
+}
+
+func (d *DB) insertStepRoundWith(execer stepRoundExecer, stepResultID string, round int, trigger string, findingsJSON *string, fixSummary, reviewedHeadSHA, startingHeadSHA, trustedConfigSHA *string, globalConfigYAML, repoConfigYAML []byte, durationMS int64) (*StepRound, error) {
 	r := &StepRound{
 		ID:               newID(),
 		StepResultID:     stepResultID,
@@ -162,7 +236,7 @@ func (d *DB) insertStepRound(stepResultID string, round int, trigger string, fin
 		DurationMS:       durationMS,
 		CreatedAt:        now(),
 	}
-	_, err := d.sql.Exec(
+	_, err := execer.Exec(
 		`INSERT INTO step_rounds (id, step_result_id, round, trigger_type, findings_json, reviewed_head_sha, starting_head_sha, trusted_config_sha, global_config_yaml, repo_config_yaml, user_findings_json, selected_finding_ids, selection_source, fix_summary, duration_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.ID, r.StepResultID, r.Round, r.Trigger, r.FindingsJSON, r.ReviewedHeadSHA, r.StartingHeadSHA, r.TrustedConfigSHA, r.GlobalConfigYAML, r.RepoConfigYAML, r.UserFindingsJSON, r.SelectedFindingIDs, r.SelectionSource, r.FixSummary, r.DurationMS, r.CreatedAt,
 	)
@@ -181,11 +255,74 @@ func (d *DB) SetStepRoundSelection(id string, selectedFindingIDs *string, source
 	if selectedFindingIDs != nil && *selectedFindingIDs != "" && source != "" {
 		selectionSource = &source
 	}
-	if _, err := d.sql.Exec(
+	result, err := d.sql.Exec(
 		`UPDATE step_rounds SET selected_finding_ids = ?, selection_source = ? WHERE id = ?`,
 		selectedFindingIDs, selectionSource, id,
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("set step round selection: %w", err)
+	}
+	return requireStepRoundUpdated(result, id)
+}
+
+func (d *DB) PersistReviewFixSelection(selection ReviewFixSelection) error {
+	if selection.RoundID == "" || selection.StepResultID == "" || selection.RepoID == "" || selection.Branch == "" || selection.FromSHA == "" || selection.HeadSHA == "" || selection.SourceRunID == "" || selection.RoundFindingsJSON == "" || selection.StepFindingsJSON == "" {
+		return fmt.Errorf("persist review fix selection: incomplete durable selection")
+	}
+	var selectionSource *string
+	if selection.SelectedFindingIDs != nil && *selection.SelectedFindingIDs != "" && selection.SelectionSource != "" {
+		selectionSource = &selection.SelectionSource
+	}
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return fmt.Errorf("begin review fix selection: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(
+		`UPDATE step_results SET findings_json = ?
+		 WHERE id = ? AND run_id = ? AND EXISTS (
+		   SELECT 1 FROM step_rounds WHERE id = ? AND step_result_id = step_results.id
+		 )`,
+		selection.StepFindingsJSON, selection.StepResultID, selection.SourceRunID, selection.RoundID,
+	)
+	if err != nil {
+		return fmt.Errorf("set durable review gate truth: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read durable review gate truth result: %w", err)
+	}
+	if rows != 1 {
+		return fmt.Errorf("step result %s not found", selection.StepResultID)
+	}
+	result, err = tx.Exec(
+		`UPDATE step_rounds
+		 SET findings_json = ?, selected_finding_ids = ?, selection_source = ?, user_findings_json = ?
+		 WHERE id = ? AND step_result_id = ?`,
+		selection.RoundFindingsJSON, selection.SelectedFindingIDs, selectionSource, selection.UserFindingsJSON, selection.RoundID, selection.StepResultID,
+	)
+	if err != nil {
+		return fmt.Errorf("set durable review round selection: %w", err)
+	}
+	if err := requireStepRoundUpdated(result, selection.RoundID); err != nil {
+		return err
+	}
+	_, err = tx.Exec(
+		`INSERT INTO uncertified_pipeline_ranges (repo_id, branch, from_sha, to_sha, source_run_id, selection_applied, created_at)
+		 VALUES (?, ?, ?, ?, ?, 0, ?)
+		 ON CONFLICT(repo_id, branch) DO UPDATE SET
+		   from_sha = excluded.from_sha,
+		   to_sha = excluded.to_sha,
+		   source_run_id = excluded.source_run_id,
+		   selection_applied = 0,
+		   created_at = excluded.created_at`,
+		selection.RepoID, selection.Branch, selection.FromSHA, selection.HeadSHA, selection.SourceRunID, now(),
+	)
+	if err != nil {
+		return fmt.Errorf("set durable review recovery marker: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit review fix selection: %w", err)
 	}
 	return nil
 }
@@ -195,11 +332,66 @@ func (d *DB) SetStepRoundUserDecision(id string, selectedFindingIDs *string, sou
 	if selectedFindingIDs != nil && *selectedFindingIDs != "" && source != "" {
 		selectionSource = &source
 	}
-	if _, err := d.sql.Exec(
+	result, err := d.sql.Exec(
 		`UPDATE step_rounds SET selected_finding_ids = ?, selection_source = ?, user_findings_json = ? WHERE id = ?`,
 		selectedFindingIDs, selectionSource, userFindingsJSON, id,
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("set step round user decision: %w", err)
+	}
+	return requireStepRoundUpdated(result, id)
+}
+
+func (d *DB) SetStepRoundUserDecisionAndFindings(id, stepResultID string, selectedFindingIDs *string, source string, userFindingsJSON *string, findingsJSON string) error {
+	var selectionSource *string
+	if selectedFindingIDs != nil && *selectedFindingIDs != "" && source != "" {
+		selectionSource = &source
+	}
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return fmt.Errorf("begin step round user decision: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(
+		`UPDATE step_results SET findings_json = ?
+		 WHERE id = ? AND EXISTS (
+		   SELECT 1 FROM step_rounds WHERE id = ? AND step_result_id = step_results.id
+		 )`,
+		findingsJSON, stepResultID, id,
+	)
+	if err != nil {
+		return fmt.Errorf("set durable review lineages: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read durable review lineages result: %w", err)
+	}
+	if rows != 1 {
+		return fmt.Errorf("step result %s not found", stepResultID)
+	}
+	result, err = tx.Exec(
+		`UPDATE step_rounds SET selected_finding_ids = ?, selection_source = ?, user_findings_json = ? WHERE id = ? AND step_result_id = ?`,
+		selectedFindingIDs, selectionSource, userFindingsJSON, id, stepResultID,
+	)
+	if err != nil {
+		return fmt.Errorf("set step round user decision: %w", err)
+	}
+	if err := requireStepRoundUpdated(result, id); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit step round user decision: %w", err)
+	}
+	return nil
+}
+
+func requireStepRoundUpdated(result sql.Result, id string) error {
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read step round update result: %w", err)
+	}
+	if rows != 1 {
+		return fmt.Errorf("step round %s not found", id)
 	}
 	return nil
 }

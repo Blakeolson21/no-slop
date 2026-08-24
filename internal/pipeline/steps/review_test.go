@@ -507,6 +507,17 @@ func TestUncertifiedRange_PersistsThenFeedsNextInitialReview(t *testing.T) {
 	fixAgent := &mockAgent{name: "test"}
 	fixCtx := newTestContextWithDBRecords(t, fixAgent, dir, baseSHA, headSHA, config.Commands{})
 	fixCtx.ReviewStartingHeadSHA = headSHA
+	reviewResult, err := fixCtx.DB.InsertStepResult(fixCtx.Run.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priorFindings := `{"findings":[],"summary":"clean"}`
+	if err := fixCtx.DB.SetStepFindings(reviewResult.ID, priorFindings); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixCtx.DB.InsertStepRound(reviewResult.ID, 1, "initial", &priorFindings, nil, 1); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(dir, "review-fix.txt"), []byte("fixed"), 0o644); err != nil {
 		t.Fatal(err)
 	}

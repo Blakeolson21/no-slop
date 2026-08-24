@@ -112,6 +112,97 @@ func TestGetChecksPassesRepoFlag(t *testing.T) {
 	}
 }
 
+func TestGetCheckAttemptIdentityReadsImmutableRunIdentityWithLegacyTitle(t *testing.T) {
+	t.Parallel()
+
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh run view 900 --repo test/repo --json databaseId,number,attempt,event,headSha,displayTitle": {
+			stdout: `{"databaseId":900,"number":42,"attempt":3,"event":"pull_request","headSha":"abc123","displayTitle":"legacy workflow title"}` + "\n",
+		},
+	}), nil, "", "test/repo")
+
+	identity, err := host.GetCheckAttemptIdentity(context.Background(), scm.Check{Bucket: scm.CheckBucketPass, Link: "https://github.com/test/repo/actions/runs/900/job/12"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.RunID != 900 || identity.RunNumber != 42 || identity.RunAttempt != 3 || identity.Event != "pull_request" || identity.HeadSHA != "abc123" || identity.PublicationNonce != "" {
+		t.Fatalf("identity = %#v", identity)
+	}
+}
+
+func TestGetCheckAttemptIdentityReadsPublicationFromCancelledRunMetadata(t *testing.T) {
+	t.Parallel()
+
+	const nonce = "00112233445566778899aabbccddeeff"
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh run view 901 --repo test/repo --json databaseId,number,attempt,event,headSha,displayTitle": {
+			stdout: `{"databaseId":901,"number":43,"attempt":1,"event":"pull_request","headSha":"abc123","displayTitle":"no-slop-required|edited|PR #42 event 43 (run 901)|<!-- no-slop-publication:v1 ` + nonce + ` --> PR body"}` + "\n",
+		},
+	}), nil, "", "test/repo")
+
+	identity, err := host.GetCheckAttemptIdentity(context.Background(), scm.Check{Bucket: scm.CheckBucketCancel, Link: "https://github.com/test/repo/actions/runs/901/job/13"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.RunID != 901 || identity.PublicationNonce != nonce {
+		t.Fatalf("cancelled run identity = %#v", identity)
+	}
+}
+
+func TestParsePublicationNonceReadsOnlyOwnedDisplayTitlePrefix(t *testing.T) {
+	t.Parallel()
+
+	const current = "00112233445566778899aabbccddeeff"
+	title := "no-slop-required|edited|PR #42 event 43 (run 901)|<!-- no-slop-publication:v1 " + current + " --> body quoting <!-- no-slop-publication:v1 ffeeddccbbaa99887766554433221100 -->"
+	got, err := parsePublicationNonce([]byte(title))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != current {
+		t.Fatalf("publication nonce = %q, want %q", got, current)
+	}
+}
+
+func TestFindAttestationPublicationIdentityDoesNotRequireJobCheck(t *testing.T) {
+	t.Parallel()
+
+	const nonce = "00112233445566778899aabbccddeeff"
+	const head = "abc123"
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh run list --workflow no-slop-required.yml --commit abc123 --limit 1000 --repo test/repo --json databaseId,number,attempt,event,headSha,displayTitle": {
+			stdout: `[{"databaseId":900,"number":42,"attempt":1,"event":"pull_request","headSha":"abc123","displayTitle":"unrelated mutation <!-- no-slop-publication:v1 ` + nonce + ` -->"},{"databaseId":901,"number":43,"attempt":1,"event":"pull_request","headSha":"abc123","displayTitle":"no-slop-required|edited|PR #42 event 43 (run 901)|<!-- no-slop-publication:v1 ` + nonce + ` --> body"}]` + "\n",
+		},
+	}), nil, "", "test/repo")
+
+	identity, found, err := host.FindAttestationPublicationIdentity(context.Background(), head, nonce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || identity.RunID != 901 || identity.RunNumber != 43 || identity.PublicationNonce != nonce || identity.HeadSHA != head {
+		t.Fatalf("publication identity = (%#v, %v)", identity, found)
+	}
+}
+
+func TestFindAttestationPublicationIdentityUsesEarliestMatchingRun(t *testing.T) {
+	t.Parallel()
+
+	const nonce = "00112233445566778899aabbccddeeff"
+	const head = "abc123"
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh run list --workflow no-slop-required.yml --commit abc123 --limit 1000 --repo test/repo --json databaseId,number,attempt,event,headSha,displayTitle": {
+			stdout: `[{"databaseId":901,"number":44,"attempt":1,"event":"pull_request","headSha":"abc123","displayTitle":"no-slop-required|edited|PR #42 event 44 (run 901)|<!-- no-slop-publication:v1 ` + nonce + ` --> later mutation"},{"databaseId":902,"number":43,"attempt":1,"event":"pull_request","headSha":"abc123","displayTitle":"no-slop-required|edited|PR #42 event 43 (run 902)|<!-- no-slop-publication:v1 ` + nonce + ` --> publication"}]` + "\n",
+		},
+	}), nil, "", "test/repo")
+
+	identity, found, err := host.FindAttestationPublicationIdentity(context.Background(), head, nonce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || identity.RunID != 902 || identity.RunNumber != 43 {
+		t.Fatalf("publication identity = (%#v, %v), want earliest run", identity, found)
+	}
+}
+
 func TestGetPRStatePassesRepoFlag(t *testing.T) {
 	t.Parallel()
 
@@ -158,8 +249,9 @@ func TestUpdatePRStreamsBodyThroughStdin(t *testing.T) {
 
 	const body = "## What Changed\n\n- update existing pull request bodies without long argv"
 	host := New(githubTestCmdFactory(map[string]githubTestResponse{
-		"gh pr edit 42 --repo test/repo --title fix: cap body --body-file -": {
-			wantStdin: body,
+		"gh api --method PATCH repos/test/repo/pulls/42 --input -": {
+			stdout:    `{"number":42,"html_url":"https://github.com/test/repo/pull/42","updated_at":"2026-08-23T18:42:31Z"}`,
+			wantStdin: `{"title":"fix: cap body","body":"## What Changed\n\n- update existing pull request bodies without long argv"}`,
 		},
 	}), nil, "", "test/repo")
 
@@ -171,20 +263,16 @@ func TestUpdatePRStreamsBodyThroughStdin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdatePR() error = %v", err)
 	}
-	if updated != pr {
-		t.Fatalf("UpdatePR() = %+v, want original PR", updated)
+	if updated == nil || updated.Number != "42" || updated.URL != pr.URL {
+		t.Fatalf("UpdatePR() = %+v", updated)
 	}
 }
 
-// UpdatePR shares the same explicit-PR selector boundary as the read methods:
-// when the number is absent it must target the canonical PR URL, never an empty
-// positional that makes `gh pr edit` resolve the cwd branch (main) from the
-// detached bare gate repo and edit the wrong PR.
 func TestUpdatePRTargetsKnownPRByURLWhenNumberMissing(t *testing.T) {
 	t.Parallel()
 
 	var recorded [][]string
-	host := New(recordingCmdFactory("", &recorded), nil, "", "test/repo")
+	host := New(recordingCmdFactory(`{"number":123,"html_url":"https://github.com/test/repo/pull/123","updated_at":"2026-08-23T18:42:31Z"}`, &recorded), nil, "", "test/repo")
 
 	prURL := "https://github.com/test/repo/pull/123"
 	if _, err := host.UpdatePR(context.Background(), &scm.PR{URL: prURL}, scm.PRContent{
@@ -197,18 +285,27 @@ func TestUpdatePRTargetsKnownPRByURLWhenNumberMissing(t *testing.T) {
 		t.Fatalf("expected exactly one gh invocation, got %d: %v", len(recorded), recorded)
 	}
 	got := recorded[0]
-	// argv is: gh pr edit <selector> --repo ...
-	if len(got) < 4 || got[1] != "pr" || got[2] != "edit" {
+	if len(got) < 6 || got[1] != "api" || got[2] != "--method" || got[3] != "PATCH" {
 		t.Fatalf("unexpected argv: %v", got)
 	}
-	if selector := got[3]; selector != prURL {
-		t.Fatalf("edit selector = %q, want the known PR URL %q (empty selector makes gh resolve the cwd branch)", selector, prURL)
+	if endpoint := got[4]; endpoint != "repos/test/repo/pulls/123" {
+		t.Fatalf("update endpoint = %q", endpoint)
 	}
 }
 
-// UpdatePR must fail closed exactly like the read methods: with neither number
-// nor URL it refuses to shell out rather than running an argument-less
-// `gh pr edit` that would edit the inferred cwd branch's PR.
+func TestUpdatePRScopesAtomicPublicationToEnterpriseHost(t *testing.T) {
+	t.Parallel()
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh api --hostname ghe.example.com --method PATCH repos/org/repo/pulls/42 --input -": {
+			stdout:    `{"number":42,"html_url":"https://ghe.example.com/org/repo/pull/42","updated_at":"2026-08-23T18:42:31Z"}`,
+			wantStdin: `{"title":"fix: publish","body":"body"}`,
+		},
+	}), nil, "ghe.example.com", "ghe.example.com/org/repo")
+	if _, err := host.UpdatePR(context.Background(), &scm.PR{Number: "42"}, scm.PRContent{Title: "fix: publish", Body: "body"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestUpdatePRFailsClosedWithoutIdentity(t *testing.T) {
 	t.Parallel()
 

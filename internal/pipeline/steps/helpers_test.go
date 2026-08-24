@@ -145,11 +145,19 @@ func newTestContext(t *testing.T, ag agent.Agent, workDir, baseSHA, headSHA stri
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { database.Close() })
+	repo, err := database.InsertRepoWithID("repo-1", workDir, "https://github.com/test/repo", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := database.InsertRun(repo.ID, "refs/heads/feature", headSHA, baseSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	return &pipeline.StepContext{
 		Ctx:  context.Background(),
-		Run:  &db.Run{ID: "run-1", RepoID: "repo-1", Branch: "refs/heads/feature", HeadSHA: headSHA, BaseSHA: baseSHA},
-		Repo: &db.Repo{ID: "repo-1", WorkingPath: workDir, UpstreamURL: "https://github.com/test/repo", DefaultBranch: "main"},
+		Run:  run,
+		Repo: repo,
 		// The executor resolves this from the app root in production. Tests get
 		// a per-test directory so a step under test can never write evidence
 		// into a shared location the next test would then observe.
@@ -395,8 +403,10 @@ func fakeGlab(t *testing.T, mrViewJSON string) (env []string, logFile string) {
 	return env, logFile
 }
 
-// newTestContextWithDBRecords is like newTestContext but also inserts
-// repo and run records into the database so GetRun works after updates.
+// newTestContextWithDBRecords retains the explicit name used by tests whose
+// assertions depend on persisted run state. newTestContext now always creates
+// production-valid repo and run rows because post-review head adoption writes
+// a foreign-keyed recovery boundary.
 func recordReviewApproval(t *testing.T, sctx *pipeline.StepContext, headSHA string) {
 	t.Helper()
 	if err := sctx.DB.UpdateRunReviewApprovedHeadSHA(sctx.Run.ID, headSHA); err != nil {
@@ -408,20 +418,7 @@ func recordReviewApproval(t *testing.T, sctx *pipeline.StepContext, headSHA stri
 
 func newTestContextWithDBRecords(t *testing.T, ag agent.Agent, workDir, baseSHA, headSHA string, cmds config.Commands) *pipeline.StepContext {
 	t.Helper()
-	sctx := newTestContext(t, ag, workDir, baseSHA, headSHA, cmds)
-
-	// Insert repo + run records so DB queries work
-	repo, err := sctx.DB.InsertRepo(workDir, "https://github.com/test/repo", "main")
-	if err != nil {
-		t.Fatal(err)
-	}
-	run, err := sctx.DB.InsertRun(repo.ID, "refs/heads/feature", headSHA, baseSHA)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sctx.Run = run
-	sctx.Repo = repo
-	return sctx
+	return newTestContext(t, ag, workDir, baseSHA, headSHA, cmds)
 }
 
 // fakeCIGH creates a fake gh binary that responds to CI-related

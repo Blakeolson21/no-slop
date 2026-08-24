@@ -16,6 +16,17 @@ import (
 // actually catches the regression.
 func TestEvidenceRootResolvesUnderAppRoot(t *testing.T) {
 	root := t.TempDir()
+	canonicalHome, canonicalHomeSet := os.LookupEnv("NS_HOME")
+	if err := os.Unsetenv("NS_HOME"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if canonicalHomeSet {
+			_ = os.Setenv("NS_HOME", canonicalHome)
+		} else {
+			_ = os.Unsetenv("NS_HOME")
+		}
+	})
 	t.Setenv("NM_HOME", root)
 
 	p, err := New()

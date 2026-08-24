@@ -493,13 +493,19 @@ func cleanReviewScenario(t *testing.T) string {
     delay_ms: 1500
     structured:
       findings:
-        - id: "review-info"
+        - prior_id: null
+          prior_continuity_token: null
           severity: info
           file: "hello.txt"
           line: 1
           description: "looks good"
           action: no-op
           review_scope: source
+          evidence:
+            tested:
+              - "fakeagent: simulated review"
+            testing_summary: "informational observation only"
+            artifacts: []
       summary: "no blocking issues"
       risk_level: low
       risk_rationale: "informational finding only"
@@ -511,13 +517,19 @@ func cleanReviewScenario(t *testing.T) string {
     text: "looks good"
     structured:
       findings:
-        - id: "review-info"
+        - prior_id: null
+          prior_continuity_token: null
           severity: info
           file: "hello.txt"
           line: 1
           description: "looks good"
           action: no-op
           review_scope: source
+          evidence:
+            tested:
+              - "fakeagent: simulated review"
+            testing_summary: "informational observation only"
+            artifacts: []
       summary: "no blocking issues"
       risk_level: low
       risk_rationale: "informational finding only"
@@ -1796,29 +1808,11 @@ func assertTestAgentNewTestFileRun(t *testing.T, h *Harness) {
 	if testStep.Status != types.StepStatusCompleted {
 		t.Fatalf("test step status = %s, want completed", testStep.Status)
 	}
-	if testStep.FindingsJSON == nil {
-		t.Fatal("expected test step to record findings JSON for new test file")
-	}
-	findings, err := types.ParseFindingsJSON(*testStep.FindingsJSON)
-	if err != nil {
-		t.Fatalf("parse new test file findings: %v", err)
-	}
-	if len(findings.Items) != 1 {
-		t.Fatalf("expected one new test file finding, got %+v", findings.Items)
-	}
-	item := findings.Items[0]
-	if item.Severity != "info" {
-		t.Fatalf("new test file finding severity = %q, want info", item.Severity)
-	}
-	if item.Action != types.ActionNoOp {
-		t.Fatalf("new test file finding action = %q, want no-op", item.Action)
-	}
-	if item.File != "agent_test.py" {
-		t.Fatalf("new test file finding file = %q, want agent_test.py", item.File)
-	}
-	if !strings.Contains(item.Description, "new test file written by agent: agent_test.py") {
-		t.Fatalf("new test file finding description = %q", item.Description)
-	}
+	// The direct TestStep regression pins the informational no-op finding.
+	// This full journey pins the end-user outcome after Document adopts the
+	// previously uncommitted file and head invalidation reruns the required
+	// gates: the run completes and publishes the agent-created test.
+	assertAgentCreatedTestPushed(t, h, "test-agent-new-test-file", "agent_test.py", "def test_agent():\n    pass\n")
 }
 
 func assertTestAgentStagedNewTestFileRun(t *testing.T, h *Harness) {
@@ -1838,28 +1832,19 @@ func assertTestAgentStagedNewTestFileRun(t *testing.T, h *Harness) {
 	if testStep.Status != types.StepStatusCompleted {
 		t.Fatalf("test step status = %s, want completed", testStep.Status)
 	}
-	if testStep.FindingsJSON == nil {
-		t.Fatal("expected test step to record findings JSON for staged new test file")
-	}
-	findings, err := types.ParseFindingsJSON(*testStep.FindingsJSON)
+	assertAgentCreatedTestPushed(t, h, "test-agent-staged-new-test-file", "agent_staged_test.go", "package main\n")
+}
+
+func assertAgentCreatedTestPushed(t *testing.T, h *Harness, branch, path, want string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	got, err := h.runGit(ctx, h.UpstreamDir, "show", "refs/heads/"+branch+":"+path)
 	if err != nil {
-		t.Fatalf("parse staged new test file findings: %v", err)
+		t.Fatalf("read agent-created test %s from pushed branch %s: %v\n%s", path, branch, err, got)
 	}
-	if len(findings.Items) != 1 {
-		t.Fatalf("expected one staged new test file finding, got %+v", findings.Items)
-	}
-	item := findings.Items[0]
-	if item.Severity != "info" {
-		t.Fatalf("staged new test file finding severity = %q, want info", item.Severity)
-	}
-	if item.Action != types.ActionNoOp {
-		t.Fatalf("staged new test file finding action = %q, want no-op", item.Action)
-	}
-	if item.File != "agent_staged_test.go" {
-		t.Fatalf("staged new test file finding file = %q, want agent_staged_test.go", item.File)
-	}
-	if !strings.Contains(item.Description, "new test file written by agent: agent_staged_test.go") {
-		t.Fatalf("staged new test file finding description = %q", item.Description)
+	if string(got) != want {
+		t.Fatalf("pushed agent-created test %s = %q, want %q", path, got, want)
 	}
 }
 

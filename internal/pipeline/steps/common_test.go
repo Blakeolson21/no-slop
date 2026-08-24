@@ -605,49 +605,84 @@ func TestCommitAgentFixes_PersistsUncertifiedRangeForReview(t *testing.T) {
 	}
 }
 
-func TestCommitAgentFixes_LintDoesNotPersistUncertifiedRange(t *testing.T) {
-	t.Parallel()
+func TestCommitAgentFixes_RefusesReviewHeadWhenRangePersistenceFails(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
-
-	ag := &mockAgent{name: "test"}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
-	sctx.ReviewStartingHeadSHA = headSHA
-	if err := os.WriteFile(filepath.Join(dir, "lint-fix.txt"), []byte("fixed"), 0o644); err != nil {
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	originalRunID := sctx.Run.ID
+	sctx.Repo.ID = "missing-repo"
+	if err := os.WriteFile(filepath.Join(dir, "review-fix.txt"), []byte("fixed"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := commitAgentFixes(sctx, types.StepLint, "apply fix", "fallback"); err != nil {
-		t.Fatal(err)
+	err := commitAgentFixes(sctx, types.StepReview, "apply fix", "fallback")
+	if err == nil || !strings.Contains(err.Error(), "persist uncertified review range") {
+		t.Fatalf("commitAgentFixes() error = %v, want persistence refusal", err)
 	}
-	got, err := sctx.DB.GetUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch)
+	if got := gitCmd(t, dir, "rev-parse", "refs/heads/feature"); got != headSHA {
+		t.Fatalf("branch head = %s, want unchanged %s", got, headSHA)
+	}
+	if sctx.Run.HeadSHA != headSHA {
+		t.Fatalf("in-memory run head = %s, want unchanged %s", sctx.Run.HeadSHA, headSHA)
+	}
+	stored, err := sctx.DB.GetRun(originalRunID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != nil {
-		t.Fatalf("lint persist = %#v, want no uncertified range", got)
+	if stored.HeadSHA != headSHA {
+		t.Fatalf("persisted run head = %s, want unchanged %s", stored.HeadSHA, headSHA)
 	}
 }
 
-func TestCommitAgentFixes_DocumentDoesNotPersistUncertifiedRange(t *testing.T) {
-	t.Parallel()
+func TestCommitAgentFixes_RestoresUncertifiedRangeWhenRefAdoptionFails(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	gitCmd(t, dir, "checkout", "--detach", headSHA)
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	if err := sctx.DB.UpsertUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch, baseSHA, headSHA, sctx.Run.ID); err != nil {
+		t.Fatal(err)
+	}
+	tree := gitCmd(t, dir, "rev-parse", headSHA+"^{tree}")
+	unrelated := gitCmd(t, dir, "commit-tree", tree, "-m", "unrelated branch head")
+	gitCmd(t, dir, "update-ref", "refs/heads/feature", unrelated)
+	if err := os.WriteFile(filepath.Join(dir, "review-fix.txt"), []byte("fixed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-	ag := &mockAgent{name: "test"}
-	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
-	sctx.ReviewStartingHeadSHA = headSHA
-	if err := os.WriteFile(filepath.Join(dir, "docs-fix.txt"), []byte("fixed"), 0o644); err != nil {
-		t.Fatal(err)
+	err := commitAgentFixes(sctx, types.StepReview, "apply fix", "fallback")
+	if err == nil || !strings.Contains(err.Error(), "refusing to move branch ref") {
+		t.Fatalf("commitAgentFixes() error = %v, want ref-adoption refusal", err)
 	}
-	if err := commitAgentFixes(sctx, types.StepDocument, "apply fix", "fallback"); err != nil {
-		t.Fatal(err)
+	got, getErr := sctx.DB.GetUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch)
+	if getErr != nil {
+		t.Fatal(getErr)
 	}
-	got, err := sctx.DB.GetUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch)
-	if err != nil {
-		t.Fatal(err)
+	if got == nil || got.FromSHA != baseSHA || got.ToSHA != headSHA || got.SourceRunID != sctx.Run.ID {
+		t.Fatalf("failed adoption left rewritten uncertified range: %#v", got)
 	}
-	if got != nil {
-		t.Fatalf("document persist = %#v, want no uncertified range", got)
+}
+
+func TestCommitAgentFixes_PersistsUncertifiedRangeForPostReviewSteps(t *testing.T) {
+	for _, stepName := range []types.StepName{types.StepTest, types.StepDocument, types.StepLint} {
+		t.Run(string(stepName), func(t *testing.T) {
+			dir, baseSHA, headSHA := setupGitRepo(t)
+			gitCmd(t, dir, "checkout", "--detach", headSHA)
+
+			ag := &mockAgent{name: "test"}
+			sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+			sctx.ReviewStartingHeadSHA = headSHA
+			if err := os.WriteFile(filepath.Join(dir, string(stepName)+"-fix.txt"), []byte("fixed"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := commitAgentFixes(sctx, stepName, "apply fix", "fallback"); err != nil {
+				t.Fatal(err)
+			}
+			got, err := sctx.DB.GetUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got == nil || got.FromSHA != headSHA || got.ToSHA != sctx.Run.HeadSHA || got.SourceRunID != sctx.Run.ID {
+				t.Fatalf("%s uncertified range = %#v", stepName, got)
+			}
+		})
 	}
 }
 
@@ -1391,6 +1426,24 @@ func TestReviewFindingsSchema_ActionAtItemLevel(t *testing.T) {
 	}
 }
 
+func TestReviewFindingsSchema_UsesExplicitPriorLineageClaims(t *testing.T) {
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(reviewFindingsSchema, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	props := parsed["properties"].(map[string]interface{})
+	items := props["findings"].(map[string]interface{})["items"].(map[string]interface{})
+	itemProps := items["properties"].(map[string]interface{})
+	for _, name := range []string{"prior_id", "prior_continuity_token"} {
+		if _, ok := itemProps[name]; !ok {
+			t.Fatalf("review finding schema missing %s", name)
+		}
+	}
+	if _, ok := itemProps["id"]; ok {
+		t.Fatal("review finding schema accepts current pipeline IDs as fresh claims")
+	}
+}
+
 func TestReviewFindingsSchema_AllowsTestingMetadata(t *testing.T) {
 	t.Parallel()
 	var parsed map[string]interface{}
@@ -1417,6 +1470,31 @@ func TestReviewFindingsSchema_AllowsTestingMetadata(t *testing.T) {
 	if testingSummary["type"] != "string" {
 		t.Fatalf("expected testing_summary to be a string, got %#v", testingSummary["type"])
 	}
+}
+
+func TestReviewFindingsSchemaRequiresLineageEvidence(t *testing.T) {
+	t.Parallel()
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(reviewFindingsSchema, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	props := parsed["properties"].(map[string]interface{})
+	items := props["findings"].(map[string]interface{})["items"].(map[string]interface{})
+	itemProps := items["properties"].(map[string]interface{})
+	evidence := itemProps["evidence"].(map[string]interface{})
+	evidenceProps := evidence["properties"].(map[string]interface{})
+	for _, name := range []string{"tested", "testing_summary", "artifacts"} {
+		if _, ok := evidenceProps[name]; !ok {
+			t.Fatalf("review finding evidence missing %s", name)
+		}
+	}
+	required := items["required"].([]interface{})
+	for _, value := range required {
+		if value == "evidence" {
+			return
+		}
+	}
+	t.Fatal("review finding schema does not require evidence")
 }
 
 func TestSanitizedPreviousFindingsForPrompt_PreservesMultilineDescriptions(t *testing.T) {

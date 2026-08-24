@@ -114,6 +114,18 @@ type persistedRerunBudget struct {
 	Rollup map[string]persistedRollupState `json:"rollup,omitempty"`
 }
 
+type expectedAttestationState struct {
+	HeadSHA              string `json:"head_sha"`
+	PublicationNonce     string `json:"publication_nonce"`
+	PublicationRunID     int64  `json:"publication_run_id,omitempty"`
+	PublicationRunNumber int64  `json:"publication_run_number,omitempty"`
+}
+
+type legacyExpectedAttestationState struct {
+	HeadSHA   string `json:"expected_attestation_head_sha"`
+	UpdatedAt string `json:"expected_attestation_updated_at"`
+}
+
 type persistedRollupState struct {
 	CompletedAt    time.Time `json:"completed_at"`
 	GraceRemaining int       `json:"grace_remaining"`
@@ -479,10 +491,7 @@ func mergeCheckNames(base, extra []string) []string {
 //
 // Every failure path here falls back to the behavior this policy replaces: no
 // rerun, and the failure escalates exactly as it would without it.
-// loadRerunBudget restores the durable rerun budget for this run. A run that
-// never spent one, or a database that cannot be read, leaves the in-memory
-// budget as it is: the failure direction is a fresh budget, which the
-// reservation write below then re-establishes.
+// loadRerunBudget restores the durable rerun budget for this run.
 func (s *CIStep) loadRerunBudget(sctx *pipeline.StepContext) {
 	if sctx.DB == nil || sctx.Run == nil {
 		return
@@ -495,6 +504,47 @@ func (s *CIStep) loadRerunBudget(sctx *pipeline.StepContext) {
 	if err := s.transientReruns.unmarshal(encoded); err != nil {
 		sctx.Log(fmt.Sprintf("warning: could not restore the persisted rerun budget: %v", err))
 	}
+}
+
+func (s *CIStep) loadExpectedAttestationState(sctx *pipeline.StepContext) error {
+	if sctx.DB == nil || sctx.Run == nil {
+		return nil
+	}
+	encoded, err := sctx.DB.GetRunCIAttestationState(sctx.Run.ID)
+	if err != nil {
+		return fmt.Errorf("read persisted CI attestation state: %w", err)
+	}
+	if strings.TrimSpace(encoded) == "" {
+		legacyEncoded, legacyErr := sctx.DB.GetRunCIRerunState(sctx.Run.ID)
+		if legacyErr != nil {
+			return fmt.Errorf("read legacy persisted CI attestation state: %w", legacyErr)
+		}
+		if strings.TrimSpace(legacyEncoded) == "" {
+			s.expectedAttestation = expectedAttestationState{}
+			return nil
+		}
+		var legacy legacyExpectedAttestationState
+		if err := json.Unmarshal([]byte(legacyEncoded), &legacy); err != nil {
+			return fmt.Errorf("restore legacy persisted CI attestation state: %w", err)
+		}
+		if legacy.HeadSHA == "" && legacy.UpdatedAt == "" {
+			s.expectedAttestation = expectedAttestationState{}
+			return nil
+		}
+		if legacy.HeadSHA == "" || legacy.UpdatedAt == "" {
+			return fmt.Errorf("restore persisted CI attestation state: expected attestation boundary is incomplete")
+		}
+		return fmt.Errorf("restore persisted CI attestation state: timestamp boundary requires PR attestation republication")
+	}
+	var state expectedAttestationState
+	if err := json.Unmarshal([]byte(encoded), &state); err != nil {
+		return fmt.Errorf("restore persisted CI attestation state: %w", err)
+	}
+	if state.HeadSHA == "" || !validPublicationNonce(state.PublicationNonce) || state.PublicationRunID < 0 || state.PublicationRunNumber < 0 || (state.PublicationRunNumber > 0 && state.PublicationRunID == 0) {
+		return fmt.Errorf("restore persisted CI attestation state: expected attestation boundary is incomplete")
+	}
+	s.expectedAttestation = state
+	return nil
 }
 
 // persistRerunBudget writes the rerun budget so a recovered run resumes with
@@ -512,6 +562,34 @@ func (s *CIStep) persistRerunBudgetCandidate(sctx *pipeline.StepContext, candida
 		return err
 	}
 	return sctx.DB.SetRunCIRerunState(sctx.Run.ID, encoded)
+}
+
+func persistExpectedAttestationPublication(sctx *pipeline.StepContext, publicationNonce string) error {
+	if !validPublicationNonce(publicationNonce) {
+		return fmt.Errorf("PR attestation publication nonce is invalid")
+	}
+	state := expectedAttestationState{HeadSHA: sctx.Run.HeadSHA, PublicationNonce: publicationNonce}
+	return persistExpectedAttestationState(sctx, state)
+}
+
+func persistExpectedAttestationState(sctx *pipeline.StepContext, state expectedAttestationState) error {
+	encoded, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	return sctx.DB.SetRunCIAttestationState(sctx.Run.ID, string(encoded))
+}
+
+func validPublicationNonce(nonce string) bool {
+	if len(nonce) != 32 {
+		return false
+	}
+	for _, char := range nonce {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *CIStep) retireResolvedReruns(sctx *pipeline.StepContext, checks []scm.Check) (bool, error) {

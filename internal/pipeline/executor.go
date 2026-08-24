@@ -224,13 +224,23 @@ func (e *Executor) Execute(ctx context.Context, run *db.Run, repo *db.Repo, work
 			e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, step.Name(), string(types.StepStatusSkipped), "", "", nil)
 			continue
 		}
-		state, err := e.durableExecutionState(sr.ID)
+		state, sr, err := e.executionStateForStep(step, sr)
 		if err != nil {
 			return e.failRun(run, repo, fmt.Errorf("restore step %s execution state: %w", step.Name(), err), ctx)
 		}
+		stepRecords[step.Name()] = sr
+		previousHeadSHA := run.HeadSHA
 		skipRemaining, restartFrom, err := e.executeStep(ctx, step, sr, run, repo, workDir, logDir, state)
 		if err != nil {
 			return e.failRun(run, repo, err, ctx)
+		}
+		restartIndex, restarting, err := e.restartAfterStep(run, repo, previousHeadSHA, restartFrom, i)
+		if err != nil {
+			return e.failRun(run, repo, restartStepError(step.Name(), restartFrom, err), ctx)
+		}
+		if restarting {
+			i = restartIndex - 1
+			continue
 		}
 		if skipRemaining {
 			// Mark all subsequent steps as skipped
@@ -242,13 +252,6 @@ func (e *Executor) Execute(ctx context.Context, run *db.Run, repo *db.Repo, work
 				e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, remaining.Name(), string(types.StepStatusSkipped), "", "", nil)
 			}
 			break
-		}
-		if restartFrom != "" {
-			restartIndex, err := e.prepareRestart(run, repo, restartFrom, i)
-			if err != nil {
-				return e.failRun(run, repo, restartStepError(step.Name(), restartFrom, err), ctx)
-			}
-			i = restartIndex - 1
 		}
 	}
 
@@ -284,10 +287,93 @@ func (e *Executor) prepareRestart(run *db.Run, repo *db.Repo, name types.StepNam
 	return index, nil
 }
 
+func (e *Executor) restartAfterStep(run *db.Run, repo *db.Repo, previousHeadSHA string, requested types.StepName, currentIndex int) (int, bool, error) {
+	if run.HeadSHA != previousHeadSHA {
+		index, err := e.restartIndexForStaleRequiredGates(run)
+		if err != nil {
+			return 0, false, err
+		}
+		if index >= 0 {
+			e.onEvent(ipc.Event{Type: ipc.EventStepsReset, RunID: run.ID, RepoID: repo.ID})
+			return index, true, nil
+		}
+	}
+	if requested == "" {
+		return 0, false, nil
+	}
+	index, err := e.prepareRestart(run, repo, requested, currentIndex)
+	return index, err == nil, err
+}
+
 func (e *Executor) initializeRunScopes(runID string) {
 	sessionsEnabled := e.config != nil && e.config.SessionReuse && e.agent != nil
 	e.sessions = NewRunSessions(e.db, runID, e.agent, sessionsEnabled)
 	e.shared = &RunShared{}
+}
+
+func (e *Executor) executionStateForStep(step Step, sr *db.StepResult) (stepExecutionState, *db.StepResult, error) {
+	fresh, err := e.db.GetStepResult(sr.ID)
+	if err != nil {
+		return stepExecutionState{}, nil, err
+	}
+	if fresh == nil {
+		return stepExecutionState{}, nil, fmt.Errorf("step result %s not found", sr.ID)
+	}
+	rounds, err := e.db.GetRoundsByStep(sr.ID)
+	if err != nil {
+		return stepExecutionState{}, nil, err
+	}
+	state := stepExecutionState{}
+	if len(rounds) > 0 {
+		latest := rounds[len(rounds)-1]
+		state.roundNum = latest.Round
+		state.currentRoundID = latest.ID
+		for _, round := range rounds {
+			if round.SelectionSource != nil && *round.SelectionSource == db.RoundSelectionSourceAutoFix {
+				state.autoFixAttempts++
+			}
+		}
+	}
+	if findingsMayBeScopeLimited(step) && fresh.FindingsJSON != nil {
+		state.carriedFindings = *fresh.FindingsJSON
+	}
+	return state, fresh, nil
+}
+
+func (e *Executor) restartIndexForStaleRequiredGates(run *db.Run) (int, error) {
+	steps, err := e.db.GetStepsByRun(run.ID)
+	if err != nil {
+		return -1, fmt.Errorf("load required gate certifications: %w", err)
+	}
+	required := map[types.StepName]bool{
+		types.StepReview:   true,
+		types.StepTest:     true,
+		types.StepDocument: true,
+	}
+	var earliest types.StepName
+	for _, step := range steps {
+		if !required[step.StepName] || step.Status != types.StepStatusCompleted {
+			continue
+		}
+		if step.CertifiedHeadSHA != nil && *step.CertifiedHeadSHA == run.HeadSHA {
+			continue
+		}
+		if earliest == "" || step.StepOrder < earliest.Order() {
+			earliest = step.StepName
+		}
+	}
+	if earliest == "" {
+		return -1, nil
+	}
+	index, err := e.stepIndex(earliest)
+	if err != nil {
+		return -1, err
+	}
+	if err := e.db.ResetStepsFromOrder(run.ID, earliest.Order()); err != nil {
+		return -1, fmt.Errorf("invalidate stale required gates: %w", err)
+	}
+	slog.Info("pipeline head changed; rerunning required gates", "run", run.ID, "head", run.HeadSHA, "from", earliest)
+	return index, nil
 }
 
 type stepExecutionState struct {
@@ -297,21 +383,7 @@ type stepExecutionState struct {
 	autoFixAttempts  int
 	executionMS      int64
 	currentRoundID   string
-}
-
-func (e *Executor) durableExecutionState(stepResultID string) (stepExecutionState, error) {
-	rounds, err := e.db.GetRoundsByStep(stepResultID)
-	if err != nil {
-		return stepExecutionState{}, err
-	}
-	state := stepExecutionState{}
-	for _, round := range rounds {
-		state.roundNum = max(state.roundNum, round.Round)
-		if round.SelectionSource != nil && *round.SelectionSource == db.RoundSelectionSourceAutoFix {
-			state.autoFixAttempts++
-		}
-	}
-	return state, nil
+	carriedFindings  string
 }
 
 func (e *Executor) dispatchableStepResult(stepResultID string, stepName types.StepName) (*db.StepResult, error) {
@@ -378,15 +450,18 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 			if gate.reviewedHeadSHA == "" {
 				return fmt.Errorf("recovered review has no durable reviewed head candidate")
 			}
-			if err := e.db.CompleteReviewStep(gate.stepResult.ID, run.ID, gate.reviewedHeadSHA, recoveredExitCode(gate.stepResult), duration, recoveredLogPath(gate.stepResult)); err != nil {
+			certifiedRange, err := certifiedUncertifiedPipelineRange(ctx, e.db, repo.ID, run.Branch, gate.reviewedHeadSHA, workDir)
+			if err != nil {
+				return err
+			}
+			if err := e.db.CompleteReviewStep(gate.stepResult.ID, run.ID, gate.reviewedHeadSHA, recoveredExitCode(gate.stepResult), duration, recoveredLogPath(gate.stepResult), certifiedRange); err != nil {
 				return err
 			}
 			reviewedHead := gate.reviewedHeadSHA
 			run.ReviewApprovedHeadSHA = &reviewedHead
-			ClearUncertifiedPipelineRangeIfCertified(ctx, e.db, repo.ID, run.Branch, reviewedHead, workDir)
 			return nil
 		}
-		return e.db.CompleteStepWithStatus(gate.stepResult.ID, types.StepStatusCompleted, recoveredExitCode(gate.stepResult), duration, recoveredLogPath(gate.stepResult))
+		return e.db.CompleteStepWithStatusAtHead(gate.stepResult.ID, types.StepStatusCompleted, run.HeadSHA, recoveredExitCode(gate.stepResult), duration, recoveredLogPath(gate.stepResult))
 	}
 	completeReconciledGate := func() error {
 		if err := completeRecoveredGate(); err != nil {
@@ -494,24 +569,39 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 		return e.failRun(run, repo, fmt.Errorf("step %s: aborted by user", gate.step.Name()), ctx)
 	case types.ActionFix:
 		telemetry.Track("fix", e.fixTelemetryFields("user", gate.step.Name(), selectedFindingCount(gate.findings, response.findingIDs), 0))
-		selected := filterFindingsJSON(gate.findings, response.findingIDs)
-		merged := mergeUserOverridesJSON(selected, response.instructions, response.addedFindings)
-		if gate.lastRoundID != "" {
-			allSelectedIDs := combineSelectedFindingIDs(response.findingIDs, merged)
-			if idsJSON := marshalFindingIDs(allSelectedIDs); idsJSON != "" {
-				var userFindingsJSON *string
-				if merged != "" && merged != selected {
-					userFindingsJSON = &merged
-				}
-				if dbErr := e.db.SetStepRoundUserDecision(gate.lastRoundID, &idsJSON, db.RoundSelectionSourceUser, userFindingsJSON); dbErr != nil {
-					slog.Warn("failed to record recovered user decision", "step", gate.step.Name(), "round", gate.round, "error", dbErr)
-				}
+		selectionTruth := gate.findings
+		if findingsMayBeScopeLimited(gate.step) {
+			selectionTruth, err = prepareReviewSelectionTruth(selectionTruth)
+			if err != nil {
+				return e.failRun(run, repo, fmt.Errorf("prepare recovered %s gate truth: %w", gate.step.Name(), err), ctx)
 			}
+		}
+		selected := filterFindingsJSON(selectionTruth, response.findingIDs)
+		registerLineages := findingsMayBeScopeLimited(gate.step)
+		merged, registered, err := prepareUserFixFindingsJSON(selected, selectionTruth, response.instructions, response.addedFindings, registerLineages)
+		if err != nil {
+			return e.failRun(run, repo, fmt.Errorf("normalize recovered %s user findings: %w", gate.step.Name(), err), ctx)
+		}
+		if registerLineages {
+			if err := e.persistReviewFixSelection(ctx, workDir, run, repo, gate.lastRoundID, gate.stepResult.ID, selectionTruth, registered, response.findingIDs, db.RoundSelectionSourceUser, persistedUserFindings(selected, merged)); err != nil {
+				return e.failRun(run, repo, fmt.Errorf("record recovered %s user decision: %w", gate.step.Name(), err), ctx)
+			}
+		} else if err := e.persistUserFixDecision(gate.lastRoundID, gate.stepResult.ID, response.findingIDs, selected, merged, registered); err != nil {
+			if findingsMayBeScopeLimited(gate.step) {
+				return e.failRun(run, repo, fmt.Errorf("record recovered %s user decision: %w", gate.step.Name(), err), ctx)
+			}
+			slog.Warn("failed to record recovered user decision", "step", gate.step.Name(), "round", gate.round, "error", err)
 		}
 		if dbErr := e.db.UpdateStepStatus(gate.stepResult.ID, types.StepStatusFixing); dbErr != nil {
 			return e.failRun(run, repo, fmt.Errorf("mark recovered step %s fixing: %w", gate.step.Name(), dbErr), ctx)
 		}
 		e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, gate.step.Name(), string(types.StepStatusFixing), "", "", nil)
+		carried := ""
+		if registerLineages {
+			carried = excludeFindingsJSON(selectionTruth, response.findingIDs)
+			gate.stepResult.FindingsJSON = &registered
+		}
+		previousHeadSHA := run.HeadSHA
 		skipRemaining, restartFrom, err := e.executeStep(ctx, gate.step, gate.stepResult, run, repo, workDir, logDir, stepExecutionState{
 			fixing:           true,
 			previousFindings: merged,
@@ -519,19 +609,20 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 			autoFixAttempts:  gate.autoFixes,
 			executionMS:      duration,
 			currentRoundID:   gate.lastRoundID,
+			carriedFindings:  carried,
 		})
 		if err != nil {
 			return e.failRun(run, repo, err, ctx)
 		}
+		restartIndex, restarting, restartErr := e.restartAfterStep(run, repo, previousHeadSHA, restartFrom, gate.index)
+		if restartErr != nil {
+			return e.failRun(run, repo, restartStepError(gate.step.Name(), restartFrom, restartErr), ctx)
+		}
+		if restarting {
+			return e.executeRecoveredRemainder(ctx, run, repo, workDir, logDir, restartIndex)
+		}
 		if skipRemaining {
 			return e.skipRecoveredRemainder(run, repo, gate.index+1)
-		}
-		if restartFrom != "" {
-			restartIndex, indexErr := e.prepareRestart(run, repo, restartFrom, gate.index)
-			if indexErr != nil {
-				return e.failRun(run, repo, restartStepError(gate.step.Name(), restartFrom, indexErr), ctx)
-			}
-			return e.executeRecoveredRemainder(ctx, run, repo, workDir, logDir, restartIndex)
 		}
 		return e.executeRecoveredRemainder(ctx, run, repo, workDir, logDir, gate.index+1)
 	default:
@@ -621,23 +712,30 @@ func (e *Executor) executeRecoveredRemainder(ctx context.Context, run *db.Run, r
 		if result.Status == types.StepStatusSkipped {
 			continue
 		}
-		state, stateErr := e.durableExecutionState(result.ID)
+		state, result, stateErr := e.executionStateForStep(e.steps[index], result)
 		if stateErr != nil {
 			return e.failRun(run, repo, fmt.Errorf("restore step %s execution state: %w", e.steps[index].Name(), stateErr), ctx)
 		}
+		results[index] = result
+		previousHeadSHA := run.HeadSHA
 		skipRemaining, restartFrom, err := e.executeStep(ctx, e.steps[index], result, run, repo, workDir, logDir, state)
 		if err != nil {
 			return e.failRun(run, repo, err, ctx)
 		}
-		if skipRemaining {
-			return e.skipRecoveredRemainder(run, repo, index+1)
+		restartIndex, restarting, restartErr := e.restartAfterStep(run, repo, previousHeadSHA, restartFrom, index)
+		if restartErr != nil {
+			return e.failRun(run, repo, restartStepError(e.steps[index].Name(), restartFrom, restartErr), ctx)
 		}
-		if restartFrom != "" {
-			restartIndex, indexErr := e.prepareRestart(run, repo, restartFrom, index)
-			if indexErr != nil {
-				return e.failRun(run, repo, restartStepError(e.steps[index].Name(), restartFrom, indexErr), ctx)
+		if restarting {
+			results, err = e.db.GetStepsByRun(run.ID)
+			if err != nil {
+				return e.failRun(run, repo, fmt.Errorf("reload recovered steps after head change: %w", err), ctx)
 			}
 			index = restartIndex - 1
+			continue
+		}
+		if skipRemaining {
+			return e.skipRecoveredRemainder(run, repo, index+1)
 		}
 	}
 	if err := e.completeRun(run, repo); err != nil {
@@ -799,6 +897,15 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 	// invocation during execution of round N+1 sees roundNum still at N.
 	autoFixAttempts := state.autoFixAttempts
 	roundNum := state.roundNum
+	carryFindings := findingsMayBeScopeLimited(step)
+	carriedFindings := state.carriedFindings
+	if !carryFindings {
+		carriedFindings = ""
+	}
+	knownLineages := ""
+	if sr.FindingsJSON != nil {
+		knownLineages = *sr.FindingsJSON
+	}
 
 	stepAgent := e.agent
 	if stepAgent != nil {
@@ -849,7 +956,20 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		OnPRMerged:         e.onPRMerged,
 	}
 	if stepName == types.StepReview {
-		BindUncertifiedPipelineRange(sctx)
+		if err := BindUncertifiedPipelineRange(sctx); err != nil {
+			return false, "", fmt.Errorf("restore uncertified review: %w", err)
+		}
+		if sctx.UncertifiedPriorFindings != "" {
+			carriedFindings = mergeCarriedFindingsJSON(carriedFindings, sctx.UncertifiedPriorFindings, string(stepName))
+			if err := e.db.SetStepFindings(sr.ID, carriedFindings); err != nil {
+				return false, "", fmt.Errorf("restore uncertified review findings: %w", err)
+			}
+		}
+		if sctx.UncertifiedPriorLineages != "" {
+			knownLineages = mergeFindingsJSON(knownLineages, sctx.UncertifiedPriorLineages)
+		} else if carriedFindings != "" {
+			knownLineages = carriedFindings
+		}
 	}
 
 	nextTrigger := "initial"
@@ -866,6 +986,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 	for {
 		reviewStartingHeadSHA := run.HeadSHA
 		sctx.ReviewStartingHeadSHA = reviewStartingHeadSHA
+		sctx.KnownReviewLineages = knownLineages
 		outcome, err := step.Execute(sctx)
 		roundNum++
 		roundDuration := time.Since(phaseStart).Milliseconds()
@@ -891,24 +1012,42 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		if stepName == types.StepReview {
 			reviewApprovedHeadSHA = outcome.ReviewApprovedHeadSHA
 		}
-		outcome.Findings = normalizeFindingsJSON(outcome.Findings, string(stepName))
+		priorLineages := knownLineages
+		if !outcome.FindingsNormalized {
+			outcome.Findings, err = normalizeFindingsJSON(outcome.Findings, string(stepName), knownLineages)
+			if err != nil {
+				return false, "", fmt.Errorf("normalize %s findings: %w", stepName, err)
+			}
+		}
+		if carryFindings {
+			outcome.Findings = mergeReappearedFindingsJSON(outcome.Findings, priorLineages)
+		}
 		finalExitCode = outcome.ExitCode
 		durationOverrideMS += outcome.DurationOverrideMS
+		effectiveFindings := outcome.Findings
+		if carryFindings {
+			effectiveFindings = mergeCarriedFindingsJSON(outcome.Findings, carriedFindings, string(stepName))
+		}
+		if effectiveFindings != "" {
+			knownLineages = effectiveFindings
+		}
 
-		if outcome.Findings != "" {
-			if dbErr := e.db.SetStepFindings(sr.ID, outcome.Findings); dbErr != nil {
-				slog.Warn("failed to set step findings in db", "step", stepName, "error", dbErr)
-			}
-		} else {
-			if dbErr := e.db.ClearStepFindings(sr.ID); dbErr != nil {
-				slog.Warn("failed to clear step findings in db", "step", stepName, "error", dbErr)
+		if !carryFindings {
+			if effectiveFindings != "" {
+				if dbErr := e.db.SetStepFindings(sr.ID, effectiveFindings); dbErr != nil {
+					slog.Warn("failed to set step findings in db", "step", stepName, "error", dbErr)
+				}
+			} else {
+				if dbErr := e.db.ClearStepFindings(sr.ID); dbErr != nil {
+					slog.Warn("failed to clear step findings in db", "step", stepName, "error", dbErr)
+				}
 			}
 		}
 
 		// Persist this execution round.
 		var findingsPtr *string
-		if outcome.Findings != "" {
-			findingsPtr = &outcome.Findings
+		if effectiveFindings != "" {
+			findingsPtr = &effectiveFindings
 		}
 		var fixSummaryPtr *string
 		if outcome.FixSummary != "" {
@@ -921,7 +1060,16 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		if stepName == types.StepCI && restartFrom != "" && !sctx.Fixing {
 			roundTrigger = "auto_fix"
 		}
-		if stepName == types.StepReview {
+		if carryFindings {
+			trustedConfigSHA := ""
+			var globalConfigYAML, repoConfigYAML []byte
+			if e.config != nil && e.config.CaptureEvalProvenance {
+				trustedConfigSHA = e.config.TrustedConfigSHA
+				globalConfigYAML = e.config.ReplayGlobalYAML
+				repoConfigYAML = e.config.ReplayRepoYAML
+			}
+			inserted, dbErr = e.db.InsertEffectiveReviewStepRoundWithProvenance(sr.ID, roundNum, roundTrigger, findingsPtr, fixSummaryPtr, reviewApprovedHeadSHA, reviewStartingHeadSHA, trustedConfigSHA, globalConfigYAML, repoConfigYAML, roundDuration)
+		} else if stepName == types.StepReview {
 			if e.config != nil && e.config.CaptureEvalProvenance {
 				inserted, dbErr = e.db.InsertReviewStepRoundWithProvenance(sr.ID, roundNum, roundTrigger, findingsPtr, fixSummaryPtr, reviewApprovedHeadSHA, reviewStartingHeadSHA, e.config.TrustedConfigSHA, e.config.ReplayGlobalYAML, e.config.ReplayRepoYAML, roundDuration)
 			} else {
@@ -932,6 +1080,9 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		}
 		if dbErr != nil {
 			currentRoundID = roundInsertID(currentRoundID, inserted, dbErr)
+			if carryFindings {
+				return false, "", fmt.Errorf("persist %s round %d: %w", stepName, roundNum, dbErr)
+			}
 			slog.Warn("failed to insert step round", "step", stepName, "round", roundNum, "error", dbErr)
 		} else {
 			currentRoundID = roundInsertID(currentRoundID, inserted, nil)
@@ -963,7 +1114,18 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		// This runs before the NeedsApproval check so that all severity
 		// levels (including "info") get a chance at automatic fixing.
 		if outcome.AutoFixable && autoFixLimit > 0 && autoFixAttempts < autoFixLimit && !convergenceTripped {
-			fixableFindings := autoFixableFindingsJSON(outcome.Findings)
+			selectionTruth := effectiveFindings
+			if carryFindings {
+				selectionTruth, err = prepareReviewSelectionTruth(effectiveFindings)
+				if err != nil {
+					return false, "", fmt.Errorf("prepare %s auto-fix gate truth: %w", stepName, err)
+				}
+			}
+			roundOwnFindings := effectiveFindings
+			if carryFindings {
+				roundOwnFindings = retainMatchingFindingsJSON(selectionTruth, outcome.Findings)
+			}
+			fixableFindings := autoFixableFindingsJSON(roundOwnFindings)
 			if fixableFindings != "" {
 				autoFixAttempts++
 				telemetry.Track("fix", e.fixTelemetryFields("auto", stepName, findingsCount(fixableFindings), autoFixAttempts))
@@ -971,27 +1133,34 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 				executionMS += time.Since(phaseStart).Milliseconds()
 				fixCount := findingsCount(fixableFindings)
 				writeLog(fmt.Sprintf("auto-fix round %d/%d starting after round %d (%d %s)", autoFixAttempts, autoFixLimit, roundNum, fixCount, pluralize(fixCount, "finding", "findings")))
+				if carryFindings {
+					if err := e.persistReviewFixSelection(ctx, workDir, run, repo, currentRoundID, sr.ID, selectionTruth, selectionTruth, findingIDList(fixableFindings), db.RoundSelectionSourceAutoFix, ""); err != nil {
+						return false, "", fmt.Errorf("record %s auto-fix selection: %w", stepName, err)
+					}
+					effectiveFindings = selectionTruth
+					knownLineages = selectionTruth
+					sr.FindingsJSON = &selectionTruth
+				} else if err := e.persistAutoFixSelection(currentRoundID, fixableFindings); err != nil {
+					slog.Warn("failed to record selected finding ids", "step", stepName, "round", roundNum, "error", err)
+				}
 				if dbErr := e.db.UpdateStepStatus(sr.ID, types.StepStatusFixing); dbErr != nil {
 					slog.Warn("failed to update step status in db", "step", stepName, "status", "fixing", "error", dbErr)
-				}
-				if currentRoundID != "" {
-					if idsJSON := findingIDsJSON(fixableFindings); idsJSON != "" {
-						if dbErr := e.db.SetStepRoundSelection(currentRoundID, &idsJSON, db.RoundSelectionSourceAutoFix); dbErr != nil {
-							slog.Warn("failed to record selected finding ids", "step", stepName, "round", roundNum, "error", dbErr)
-						}
-					}
 				}
 				e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusFixing), "", "", nil)
 				phaseStart = time.Now()
 				sctx.Fixing = true
 				sctx.PreviousFindings = fixableFindings
 				nextTrigger = "auto_fix"
+				if carryFindings {
+					carriedFindings = excludeFindingsJSON(selectionTruth, findingIDList(fixableFindings))
+				}
 				continue
 			}
 		}
 
-		if !outcome.NeedsApproval && !hasAskUserFindingsJSON(outcome.Findings) &&
-			!(convergenceTripped && actionableFindingsCountJSON(outcome.Findings) > 0) {
+		carryRequiresApproval := carryFindings && actionableFindingsCountJSON(carriedFindings) > 0
+		if !outcome.NeedsApproval && !hasAskUserFindingsJSON(effectiveFindings) && !carryRequiresApproval &&
+			!(convergenceTripped && actionableFindingsCountJSON(effectiveFindings) > 0) {
 			// Step completed without needing approval.
 			// Any remaining info-only or non-blocking findings
 			// are acceptable and don't block the pipeline.
@@ -1042,7 +1211,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			e.mu.Unlock()
 			return false, "", fmt.Errorf("persist %s approval gate: %w", stepName, dbErr)
 		}
-		e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(approvalStatus), outcome.Findings, "", &executionMS)
+		e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(approvalStatus), effectiveFindings, "", &executionMS)
 
 		response, reconciled, err := e.waitForApprovalOrReconcile(ctx, step, sctx, true)
 		if dbErr := e.db.CompleteRunAwaitingAgent(run.ID, time.Since(parkStart).Milliseconds()); dbErr != nil {
@@ -1068,7 +1237,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		if agentName := e.telemetryAgentName(); agentName != "" {
 			approvalFields["agent"] = agentName
 		}
-		if selectedCount := selectedFindingCount(outcome.Findings, response.findingIDs); selectedCount > 0 {
+		if selectedCount := selectedFindingCount(effectiveFindings, response.findingIDs); selectedCount > 0 {
 			approvalFields["selected_findings_count"] = selectedCount
 		}
 		telemetry.Track("approval", approvalFields)
@@ -1081,7 +1250,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			// adjudication by the approver; record it durably in the step log so
 			// a "passed" run carrying unapplied findings is always attributable
 			// to an explicit decision, never a silent default.
-			if n := actionableFindingsCountJSON(outcome.Findings); n > 0 {
+			if n := actionableFindingsCountJSON(effectiveFindings); n > 0 {
 				writeLog(fmt.Sprintf("gate approved with %d unresolved actionable %s; approval recorded as explicit adjudication", n, pluralize(n, "finding", "findings")))
 			}
 			phaseStart = time.Now()
@@ -1103,31 +1272,44 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			return false, "", fmt.Errorf("step %s: aborted by user", stepName)
 
 		case types.ActionFix:
-			telemetry.Track("fix", e.fixTelemetryFields("user", stepName, selectedFindingCount(outcome.Findings, response.findingIDs), 0))
+			telemetry.Track("fix", e.fixTelemetryFields("user", stepName, selectedFindingCount(effectiveFindings, response.findingIDs), 0))
 			// Fix - mark step as fixing, resume execution timer, re-execute.
 			phaseStart = time.Now()
-			selectedCount := selectedFindingCount(outcome.Findings, response.findingIDs)
+			selectedCount := selectedFindingCount(effectiveFindings, response.findingIDs)
 			writeLog(fmt.Sprintf("user-fix round starting after round %d (%d %s selected)", roundNum, selectedCount, pluralize(selectedCount, "finding", "findings")))
+			selectionTruth := effectiveFindings
+			if carryFindings {
+				selectionTruth, err = prepareReviewSelectionTruth(selectionTruth)
+				if err != nil {
+					return false, "", fmt.Errorf("prepare %s user-fix gate truth: %w", stepName, err)
+				}
+			}
+			selectedFindings := filterFindingsJSON(selectionTruth, response.findingIDs)
+			mergedFindings, registeredLineages, err := prepareUserFixFindingsJSON(selectedFindings, selectionTruth, response.instructions, response.addedFindings, carryFindings)
+			if err != nil {
+				return false, "", fmt.Errorf("normalize %s user findings: %w", stepName, err)
+			}
+			if carryFindings {
+				if err := e.persistReviewFixSelection(ctx, workDir, run, repo, currentRoundID, sr.ID, selectionTruth, registeredLineages, response.findingIDs, db.RoundSelectionSourceUser, persistedUserFindings(selectedFindings, mergedFindings)); err != nil {
+					return false, "", fmt.Errorf("record %s user decision: %w", stepName, err)
+				}
+			} else if err := e.persistUserFixDecision(currentRoundID, sr.ID, response.findingIDs, selectedFindings, mergedFindings, registeredLineages); err != nil {
+				if carryFindings {
+					return false, "", fmt.Errorf("record %s user decision: %w", stepName, err)
+				}
+				slog.Warn("failed to record user decision", "step", stepName, "round", roundNum, "error", err)
+			}
 			if dbErr := e.db.UpdateStepStatus(sr.ID, types.StepStatusFixing); dbErr != nil {
 				slog.Warn("failed to update step status in db", "step", stepName, "status", "fixing", "error", dbErr)
 			}
 			sctx.Fixing = true
-			selectedFindings := filterFindingsJSON(outcome.Findings, response.findingIDs)
-			mergedFindings := mergeUserOverridesJSON(selectedFindings, response.instructions, response.addedFindings)
 			sctx.PreviousFindings = mergedFindings
-			nextTrigger = "auto_fix"
-			if currentRoundID != "" {
-				allSelectedIDs := combineSelectedFindingIDs(response.findingIDs, mergedFindings)
-				if idsJSON := marshalFindingIDs(allSelectedIDs); idsJSON != "" {
-					var userFindingsJSON *string
-					if mergedFindings != "" && mergedFindings != selectedFindings {
-						userFindingsJSON = &mergedFindings
-					}
-					if dbErr := e.db.SetStepRoundUserDecision(currentRoundID, &idsJSON, db.RoundSelectionSourceUser, userFindingsJSON); dbErr != nil {
-						slog.Warn("failed to record user decision", "step", stepName, "round", roundNum, "error", dbErr)
-					}
-				}
+			if carryFindings {
+				knownLineages = registeredLineages
+				sr.FindingsJSON = &registeredLineages
+				carriedFindings = excludeFindingsJSON(selectionTruth, response.findingIDs)
 			}
+			nextTrigger = "auto_fix"
 			e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusFixing), "", "", nil)
 			slog.Info("step fix requested, re-executing", "step", stepName)
 			continue // loop back to step.Execute
@@ -1149,17 +1331,95 @@ done:
 	// return earlier, and skipped reviews deliberately leave the binding empty.
 	// Completion and authority replacement are one DB transaction.
 	if stepName == types.StepReview && status == types.StepStatusCompleted && reviewApprovedHeadSHA != "" {
-		if err := e.db.CompleteReviewStep(sr.ID, run.ID, reviewApprovedHeadSHA, finalExitCode, durationMS, logPath); err != nil {
+		certifiedRange, err := certifiedUncertifiedPipelineRange(ctx, e.db, repo.ID, run.Branch, reviewApprovedHeadSHA, workDir)
+		if err != nil {
+			return false, "", fmt.Errorf("complete step %s: %w", stepName, err)
+		}
+		if err := e.db.CompleteReviewStep(sr.ID, run.ID, reviewApprovedHeadSHA, finalExitCode, durationMS, logPath, certifiedRange); err != nil {
 			return false, "", fmt.Errorf("complete step %s: %w", stepName, err)
 		}
 		reviewedHead := reviewApprovedHeadSHA
 		run.ReviewApprovedHeadSHA = &reviewedHead
-		ClearUncertifiedPipelineRangeIfCertified(ctx, e.db, repo.ID, run.Branch, reviewedHead, workDir)
-	} else if err := e.db.CompleteStepWithStatus(sr.ID, status, finalExitCode, durationMS, logPath); err != nil {
+	} else if err := e.db.CompleteStepWithStatusAtHead(sr.ID, status, run.HeadSHA, finalExitCode, durationMS, logPath); err != nil {
 		return false, "", fmt.Errorf("complete step %s: %w", stepName, err)
 	}
 	e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(status), "", "", &durationMS)
 	return skipRemaining, restartFrom, nil
+}
+
+func (e *Executor) persistAutoFixSelection(roundID, findings string) error {
+	idsJSON := findingIDsJSON(findings)
+	if idsJSON == "" {
+		return nil
+	}
+	if roundID == "" {
+		return errors.New("step round is not durable")
+	}
+	return e.db.SetStepRoundSelection(roundID, &idsJSON, db.RoundSelectionSourceAutoFix)
+}
+
+func (e *Executor) persistUserFixDecision(roundID, stepResultID string, selectedIDs []string, selected, merged, registeredLineages string) error {
+	idsJSON := marshalFindingIDs(combineSelectedFindingIDs(selectedIDs, merged))
+	if idsJSON == "" {
+		return nil
+	}
+	if roundID == "" {
+		return errors.New("step round is not durable")
+	}
+	var userFindingsJSON *string
+	if merged != "" && merged != selected {
+		userFindingsJSON = &merged
+	}
+	if registeredLineages != "" {
+		return e.db.SetStepRoundUserDecisionAndFindings(roundID, stepResultID, &idsJSON, db.RoundSelectionSourceUser, userFindingsJSON, registeredLineages)
+	}
+	return e.db.SetStepRoundUserDecision(roundID, &idsJSON, db.RoundSelectionSourceUser, userFindingsJSON)
+}
+
+func (e *Executor) persistReviewFixSelection(ctx context.Context, workDir string, run *db.Run, repo *db.Repo, roundID, stepResultID, roundFindings, stepFindings string, selectedIDs []string, source, userFindings string) error {
+	idsJSON := marshalFindingIDs(combineSelectedFindingIDs(selectedIDs, userFindings))
+	if idsJSON == "" {
+		return nil
+	}
+	fromSHA := strings.TrimSpace(run.HeadSHA)
+	existing, err := e.db.GetUncertifiedPipelineRange(repo.ID, run.Branch)
+	if err != nil {
+		return fmt.Errorf("read existing review recovery marker: %w", err)
+	}
+	if existing != nil {
+		inLineage, lineageErr := commitIsSelfOrAncestor(ctx, workDir, existing.ToSHA, run.HeadSHA)
+		if lineageErr != nil {
+			return fmt.Errorf("verify existing review recovery marker: %w", lineageErr)
+		}
+		if inLineage {
+			fromSHA = existing.FromSHA
+		}
+	}
+	var userFindingsJSON *string
+	if userFindings != "" {
+		userFindingsJSON = &userFindings
+	}
+	return e.db.PersistReviewFixSelection(db.ReviewFixSelection{
+		RoundID:            roundID,
+		StepResultID:       stepResultID,
+		RepoID:             repo.ID,
+		Branch:             run.Branch,
+		FromSHA:            fromSHA,
+		HeadSHA:            run.HeadSHA,
+		SourceRunID:        run.ID,
+		RoundFindingsJSON:  roundFindings,
+		StepFindingsJSON:   stepFindings,
+		SelectedFindingIDs: &idsJSON,
+		SelectionSource:    source,
+		UserFindingsJSON:   userFindingsJSON,
+	})
+}
+
+func persistedUserFindings(selected, merged string) string {
+	if merged == selected {
+		return ""
+	}
+	return merged
 }
 
 func roundInsertID(_ string, inserted *db.StepRound, err error) string {
