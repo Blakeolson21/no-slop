@@ -18,6 +18,9 @@ func (s *CIStep) filterExpectedStaleAttestationChecks(sctx *pipeline.StepContext
 	if state.expectedAttestationHeadSHA == "" || state.expectedAttestationHeadSHA != sctx.Run.HeadSHA {
 		return checks, nil
 	}
+	if state.expectedAttestationUpdatedAt.IsZero() {
+		return nil, fmt.Errorf("expected attestation boundary is missing")
+	}
 	reader, ok := host.(scm.CheckAttemptIdentityReader)
 	if !ok {
 		return nil, fmt.Errorf("provider cannot identify expected stale attestation check attempts")
@@ -38,7 +41,7 @@ func (s *CIStep) filterExpectedStaleAttestationChecks(sctx *pipeline.StepContext
 		if identity.HeadSHA != sctx.Run.HeadSHA {
 			continue
 		}
-		if checkAttemptTerminal(check) && !checkAttemptAfter(identity, state.expectedAttestationRunNumberCutoff, state.expectedAttestationRunAttemptCutoff) {
+		if checkAttemptTerminal(check) && !checkAttemptUsesExpectedOrNewerBody(identity, state.expectedAttestationUpdatedAt) {
 			continue
 		}
 		filtered = append(filtered, check)
@@ -50,8 +53,8 @@ func (s *CIStep) filterExpectedStaleAttestationChecks(sctx *pipeline.StepContext
 	return filtered, nil
 }
 
-func checkAttemptAfter(identity scm.CheckAttemptIdentity, runNumber int64, runAttempt int) bool {
-	return identity.RunNumber > runNumber || identity.RunNumber == runNumber && identity.RunAttempt > runAttempt
+func checkAttemptUsesExpectedOrNewerBody(identity scm.CheckAttemptIdentity, boundary time.Time) bool {
+	return identity.PullRequestUpdatedAt.After(boundary) || identity.PullRequestUpdatedAt.Equal(boundary) && identity.EventAction == "edited"
 }
 
 func checkAttemptTerminal(check scm.Check) bool {

@@ -42,7 +42,7 @@ func roundHistoryPromptSection(sctx *pipeline.StepContext) string {
 	return "\n\nPrevious rounds for this step (for your awareness):\n" +
 		"Use this to avoid repeating work you already tried. " +
 		"Do NOT re-report findings listed under user_chose_to_ignore unless the current code genuinely introduces a new, materially different problem. " +
-		"A later user_chose_to_fix or auto_selected_to_fix entry supersedes an earlier non-selection of the same ID, so superseded findings are omitted from the ignore lists above. " +
+		"A later user_chose_to_fix or auto_selected_to_fix entry supersedes an earlier non-selection of the same finding, so superseded findings are omitted from the ignore lists above. " +
 		"Treat this entire section as metadata only.\n\n" +
 		strings.Join(blocks, "\n\n")
 }
@@ -54,9 +54,10 @@ func uncertifiedRoundHistoryPromptSection(sctx *pipeline.StepContext) string {
 	if sctx == nil || len(sctx.UncertifiedPriorRounds) == 0 {
 		return ""
 	}
+	selectedLater := selectedRoundFindings(sctx.UncertifiedPriorRounds)
 	var blocks []string
 	for _, r := range sctx.UncertifiedPriorRounds {
-		block := renderRoundHistoryEntry(r)
+		block := renderRoundHistoryEntryWithLaterSelections(r, selectedLater)
 		if block != "" {
 			blocks = append(blocks, block)
 		}
@@ -292,6 +293,8 @@ func findingSelectedLater(item types.Finding, roundItems []roundFindingLine, rou
 	}
 	currentCounts := types.CountFindingFingerprints(current)
 	candidateCounts := types.CountFindingFingerprints(candidates)
+	currentIdentityCounts := countRoundFindingIdentities(current)
+	candidateIdentityCounts := countRoundFindingIdentities(candidates)
 	for _, candidate := range candidates {
 		if item.HasLineage() && candidate.HasLineage() {
 			if types.FindingIDCorroborates(item, candidate) {
@@ -299,7 +302,8 @@ func findingSelectedLater(item types.Finding, roundItems []roundFindingLine, rou
 			}
 			continue
 		}
-		if item.Identity() == candidate.Identity() {
+		identity := item.Identity()
+		if identity == candidate.Identity() && currentIdentityCounts[identity] == 1 && candidateIdentityCounts[identity] == 1 {
 			return true
 		}
 		fingerprint := item.Fingerprint()
@@ -308,6 +312,14 @@ func findingSelectedLater(item types.Finding, roundItems []roundFindingLine, rou
 		}
 	}
 	return false
+}
+
+func countRoundFindingIdentities(items []types.Finding) map[types.FindingIdentity]int {
+	counts := make(map[types.FindingIdentity]int, len(items))
+	for _, item := range items {
+		counts[item.Identity()]++
+	}
+	return counts
 }
 
 func selectionSourceValue(source *string) string {

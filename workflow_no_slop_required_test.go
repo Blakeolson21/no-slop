@@ -227,16 +227,16 @@ func TestNoSlopRequiredWorkflowPublishesStableEventIdentity(t *testing.T) {
 		t.Fatalf("required check name changed to %q", workflow.Jobs["check"].Name)
 	}
 
-	first := requiredWorkflowEvent{Action: "edited", PRNumber: 549, RunID: 29962943078, RunNumber: 587}
-	latest := requiredWorkflowEvent{Action: "edited", PRNumber: 549, RunID: 29965243268, RunNumber: 588}
+	first := requiredWorkflowEvent{Action: "edited", UpdatedAt: "2026-08-23T18:42:30Z", PRNumber: 549, RunID: 29962943078, RunNumber: 587}
+	latest := requiredWorkflowEvent{Action: "edited", UpdatedAt: "2026-08-23T18:42:31Z", PRNumber: 549, RunID: 29965243268, RunNumber: 588}
 	firstName := renderRequiredWorkflowTemplate(t, workflow.RunName, first)
 	latestName := renderRequiredWorkflowTemplate(t, workflow.RunName, latest)
-	for _, want := range []string{"#549", "edited", "587", "29962943078"} {
+	for _, want := range []string{"no-slop-required|edited|2026-08-23T18:42:30Z", "#549", "587", "29962943078"} {
 		if !strings.Contains(firstName, want) {
 			t.Errorf("first event run name %q does not expose %q", firstName, want)
 		}
 	}
-	for _, want := range []string{"#549", "edited", "588", "29965243268"} {
+	for _, want := range []string{"no-slop-required|edited|2026-08-23T18:42:31Z", "#549", "588", "29965243268"} {
 		if !strings.Contains(latestName, want) {
 			t.Errorf("latest event run name %q does not expose %q", latestName, want)
 		}
@@ -309,6 +309,7 @@ type requiredWorkflowEvent struct {
 	Action    string
 	Body      string
 	HeadSHA   string
+	UpdatedAt string
 	PRNumber  int64
 	RunID     int64
 	RunNumber int64
@@ -569,6 +570,7 @@ func renderRequiredWorkflowTemplate(t *testing.T, template string, event require
 		{expression: "github.event.action", value: event.Action},
 		{expression: "github.event.pull_request.number", value: strconv.FormatInt(event.PRNumber, 10)},
 		{expression: "github.event.pull_request.head.sha", value: event.HeadSHA},
+		{expression: "github.event.pull_request.updated_at", value: event.UpdatedAt},
 		{expression: "github.run_id", value: strconv.FormatInt(event.RunID, 10)},
 		{expression: "github.run_number", value: strconv.FormatInt(event.RunNumber, 10)},
 	}

@@ -89,14 +89,18 @@ func (s *PRStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 	}
 	if existing != nil {
 		sctx.Log(fmt.Sprintf("pull request already exists: %s, updating...", describePR(existing)))
-		if reader, ok := host.(scm.CheckAttemptIdentityReader); ok {
-			if err := persistExpectedAttestationBoundary(sctx, host, existing, reader); err != nil {
-				return nil, fmt.Errorf("persist expected attestation boundary: %w", err)
-			}
-		}
 		updated, err := host.UpdatePR(ctx, existing, scm.PRContent(content))
 		if err != nil {
 			return nil, fmt.Errorf("update pull request: %w", err)
+		}
+		if reader, ok := host.(scm.PRAttestationBoundaryReader); ok {
+			updatedAt, err := reader.GetPRAttestationBoundary(ctx, existing)
+			if err != nil {
+				return nil, fmt.Errorf("read updated pull request attestation boundary: %w", err)
+			}
+			if err := persistExpectedAttestationBoundary(sctx, updatedAt); err != nil {
+				return nil, fmt.Errorf("persist expected attestation boundary: %w", err)
+			}
 		}
 		prURL := existing.URL
 		if updated != nil && updated.URL != "" {

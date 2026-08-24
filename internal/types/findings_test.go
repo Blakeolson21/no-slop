@@ -606,7 +606,7 @@ func TestNormalizeFindingsPreservesUnrelatedClaimAsNewLineage(t *testing.T) {
 	}
 }
 
-func TestNormalizeFindingsCorroboratesRewordingAtSameLocation(t *testing.T) {
+func TestNormalizeFindingsPreservesRewordingAtSameLocation(t *testing.T) {
 	prior, err := NormalizeFindings(Findings{Items: []Finding{{File: "loader.go", Line: 42, Description: "unsafe loader"}}}, "review", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -621,8 +621,8 @@ func TestNormalizeFindingsCorroboratesRewordingAtSameLocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !FindingIDCorroborates(fresh.Items[0], prior.Items[0]) {
-		t.Fatalf("same-location continuation lost lineage: %#v", fresh.Items[0])
+	if FindingIDCorroborates(fresh.Items[0], prior.Items[0]) {
+		t.Fatalf("description change inherited prior lineage: %#v", fresh.Items[0])
 	}
 }
 

@@ -130,27 +130,19 @@ func fakeGHHandler(args []string) {
 		os.Exit(0)
 	}
 	if len(args) >= 2 && args[0] == "pr" && args[1] == "view" {
+		if strings.Contains(strings.Join(args, " "), "updatedAt") {
+			updatedAt := os.Getenv("FAKE_CLI_GH_PR_UPDATED_AT")
+			if updatedAt == "" {
+				os.Exit(1)
+			}
+			fmt.Println(updatedAt)
+			os.Exit(0)
+		}
 		if prURL != "" {
 			fmt.Println(prURL)
 			os.Exit(0)
 		}
 		os.Exit(1)
-	}
-	if len(args) >= 2 && args[0] == "pr" && args[1] == "checks" {
-		checks := os.Getenv("FAKE_CLI_GH_CHECKS_JSON")
-		if checks == "" {
-			checks = "[]"
-		}
-		fmt.Println(checks)
-		os.Exit(0)
-	}
-	if len(args) >= 2 && args[0] == "run" && args[1] == "view" {
-		identity := os.Getenv("FAKE_CLI_GH_RUN_IDENTITY_JSON")
-		if identity == "" {
-			os.Exit(1)
-		}
-		fmt.Println(identity)
-		os.Exit(0)
 	}
 	if len(args) >= 2 && args[0] == "pr" && args[1] == "edit" {
 		if os.Getenv("FAKE_CLI_GH_EDIT_ERROR") != "" {

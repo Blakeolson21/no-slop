@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/Blakeolson21/no-slop/internal/agent"
@@ -49,12 +50,10 @@ func TestPRStep_GhNotAvailable(t *testing.T) {
 func TestPRStep_UpdatesExistingPR(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
+	boundary := time.Date(2026, 8, 23, 18, 42, 31, 0, time.UTC)
 
 	env, logFile := fakeGH(t, "https://github.com/test/repo/pull/42")
-	env = append(env,
-		`FAKE_CLI_GH_CHECKS_JSON=[{"name":"PR must be raised via no-slop","bucket":"fail","state":"FAILURE","link":"https://github.com/test/repo/actions/runs/100/job/1000"}]`,
-		`FAKE_CLI_GH_RUN_IDENTITY_JSON={"databaseId":100,"number":41,"attempt":3,"event":"pull_request_target","headSha":"`+headSHA+`"}`,
-	)
+	env = append(env, "FAKE_CLI_GH_PR_UPDATED_AT="+boundary.Format(time.RFC3339Nano))
 
 	ag := &mockAgent{name: "test"}
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
@@ -67,10 +66,9 @@ func TestPRStep_UpdatesExistingPR(t *testing.T) {
 		t.Fatal(err)
 	}
 	budget := &checkRerunBudget{
-		spent:                               map[string]int{"build": 1},
-		expectedAttestationHeadSHA:          baseSHA,
-		expectedAttestationRunNumberCutoff:  12,
-		expectedAttestationRunAttemptCutoff: 2,
+		spent:                        map[string]int{"build": 1},
+		expectedAttestationHeadSHA:   baseSHA,
+		expectedAttestationUpdatedAt: boundary.Add(-time.Minute),
 	}
 	encoded, err := budget.marshal()
 	if err != nil {
@@ -104,6 +102,11 @@ func TestPRStep_UpdatesExistingPR(t *testing.T) {
 	if !strings.Contains(ghLog, noMistakesPRSignature) {
 		t.Errorf("expected updated PR body to include no-slop signature, got:\n%s", ghLog)
 	}
+	editAt := strings.Index(ghLog, "pr edit")
+	boundaryAt := strings.Index(ghLog, "pr view 42 --repo test/repo --json updatedAt")
+	if editAt < 0 || boundaryAt < editAt {
+		t.Fatalf("attestation boundary was not read after PR update:\n%s", ghLog)
+	}
 
 	// Verify PR URL was stored
 	run, err := sctx.DB.GetRun(sctx.Run.ID)
@@ -121,7 +124,7 @@ func TestPRStep_UpdatesExistingPR(t *testing.T) {
 	if err := persisted.unmarshal(encoded); err != nil {
 		t.Fatal(err)
 	}
-	if persisted.expectedAttestationHeadSHA != headSHA || persisted.expectedAttestationRunNumberCutoff != 41 || persisted.expectedAttestationRunAttemptCutoff != 3 || persisted.used("build") != 1 {
+	if persisted.expectedAttestationHeadSHA != headSHA || !persisted.expectedAttestationUpdatedAt.Equal(boundary) || persisted.used("build") != 1 {
 		t.Fatalf("persisted attestation expectation = %#v", persisted)
 	}
 }

@@ -153,15 +153,21 @@ type Check struct {
 }
 
 type CheckAttemptIdentity struct {
-	RunID      int64
-	RunNumber  int64
-	RunAttempt int
-	Event      string
-	HeadSHA    string
+	RunID                int64
+	RunNumber            int64
+	RunAttempt           int
+	Event                string
+	EventAction          string
+	PullRequestUpdatedAt time.Time
+	HeadSHA              string
 }
 
 type CheckAttemptIdentityReader interface {
 	GetCheckAttemptIdentity(ctx context.Context, check Check) (CheckAttemptIdentity, error)
+}
+
+type PRAttestationBoundaryReader interface {
+	GetPRAttestationBoundary(ctx context.Context, pr *PR) (time.Time, error)
 }
 
 // Failing reports whether the check is in a failed bucket.

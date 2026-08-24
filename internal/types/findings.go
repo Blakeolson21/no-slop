@@ -245,13 +245,7 @@ func NormalizeFindings(findings Findings, prefix string, existing []Finding) (Fi
 }
 
 func findingSemanticallyCorroborates(item, candidate Finding) bool {
-	if strings.TrimSpace(item.Description) == "" || strings.TrimSpace(candidate.Description) == "" {
-		return false
-	}
-	if item.Fingerprint() == candidate.Fingerprint() {
-		return true
-	}
-	return item.File != "" && item.File == candidate.File && item.Line > 0 && item.Line == candidate.Line
+	return strings.TrimSpace(item.Description) != "" && item.Fingerprint() == candidate.Fingerprint()
 }
 
 func normalizeNonReviewFindings(findings Findings, prefix string, _ []Finding) (Findings, error) {

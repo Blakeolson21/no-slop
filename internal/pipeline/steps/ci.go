@@ -136,7 +136,9 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 	// A run recovered after a restart resumes the rerun budget it already
 	// spent. Without this the fresh in-memory budget would grant reruns the
 	// documented limit already accounted for.
-	s.loadRerunBudget(sctx)
+	if err := s.loadRerunBudget(sctx); err != nil {
+		return nil, err
+	}
 	ctx := sctx.Ctx
 	if err := ctx.Err(); err != nil {
 		return nil, err

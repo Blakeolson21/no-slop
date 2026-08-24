@@ -1,5 +1,5 @@
 name: Require no-slop
-run-name: "PR #${{ github.event.pull_request.number }} body compliance - ${{ github.event.action }} - event ${{ github.run_number }} (run ${{ github.run_id }})"
+run-name: "no-slop-required|${{ github.event.action }}|${{ github.event.pull_request.updated_at }}|PR #${{ github.event.pull_request.number }} event ${{ github.run_number }} (run ${{ github.run_id }})"
 
 on:
   pull_request:

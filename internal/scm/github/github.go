@@ -279,6 +279,26 @@ func (h *Host) UpdatePR(ctx context.Context, pr *scm.PR, content scm.PRContent) 
 	return pr, nil
 }
 
+func (h *Host) GetPRAttestationBoundary(ctx context.Context, pr *scm.PR) (time.Time, error) {
+	selector, err := prSelector(pr)
+	if err != nil {
+		return time.Time{}, err
+	}
+	args := append([]string{"pr", "view", selector}, h.repoArgs()...)
+	args = append(args, "--json", "updatedAt", "--jq", ".updatedAt")
+	cmd := h.cmd(ctx, "gh", args...)
+	shellenv.ConfigureShellCommand(cmd)
+	out, err := shellenv.OutputShellCommand(cmd)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("gh pr view attestation boundary: %w", err)
+	}
+	updatedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(out)))
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse PR attestation boundary: %w", err)
+	}
+	return updatedAt, nil
+}
+
 func (h *Host) GetPRState(ctx context.Context, pr *scm.PR) (scm.PRState, error) {
 	selector, err := prSelector(pr)
 	if err != nil {
@@ -344,7 +364,7 @@ func (h *Host) GetCheckAttemptIdentity(ctx context.Context, check scm.Check) (sc
 		return scm.CheckAttemptIdentity{}, fmt.Errorf("check link does not identify a GitHub Actions run: %s", check.Link)
 	}
 	args := append([]string{"run", "view", runID}, h.repoArgs()...)
-	args = append(args, "--json", "databaseId,number,attempt,event,headSha")
+	args = append(args, "--json", "databaseId,number,attempt,event,headSha,displayTitle")
 	cmd := h.cmd(ctx, "gh", args...)
 	shellenv.ConfigureShellCommand(cmd)
 	out, err := shellenv.OutputShellCommand(cmd)
@@ -352,11 +372,12 @@ func (h *Host) GetCheckAttemptIdentity(ctx context.Context, check scm.Check) (sc
 		return scm.CheckAttemptIdentity{}, fmt.Errorf("gh run view: %w", err)
 	}
 	var raw struct {
-		RunID      int64  `json:"databaseId"`
-		RunNumber  int64  `json:"number"`
-		RunAttempt int    `json:"attempt"`
-		Event      string `json:"event"`
-		HeadSHA    string `json:"headSha"`
+		RunID        int64  `json:"databaseId"`
+		RunNumber    int64  `json:"number"`
+		RunAttempt   int    `json:"attempt"`
+		Event        string `json:"event"`
+		HeadSHA      string `json:"headSha"`
+		DisplayTitle string `json:"displayTitle"`
 	}
 	if err := json.Unmarshal(out, &raw); err != nil {
 		return scm.CheckAttemptIdentity{}, fmt.Errorf("parse GitHub Actions run identity: %w", err)
@@ -364,13 +385,31 @@ func (h *Host) GetCheckAttemptIdentity(ctx context.Context, check scm.Check) (sc
 	if raw.RunID == 0 || raw.RunNumber == 0 {
 		return scm.CheckAttemptIdentity{}, fmt.Errorf("GitHub Actions run identity is incomplete for %s", check.Link)
 	}
+	action, updatedAt, err := parseAttestationRunBoundary(raw.DisplayTitle)
+	if err != nil {
+		return scm.CheckAttemptIdentity{}, err
+	}
 	return scm.CheckAttemptIdentity{
-		RunID:      raw.RunID,
-		RunNumber:  raw.RunNumber,
-		RunAttempt: raw.RunAttempt,
-		Event:      strings.TrimSpace(raw.Event),
-		HeadSHA:    strings.TrimSpace(raw.HeadSHA),
+		RunID:                raw.RunID,
+		RunNumber:            raw.RunNumber,
+		RunAttempt:           raw.RunAttempt,
+		Event:                strings.TrimSpace(raw.Event),
+		EventAction:          action,
+		PullRequestUpdatedAt: updatedAt,
+		HeadSHA:              strings.TrimSpace(raw.HeadSHA),
 	}, nil
+}
+
+func parseAttestationRunBoundary(title string) (string, time.Time, error) {
+	parts := strings.SplitN(strings.TrimSpace(title), "|", 4)
+	if len(parts) < 3 || parts[0] != "no-slop-required" || strings.TrimSpace(parts[1]) == "" {
+		return "", time.Time{}, fmt.Errorf("GitHub Actions run title has no attestation boundary")
+	}
+	updatedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(parts[2]))
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("parse GitHub Actions attestation boundary: %w", err)
+	}
+	return strings.TrimSpace(parts[1]), updatedAt, nil
 }
 
 // RerunCheck re-runs the Actions job behind check for the same commit, so a

@@ -80,6 +80,22 @@ func TestMergeCarriedFindingsJSON_MatchedLineagePreservesEffectiveRisk(t *testin
 	}
 }
 
+func TestMergeCarriedFindingsJSON_ExcludesPipelineDeliveryFromEffectiveRisk(t *testing.T) {
+	carriedRaw := `{"findings":[{"id":"review-delivery","severity":"error","description":"PR not pushed","action":"ask-user","review_scope":"pipeline-owned-delivery"}],"risk_level":"high","risk_rationale":"PR is absent.","risk_scope":"pipeline-owned-delivery"}`
+	freshRaw := `{"findings":[{"id":"review-source","severity":"info","description":"bounded source concern","action":"ask-user","review_scope":"source"}],"risk_level":"low","risk_rationale":"Source change is bounded.","risk_scope":"source-or-external"}`
+
+	merged, err := types.ParseFindingsJSON(mergeCarriedFindingsJSON(freshRaw, carriedRaw, "review"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged.RiskLevel != "low" || merged.RiskScope != types.FindingsRiskScopeSourceOrExternal {
+		t.Fatalf("effective source risk = %q/%q, want low/source-or-external", merged.RiskLevel, merged.RiskScope)
+	}
+	if !strings.Contains(merged.RiskRationale, "excluded from source/external risk") {
+		t.Fatalf("risk rationale = %q", merged.RiskRationale)
+	}
+}
+
 func TestMergeCarriedFindingsJSON_DoesNotTrustUncorroboratedExplicitID(t *testing.T) {
 	carriedRaw := `{"findings":[{"id":"review-1","severity":"warning","file":"loader.go","line":12,"description":"unsafe loader","action":"ask-user"}]}`
 	freshRaw := `{"findings":[{"id":"review-1","severity":"error","file":"loader.go","line":12,"description":"cache write can deadlock","action":"auto-fix"}]}`
@@ -107,6 +123,7 @@ func TestMergeCarriedFindingsJSON_DoesNotTrustUncorroboratedExplicitID(t *testin
 func TestMergeCarriedFindingsJSON_PreservesPriorWhenClaimIsUnrelated(t *testing.T) {
 	prior, err := types.NormalizeFindings(types.Findings{Items: []types.Finding{{
 		File:        "loader.go",
+		Line:        42,
 		Description: "unsafe loader",
 		Action:      types.ActionAskUser,
 	}}}, "review", nil)
@@ -116,7 +133,8 @@ func TestMergeCarriedFindingsJSON_PreservesPriorWhenClaimIsUnrelated(t *testing.
 	fresh, err := types.NormalizeFindings(types.Findings{Items: []types.Finding{{
 		PriorID:              prior.Items[0].ID,
 		PriorContinuityToken: prior.Items[0].ContinuityToken,
-		File:                 "auth.go",
+		File:                 "loader.go",
+		Line:                 42,
 		Description:          "authentication token leaks in logs",
 		Action:               types.ActionAutoFix,
 	}}}, "review", prior.Items)

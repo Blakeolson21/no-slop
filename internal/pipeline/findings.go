@@ -215,31 +215,34 @@ func mergeEvidenceSummary(fresh, carried string) string {
 }
 
 func effectiveFindingsRisk(items []types.Finding, fresh, carried types.Findings, carriedCount int) (string, string, string) {
-	rank := riskRank(fresh.RiskLevel)
-	if carriedRank := riskRank(carried.RiskLevel); carriedRank > rank {
-		rank = carriedRank
+	rank := 0
+	if fresh.RiskScope != types.FindingsRiskScopePipelineOwnedDelivery {
+		rank = riskRank(fresh.RiskLevel)
 	}
-	scope := fresh.RiskScope
-	if carried.RiskScope == types.FindingsRiskScopeSourceOrExternal || scope == "" {
-		scope = carried.RiskScope
+	if carried.RiskScope != types.FindingsRiskScopePipelineOwnedDelivery {
+		carriedRank := riskRank(carried.RiskLevel)
+		if carriedRank > rank {
+			rank = carriedRank
+		}
 	}
+	excluded := 0
 	for _, item := range items {
+		if item.ReviewScope == types.FindingReviewScopePipelineOwnedDelivery {
+			excluded++
+			continue
+		}
 		if severityRank(item.Severity) > rank {
 			rank = severityRank(item.Severity)
 		}
-		switch item.ReviewScope {
-		case types.FindingReviewScopeSource, types.FindingReviewScopeExternalDelivery:
-			scope = types.FindingsRiskScopeSourceOrExternal
-		case types.FindingReviewScopePipelineOwnedDelivery:
-			if scope == "" {
-				scope = types.FindingsRiskScopePipelineOwnedDelivery
-			}
-		}
 	}
-	if scope == "" {
-		scope = types.FindingsRiskScopeSourceOrExternal
+	if rank == 0 {
+		rank = riskRank("low")
 	}
-	return riskLevel(rank), fmt.Sprintf("Effective review contains %d unresolved %s, including %d carried from earlier review rounds.", len(items), pluralize(len(items), "finding", "findings"), carriedCount), scope
+	rationale := fmt.Sprintf("Effective review contains %d unresolved %s, including %d carried from earlier review rounds.", len(items), pluralize(len(items), "finding", "findings"), carriedCount)
+	if excluded > 0 {
+		rationale += fmt.Sprintf(" %d pipeline-owned delivery %s excluded from source/external risk.", excluded, pluralize(excluded, "finding was", "findings were"))
+	}
+	return riskLevel(rank), rationale, types.FindingsRiskScopeSourceOrExternal
 }
 
 func severityRank(severity string) int {

@@ -114,10 +114,11 @@ func TestGetChecksPassesRepoFlag(t *testing.T) {
 
 func TestGetCheckAttemptIdentityReadsGitHubRunIdentity(t *testing.T) {
 	t.Parallel()
+	updatedAt := time.Date(2026, 8, 23, 18, 42, 31, 0, time.UTC)
 
 	host := New(githubTestCmdFactory(map[string]githubTestResponse{
-		"gh run view 900 --repo test/repo --json databaseId,number,attempt,event,headSha": {
-			stdout: `{"databaseId":900,"number":42,"attempt":3,"event":"pull_request","headSha":"abc123"}` + "\n",
+		"gh run view 900 --repo test/repo --json databaseId,number,attempt,event,headSha,displayTitle": {
+			stdout: `{"databaseId":900,"number":42,"attempt":3,"event":"pull_request","headSha":"abc123","displayTitle":"no-slop-required|edited|2026-08-23T18:42:31Z|PR #42"}` + "\n",
 		},
 	}), nil, "", "test/repo")
 
@@ -125,8 +126,24 @@ func TestGetCheckAttemptIdentityReadsGitHubRunIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if identity.RunID != 900 || identity.RunNumber != 42 || identity.RunAttempt != 3 || identity.Event != "pull_request" || identity.HeadSHA != "abc123" {
+	if identity.RunID != 900 || identity.RunNumber != 42 || identity.RunAttempt != 3 || identity.Event != "pull_request" || identity.EventAction != "edited" || !identity.PullRequestUpdatedAt.Equal(updatedAt) || identity.HeadSHA != "abc123" {
 		t.Fatalf("identity = %#v", identity)
+	}
+}
+
+func TestGetPRAttestationBoundaryReadsProviderTimestamp(t *testing.T) {
+	t.Parallel()
+	want := time.Date(2026, 8, 23, 18, 42, 31, 0, time.UTC)
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh pr view 123 --repo test/repo --json updatedAt --jq .updatedAt": {stdout: "2026-08-23T18:42:31Z\n"},
+	}), nil, "", "test/repo")
+
+	got, err := host.GetPRAttestationBoundary(context.Background(), &scm.PR{Number: "123"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Equal(want) {
+		t.Fatalf("boundary = %v, want %v", got, want)
 	}
 }
 
