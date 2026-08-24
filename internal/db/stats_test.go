@@ -365,7 +365,7 @@ func TestStepFindingStatsCountsDistinctGeneratedLineagesWithIdenticalContent(t *
 	}
 }
 
-func TestStepFindingStatsUsesStructuralContinuityForNonReviewSteps(t *testing.T) {
+func TestStepFindingStatsPreservesLegacyIdentityForNonReviewSteps(t *testing.T) {
 	for _, stepName := range []types.StepName{types.StepTest, types.StepDocument, types.StepLint} {
 		t.Run(string(stepName), func(t *testing.T) {
 			d := openTestDB(t)
@@ -389,6 +389,29 @@ func TestStepFindingStatsUsesStructuralContinuityForNonReviewSteps(t *testing.T)
 				t.Fatalf("stats = reported %d fixed %d", stats.ReportedFindings, stats.FixedFindings)
 			}
 		})
+	}
+}
+
+func TestStepFindingStatsCountsNonReviewReclassificationAsNewFinding(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/repo/non-review-reclassification", "git@example.com:non-review.git", "main")
+	run, _ := d.InsertRun(repo.ID, "non-review", "head", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepTest)
+	initial := `{"findings":[{"id":"first-id","severity":"warning","file":"loader.go","line":8,"description":"unsafe loader","action":"auto-fix","review_scope":"source"}]}`
+	final := `{"findings":[{"id":"second-id","severity":"error","file":"loader.go","line":8,"description":"unsafe loader","action":"ask-user","review_scope":"external-delivery"}]}`
+	if _, err := d.InsertStepRound(step.ID, 1, "initial", &initial, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.InsertStepRound(step.ID, 2, "auto_fix", &final, nil, 100); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := d.StepFindingStats(step)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ReportedFindings != 2 || stats.FixedFindings != 1 {
+		t.Fatalf("stats = reported %d fixed %d, want 2/1", stats.ReportedFindings, stats.FixedFindings)
 	}
 }
 

@@ -124,9 +124,9 @@ func TestFilterExpectedStaleAttestationChecksUsesPublicationNonce(t *testing.T) 
 	laterSameBody := scm.Check{Name: requiredAttestationCheckName, Bucket: scm.CheckBucketPass, State: "SUCCESS", Link: "later-same-body"}
 	host := &attestationIdentityHost{identities: map[string]scm.CheckAttemptIdentity{
 		"older-pass":            {RunID: 999, RunNumber: 99, RunAttempt: 1, HeadSHA: headSHA, PublicationNonce: staleNonce},
-		"stale":                 {RunID: 1001, RunNumber: 101, RunAttempt: 1, HeadSHA: headSHA, PublicationNonce: staleNonce},
+		"stale":                 {RunID: 1000, RunNumber: 101, RunAttempt: 1, HeadSHA: headSHA, PublicationNonce: staleNonce},
 		"publication-cancelled": {RunID: 1002, RunNumber: 102, RunAttempt: 1, HeadSHA: headSHA, PublicationNonce: currentNonce},
-		"later-failure":         {RunID: 1003, RunNumber: 103, RunAttempt: 1, HeadSHA: headSHA, PublicationNonce: staleNonce},
+		"later-failure":         {RunID: 1001, RunNumber: 103, RunAttempt: 1, HeadSHA: headSHA, PublicationNonce: staleNonce},
 		"later-same-body":       {RunID: 1004, RunNumber: 104, RunAttempt: 1, HeadSHA: headSHA, PublicationNonce: currentNonce},
 	}, publication: scm.CheckAttemptIdentity{RunID: 1002, RunNumber: 102, RunAttempt: 1, HeadSHA: headSHA, PublicationNonce: currentNonce}}
 	state := expectedAttestationState{HeadSHA: headSHA, PublicationNonce: currentNonce}
@@ -161,6 +161,9 @@ func TestFilterExpectedStaleAttestationChecksUsesPublicationNonce(t *testing.T) 
 	if step.expectedAttestation.PublicationRunID != 1002 {
 		t.Fatalf("publication run ID = %d, want 1002", step.expectedAttestation.PublicationRunID)
 	}
+	if step.expectedAttestation.PublicationRunNumber != 102 {
+		t.Fatalf("publication run number = %d, want 102", step.expectedAttestation.PublicationRunNumber)
+	}
 
 	filtered, err = step.filterExpectedStaleAttestationChecks(sctx, host, []scm.Check{olderPass, stale, publicationCancelled, laterFailure, laterSameBody})
 	if err != nil {
@@ -181,7 +184,7 @@ func TestFilterExpectedStaleAttestationChecksUsesPublicationNonce(t *testing.T) 
 	if len(filtered) != 2 || filtered[0].Link != "publication-cancelled" || filtered[1].Link != "later-failure" {
 		t.Fatalf("recovered attempt ordering = %#v", filtered)
 	}
-	if recovered.expectedAttestation.PublicationRunID != 1002 {
+	if recovered.expectedAttestation.PublicationRunID != 1002 || recovered.expectedAttestation.PublicationRunNumber != 102 {
 		t.Fatalf("recovered attestation state = %#v", recovered.expectedAttestation)
 	}
 }

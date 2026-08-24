@@ -466,7 +466,7 @@ func (h *Host) FindAttestationPublicationIdentity(ctx context.Context, headSHA, 
 		if run.RunID <= 0 || run.RunNumber <= 0 {
 			return scm.CheckAttemptIdentity{}, false, fmt.Errorf("GitHub Actions publication identity is incomplete")
 		}
-		if found.RunID != 0 && found.RunID <= run.RunID {
+		if found.RunNumber != 0 && found.RunNumber <= run.RunNumber {
 			continue
 		}
 		found = scm.CheckAttemptIdentity{

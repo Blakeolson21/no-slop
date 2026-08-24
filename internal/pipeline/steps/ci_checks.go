@@ -31,27 +31,30 @@ func (s *CIStep) filterExpectedStaleAttestationChecks(sctx *pipeline.StepContext
 	}
 	identities := make(map[string]scm.CheckAttemptIdentity)
 	publicationRunID := state.PublicationRunID
-	if publicationRunID == 0 {
+	publicationRunNumber := state.PublicationRunNumber
+	if publicationRunNumber == 0 {
 		identity, found, err := publicationReader.FindAttestationPublicationIdentity(sctx.Ctx, sctx.Run.HeadSHA, state.PublicationNonce)
 		if err != nil {
 			return nil, fmt.Errorf("identify attestation publication workflow event: %w", err)
 		}
 		if found {
-			if identity.RunID <= 0 || identity.HeadSHA != sctx.Run.HeadSHA || identity.PublicationNonce != state.PublicationNonce {
+			if identity.RunID <= 0 || identity.RunNumber <= 0 || identity.HeadSHA != sctx.Run.HeadSHA || identity.PublicationNonce != state.PublicationNonce {
 				return nil, fmt.Errorf("attestation publication workflow identity is incomplete")
 			}
 			publicationRunID = identity.RunID
+			publicationRunNumber = identity.RunNumber
 		}
 	}
-	if publicationRunID != 0 && state.PublicationRunID != publicationRunID {
+	if publicationRunNumber != 0 && (state.PublicationRunID != publicationRunID || state.PublicationRunNumber != publicationRunNumber) {
 		state.PublicationRunID = publicationRunID
+		state.PublicationRunNumber = publicationRunNumber
 		if err := persistExpectedAttestationState(sctx, *state); err != nil {
 			return nil, fmt.Errorf("persist attestation publication run identity: %w", err)
 		}
 	}
 
 	filtered := make([]scm.Check, 0, len(checks)+1)
-	if publicationRunID == 0 {
+	if publicationRunNumber == 0 {
 		for _, check := range checks {
 			if check.Name != requiredAttestationCheckName {
 				filtered = append(filtered, check)
@@ -73,10 +76,10 @@ func (s *CIStep) filterExpectedStaleAttestationChecks(sctx *pipeline.StepContext
 		if identity.HeadSHA != sctx.Run.HeadSHA {
 			continue
 		}
-		if identity.RunID <= 0 {
-			return nil, fmt.Errorf("attestation check attempt has no immutable run identity")
+		if identity.RunID <= 0 || identity.RunNumber <= 0 {
+			return nil, fmt.Errorf("attestation check attempt has incomplete run identity")
 		}
-		if identity.RunID < publicationRunID {
+		if identity.RunNumber < publicationRunNumber {
 			continue
 		}
 		filtered = append(filtered, check)

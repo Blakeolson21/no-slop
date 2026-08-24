@@ -142,7 +142,7 @@ func stepFindingStats(step *StepResult, rounds []*StepRound) StepStats {
 		return stats
 	}
 	if step.StepName != types.StepReview {
-		return structuralStepFindingStats(step, rounds)
+		return legacyStepFindingStats(step, rounds)
 	}
 
 	reportedLineages := make(map[string]bool)
@@ -176,19 +176,22 @@ func stepFindingStats(step *StepResult, rounds []*StepRound) StepStats {
 	return stats
 }
 
-func structuralStepFindingStats(step *StepResult, rounds []*StepRound) StepStats {
-	reported := make(map[types.FindingIdentity]bool)
-	reportedCounts := make(map[types.FindingIdentity]int)
+type legacyFindingStatsIdentity struct {
+	Severity    string
+	File        string
+	Line        int
+	Description string
+	ReviewScope string
+	Category    string
+}
+
+func legacyStepFindingStats(step *StepResult, rounds []*StepRound) StepStats {
+	reported := make(map[legacyFindingStatsIdentity]bool)
 	var current []types.Finding
 	for _, round := range rounds {
 		current = findingItems(round.FindingsJSON)
-		currentCounts := types.CountFindingFingerprints(current)
 		for _, item := range current {
-			if reported[item.Identity()] || (currentCounts[item.Fingerprint()] == 1 && reportedCounts[item.Fingerprint()] == 1) {
-				continue
-			}
-			reported[item.Identity()] = true
-			reportedCounts[item.Fingerprint()]++
+			reported[legacyFindingStatsKey(item)] = true
 		}
 	}
 	stats := StepStats{StepName: step.StepName, ReportedFindings: len(reported)}
@@ -196,7 +199,21 @@ func structuralStepFindingStats(step *StepResult, rounds []*StepRound) StepStats
 	if stats.FixedFindings < 0 {
 		stats.FixedFindings = 0
 	}
+	if stats.FixedFindings > stats.ReportedFindings {
+		stats.FixedFindings = stats.ReportedFindings
+	}
 	return stats
+}
+
+func legacyFindingStatsKey(item types.Finding) legacyFindingStatsIdentity {
+	return legacyFindingStatsIdentity{
+		Severity:    item.Severity,
+		File:        item.File,
+		Line:        item.Line,
+		Description: item.Description,
+		ReviewScope: item.ReviewScope,
+		Category:    item.Category,
+	}
 }
 
 func findingStatsLineageKey(item types.Finding, lineageStats bool) (string, bool) {
