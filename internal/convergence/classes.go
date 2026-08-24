@@ -10,13 +10,13 @@ import (
 
 // Finding-class identity across rounds.
 //
-// A finding's id and file are useless as identity: the observed ladder failure
-// reported one defect class ("env-file parsing semantics disagree with docker
-// compose") three times under three different ids in three different files, so
-// identity has to come from content. Each finding is reduced to a normalized
-// token set over its category and description (lowercased, lightly stemmed,
-// stopwords and numbers dropped), and findings whose token sets substantially
-// overlap are grouped into one class.
+// Pipeline lineage identifies an exact carried finding, but it is insufficient
+// for convergence-class identity: the observed ladder failure reported one
+// defect class ("env-file parsing semantics disagree with docker compose") as
+// three distinct lineages in three different files. Class identity therefore
+// comes from content. Each finding is reduced to a normalized token set over its
+// category and description (lowercased, lightly stemmed, stopwords and numbers
+// dropped), and findings whose token sets substantially overlap are grouped.
 //
 // Similarity is the overlap coefficient (|A∩B| / min(|A|,|B|)) rather than
 // Jaccard: reworded findings of the same class share a stable core vocabulary

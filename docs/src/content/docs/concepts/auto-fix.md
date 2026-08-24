@@ -89,8 +89,7 @@ When the pipeline pauses for approval, you can manually trigger a fix from the T
 
 The agent receives the merged fix payload for that round: the selected agent findings, any per-finding user notes, any selected user-authored findings added from the TUI or AXI interface, and a sanitized history of previous rounds for that step.
 That history includes which finding IDs were selected for a prior fix attempt, which findings were left unselected by the user, and any one-line summaries from earlier fix commits.
-On follow-up review passes, that history tells the agent not to re-report user-ignored findings unless the code now presents a materially different issue.
-A review finding that remains unselected is carried into the next gate even when the rereviewer does not mention it, so a narrower or silent follow-up cannot retract an unresolved decision. If that carried ID is selected later, the later selection supersedes its earlier non-selection in the verification history; the finding clears only after that selected fix receives its rereview.
+Review adds continuity rules to this generic history. The [Review step reference](/no-slop/reference/pipeline-steps/#review) owns how unresolved findings survive rereviews and how a later selection supersedes an earlier non-selection.
 
 After a user-triggered fix, the step re-runs and pauses again to show you the results (`fix_review` status). You can then approve, fix again, skip, or abort.
 TUI yolo mode approves the fix review automatically after its one fix round. AXI `--yes` funds up to 3 fix rounds per step and approves a fix review only when it is clean or contains only `no-op` findings. If an actionable finding cannot be selected or survives that budget, it leaves the run parked for explicit adjudication instead of silently approving it. An explicit approval can accept remaining actionable findings; the [step log](/no-slop/reference/cli/#no-slop-axi-logs) records that adjudication.
@@ -112,8 +111,7 @@ The Push step uses `no-slop: apply agent fixes` for remaining uncommitted change
 ## Step rounds
 
 Each execution of a step (initial run or follow-up auto-fix run) is recorded as a "round" in the database.
-A round stores its findings, duration, any selected finding IDs and whether that selection came from the user or auto-fix filtering, the merged finding payload actually sent to the fix agent for that round, and any one-line fix summary from that execution.
-That merged payload can include per-finding user notes and user-authored findings added from the TUI or AXI interface.
+The [database model](/no-slop/concepts/gate-model/#database) owns the persisted round fields, including Review's effective carried gate and the merged payload sent to a fix agent.
 AXI status uses the same round history and the persisted auto-fix limit to show the active fix attempt, for example `auto-fix 1/3` or `fix 2`.
 The step log records a marker when each automatic or user-triggered fix round starts.
 The full round history remains available in the run log. The generated PR keeps earlier evidence step-scoped and shows only compact step status in its Pipeline section; the [pipeline steps reference](/no-slop/reference/pipeline-steps/#pr) owns the PR body and size-limit contract.

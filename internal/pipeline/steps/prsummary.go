@@ -102,8 +102,9 @@ func BuildPipelineSummary(steps []*db.StepResult, rounds map[string][]*db.StepRo
 }
 
 // buildPipelineAttestation records the exact step lifecycle snapshot available
-// when no-mistakes writes the PR body. Its compact JSON is deliberately data
-// only: consumers decide their own policy from the step names and statuses.
+// when no-slop writes the PR body. Its compact JSON is deliberately data only:
+// consumers decide their own policy from step names, statuses, and certified
+// heads.
 func buildPipelineAttestation(steps []*db.StepResult, headSHA string) string {
 	attestation := pipelineAttestation{
 		HeadSHA: headSHA,

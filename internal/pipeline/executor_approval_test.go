@@ -140,7 +140,7 @@ func TestExecutor_ResumeRestoresParkedGateAndReviewSessions(t *testing.T) {
 	if err := database.SetStepFindings(stepResult.ID, findings); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.InsertReviewStepRound(stepResult.ID, 1, "initial", &findings, nil, "1111111111111111111111111111111111111111", 25); err != nil {
+	if _, err := database.InsertReviewStepRound(stepResult.ID, 1, "initial", &findings, nil, run.HeadSHA, 25); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpdateStepStatusWithDuration(stepResult.ID, types.StepStatusAwaitingApproval, 25); err != nil {
@@ -175,7 +175,7 @@ func TestExecutor_ResumeRestoresParkedGateAndReviewSessions(t *testing.T) {
 			if _, err := sctx.Agent.Run(sctx.Ctx, agent.RunOpts{Prompt: "rereview"}); err != nil {
 				return nil, err
 			}
-			return &StepOutcome{ReviewApprovedHeadSHA: "2222222222222222222222222222222222222222"}, nil
+			return &StepOutcome{ReviewApprovedHeadSHA: run.HeadSHA}, nil
 		},
 	}
 	exec := NewExecutor(database, p, &config.Config{SessionReuse: true}, fake, []Step{step}, nil)
@@ -222,7 +222,7 @@ func TestExecutor_ResumeRestoresParkedGateAndReviewSessions(t *testing.T) {
 	if resumed.Status != types.RunCompleted || resumed.AwaitingAgentSince != nil {
 		t.Fatalf("recovered run = status %s awaiting %v, want completed and unparked", resumed.Status, resumed.AwaitingAgentSince)
 	}
-	if resumed.ReviewApprovedHeadSHA == nil || *resumed.ReviewApprovedHeadSHA != "2222222222222222222222222222222222222222" {
+	if resumed.ReviewApprovedHeadSHA == nil || *resumed.ReviewApprovedHeadSHA != run.HeadSHA {
 		t.Fatalf("recovered rereview approval = %#v", resumed.ReviewApprovedHeadSHA)
 	}
 }
@@ -243,7 +243,7 @@ func TestExecutor_ResumeCarriesUnselectedReviewFinding(t *testing.T) {
 	if err := database.SetStepFindings(stepResult.ID, findings); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.InsertReviewStepRound(stepResult.ID, 1, "initial", &findings, nil, "1111111111111111111111111111111111111111", 10); err != nil {
+	if _, err := database.InsertReviewStepRound(stepResult.ID, 1, "initial", &findings, nil, run.HeadSHA, 10); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpdateStepStatusWithDuration(stepResult.ID, types.StepStatusAwaitingApproval, 10); err != nil {
@@ -262,7 +262,7 @@ func TestExecutor_ResumeCarriesUnselectedReviewFinding(t *testing.T) {
 		fn: func(sctx *StepContext) (*StepOutcome, error) {
 			return &StepOutcome{
 				Findings:              `{"findings":[],"summary":"clean rereview","risk_level":"low"}`,
-				ReviewApprovedHeadSHA: "2222222222222222222222222222222222222222",
+				ReviewApprovedHeadSHA: run.HeadSHA,
 			}, nil
 		},
 	}}

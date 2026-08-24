@@ -12,11 +12,13 @@ const (
 
 // StepRound represents one execution round within a pipeline step.
 type StepRound struct {
-	ID               string
-	StepResultID     string
-	Round            int
-	Trigger          string  // "initial", "auto_fix"; legacy "user_fix" is treated as "auto_fix"
-	FindingsJSON     *string // nullable - findings produced by this round
+	ID           string
+	StepResultID string
+	Round        int
+	Trigger      string // "initial", "auto_fix"; legacy "user_fix" is treated as "auto_fix"
+	// FindingsJSON is the nullable finding set shown at this round's gate.
+	// Review rounds persist the effective set, including unresolved carry.
+	FindingsJSON     *string
 	ReviewedHeadSHA  *string // non-authoritative commit candidate captured by a review round
 	StartingHeadSHA  *string
 	TrustedConfigSHA *string
