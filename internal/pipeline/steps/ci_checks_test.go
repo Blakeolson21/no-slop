@@ -2,6 +2,7 @@ package steps
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -18,16 +19,16 @@ type attestationIdentityHost struct {
 func TestCIStepFailsClosedWhenAttestationStateCannotBeRestored(t *testing.T) {
 	for _, encoded := range []string{
 		`{`,
-		`{"expected_attestation_head_sha":"head-without-boundary"}`,
+		`{"head_sha":"head-without-boundary"}`,
 	} {
 		t.Run(encoded, func(t *testing.T) {
 			dir, baseSHA, headSHA := setupGitRepo(t)
 			sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
-			if err := sctx.DB.SetRunCIRerunState(sctx.Run.ID, encoded); err != nil {
+			if err := sctx.DB.SetRunCIAttestationState(sctx.Run.ID, encoded); err != nil {
 				t.Fatal(err)
 			}
 			outcome, err := (&CIStep{}).Execute(sctx)
-			if err == nil || !strings.Contains(err.Error(), "persisted CI state") {
+			if err == nil || !strings.Contains(err.Error(), "persisted CI attestation state") {
 				t.Fatalf("Execute() = (%#v, %v), want restoration error", outcome, err)
 			}
 		})
@@ -41,8 +42,58 @@ func TestCIStepFailsClosedWhenAttestationStateCannotBeRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	outcome, err := (&CIStep{}).Execute(sctx)
-	if err == nil || !strings.Contains(err.Error(), "read persisted CI state") {
+	if err == nil || !strings.Contains(err.Error(), "read persisted CI attestation state") {
 		t.Fatalf("Execute() = (%#v, %v), want read error", outcome, err)
+	}
+}
+
+func TestCIStepKeepsLegacyRerunRestorationBestEffort(t *testing.T) {
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	if err := sctx.DB.SetRunCIRerunState(sctx.Run.ID, `{`); err != nil {
+		t.Fatal(err)
+	}
+	var logs []string
+	sctx.Log = func(line string) { logs = append(logs, line) }
+	sctx.Run.PRURL = nil
+	outcome, err := (&CIStep{}).Execute(sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome == nil || !outcome.Skipped {
+		t.Fatalf("Execute() = %#v, want no-PR skip", outcome)
+	}
+	if !strings.Contains(strings.Join(logs, "\n"), "could not restore the persisted rerun budget") {
+		t.Fatalf("logs = %q", logs)
+	}
+}
+
+func TestCIStepMigratesLegacyExpectedAttestationState(t *testing.T) {
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	boundary := time.Date(2026, 8, 23, 18, 42, 31, 0, time.UTC)
+	legacy := `{"spent":{"build":1},"expected_attestation_head_sha":"` + headSHA + `","expected_attestation_updated_at":"` + boundary.Format(time.RFC3339Nano) + `"}`
+	if err := sctx.DB.SetRunCIRerunState(sctx.Run.ID, legacy); err != nil {
+		t.Fatal(err)
+	}
+	step := &CIStep{}
+	step.loadRerunBudget(sctx)
+	if err := step.loadExpectedAttestationState(sctx); err != nil {
+		t.Fatal(err)
+	}
+	if step.transientReruns.used("build") != 1 || step.expectedAttestation.HeadSHA != headSHA || !step.expectedAttestation.UpdatedAt.Equal(boundary) {
+		t.Fatalf("restored state = budget %#v, attestation %#v", step.transientReruns, step.expectedAttestation)
+	}
+	encoded, err := sctx.DB.GetRunCIAttestationState(sctx.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var migrated expectedAttestationState
+	if err := json.Unmarshal([]byte(encoded), &migrated); err != nil {
+		t.Fatal(err)
+	}
+	if migrated.HeadSHA != headSHA || !migrated.UpdatedAt.Equal(boundary) {
+		t.Fatalf("migrated attestation = %#v", migrated)
 	}
 }
 
@@ -66,16 +117,17 @@ func TestFilterExpectedStaleAttestationChecksUsesEventBoundary(t *testing.T) {
 		"current-pending": {RunID: 1002, RunNumber: 102, RunAttempt: 1, EventAction: "edited", PullRequestUpdatedAt: boundary, HeadSHA: headSHA},
 		"new-failure":     {RunID: 1002, RunNumber: 102, RunAttempt: 1, EventAction: "edited", PullRequestUpdatedAt: boundary, HeadSHA: headSHA},
 	}}
-	state := checkRerunBudget{expectedAttestationHeadSHA: headSHA, expectedAttestationUpdatedAt: boundary}
-	encoded, err := state.marshal()
+	state := expectedAttestationState{HeadSHA: headSHA, UpdatedAt: boundary}
+	encoded, err := json.Marshal(state)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sctx.DB.SetRunCIRerunState(sctx.Run.ID, encoded); err != nil {
+	if err := sctx.DB.SetRunCIAttestationState(sctx.Run.ID, string(encoded)); err != nil {
 		t.Fatal(err)
 	}
 	step := &CIStep{}
-	if err := step.loadRerunBudget(sctx); err != nil {
+	step.loadRerunBudget(sctx)
+	if err := step.loadExpectedAttestationState(sctx); err != nil {
 		t.Fatal(err)
 	}
 
@@ -110,8 +162,8 @@ func TestFilterExpectedStaleAttestationChecksUsesEventBoundary(t *testing.T) {
 	if len(filtered) != 1 || filtered[0].Link != "new-failure" || !filtered[0].Failing() {
 		t.Fatalf("post-update failure was suppressed: %#v", filtered)
 	}
-	if step.transientReruns.expectedAttestationHeadSHA != headSHA || !step.transientReruns.expectedAttestationUpdatedAt.Equal(boundary) {
-		t.Fatalf("recovered attestation boundary = %#v", step.transientReruns)
+	if step.expectedAttestation.HeadSHA != headSHA || !step.expectedAttestation.UpdatedAt.Equal(boundary) {
+		t.Fatalf("recovered attestation boundary = %#v", step.expectedAttestation)
 	}
 }
 

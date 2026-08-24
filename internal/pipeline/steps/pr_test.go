@@ -51,9 +51,13 @@ func TestPRStep_UpdatesExistingPR(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
 	boundary := time.Date(2026, 8, 23, 18, 42, 31, 0, time.UTC)
+	unrelatedMutation := boundary.Add(time.Minute)
 
 	env, logFile := fakeGH(t, "https://github.com/test/repo/pull/42")
-	env = append(env, "FAKE_CLI_GH_PR_UPDATED_AT="+boundary.Format(time.RFC3339Nano))
+	env = append(env,
+		"FAKE_CLI_GH_UPDATE_RESPONSE_AT="+boundary.Format(time.RFC3339Nano),
+		"FAKE_CLI_GH_PR_UPDATED_AT="+unrelatedMutation.Format(time.RFC3339Nano),
+	)
 
 	ag := &mockAgent{name: "test"}
 	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
@@ -66,15 +70,20 @@ func TestPRStep_UpdatesExistingPR(t *testing.T) {
 		t.Fatal(err)
 	}
 	budget := &checkRerunBudget{
-		spent:                        map[string]int{"build": 1},
-		expectedAttestationHeadSHA:   baseSHA,
-		expectedAttestationUpdatedAt: boundary.Add(-time.Minute),
+		spent: map[string]int{"build": 1},
 	}
 	encoded, err := budget.marshal()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := sctx.DB.SetRunCIRerunState(sctx.Run.ID, encoded); err != nil {
+		t.Fatal(err)
+	}
+	priorAttestation, err := json.Marshal(expectedAttestationState{HeadSHA: baseSHA, UpdatedAt: boundary.Add(-time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sctx.DB.SetRunCIAttestationState(sctx.Run.ID, string(priorAttestation)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -87,28 +96,24 @@ func TestPRStep_UpdatesExistingPR(t *testing.T) {
 		t.Error("pr step should never need approval")
 	}
 
-	// Verify gh pr edit was called to update the PR body
 	logData, err := os.ReadFile(logFile)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ghLog := string(logData)
-	if !strings.Contains(ghLog, "pr edit") {
-		t.Errorf("expected gh pr edit to be called, got:\n%s", ghLog)
+	if !strings.Contains(ghLog, "api --method PATCH") {
+		t.Errorf("expected GitHub API update to be called, got:\n%s", ghLog)
 	}
 	if !strings.Contains(ghLog, "--body") {
-		t.Errorf("expected --body flag in gh pr edit, got:\n%s", ghLog)
+		t.Errorf("expected PR body on stdin, got:\n%s", ghLog)
 	}
 	if !strings.Contains(ghLog, noMistakesPRSignature) {
 		t.Errorf("expected updated PR body to include no-slop signature, got:\n%s", ghLog)
 	}
-	editAt := strings.Index(ghLog, "pr edit")
-	boundaryAt := strings.Index(ghLog, "pr view 42 --repo test/repo --json updatedAt")
-	if editAt < 0 || boundaryAt < editAt {
-		t.Fatalf("attestation boundary was not read after PR update:\n%s", ghLog)
+	if strings.Contains(ghLog, "pr view 42 --repo test/repo --json updatedAt") {
+		t.Fatalf("attestation publication used mutable PR state:\n%s", ghLog)
 	}
 
-	// Verify PR URL was stored
 	run, err := sctx.DB.GetRun(sctx.Run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -124,8 +129,19 @@ func TestPRStep_UpdatesExistingPR(t *testing.T) {
 	if err := persisted.unmarshal(encoded); err != nil {
 		t.Fatal(err)
 	}
-	if persisted.expectedAttestationHeadSHA != headSHA || !persisted.expectedAttestationUpdatedAt.Equal(boundary) || persisted.used("build") != 1 {
-		t.Fatalf("persisted attestation expectation = %#v", persisted)
+	if persisted.used("build") != 1 {
+		t.Fatalf("persisted rerun budget = %#v", persisted)
+	}
+	encoded, err = sctx.DB.GetRunCIAttestationState(sctx.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attestation expectedAttestationState
+	if err := json.Unmarshal([]byte(encoded), &attestation); err != nil {
+		t.Fatal(err)
+	}
+	if attestation.HeadSHA != headSHA || !attestation.UpdatedAt.Equal(boundary) || attestation.UpdatedAt.Equal(unrelatedMutation) {
+		t.Fatalf("persisted attestation expectation = %#v", attestation)
 	}
 }
 

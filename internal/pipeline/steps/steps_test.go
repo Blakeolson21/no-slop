@@ -96,7 +96,7 @@ func logFakeCLIStdinBody(args []string, logFile string) {
 
 func argsUseStdinBodyFile(args []string) bool {
 	for i := 0; i+1 < len(args); i++ {
-		if args[i] == "--body-file" && args[i+1] == "-" {
+		if (args[i] == "--body-file" || args[i] == "--input") && args[i+1] == "-" {
 			return true
 		}
 	}
@@ -144,11 +144,17 @@ func fakeGHHandler(args []string) {
 		}
 		os.Exit(1)
 	}
-	if len(args) >= 2 && args[0] == "pr" && args[1] == "edit" {
+	if len(args) >= 2 && args[0] == "api" && args[1] == "--method" {
 		if os.Getenv("FAKE_CLI_GH_EDIT_ERROR") != "" {
 			fmt.Fprintln(os.Stderr, "injected PR update failure")
 			os.Exit(1)
 		}
+		updatedAt := os.Getenv("FAKE_CLI_GH_UPDATE_RESPONSE_AT")
+		if updatedAt == "" {
+			os.Exit(1)
+		}
+		number := extractTrailingNumber(prURL)
+		fmt.Printf("{\"number\":%d,\"html_url\":%q,\"updated_at\":%q}\n", number, prURL, updatedAt)
 		os.Exit(0)
 	}
 	if len(args) >= 2 && args[0] == "pr" && args[1] == "create" {

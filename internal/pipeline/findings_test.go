@@ -310,6 +310,29 @@ func TestMergeCarriedFindingsJSON_PreservesIdentityAcrossReclassification(t *tes
 	}
 }
 
+func TestMergeCarriedFindingsJSON_PreservesAmbiguousLegacyLineages(t *testing.T) {
+	carriedRaw := `{"findings":[{"id":"review-old-a","severity":"error","file":"loader.go","line":42,"description":"unsafe loader","action":"ask-user"},{"id":"review-old-b","severity":"error","file":"loader.go","line":42,"description":"unsafe loader","action":"ask-user"}]}`
+	freshRaw := `{"findings":[{"id":"review-fresh","severity":"error","file":"loader.go","line":42,"description":"unsafe loader","action":"auto-fix"}]}`
+
+	merged, err := types.ParseFindingsJSON(mergeCarriedFindingsJSON(freshRaw, carriedRaw, "review"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged.Items) != 3 {
+		t.Fatalf("ambiguous legacy lineages collapsed: %#v", merged.Items)
+	}
+	ids := make(map[string]bool, len(merged.Items))
+	for _, item := range merged.Items {
+		if ids[item.ID] {
+			t.Fatalf("ambiguous lineages share ID %q: %#v", item.ID, merged.Items)
+		}
+		ids[item.ID] = true
+	}
+	if !ids["review-old-a"] || !ids["review-old-b"] {
+		t.Fatalf("carried identities changed: %#v", merged.Items)
+	}
+}
+
 func TestMergeCarriedFindingsJSON_RecomputesEffectiveRiskAndPreservesEvidence(t *testing.T) {
 	carriedRaw := `{"findings":[{"id":"review-2","severity":"error","description":"remaining concern","action":"ask-user","review_scope":"source"}],"testing_summary":"Reproduced the remaining race under load.","risk_level":"high","risk_rationale":"Selected finding can corrupt data.","risk_scope":"source-or-external"}`
 	freshRaw := `{"findings":[],"testing_summary":"Verified the selected defect is fixed.","risk_level":"low","risk_rationale":"The selected defect is fixed.","risk_scope":"source-or-external"}`

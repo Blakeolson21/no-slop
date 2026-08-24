@@ -131,22 +131,6 @@ func TestGetCheckAttemptIdentityReadsGitHubRunIdentity(t *testing.T) {
 	}
 }
 
-func TestGetPRAttestationBoundaryReadsProviderTimestamp(t *testing.T) {
-	t.Parallel()
-	want := time.Date(2026, 8, 23, 18, 42, 31, 0, time.UTC)
-	host := New(githubTestCmdFactory(map[string]githubTestResponse{
-		"gh pr view 123 --repo test/repo --json updatedAt --jq .updatedAt": {stdout: "2026-08-23T18:42:31Z\n"},
-	}), nil, "", "test/repo")
-
-	got, err := host.GetPRAttestationBoundary(context.Background(), &scm.PR{Number: "123"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got.Equal(want) {
-		t.Fatalf("boundary = %v, want %v", got, want)
-	}
-}
-
 func TestGetPRStatePassesRepoFlag(t *testing.T) {
 	t.Parallel()
 
@@ -192,9 +176,11 @@ func TestUpdatePRStreamsBodyThroughStdin(t *testing.T) {
 	t.Parallel()
 
 	const body = "## What Changed\n\n- update existing pull request bodies without long argv"
+	wantUpdatedAt := time.Date(2026, 8, 23, 18, 42, 31, 0, time.UTC)
 	host := New(githubTestCmdFactory(map[string]githubTestResponse{
-		"gh pr edit 42 --repo test/repo --title fix: cap body --body-file -": {
-			wantStdin: body,
+		"gh api --method PATCH repos/test/repo/pulls/42 --input -": {
+			stdout:    `{"number":42,"html_url":"https://github.com/test/repo/pull/42","updated_at":"2026-08-23T18:42:31Z"}`,
+			wantStdin: `{"title":"fix: cap body","body":"## What Changed\n\n- update existing pull request bodies without long argv"}`,
 		},
 	}), nil, "", "test/repo")
 
@@ -206,20 +192,16 @@ func TestUpdatePRStreamsBodyThroughStdin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdatePR() error = %v", err)
 	}
-	if updated != pr {
-		t.Fatalf("UpdatePR() = %+v, want original PR", updated)
+	if updated == nil || updated.Number != "42" || updated.URL != pr.URL || !updated.UpdatedAt.Equal(wantUpdatedAt) {
+		t.Fatalf("UpdatePR() = %+v", updated)
 	}
 }
 
-// UpdatePR shares the same explicit-PR selector boundary as the read methods:
-// when the number is absent it must target the canonical PR URL, never an empty
-// positional that makes `gh pr edit` resolve the cwd branch (main) from the
-// detached bare gate repo and edit the wrong PR.
 func TestUpdatePRTargetsKnownPRByURLWhenNumberMissing(t *testing.T) {
 	t.Parallel()
 
 	var recorded [][]string
-	host := New(recordingCmdFactory("", &recorded), nil, "", "test/repo")
+	host := New(recordingCmdFactory(`{"number":123,"html_url":"https://github.com/test/repo/pull/123","updated_at":"2026-08-23T18:42:31Z"}`, &recorded), nil, "", "test/repo")
 
 	prURL := "https://github.com/test/repo/pull/123"
 	if _, err := host.UpdatePR(context.Background(), &scm.PR{URL: prURL}, scm.PRContent{
@@ -232,18 +214,31 @@ func TestUpdatePRTargetsKnownPRByURLWhenNumberMissing(t *testing.T) {
 		t.Fatalf("expected exactly one gh invocation, got %d: %v", len(recorded), recorded)
 	}
 	got := recorded[0]
-	// argv is: gh pr edit <selector> --repo ...
-	if len(got) < 4 || got[1] != "pr" || got[2] != "edit" {
+	if len(got) < 6 || got[1] != "api" || got[2] != "--method" || got[3] != "PATCH" {
 		t.Fatalf("unexpected argv: %v", got)
 	}
-	if selector := got[3]; selector != prURL {
-		t.Fatalf("edit selector = %q, want the known PR URL %q (empty selector makes gh resolve the cwd branch)", selector, prURL)
+	if endpoint := got[4]; endpoint != "repos/test/repo/pulls/123" {
+		t.Fatalf("update endpoint = %q", endpoint)
 	}
 }
 
-// UpdatePR must fail closed exactly like the read methods: with neither number
-// nor URL it refuses to shell out rather than running an argument-less
-// `gh pr edit` that would edit the inferred cwd branch's PR.
+func TestUpdatePRScopesAtomicPublicationToEnterpriseHost(t *testing.T) {
+	t.Parallel()
+	host := New(githubTestCmdFactory(map[string]githubTestResponse{
+		"gh api --hostname ghe.example.com --method PATCH repos/org/repo/pulls/42 --input -": {
+			stdout:    `{"number":42,"html_url":"https://ghe.example.com/org/repo/pull/42","updated_at":"2026-08-23T18:42:31Z"}`,
+			wantStdin: `{"title":"fix: publish","body":"body"}`,
+		},
+	}), nil, "ghe.example.com", "ghe.example.com/org/repo")
+	updated, err := host.UpdatePR(context.Background(), &scm.PR{Number: "42"}, scm.PRContent{Title: "fix: publish", Body: "body"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated == nil || updated.UpdatedAt.IsZero() {
+		t.Fatalf("updated PR = %#v", updated)
+	}
+}
+
 func TestUpdatePRFailsClosedWithoutIdentity(t *testing.T) {
 	t.Parallel()
 

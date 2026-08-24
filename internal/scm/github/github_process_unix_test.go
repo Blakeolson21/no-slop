@@ -22,7 +22,8 @@ func TestUpdatePRReapsLeakedGrandchild(t *testing.T) {
 	heartbeat := filepath.Join(dir, "heartbeat")
 	factory := func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
 		script := "( i=0; while true; do echo $i > " + heartbeat + "; i=$((i+1)); sleep 0.05; done ) >/dev/null 2>&1 & " +
-			"child=$!; while [ ! -f " + heartbeat + " ]; do sleep 0.01; done; echo $child > " + pidFile + "; exit 0"
+			"child=$!; while [ ! -f " + heartbeat + " ]; do sleep 0.01; done; echo $child > " + pidFile + "; " +
+			"echo '{\"number\":42,\"html_url\":\"https://github.com/test/repo/pull/42\",\"updated_at\":\"2026-08-23T18:42:31Z\"}'; exit 0"
 		return exec.CommandContext(ctx, "/bin/sh", "-c", script)
 	}
 	host := New(factory, nil, "", "test/repo")

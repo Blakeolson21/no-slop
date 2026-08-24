@@ -938,6 +938,13 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 	}
 	if stepName == types.StepReview {
 		BindUncertifiedPipelineRange(sctx)
+		if sctx.UncertifiedPriorFindings != "" {
+			carriedFindings = mergeCarriedFindingsJSON(carriedFindings, sctx.UncertifiedPriorFindings, string(stepName))
+			knownLineages = carriedFindings
+			if err := e.db.SetStepFindings(sr.ID, carriedFindings); err != nil {
+				return false, "", fmt.Errorf("restore uncertified review findings: %w", err)
+			}
+		}
 	}
 
 	nextTrigger := "initial"

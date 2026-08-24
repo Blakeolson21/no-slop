@@ -136,12 +136,15 @@ func mergeCarriedFindingsJSON(freshRaw, carriedRaw, prefix string) string {
 	merged.TestingSummary = mergeEvidenceSummary(fresh.TestingSummary, carried.TestingSummary)
 	freshCounts := types.CountFindingFingerprints(fresh.Items)
 	carriedCounts := types.CountFindingFingerprints(carried.Items)
+	freshIdentityCounts := countFindingIdentities(fresh.Items)
+	carriedIdentityCounts := countFindingIdentities(carried.Items)
 	carriedIdentity := make(map[int]bool, len(carried.Items))
 	carriedCount := 0
 	for _, old := range carried.Items {
 		match := -1
 		for i, current := range merged.Items {
-			legacyMatch := (!current.HasLineage() || !old.HasLineage()) && (findingKey(current) == findingKey(old) ||
+			identity := findingKey(current)
+			legacyMatch := (!current.HasLineage() || !old.HasLineage()) && ((identity == findingKey(old) && freshIdentityCounts[identity] == 1 && carriedIdentityCounts[identity] == 1) ||
 				(findingFingerprint(current) == findingFingerprint(old) && freshCounts[findingFingerprint(current)] == 1 && carriedCounts[findingFingerprint(old)] == 1))
 			if types.FindingIDCorroborates(current, old) || legacyMatch {
 				match = i
@@ -199,6 +202,14 @@ func mergeCarriedFindingsJSON(freshRaw, carriedRaw, prefix string) string {
 		return carriedRaw
 	}
 	return encoded
+}
+
+func countFindingIdentities(items []types.Finding) map[types.FindingIdentity]int {
+	counts := make(map[types.FindingIdentity]int, len(items))
+	for _, item := range items {
+		counts[item.Identity()]++
+	}
+	return counts
 }
 
 func mergeEvidenceSummary(fresh, carried string) string {

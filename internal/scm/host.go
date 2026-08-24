@@ -87,8 +87,9 @@ func ExtractPRNumber(prURL string) (string, error) {
 
 // PR identifies a pull/merge request on a provider.
 type PR struct {
-	Number string
-	URL    string
+	Number    string
+	URL       string
+	UpdatedAt time.Time
 }
 
 // PRContent is the title + body for creating or updating a PR.
@@ -164,10 +165,6 @@ type CheckAttemptIdentity struct {
 
 type CheckAttemptIdentityReader interface {
 	GetCheckAttemptIdentity(ctx context.Context, check Check) (CheckAttemptIdentity, error)
-}
-
-type PRAttestationBoundaryReader interface {
-	GetPRAttestationBoundary(ctx context.Context, pr *PR) (time.Time, error)
 }
 
 // Failing reports whether the check is in a failed bucket.

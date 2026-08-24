@@ -264,39 +264,77 @@ func (h *Host) CreatePR(ctx context.Context, branch, base string, content scm.PR
 }
 
 func (h *Host) UpdatePR(ctx context.Context, pr *scm.PR, content scm.PRContent) (*scm.PR, error) {
-	selector, err := prSelector(pr)
+	repo, number, err := h.prAPIIdentity(pr)
 	if err != nil {
 		return nil, err
 	}
-	args := append([]string{"pr", "edit", selector}, h.repoArgs()...)
-	args = append(args, "--title", content.Title, "--body-file", "-")
-	cmd := h.cmd(ctx, "gh", args...)
-	cmd.Stdin = strings.NewReader(content.Body)
-	shellenv.ConfigureShellCommand(cmd)
-	if out, err := shellenv.CombinedOutputShellCommand(cmd); err != nil {
-		return nil, fmt.Errorf("gh pr edit: %s: %w", strings.TrimSpace(string(out)), err)
+	payload, err := json.Marshal(struct {
+		Title string `json:"title"`
+		Body  string `json:"body"`
+	}{Title: content.Title, Body: content.Body})
+	if err != nil {
+		return nil, fmt.Errorf("marshal pull request update: %w", err)
 	}
-	return pr, nil
+	args := []string{"api"}
+	if h.host != "" && !strings.EqualFold(h.host, "github.com") {
+		args = append(args, "--hostname", h.host)
+	}
+	args = append(args, "--method", "PATCH", "repos/"+repo+"/pulls/"+number, "--input", "-")
+	cmd := h.cmd(ctx, "gh", args...)
+	cmd.Stdin = strings.NewReader(string(payload))
+	shellenv.ConfigureShellCommand(cmd)
+	out, err := shellenv.CombinedOutputShellCommand(cmd)
+	if err != nil {
+		return nil, fmt.Errorf("gh api update pull request: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	var response struct {
+		Number    int       `json:"number"`
+		URL       string    `json:"html_url"`
+		UpdatedAt time.Time `json:"updated_at"`
+	}
+	if err := json.Unmarshal(out, &response); err != nil {
+		return nil, fmt.Errorf("parse updated pull request: %w", err)
+	}
+	if response.UpdatedAt.IsZero() {
+		return nil, errors.New("updated pull request response has no publication timestamp")
+	}
+	updated := &scm.PR{Number: number, UpdatedAt: response.UpdatedAt}
+	if response.Number != 0 {
+		updated.Number = fmt.Sprintf("%d", response.Number)
+	}
+	updated.URL = response.URL
+	if updated.URL == "" && pr != nil {
+		updated.URL = pr.URL
+	}
+	return updated, nil
 }
 
-func (h *Host) GetPRAttestationBoundary(ctx context.Context, pr *scm.PR) (time.Time, error) {
-	selector, err := prSelector(pr)
-	if err != nil {
-		return time.Time{}, err
+func (h *Host) prAPIIdentity(pr *scm.PR) (string, string, error) {
+	if pr == nil {
+		return "", "", errors.New("no PR number or URL known; refusing to update pull request")
 	}
-	args := append([]string{"pr", "view", selector}, h.repoArgs()...)
-	args = append(args, "--json", "updatedAt", "--jq", ".updatedAt")
-	cmd := h.cmd(ctx, "gh", args...)
-	shellenv.ConfigureShellCommand(cmd)
-	out, err := shellenv.OutputShellCommand(cmd)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("gh pr view attestation boundary: %w", err)
+	number := strings.TrimSpace(pr.Number)
+	if number == "" && strings.TrimSpace(pr.URL) != "" {
+		var err error
+		number, err = scm.ExtractPRNumber(pr.URL)
+		if err != nil {
+			return "", "", err
+		}
 	}
-	updatedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(out)))
-	if err != nil {
-		return time.Time{}, fmt.Errorf("parse PR attestation boundary: %w", err)
+	if number == "" {
+		return "", "", errors.New("no PR number or URL known; refusing to update pull request")
 	}
-	return updatedAt, nil
+	repo := strings.TrimSpace(h.repo)
+	if h.host != "" {
+		repo = strings.TrimPrefix(repo, h.host+"/")
+	}
+	if repo == "" {
+		repo = RepoSlug(pr.URL)
+	}
+	if repo == "" {
+		return "", "", errors.New("no repository known; refusing to update pull request")
+	}
+	return repo, number, nil
 }
 
 func (h *Host) GetPRState(ctx context.Context, pr *scm.PR) (scm.PRState, error) {

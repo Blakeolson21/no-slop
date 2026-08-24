@@ -39,7 +39,7 @@ func BindUncertifiedPipelineRange(sctx *StepContext) {
 	sctx.UncertifiedFromSHA = rng.FromSHA
 	sctx.UncertifiedToSHA = rng.ToSHA
 	sctx.UncertifiedSourceRunID = rng.SourceRunID
-	sctx.UncertifiedPriorRounds = loadUncertifiedPriorRounds(sctx.DB, rng.SourceRunID)
+	sctx.UncertifiedPriorRounds, sctx.UncertifiedPriorFindings = loadUncertifiedPriorReview(sctx.DB, rng.SourceRunID)
 }
 
 // PersistUncertifiedPipelineRange records the fixer commit span after a
@@ -237,15 +237,15 @@ func commitIsSelfOrAncestor(ctx context.Context, workDir, ancestor, descendent s
 	return err == nil
 }
 
-func loadUncertifiedPriorRounds(database *db.DB, sourceRunID string) []*db.StepRound {
+func loadUncertifiedPriorReview(database *db.DB, sourceRunID string) ([]*db.StepRound, string) {
 	sourceRunID = strings.TrimSpace(sourceRunID)
 	if database == nil || sourceRunID == "" {
-		return nil
+		return nil, ""
 	}
 	steps, err := database.GetStepsByRun(sourceRunID)
 	if err != nil {
 		slog.Warn("failed to read uncertified source-run steps", "run_id", sourceRunID, "error", err)
-		return nil
+		return nil, ""
 	}
 	for _, step := range steps {
 		if step.StepName != types.StepReview {
@@ -254,9 +254,13 @@ func loadUncertifiedPriorRounds(database *db.DB, sourceRunID string) []*db.StepR
 		rounds, err := database.GetRoundsByStep(step.ID)
 		if err != nil {
 			slog.Warn("failed to read uncertified source-run review rounds", "run_id", sourceRunID, "error", err)
-			return nil
+			return nil, ""
 		}
-		return rounds
+		findings := ""
+		if step.FindingsJSON != nil {
+			findings = *step.FindingsJSON
+		}
+		return rounds, findings
 	}
-	return nil
+	return nil, ""
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Blakeolson21/no-slop/internal/config"
 	"github.com/Blakeolson21/no-slop/internal/git"
@@ -69,6 +70,63 @@ func TestBindUncertifiedPipelineRange_CopiesOntoStepContext(t *testing.T) {
 	}
 	if len(sctx.UncertifiedPriorRounds) != 1 {
 		t.Fatalf("prior rounds = %d, want 1", len(sctx.UncertifiedPriorRounds))
+	}
+}
+
+func TestExecutor_RestoresUncertifiedPriorRunEffectiveFindings(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	source, err := database.InsertRun(repo.ID, run.Branch, "older", "base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceReview, err := database.InsertStepResult(source.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior := `{"findings":[{"id":"review-a","id_generated":true,"continuity_token":"token-a","severity":"error","description":"selected defect","action":"auto-fix"},{"id":"review-b","id_generated":true,"continuity_token":"token-b","severity":"error","description":"unresolved defect","action":"ask-user"}]}`
+	remaining := `{"findings":[{"id":"review-b","id_generated":true,"continuity_token":"token-b","severity":"error","description":"unresolved defect","action":"ask-user"}]}`
+	if _, err := database.InsertEffectiveReviewStepRoundWithProvenance(sourceReview.ID, 1, "initial", &prior, nil, "older", "older", "", nil, nil, 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.InsertEffectiveReviewStepRoundWithProvenance(sourceReview.ID, 2, "auto_fix", &remaining, nil, "", "older", "", nil, nil, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, "from-sha", run.HeadSHA, source.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	step := &scopeLimitedAdaptiveCallStep{adaptiveCallStep{name: types.StepReview, fn: func(*StepContext) (*StepOutcome, error) {
+		return &StepOutcome{ReviewApprovedHeadSHA: run.HeadSHA}, nil
+	}}}
+	exec := NewExecutor(database, p, &config.Config{}, nil, []Step{step}, nil)
+	done := make(chan error, 1)
+	go func() { done <- exec.Execute(context.Background(), run, repo, t.TempDir()) }()
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	if err := exec.Respond(types.StepReview, types.ActionApprove, nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("executor timed out")
+	}
+
+	steps, err := database.GetStepsByRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(steps) != 1 || steps[0].FindingsJSON == nil {
+		t.Fatalf("replacement review = %#v", steps)
+	}
+	got, err := types.ParseFindingsJSON(*steps[0].FindingsJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Items) != 1 || got.Items[0].ID != "review-b" || got.Items[0].Description != "unresolved defect" {
+		t.Fatalf("restored findings = %#v", got.Items)
 	}
 }
 

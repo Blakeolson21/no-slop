@@ -60,7 +60,8 @@ type StepContext struct {
 	UncertifiedSourceRunID string
 	// UncertifiedPriorRounds are review rounds from the source run that left
 	// the uncertified range. Nil when none apply.
-	UncertifiedPriorRounds []*db.StepRound
+	UncertifiedPriorRounds   []*db.StepRound
+	UncertifiedPriorFindings string
 	// Sessions manages the run's durable review-fixer session. The session
 	// machinery remains role-generic for legacy recovery; nil runs every
 	// invocation cold.

@@ -93,12 +93,11 @@ func (s *PRStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 		if err != nil {
 			return nil, fmt.Errorf("update pull request: %w", err)
 		}
-		if reader, ok := host.(scm.PRAttestationBoundaryReader); ok {
-			updatedAt, err := reader.GetPRAttestationBoundary(ctx, existing)
-			if err != nil {
-				return nil, fmt.Errorf("read updated pull request attestation boundary: %w", err)
+		if provider == scm.ProviderGitHub {
+			if updated == nil || updated.UpdatedAt.IsZero() {
+				return nil, fmt.Errorf("updated pull request has no attestation publication identity")
 			}
-			if err := persistExpectedAttestationBoundary(sctx, updatedAt); err != nil {
+			if err := persistExpectedAttestationBoundary(sctx, updated.UpdatedAt); err != nil {
 				return nil, fmt.Errorf("persist expected attestation boundary: %w", err)
 			}
 		}

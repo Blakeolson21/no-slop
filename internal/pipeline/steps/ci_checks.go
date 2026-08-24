@@ -14,11 +14,11 @@ import (
 const requiredAttestationCheckName = "PR must be raised via no-slop"
 
 func (s *CIStep) filterExpectedStaleAttestationChecks(sctx *pipeline.StepContext, host scm.Host, checks []scm.Check) ([]scm.Check, error) {
-	state := &s.transientReruns
-	if state.expectedAttestationHeadSHA == "" || state.expectedAttestationHeadSHA != sctx.Run.HeadSHA {
+	state := &s.expectedAttestation
+	if state.HeadSHA == "" || state.HeadSHA != sctx.Run.HeadSHA {
 		return checks, nil
 	}
-	if state.expectedAttestationUpdatedAt.IsZero() {
+	if state.UpdatedAt.IsZero() {
 		return nil, fmt.Errorf("expected attestation boundary is missing")
 	}
 	reader, ok := host.(scm.CheckAttemptIdentityReader)
@@ -41,7 +41,7 @@ func (s *CIStep) filterExpectedStaleAttestationChecks(sctx *pipeline.StepContext
 		if identity.HeadSHA != sctx.Run.HeadSHA {
 			continue
 		}
-		if checkAttemptTerminal(check) && !checkAttemptUsesExpectedOrNewerBody(identity, state.expectedAttestationUpdatedAt) {
+		if checkAttemptTerminal(check) && !checkAttemptUsesExpectedOrNewerBody(identity, state.UpdatedAt) {
 			continue
 		}
 		filtered = append(filtered, check)

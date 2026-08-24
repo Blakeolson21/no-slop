@@ -102,20 +102,26 @@ type rerunRollupState struct {
 // key and therefore one budget. Selection must reserve against that shared key
 // (see transientRerunCandidates) or a single poll could spend it more than once.
 type checkRerunBudget struct {
-	spent                        map[string]int
-	rollup                       map[string]rerunRollupState
-	expectedAttestationHeadSHA   string
-	expectedAttestationUpdatedAt time.Time
+	spent  map[string]int
+	rollup map[string]rerunRollupState
 }
 
 // persistedRerunBudget is the on-disk shape of a checkRerunBudget. It is a
 // named type rather than an inline literal so a field added here is a
 // compile-time decision about what must survive a restart.
 type persistedRerunBudget struct {
-	Spent                        map[string]int                  `json:"spent,omitempty"`
-	Rollup                       map[string]persistedRollupState `json:"rollup,omitempty"`
-	ExpectedAttestationHeadSHA   string                          `json:"expected_attestation_head_sha,omitempty"`
-	ExpectedAttestationUpdatedAt string                          `json:"expected_attestation_updated_at,omitempty"`
+	Spent  map[string]int                  `json:"spent,omitempty"`
+	Rollup map[string]persistedRollupState `json:"rollup,omitempty"`
+}
+
+type expectedAttestationState struct {
+	HeadSHA   string    `json:"head_sha"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type legacyExpectedAttestationState struct {
+	HeadSHA   string `json:"expected_attestation_head_sha"`
+	UpdatedAt string `json:"expected_attestation_updated_at"`
 }
 
 type persistedRollupState struct {
@@ -128,13 +134,10 @@ type persistedRollupState struct {
 // marshal renders the budget for persistence. An empty budget marshals to the
 // empty string so a run that never spent a rerun writes nothing.
 func (b *checkRerunBudget) marshal() (string, error) {
-	if len(b.spent) == 0 && len(b.rollup) == 0 && b.expectedAttestationHeadSHA == "" && b.expectedAttestationUpdatedAt.IsZero() {
+	if len(b.spent) == 0 && len(b.rollup) == 0 {
 		return "", nil
 	}
-	payload := persistedRerunBudget{Spent: b.spent, ExpectedAttestationHeadSHA: b.expectedAttestationHeadSHA}
-	if !b.expectedAttestationUpdatedAt.IsZero() {
-		payload.ExpectedAttestationUpdatedAt = b.expectedAttestationUpdatedAt.UTC().Format(time.RFC3339Nano)
-	}
+	payload := persistedRerunBudget{Spent: b.spent}
 	if len(b.rollup) > 0 {
 		payload.Rollup = make(map[string]persistedRollupState, len(b.rollup))
 		for name, state := range b.rollup {
@@ -173,14 +176,6 @@ func (b *checkRerunBudget) unmarshal(encoded string) error {
 		b.spent = map[string]int{}
 	}
 	b.rollup = make(map[string]rerunRollupState, len(payload.Rollup))
-	b.expectedAttestationHeadSHA = payload.ExpectedAttestationHeadSHA
-	if payload.ExpectedAttestationUpdatedAt != "" {
-		updatedAt, err := time.Parse(time.RFC3339Nano, payload.ExpectedAttestationUpdatedAt)
-		if err != nil {
-			return fmt.Errorf("parse expected attestation boundary: %w", err)
-		}
-		b.expectedAttestationUpdatedAt = updatedAt
-	}
 	for name, state := range payload.Rollup {
 		observedLinks := make(map[string]bool, len(state.ObservedLinks))
 		for _, link := range state.ObservedLinks {
@@ -275,10 +270,8 @@ func (b *checkRerunBudget) retireResolvedReruns(checks []scm.Check, currentHead 
 		return false, nil
 	}
 	candidate := &checkRerunBudget{
-		spent:                        b.spent,
-		rollup:                       make(map[string]rerunRollupState, len(b.rollup)-len(retirable)),
-		expectedAttestationHeadSHA:   b.expectedAttestationHeadSHA,
-		expectedAttestationUpdatedAt: b.expectedAttestationUpdatedAt,
+		spent:  b.spent,
+		rollup: make(map[string]rerunRollupState, len(b.rollup)-len(retirable)),
 	}
 	for name, state := range b.rollup {
 		if !retirable[name] {
@@ -496,23 +489,70 @@ func mergeCheckNames(base, extra []string) []string {
 //
 // Every failure path here falls back to the behavior this policy replaces: no
 // rerun, and the failure escalates exactly as it would without it.
-// loadRerunBudget restores the durable CI state for this run.
-func (s *CIStep) loadRerunBudget(sctx *pipeline.StepContext) error {
+// loadRerunBudget restores the durable rerun budget for this run.
+func (s *CIStep) loadRerunBudget(sctx *pipeline.StepContext) {
 	if sctx.DB == nil || sctx.Run == nil {
-		return nil
+		return
 	}
 	encoded, err := sctx.DB.GetRunCIRerunState(sctx.Run.ID)
 	if err != nil {
-		return fmt.Errorf("read persisted CI state: %w", err)
+		sctx.Log(fmt.Sprintf("warning: could not read the persisted rerun budget: %v", err))
+		return
 	}
-	candidate := checkRerunBudget{}
-	if err := candidate.unmarshal(encoded); err != nil {
-		return fmt.Errorf("restore persisted CI state: %w", err)
+	if err := s.transientReruns.unmarshal(encoded); err != nil {
+		sctx.Log(fmt.Sprintf("warning: could not restore the persisted rerun budget: %v", err))
 	}
-	if (candidate.expectedAttestationHeadSHA == "") != candidate.expectedAttestationUpdatedAt.IsZero() {
-		return fmt.Errorf("restore persisted CI state: expected attestation boundary is incomplete")
+}
+
+func (s *CIStep) loadExpectedAttestationState(sctx *pipeline.StepContext) error {
+	if sctx.DB == nil || sctx.Run == nil {
+		return nil
 	}
-	s.transientReruns = candidate
+	encoded, err := sctx.DB.GetRunCIAttestationState(sctx.Run.ID)
+	if err != nil {
+		return fmt.Errorf("read persisted CI attestation state: %w", err)
+	}
+	if strings.TrimSpace(encoded) == "" {
+		legacyEncoded, legacyErr := sctx.DB.GetRunCIRerunState(sctx.Run.ID)
+		if legacyErr != nil || strings.TrimSpace(legacyEncoded) == "" {
+			s.expectedAttestation = expectedAttestationState{}
+			return nil
+		}
+		var legacy legacyExpectedAttestationState
+		if err := json.Unmarshal([]byte(legacyEncoded), &legacy); err != nil {
+			s.expectedAttestation = expectedAttestationState{}
+			return nil
+		}
+		if legacy.HeadSHA == "" && legacy.UpdatedAt == "" {
+			s.expectedAttestation = expectedAttestationState{}
+			return nil
+		}
+		if legacy.HeadSHA == "" || legacy.UpdatedAt == "" {
+			return fmt.Errorf("restore persisted CI attestation state: expected attestation boundary is incomplete")
+		}
+		updatedAt, err := time.Parse(time.RFC3339Nano, legacy.UpdatedAt)
+		if err != nil {
+			return fmt.Errorf("restore persisted CI attestation state: %w", err)
+		}
+		state := expectedAttestationState{HeadSHA: legacy.HeadSHA, UpdatedAt: updatedAt}
+		migrated, err := json.Marshal(state)
+		if err != nil {
+			return fmt.Errorf("restore persisted CI attestation state: %w", err)
+		}
+		if err := sctx.DB.SetRunCIAttestationState(sctx.Run.ID, string(migrated)); err != nil {
+			return fmt.Errorf("restore persisted CI attestation state: %w", err)
+		}
+		s.expectedAttestation = state
+		return nil
+	}
+	var state expectedAttestationState
+	if err := json.Unmarshal([]byte(encoded), &state); err != nil {
+		return fmt.Errorf("restore persisted CI attestation state: %w", err)
+	}
+	if state.HeadSHA == "" || state.UpdatedAt.IsZero() {
+		return fmt.Errorf("restore persisted CI attestation state: expected attestation boundary is incomplete")
+	}
+	s.expectedAttestation = state
 	return nil
 }
 
@@ -537,21 +577,12 @@ func persistExpectedAttestationBoundary(sctx *pipeline.StepContext, updatedAt ti
 	if updatedAt.IsZero() {
 		return fmt.Errorf("PR attestation boundary is empty")
 	}
-	encoded, err := sctx.DB.GetRunCIRerunState(sctx.Run.ID)
+	state := expectedAttestationState{HeadSHA: sctx.Run.HeadSHA, UpdatedAt: updatedAt}
+	encoded, err := json.Marshal(state)
 	if err != nil {
 		return err
 	}
-	state := &checkRerunBudget{}
-	if err := state.unmarshal(encoded); err != nil {
-		return err
-	}
-	state.expectedAttestationHeadSHA = sctx.Run.HeadSHA
-	state.expectedAttestationUpdatedAt = updatedAt
-	encoded, err = state.marshal()
-	if err != nil {
-		return err
-	}
-	return sctx.DB.SetRunCIRerunState(sctx.Run.ID, encoded)
+	return sctx.DB.SetRunCIAttestationState(sctx.Run.ID, string(encoded))
 }
 
 func (s *CIStep) retireResolvedReruns(sctx *pipeline.StepContext, checks []scm.Check) (bool, error) {

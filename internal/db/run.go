@@ -701,3 +701,23 @@ func (d *DB) SetRunCIRerunState(id, state string) error {
 	}
 	return nil
 }
+
+func (d *DB) GetRunCIAttestationState(id string) (string, error) {
+	var state sql.NullString
+	err := d.sql.QueryRow(`SELECT ci_attestation_state FROM runs WHERE id = ?`, id).Scan(&state)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get run ci attestation state: %w", err)
+	}
+	return state.String, nil
+}
+
+func (d *DB) SetRunCIAttestationState(id, state string) error {
+	_, err := d.sql.Exec(`UPDATE runs SET ci_attestation_state = ?, updated_at = ? WHERE id = ?`, state, now(), id)
+	if err != nil {
+		return fmt.Errorf("set run ci attestation state: %w", err)
+	}
+	return nil
+}

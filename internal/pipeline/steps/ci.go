@@ -41,7 +41,8 @@ type CIStep struct {
 	lastFixedCompletedAt map[string]time.Time // terminally failed check completion times seen before the last fix attempt
 	ciFixAttempts        int                  // number of CI auto-fix attempts made
 	transientReruns      checkRerunBudget     // per-check rerun budget spent on provider-reported transient failures
-	pollIntervalOverride time.Duration        // if set, overrides computed poll interval (for testing)
+	expectedAttestation  expectedAttestationState
+	pollIntervalOverride time.Duration // if set, overrides computed poll interval (for testing)
 	waitForNextPoll      func(context.Context, time.Duration) error
 	now                  func() time.Time
 	// baseBranchTip resolves the current tip SHA of the upstream default
@@ -136,7 +137,8 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 	// A run recovered after a restart resumes the rerun budget it already
 	// spent. Without this the fresh in-memory budget would grant reruns the
 	// documented limit already accounted for.
-	if err := s.loadRerunBudget(sctx); err != nil {
+	s.loadRerunBudget(sctx)
+	if err := s.loadExpectedAttestationState(sctx); err != nil {
 		return nil, err
 	}
 	ctx := sctx.Ctx
