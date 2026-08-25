@@ -136,7 +136,8 @@ func isManagedPreReceiveHook(content []byte) bool {
 }
 
 // RefreshManagedPreReceiveHook installs or refreshes admission while preserving
-// an existing user hook behind the managed wrapper.
+// a genuine user hook behind the managed wrapper. A preserved hook that matches
+// the managed-hook signature is disarmed instead of retained as executable.
 func RefreshManagedPreReceiveHook(bareDir string) (bool, error) {
 	hooksDir := filepath.Join(bareDir, "hooks")
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {

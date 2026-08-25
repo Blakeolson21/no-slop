@@ -113,6 +113,17 @@ to authorize the pushing process. The daemon refuses descendants of an active
 validation step before mutation, including direct pushes, and safely omits run
 or phase details when authenticated ancestry cannot identify them uniquely.
 An existing custom `pre-receive` hook is preserved and runs after admission.
+Before running it, the managed wrapper checks for the managed hook header and
+the `daemon admit-push` marker. A preserved hook with both markers is treated as
+a copy of the managed admission hook and skipped with an explanation on stderr,
+because executing that copy would re-enter admission forever. If the wrapper
+cannot perform this inspection, it refuses the push before ref mutation.
+
+Every managed-hook refresh also heals this state: it renames the preserved copy
+with a `.managed-copy-disarmed` suffix and removes its executable bits while
+leaving admission active. This is deliberately fail-safe, so a custom hook that
+contains both managed markers is also skipped; other preserved user hooks still
+run normally.
 
 When `git push no-slop <branch>` lands, the bare repo's `post-receive` hook
 fires. It resolves the gate to an absolute bare-repo path using Git's own view

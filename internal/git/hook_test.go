@@ -1143,11 +1143,13 @@ func TestPreReceiveHookScriptRefusesManagedPreservedHook(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("hook script is /bin/sh")
 	}
-	gate := t.TempDir()
-	hooks := filepath.Join(gate, "hooks")
-	if err := os.MkdirAll(hooks, 0o755); err != nil {
+	base := t.TempDir()
+	gate := filepath.Join(base, "gate.git")
+	if err := InitBare(context.Background(), gate); err != nil {
 		t.Fatal(err)
 	}
+	work := seedGate(t, base, gate)
+	hooks := filepath.Join(gate, "hooks")
 	stub := filepath.Join(gate, "no-slop-stub")
 	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -1162,23 +1164,28 @@ func TestPreReceiveHookScriptRefusesManagedPreservedHook(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(hooks, legacyPreservedPreReceiveHook), script, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	runGitOrFatal(t, work, "commit", "--allow-empty", "-m", "push through guarded hook")
+	want := strings.TrimSpace(runGitOrFatal(t, work, "rev-parse", "HEAD"))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "/bin/sh", hookPath)
-	cmd.Dir = gate
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	err := cmd.Run()
+	cmd := exec.CommandContext(ctx, "git", "-C", work, "push", "gate", "HEAD:refs/heads/main")
+	cmd.WaitDelay = 2 * time.Second
+	output, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
-		t.Fatalf("hook did not terminate: it re-entered the preserved copy of itself; stderr=%q", stderr.String())
+		t.Fatalf("hook did not terminate: it re-entered the preserved copy of itself; push output=%q", output)
 	}
 	if err != nil {
-		t.Fatalf("hook exited %v, want success after skipping the managed copy; stderr=%q", err, stderr.String())
+		t.Fatalf("push exited %v, want success after skipping the managed copy; output=%q", err, output)
 	}
-	if !strings.Contains(stderr.String(), "refusing to run preserved pre-receive hook") {
-		t.Fatalf("hook did not say why it skipped the preserved copy; stderr=%q", stderr.String())
+	if !strings.Contains(string(output), "refusing to run preserved pre-receive hook") {
+		t.Fatalf("hook did not say why it skipped the preserved copy; push output=%q", output)
 	}
+	got := strings.TrimSpace(runGitOrFatal(t, gate, "rev-parse", "refs/heads/main"))
+	if got != want {
+		t.Fatalf("push returned but did not update refs/heads/main: got %q, want %q", got, want)
+	}
+	t.Logf("git push returned successfully, advanced refs/heads/main to %s, and told the user why the recursive preserved hook was skipped:\n%s", got, output)
 }
 
 func TestPreReceiveHookScriptStillRunsGenuinePreservedHook(t *testing.T) {
@@ -1216,6 +1223,7 @@ func TestPreReceiveHookScriptStillRunsGenuinePreservedHook(t *testing.T) {
 	if _, err := os.Stat(marker); err != nil {
 		t.Fatalf("a genuine preserved user hook must still run: %v; stderr=%q", err, stderr.String())
 	}
+	t.Log("managed admission completed and the genuine preserved user hook created its marker")
 }
 
 func TestPreReceiveHookScriptFailsClosedWhenManagedHookInspectionIsUnavailable(t *testing.T) {
@@ -1293,6 +1301,7 @@ func TestRefreshManagedPreReceiveHookDisarmsManagedPreservedCopy(t *testing.T) {
 	if err != nil || !isManagedPreReceiveHook(current) {
 		t.Fatalf("managed admission hook missing after disarm: %v", err)
 	}
+	t.Logf("refresh removed %s from the executable hook path, retained %s with mode %04o, and kept managed admission active", filepath.Base(legacy), filepath.Base(legacy+disarmedManagedPreservedHookSuffix), disarmed.Mode().Perm())
 }
 
 func TestRefreshManagedPreReceiveHookDisarmsAliasesWithoutDisablingAdmission(t *testing.T) {
