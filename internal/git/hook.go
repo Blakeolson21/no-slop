@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 )
@@ -18,6 +19,14 @@ var runGit = RunBare
 const gateConfigStampFile = "no-slop-gate-config"
 const preservedPreReceiveHook = "pre-receive.no-slop-user"
 const legacyPreservedPreReceiveHook = "pre-receive.no-mistakes-user"
+
+// managedHookHeaderPattern and managedHookAdmissionMarker identify a managed
+// admission hook. Both the Go detector and the hook script's own preserved-hook
+// guard read these, so "is this hook ours" has one definition: a second
+// implementation is how a copy of the wrapper gets mistaken for a user hook.
+const managedHookHeaderPattern = `^# no-(slop|mistakes) pre-receive hook$`
+const managedHookAdmissionMarker = "daemon admit-push"
+const disarmedManagedPreservedHookSuffix = ".managed-copy-disarmed"
 
 // PreReceiveHookScript returns the fail-closed admission hook that runs before
 // Git mutates any managed gate ref. The daemon authenticates the hook process's
@@ -92,18 +101,22 @@ USER_HOOK="$CANONICAL_USER_HOOK"
 if [ ! -x "$USER_HOOK" ]; then
   USER_HOOK="$LEGACY_USER_HOOK"
 fi
-if [ -x "$USER_HOOK" ]; then
+if [ -x "$USER_HOOK" ] && grep -qE '` + managedHookHeaderPattern + `' "$USER_HOOK" && grep -q '` + managedHookAdmissionMarker + `' "$USER_HOOK"; then
+  printf 'no-slop: refusing to run preserved pre-receive hook %s: it is a copy of this managed admission hook, so running it would re-enter admission forever\n' "$USER_HOOK" >&2
+  USER_HOOK=""
+fi
+if [ -n "$USER_HOOK" ] && [ -x "$USER_HOOK" ]; then
   exec "$USER_HOOK"
 fi
 exit 0
 `
 }
 
+var managedHookHeaderRe = regexp.MustCompile("(?m)" + managedHookHeaderPattern)
+
 func isManagedPreReceiveHook(content []byte) bool {
-	text := string(content)
-	return (strings.Contains(text, "# no-slop pre-receive hook") ||
-		strings.Contains(text, "# no-mistakes pre-receive hook")) &&
-		strings.Contains(text, "daemon admit-push")
+	return managedHookHeaderRe.Match(content) &&
+		bytes.Contains(content, []byte(managedHookAdmissionMarker))
 }
 
 // RefreshManagedPreReceiveHook installs or refreshes admission while preserving
@@ -111,6 +124,9 @@ func isManagedPreReceiveHook(content []byte) bool {
 func RefreshManagedPreReceiveHook(bareDir string) (bool, error) {
 	hooksDir := filepath.Join(bareDir, "hooks")
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		return false, err
+	}
+	if err := disarmManagedPreservedPreReceiveHooks(hooksDir); err != nil {
 		return false, err
 	}
 	if err := validatePreservedPreReceiveHookAliases(hooksDir); err != nil {
@@ -149,6 +165,43 @@ func RefreshManagedPreReceiveHook(bareDir string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// disarmManagedPreservedPreReceiveHooks removes the executable bit from a
+// preserved "user" hook that is really a copy of the managed admission hook.
+// The managed hook ends by exec-ing the preserved hook, so a preserved copy of
+// itself re-enters admission forever: the push never fails and never returns,
+// and git waits on a hook that will never read stdin. The file is renamed
+// rather than deleted because it is evidence of how the gate was installed.
+func disarmManagedPreservedPreReceiveHooks(hooksDir string) error {
+	for _, name := range []string{preservedPreReceiveHook, legacyPreservedPreReceiveHook} {
+		path := filepath.Join(hooksDir, name)
+		info, err := os.Stat(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !preservedHookRunnable(info) {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if !isManagedPreReceiveHook(data) {
+			continue
+		}
+		disarmed := path + disarmedManagedPreservedHookSuffix
+		if err := os.Rename(path, disarmed); err != nil {
+			return fmt.Errorf("disarm preserved pre-receive hook %s: %w", name, err)
+		}
+		if err := os.Chmod(disarmed, 0o644); err != nil {
+			return fmt.Errorf("disarm preserved pre-receive hook %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 func validatePreservedPreReceiveHookAliases(hooksDir string) error {

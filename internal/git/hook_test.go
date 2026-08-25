@@ -1134,3 +1134,121 @@ func TestInstallPostReceiveHookCreatesDir(t *testing.T) {
 		t.Fatalf("hook file not found: %v", err)
 	}
 }
+
+// A gate whose preserved "user" hook is a copy of the managed admission hook
+// used to exec itself forever: admission passed, the hook exec'd the copy, the
+// copy ran admission again, and git waited on a hook that never read stdin. The
+// push neither failed nor returned.
+func TestPreReceiveHookScriptRefusesManagedPreservedHook(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("hook script is /bin/sh")
+	}
+	gate := t.TempDir()
+	hooks := filepath.Join(gate, "hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stub := filepath.Join(gate, "no-slop-stub")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := []byte(preReceiveHookScript(stub))
+	hookPath := filepath.Join(hooks, "pre-receive")
+	if err := os.WriteFile(hookPath, script, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The exact shape found on five live gate mirrors: the preserved hook is
+	// byte-identical to the managed hook it is preserved behind.
+	if err := os.WriteFile(filepath.Join(hooks, legacyPreservedPreReceiveHook), script, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/sh", hookPath)
+	cmd.Dir = gate
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		t.Fatalf("hook did not terminate: it re-entered the preserved copy of itself; stderr=%q", stderr.String())
+	}
+	if err != nil {
+		t.Fatalf("hook exited %v, want success after skipping the managed copy; stderr=%q", err, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "refusing to run preserved pre-receive hook") {
+		t.Fatalf("hook did not say why it skipped the preserved copy; stderr=%q", stderr.String())
+	}
+}
+
+func TestPreReceiveHookScriptStillRunsGenuinePreservedHook(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("hook script is /bin/sh")
+	}
+	gate := t.TempDir()
+	hooks := filepath.Join(gate, "hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stub := filepath.Join(gate, "no-slop-stub")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hookPath := filepath.Join(hooks, "pre-receive")
+	if err := os.WriteFile(hookPath, []byte(preReceiveHookScript(stub)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(gate, "user-hook-ran")
+	user := "#!/bin/sh\ntouch " + marker + "\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(hooks, legacyPreservedPreReceiveHook), []byte(user), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/sh", hookPath)
+	cmd.Dir = gate
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("hook exited %v; stderr=%q", err, stderr.String())
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("a genuine preserved user hook must still run: %v; stderr=%q", err, stderr.String())
+	}
+}
+
+func TestRefreshManagedPreReceiveHookDisarmsManagedPreservedCopy(t *testing.T) {
+	bare := t.TempDir()
+	hooks := filepath.Join(bare, "hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	managed := []byte(PreReceiveHookScript())
+	if err := os.WriteFile(filepath.Join(hooks, "pre-receive"), managed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(hooks, legacyPreservedPreReceiveHook)
+	if err := os.WriteFile(legacy, managed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := RefreshManagedPreReceiveHook(bare); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatalf("preserved copy of the managed hook still in place: %v", err)
+	}
+	disarmed, err := os.Stat(legacy + disarmedManagedPreservedHookSuffix)
+	if err != nil {
+		t.Fatalf("disarmed copy not kept as evidence: %v", err)
+	}
+	if disarmed.Mode()&0o111 != 0 {
+		t.Fatalf("disarmed copy is still executable: %v", disarmed.Mode())
+	}
+	current, err := os.ReadFile(filepath.Join(hooks, "pre-receive"))
+	if err != nil || !isManagedPreReceiveHook(current) {
+		t.Fatalf("managed admission hook missing after disarm: %v", err)
+	}
+}
