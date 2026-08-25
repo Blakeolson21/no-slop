@@ -1218,6 +1218,48 @@ func TestPreReceiveHookScriptStillRunsGenuinePreservedHook(t *testing.T) {
 	}
 }
 
+func TestPreReceiveHookScriptFailsClosedWhenManagedHookInspectionIsUnavailable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("hook script is /bin/sh")
+	}
+	gate := t.TempDir()
+	hooks := filepath.Join(gate, "hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stub := filepath.Join(gate, "no-slop-stub")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := []byte(preReceiveHookScript(stub))
+	hookPath := filepath.Join(hooks, "pre-receive")
+	if err := os.WriteFile(hookPath, script, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hooks, legacyPreservedPreReceiveHook), script, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/sh", hookPath)
+	cmd.WaitDelay = 2 * time.Second
+	cmd.Dir = gate
+	cmd.Env = []string{"PATH=" + t.TempDir()}
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		t.Fatalf("hook did not terminate after inspection failed; stderr=%q", stderr.String())
+	}
+	if err == nil {
+		t.Fatalf("hook allowed the push after inspection failed; stderr=%q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "unable to inspect preserved pre-receive hook") {
+		t.Fatalf("hook did not report its inspection failure; stderr=%q", stderr.String())
+	}
+}
+
 func TestRefreshManagedPreReceiveHookDisarmsManagedPreservedCopy(t *testing.T) {
 	bare := t.TempDir()
 	hooks := filepath.Join(bare, "hooks")
@@ -1250,5 +1292,124 @@ func TestRefreshManagedPreReceiveHookDisarmsManagedPreservedCopy(t *testing.T) {
 	current, err := os.ReadFile(filepath.Join(hooks, "pre-receive"))
 	if err != nil || !isManagedPreReceiveHook(current) {
 		t.Fatalf("managed admission hook missing after disarm: %v", err)
+	}
+}
+
+func TestRefreshManagedPreReceiveHookDisarmsAliasesWithoutDisablingAdmission(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executable mode and symlink behavior are POSIX-specific")
+	}
+	for _, tt := range []struct {
+		name  string
+		alias func(string, string) error
+	}{
+		{name: "symlink", alias: func(_, alias string) error {
+			return os.Symlink("pre-receive", alias)
+		}},
+		{name: "hard link", alias: os.Link},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			bare := t.TempDir()
+			hooks := filepath.Join(bare, "hooks")
+			if err := os.MkdirAll(hooks, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			managed := []byte(PreReceiveHookScript())
+			active := filepath.Join(hooks, "pre-receive")
+			if err := os.WriteFile(active, managed, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			preserved := filepath.Join(hooks, legacyPreservedPreReceiveHook)
+			if err := tt.alias(active, preserved); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := RefreshManagedPreReceiveHook(bare); err != nil {
+				t.Fatalf("refresh: %v", err)
+			}
+
+			activeInfo, err := os.Lstat(active)
+			if err != nil {
+				t.Fatalf("stat active hook: %v", err)
+			}
+			if !hookFileRunnable(activeInfo) {
+				t.Fatalf("active admission hook is not an executable regular file: %v", activeInfo.Mode())
+			}
+			if _, err := os.Lstat(preserved); !os.IsNotExist(err) {
+				t.Fatalf("preserved alias still in place: %v", err)
+			}
+			disarmedPath := preserved + disarmedManagedPreservedHookSuffix
+			disarmedInfo, err := os.Lstat(disarmedPath)
+			if err != nil {
+				t.Fatalf("stat disarmed evidence: %v", err)
+			}
+			if !disarmedInfo.Mode().IsRegular() || disarmedInfo.Mode()&0o111 != 0 {
+				t.Fatalf("disarmed evidence mode = %v", disarmedInfo.Mode())
+			}
+			if os.SameFile(activeInfo, disarmedInfo) {
+				t.Fatal("disarmed evidence still shares the active hook inode")
+			}
+			activeContent, err := os.ReadFile(active)
+			if err != nil || string(activeContent) != string(managed) {
+				t.Fatalf("active admission hook changed: %v", err)
+			}
+			disarmedContent, err := os.ReadFile(disarmedPath)
+			if err != nil || string(disarmedContent) != string(managed) {
+				t.Fatalf("disarmed evidence changed: %v", err)
+			}
+		})
+	}
+}
+
+func TestRefreshManagedPreReceiveHookRepairsManagedHookTypeAndMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executable mode and symlink behavior are POSIX-specific")
+	}
+	for _, tt := range []struct {
+		name  string
+		setup func(string, []byte) error
+	}{
+		{name: "non-executable", setup: func(path string, managed []byte) error {
+			return os.WriteFile(path, managed, 0o644)
+		}},
+		{name: "symlink", setup: func(path string, managed []byte) error {
+			target := path + ".target"
+			if err := os.WriteFile(target, managed, 0o755); err != nil {
+				return err
+			}
+			return os.Symlink(filepath.Base(target), path)
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			bare := t.TempDir()
+			hooks := filepath.Join(bare, "hooks")
+			if err := os.MkdirAll(hooks, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			managed := []byte(PreReceiveHookScript())
+			active := filepath.Join(hooks, "pre-receive")
+			if err := tt.setup(active, managed); err != nil {
+				t.Fatal(err)
+			}
+
+			changed, err := RefreshManagedPreReceiveHook(bare)
+			if err != nil {
+				t.Fatalf("refresh: %v", err)
+			}
+			if !changed {
+				t.Fatal("refresh did not report repairing the active hook")
+			}
+			info, err := os.Lstat(active)
+			if err != nil {
+				t.Fatalf("stat active hook: %v", err)
+			}
+			if !hookFileRunnable(info) {
+				t.Fatalf("active admission hook is not an executable regular file: %v", info.Mode())
+			}
+			content, err := os.ReadFile(active)
+			if err != nil || string(content) != string(managed) {
+				t.Fatalf("active admission hook changed: %v", err)
+			}
+		})
 	}
 }

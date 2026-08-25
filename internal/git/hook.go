@@ -101,9 +101,25 @@ USER_HOOK="$CANONICAL_USER_HOOK"
 if [ ! -x "$USER_HOOK" ]; then
   USER_HOOK="$LEGACY_USER_HOOK"
 fi
-if [ -x "$USER_HOOK" ] && grep -qE '` + managedHookHeaderPattern + `' "$USER_HOOK" && grep -q '` + managedHookAdmissionMarker + `' "$USER_HOOK"; then
-  printf 'no-slop: refusing to run preserved pre-receive hook %s: it is a copy of this managed admission hook, so running it would re-enter admission forever\n' "$USER_HOOK" >&2
-  USER_HOOK=""
+if [ -x "$USER_HOOK" ]; then
+  grep -qE '` + managedHookHeaderPattern + `' "$USER_HOOK"
+  header_status=$?
+  if [ $header_status -gt 1 ]; then
+    printf 'no-slop: unable to inspect preserved pre-receive hook %s; refusing gate push\n' "$USER_HOOK" >&2
+    exit 1
+  fi
+  if [ $header_status -eq 0 ]; then
+    grep -q '` + managedHookAdmissionMarker + `' "$USER_HOOK"
+    admission_status=$?
+    if [ $admission_status -gt 1 ]; then
+      printf 'no-slop: unable to inspect preserved pre-receive hook %s; refusing gate push\n' "$USER_HOOK" >&2
+      exit 1
+    fi
+    if [ $admission_status -eq 0 ]; then
+      printf 'no-slop: refusing to run preserved pre-receive hook %s: it is a copy of this managed admission hook, so running it would re-enter admission forever\n' "$USER_HOOK" >&2
+      USER_HOOK=""
+    fi
+  fi
 fi
 if [ -n "$USER_HOOK" ] && [ -x "$USER_HOOK" ]; then
   exec "$USER_HOOK"
@@ -138,7 +154,10 @@ func RefreshManagedPreReceiveHook(bareDir string) (bool, error) {
 	existing, err := os.ReadFile(hookPath)
 	if err == nil {
 		if string(existing) == string(desired) {
-			return false, nil
+			info, infoErr := os.Lstat(hookPath)
+			if infoErr == nil && hookFileRunnable(info) {
+				return false, nil
+			}
 		}
 		if !isManagedPreReceiveHook(existing) {
 			if err := validatePreservedPreReceiveHookCandidate(hooksDir, existing); err != nil {
@@ -174,16 +193,31 @@ func RefreshManagedPreReceiveHook(bareDir string) (bool, error) {
 // and git waits on a hook that will never read stdin. The file is renamed
 // rather than deleted because it is evidence of how the gate was installed.
 func disarmManagedPreservedPreReceiveHooks(hooksDir string) error {
+	activeInfo, activeErr := os.Stat(filepath.Join(hooksDir, "pre-receive"))
+	if activeErr != nil && !os.IsNotExist(activeErr) {
+		return activeErr
+	}
 	for _, name := range []string{preservedPreReceiveHook, legacyPreservedPreReceiveHook} {
 		path := filepath.Join(hooksDir, name)
-		info, err := os.Stat(path)
+		entryInfo, err := os.Lstat(path)
 		if os.IsNotExist(err) {
 			continue
 		}
 		if err != nil {
 			return err
 		}
-		if !preservedHookRunnable(info) {
+		targetInfo := entryInfo
+		isSymlink := entryInfo.Mode()&os.ModeSymlink != 0
+		if isSymlink {
+			targetInfo, err = os.Stat(path)
+			if os.IsNotExist(err) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+		}
+		if !hookFileRunnable(targetInfo) {
 			continue
 		}
 		data, err := os.ReadFile(path)
@@ -194,6 +228,19 @@ func disarmManagedPreservedPreReceiveHooks(hooksDir string) error {
 			continue
 		}
 		disarmed := path + disarmedManagedPreservedHookSuffix
+		aliasesActive := isSymlink || activeErr != nil
+		if activeInfo != nil && targetInfo.Mode().IsRegular() && activeInfo.Mode().IsRegular() && os.SameFile(targetInfo, activeInfo) {
+			aliasesActive = true
+		}
+		if aliasesActive {
+			if err := writeGateFileAtomic(disarmed, data, 0o644, ".pre-receive-disarmed-*"); err != nil {
+				return fmt.Errorf("disarm preserved pre-receive hook %s: %w", name, err)
+			}
+			if err := os.Remove(path); err != nil {
+				return fmt.Errorf("disarm preserved pre-receive hook %s: %w", name, err)
+			}
+			continue
+		}
 		if err := os.Rename(path, disarmed); err != nil {
 			return fmt.Errorf("disarm preserved pre-receive hook %s: %w", name, err)
 		}
@@ -218,7 +265,7 @@ func validatePreservedPreReceiveHookAliases(hooksDir string) error {
 	if legacyErr != nil {
 		return legacyErr
 	}
-	if !preservedHookRunnable(canonicalInfo) || !preservedHookRunnable(legacyInfo) {
+	if !hookFileRunnable(canonicalInfo) || !hookFileRunnable(legacyInfo) {
 		return nil
 	}
 	canonicalData, err := os.ReadFile(canonical)
@@ -244,7 +291,7 @@ func validatePreservedPreReceiveHookCandidate(hooksDir string, candidate []byte)
 	if err != nil {
 		return err
 	}
-	if !preservedHookRunnable(legacyInfo) {
+	if !hookFileRunnable(legacyInfo) {
 		return nil
 	}
 	legacyData, err := os.ReadFile(legacy)
@@ -257,8 +304,8 @@ func validatePreservedPreReceiveHookCandidate(hooksDir string, candidate []byte)
 	return nil
 }
 
-func preservedHookRunnable(info os.FileInfo) bool {
-	return runtime.GOOS == "windows" || info.Mode()&0o111 != 0
+func hookFileRunnable(info os.FileInfo) bool {
+	return info.Mode().IsRegular() && (runtime.GOOS == "windows" || info.Mode()&0o111 != 0)
 }
 
 // RefreshManagedGateHooks owns the complete receive boundary.
@@ -445,7 +492,12 @@ func GateConfigCurrent(bareDir string) bool {
 	// Admission is a security boundary, not merely notification. Verify the
 	// managed pre-receive bytes on every startup so a stale stamp cannot hide a
 	// removed or replaced guard. This remains filesystem-only for current gates.
-	preReceive, err := os.ReadFile(filepath.Join(bareDir, "hooks", "pre-receive"))
+	preReceivePath := filepath.Join(bareDir, "hooks", "pre-receive")
+	preReceiveInfo, err := os.Lstat(preReceivePath)
+	if err != nil || !hookFileRunnable(preReceiveInfo) {
+		return false
+	}
+	preReceive, err := os.ReadFile(preReceivePath)
 	return err == nil && string(preReceive) == PreReceiveHookScript()
 }
 
