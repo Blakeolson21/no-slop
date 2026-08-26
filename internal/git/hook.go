@@ -202,10 +202,6 @@ func RefreshManagedPreReceiveHook(bareDir string) (bool, error) {
 // and git waits on a hook that will never read stdin. The file is renamed
 // rather than deleted because it is evidence of how the gate was installed.
 func disarmManagedPreservedPreReceiveHooks(hooksDir string) error {
-	activeInfo, activeErr := os.Stat(filepath.Join(hooksDir, "pre-receive"))
-	if activeErr != nil && !os.IsNotExist(activeErr) {
-		return activeErr
-	}
 	for _, name := range []string{preservedPreReceiveHook, legacyPreservedPreReceiveHook} {
 		path := filepath.Join(hooksDir, name)
 		entryInfo, err := os.Lstat(path)
@@ -237,23 +233,10 @@ func disarmManagedPreservedPreReceiveHooks(hooksDir string) error {
 			continue
 		}
 		disarmed := path + disarmedManagedPreservedHookSuffix
-		aliasesActive := isSymlink || activeErr != nil
-		if activeInfo != nil && targetInfo.Mode().IsRegular() && activeInfo.Mode().IsRegular() && os.SameFile(targetInfo, activeInfo) {
-			aliasesActive = true
-		}
-		if aliasesActive {
-			if err := writeGateFileAtomic(disarmed, data, 0o644, ".pre-receive-disarmed-*"); err != nil {
-				return fmt.Errorf("disarm preserved pre-receive hook %s: %w", name, err)
-			}
-			if err := os.Remove(path); err != nil {
-				return fmt.Errorf("disarm preserved pre-receive hook %s: %w", name, err)
-			}
-			continue
-		}
-		if err := os.Rename(path, disarmed); err != nil {
+		if err := writeGateFileAtomic(disarmed, data, 0o644, ".pre-receive-disarmed-*"); err != nil {
 			return fmt.Errorf("disarm preserved pre-receive hook %s: %w", name, err)
 		}
-		if err := os.Chmod(disarmed, 0o644); err != nil {
+		if err := os.Remove(path); err != nil {
 			return fmt.Errorf("disarm preserved pre-receive hook %s: %w", name, err)
 		}
 	}

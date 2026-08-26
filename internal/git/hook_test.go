@@ -1355,6 +1355,58 @@ func TestRefreshManagedPreReceiveHookDisarmsNonExecutableManagedPreservedCopy(t 
 	}
 }
 
+func TestRefreshManagedPreReceiveHookDisarmsCrossGateHardLinkWithoutDisablingAdmission(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executable mode and hard links are POSIX-specific")
+	}
+	root := t.TempDir()
+	gateAHooks := filepath.Join(root, "gate-a.git", "hooks")
+	gateBHooks := filepath.Join(root, "gate-b.git", "hooks")
+	if err := os.MkdirAll(gateAHooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(gateBHooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	managed := []byte(PreReceiveHookScript())
+	gateAActive := filepath.Join(gateAHooks, "pre-receive")
+	if err := os.WriteFile(gateAActive, managed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gateBHooks, "pre-receive"), managed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gateBPreserved := filepath.Join(gateBHooks, preservedPreReceiveHook)
+	if err := os.Link(gateAActive, gateBPreserved); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := RefreshManagedPreReceiveHook(filepath.Join(root, "gate-b.git")); err != nil {
+		t.Fatalf("refresh gate B: %v", err)
+	}
+
+	gateAInfo, err := os.Stat(gateAActive)
+	if err != nil {
+		t.Fatalf("stat gate A admission hook: %v", err)
+	}
+	if !hookFileRunnable(gateAInfo) {
+		t.Fatalf("refreshing gate B disabled gate A admission: mode=%v", gateAInfo.Mode())
+	}
+	if _, err := os.Lstat(gateBPreserved); !os.IsNotExist(err) {
+		t.Fatalf("gate B preserved managed copy still exists: %v", err)
+	}
+	disarmedInfo, err := os.Stat(gateBPreserved + disarmedManagedPreservedHookSuffix)
+	if err != nil {
+		t.Fatalf("stat gate B disarmed evidence: %v", err)
+	}
+	if disarmedInfo.Mode().Perm() != 0o644 {
+		t.Fatalf("gate B disarmed evidence mode = %04o, want 0644", disarmedInfo.Mode().Perm())
+	}
+	if os.SameFile(gateAInfo, disarmedInfo) {
+		t.Fatal("gate B disarmed evidence still shares gate A admission inode")
+	}
+}
+
 func TestPreReceiveHookScriptRejectsExecutableNonRegularPreservedHook(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("hook script and FIFO are POSIX-specific")
