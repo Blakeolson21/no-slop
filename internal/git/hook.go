@@ -195,12 +195,18 @@ func RefreshManagedPreReceiveHook(bareDir string) (bool, error) {
 	return true, nil
 }
 
-// disarmManagedPreservedPreReceiveHooks removes the executable bit from a
-// preserved "user" hook that is really a copy of the managed admission hook.
-// The managed hook ends by exec-ing the preserved hook, so a preserved copy of
-// itself re-enters admission forever: the push never fails and never returns,
-// and git waits on a hook that will never read stdin. The file is renamed
-// rather than deleted because it is evidence of how the gate was installed.
+// disarmManagedPreservedPreReceiveHooks retires a preserved "user" hook that is
+// really a copy of the managed admission hook. The managed hook ends by
+// exec-ing the preserved hook, so a preserved copy of itself re-enters
+// admission forever: the push never fails and never returns, and git waits on a
+// hook that will never read stdin.
+//
+// The bytes are copied to a sibling ".disarmed" file at mode 0644 and the
+// original entry is then unlinked. The copy keeps the evidence of how the gate
+// was installed; the copy-then-unlink is deliberate and must not be replaced by
+// a rename or a chmod, because the preserved entry may be a hard link to
+// another repository's live pre-receive hook. Mutating that shared inode would
+// silently disarm the other gate's admission instead of this one's.
 func disarmManagedPreservedPreReceiveHooks(hooksDir string) error {
 	for _, name := range []string{preservedPreReceiveHook, legacyPreservedPreReceiveHook} {
 		path := filepath.Join(hooksDir, name)
