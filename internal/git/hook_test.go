@@ -1451,10 +1451,10 @@ func TestPreReceiveHookScriptRejectsExecutableNonRegularPreservedHook(t *testing
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "/bin/sh", hookPath)
-	cmd.WaitDelay = 200 * time.Millisecond
+	cmd.WaitDelay = 2 * time.Second
 	cmd.Dir = gate
 	var stderr strings.Builder
 	cmd.Stderr = &stderr

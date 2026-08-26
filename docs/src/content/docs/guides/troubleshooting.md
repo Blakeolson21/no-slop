@@ -205,7 +205,7 @@ no-slop status
 ls -la <gate-path>/hooks/pre-receive <gate-path>/hooks/post-receive
 ```
 
-Both hooks should be executable. If either is missing or non-executable, `no-slop init` will reinstall it for an existing no-slop-managed gate.
+Managed hook entries should be regular executable files. If a managed hook is missing, has lost its executable mode, or is a symlink, `no-slop init` repairs it for an existing no-slop-managed gate; custom `post-receive` hooks remain untouched.
 For validated registered gates and strictly named legacy gates, `no-slop daemon restart` also installs missing no-slop-managed hooks and refreshes legacy managed hooks.
 If an older gate's push hangs while repeatedly running admission, refresh the hooks with `no-slop init` or `no-slop daemon restart`; see [Receive hooks](/no-slop/concepts/gate-model/#receive-hooks) for custom-hook preservation and managed-copy safety behavior.
 Current managed hooks resolve the gate as an absolute bare-repo path before notifying the daemon, so a shell with a bad `PWD` value cannot accidentally report the gate as `.`.

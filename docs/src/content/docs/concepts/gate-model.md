@@ -112,7 +112,9 @@ Before Git changes a managed gate ref, the `pre-receive` hook asks the daemon
 to authorize the pushing process. The daemon refuses descendants of an active
 validation step before mutation, including direct pushes, and safely omits run
 or phase details when authenticated ancestry cannot identify them uniquely.
-An existing custom `pre-receive` hook is preserved and runs after admission.
+An existing genuine custom `pre-receive` hook is preserved and runs after
+admission. An executable preserved entry must resolve to a regular file;
+admission refuses the push before inspection when it does not.
 Before running it, the managed wrapper checks for the managed hook header and
 the `daemon admit-push` marker. A preserved hook with both markers is treated as
 a copy of the managed admission hook and skipped with an explanation on stderr,
@@ -127,6 +129,11 @@ gate's live `pre-receive`, and mutating that shared inode would silently
 disable the other gate's admission. This is deliberately fail-safe, so a custom
 hook that contains both managed markers is also skipped; other preserved user
 hooks still run normally.
+
+A managed-hook refresh also restores the managed `pre-receive` and
+`post-receive` entries as regular executable files when a mirrored or restored
+gate retained the correct hook bytes but lost the entry type or executable
+mode. Custom `post-receive` hooks remain untouched.
 
 When `git push no-slop <branch>` lands, the bare repo's `post-receive` hook
 fires. It resolves the gate to an absolute bare-repo path using Git's own view
