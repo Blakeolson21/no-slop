@@ -428,22 +428,92 @@ func RefreshManagedPostReceiveHook(bareDir string) (bool, error) {
 		return false, err
 	}
 	hookPath := filepath.Join(hooksDir, "post-receive")
-	desired := []byte(PostReceiveHookScript())
-	existing, err := os.ReadFile(hookPath)
-	if err == nil {
-		if string(existing) == string(desired) {
-			return false, nil
-		}
-		if !isManagedPostReceiveHook(existing) {
-			return false, nil
-		}
-	} else if !os.IsNotExist(err) {
+	needsWrite, err := managedPostReceiveHookNeedsWrite(hookPath)
+	if err != nil {
 		return false, err
 	}
-	if err := writeHookFileAtomic(hookPath, desired); err != nil {
+	if !needsWrite {
+		return false, nil
+	}
+	if err := writeHookFileAtomic(hookPath, []byte(PostReceiveHookScript())); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+// managedPostReceiveHookNeedsWrite is the single definition of "would a
+// managed refresh change this post-receive hook". Both the refresh and the
+// startup currency check read it, so a hook state one of them repairs can
+// never look settled to the other: a gate mirrored without its executable
+// bits used to keep byte-correct hooks that Git would not run, and because
+// the currency check never looked at post-receive, admission was restored
+// while daemon notification stayed dead and no error was ever emitted.
+func managedPostReceiveHookNeedsWrite(hookPath string) (bool, error) {
+	state, err := inspectHookFile(hookPath)
+	if err != nil {
+		return false, err
+	}
+	switch {
+	case state.missing:
+		return true, nil
+	case !state.readable:
+		// A non-regular target is user-owned; refresh has never claimed it,
+		// and its contents cannot be read without risking a blocking open.
+		return false, nil
+	case bytes.Equal(state.content, []byte(PostReceiveHookScript())):
+		return !state.entryRegular || !state.runnable, nil
+	default:
+		return isManagedPostReceiveHook(state.content), nil
+	}
+}
+
+type hookFileState struct {
+	missing bool
+	// readable reports that the entry resolves to a regular file, so its
+	// content below is what Git would run.
+	readable bool
+	// entryRegular reports that the hook entry is itself a regular file
+	// rather than a symlink standing in for one.
+	entryRegular bool
+	runnable     bool
+	content      []byte
+}
+
+// inspectHookFile resolves a hook entry to the file Git would actually run,
+// reading it only once a regular target is proven so a fifo or device entry
+// cannot block the caller in open().
+func inspectHookFile(path string) (hookFileState, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return hookFileState{missing: true}, nil
+	}
+	if err != nil {
+		return hookFileState{}, err
+	}
+	target := info
+	symlink := info.Mode()&os.ModeSymlink != 0
+	if symlink {
+		target, err = os.Stat(path)
+		if os.IsNotExist(err) {
+			return hookFileState{missing: true}, nil
+		}
+		if err != nil {
+			return hookFileState{}, err
+		}
+	}
+	if !target.Mode().IsRegular() {
+		return hookFileState{}, nil
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return hookFileState{}, err
+	}
+	return hookFileState{
+		readable:     true,
+		entryRegular: !symlink,
+		runnable:     hookFileRunnable(target),
+		content:      content,
+	}, nil
 }
 
 func writeHookFileAtomic(path string, content []byte) error {
@@ -490,7 +560,15 @@ func GateConfigCurrent(bareDir string) bool {
 		return false
 	}
 	preReceive, err := os.ReadFile(preReceivePath)
-	return err == nil && string(preReceive) == PreReceiveHookScript()
+	if err != nil || string(preReceive) != PreReceiveHookScript() {
+		return false
+	}
+	// Notification is not a security boundary, but a post-receive hook Git
+	// will not run silently strands every admitted push with no pipeline and
+	// no error, so a gate is only current when the refresh would leave it
+	// exactly as it stands.
+	needsWrite, err := managedPostReceiveHookNeedsWrite(filepath.Join(bareDir, "hooks", "post-receive"))
+	return err == nil && !needsWrite
 }
 
 // MarkGateConfigCurrent atomically records a fully completed gate migration.

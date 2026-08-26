@@ -1588,3 +1588,118 @@ func TestRefreshManagedPreReceiveHookRepairsManagedHookTypeAndMode(t *testing.T)
 		})
 	}
 }
+
+// TestRefreshManagedPostReceiveHookRepairsTypeAndMode covers the sibling of
+// the managed pre-receive repair: a gate directory mirrored or restored
+// without its permission bits keeps byte-correct hooks that Git will not run.
+// Admission fails closed and is repaired, but a dead post-receive is silent -
+// the push is admitted into the gate and no pipeline is ever notified.
+func TestRefreshManagedPostReceiveHookRepairsTypeAndMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executable mode and symlink behavior are POSIX-specific")
+	}
+	for _, tt := range []struct {
+		name  string
+		setup func(string, []byte) error
+	}{
+		{name: "non-executable", setup: func(path string, managed []byte) error {
+			return os.WriteFile(path, managed, 0o644)
+		}},
+		{name: "symlink", setup: func(path string, managed []byte) error {
+			target := path + ".target"
+			if err := os.WriteFile(target, managed, 0o755); err != nil {
+				return err
+			}
+			return os.Symlink(filepath.Base(target), path)
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			bare := t.TempDir()
+			hooks := filepath.Join(bare, "hooks")
+			if err := os.MkdirAll(hooks, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			managed := []byte(PostReceiveHookScript())
+			hookPath := filepath.Join(hooks, "post-receive")
+			if err := tt.setup(hookPath, managed); err != nil {
+				t.Fatal(err)
+			}
+
+			changed, err := RefreshManagedPostReceiveHook(bare)
+			if err != nil {
+				t.Fatalf("refresh: %v", err)
+			}
+			if !changed {
+				t.Fatal("refresh did not report repairing the notification hook")
+			}
+			info, err := os.Lstat(hookPath)
+			if err != nil {
+				t.Fatalf("stat notification hook: %v", err)
+			}
+			if !hookFileRunnable(info) {
+				t.Fatalf("notification hook is not an executable regular file: %v", info.Mode())
+			}
+			content, err := os.ReadFile(hookPath)
+			if err != nil || string(content) != string(managed) {
+				t.Fatalf("notification hook content changed: %v", err)
+			}
+		})
+	}
+}
+
+// TestGateConfigCurrentTracksNotificationHookRunnability pins the startup
+// integrity check to the same predicate the refresh uses. Without it a gate
+// whose post-receive lost its executable bit stamps as current forever: the
+// pre-receive repair runs once, marks the gate, and every later restart
+// short-circuits before the notification hook is ever inspected.
+func TestGateConfigCurrentTracksNotificationHookRunnability(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executable mode is POSIX-specific")
+	}
+	bare := t.TempDir()
+	if err := RefreshManagedGateHooks(bare); err != nil {
+		t.Fatalf("install hooks: %v", err)
+	}
+	if err := MarkGateConfigCurrent(bare); err != nil {
+		t.Fatalf("mark current: %v", err)
+	}
+	if !GateConfigCurrent(bare) {
+		t.Fatal("fresh managed gate should be current")
+	}
+
+	hookPath := filepath.Join(bare, "hooks", "post-receive")
+	if err := os.Chmod(hookPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if GateConfigCurrent(bare) {
+		t.Fatal("a post-receive hook git will not run must invalidate the gate stamp")
+	}
+
+	if err := RefreshManagedGateHooks(bare); err != nil {
+		t.Fatalf("refresh hooks: %v", err)
+	}
+	if !GateConfigCurrent(bare) {
+		t.Fatal("refresh must restore the gate to a current state")
+	}
+}
+
+// TestGateConfigCurrentLeavesCustomNotificationHookCurrent is the negative
+// control for the check above: refresh deliberately never touches a custom
+// post-receive hook, so treating one as stale would re-migrate the gate on
+// every daemon restart without ever converging.
+func TestGateConfigCurrentLeavesCustomNotificationHookCurrent(t *testing.T) {
+	bare := t.TempDir()
+	if err := RefreshManagedGateHooks(bare); err != nil {
+		t.Fatalf("install hooks: %v", err)
+	}
+	custom := []byte("#!/bin/sh\necho custom\n")
+	if err := os.WriteFile(filepath.Join(bare, "hooks", "post-receive"), custom, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := MarkGateConfigCurrent(bare); err != nil {
+		t.Fatalf("mark current: %v", err)
+	}
+	if !GateConfigCurrent(bare) {
+		t.Fatal("a gate with a preserved custom post-receive hook must stay current")
+	}
+}

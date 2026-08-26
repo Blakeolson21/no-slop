@@ -119,11 +119,14 @@ a copy of the managed admission hook and skipped with an explanation on stderr,
 because executing that copy would re-enter admission forever. If the wrapper
 cannot perform this inspection, it refuses the push before ref mutation.
 
-Every managed-hook refresh also heals this state: it renames the preserved copy
-with a `.managed-copy-disarmed` suffix and removes its executable bits while
-leaving admission active. This is deliberately fail-safe, so a custom hook that
-contains both managed markers is also skipped; other preserved user hooks still
-run normally.
+Every managed-hook refresh also heals this state: it copies the preserved hook
+to a `.managed-copy-disarmed` file with mode `0644`, then removes the original
+entry, while leaving admission active. The copy is deliberate rather than a
+rename plus `chmod`, because a preserved hook can be a hard link to another
+gate's live `pre-receive`, and mutating that shared inode would silently
+disable the other gate's admission. This is deliberately fail-safe, so a custom
+hook that contains both managed markers is also skipped; other preserved user
+hooks still run normally.
 
 When `git push no-slop <branch>` lands, the bare repo's `post-receive` hook
 fires. It resolves the gate to an absolute bare-repo path using Git's own view
