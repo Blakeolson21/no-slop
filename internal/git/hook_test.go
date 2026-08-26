@@ -1304,6 +1304,120 @@ func TestRefreshManagedPreReceiveHookDisarmsManagedPreservedCopy(t *testing.T) {
 	t.Logf("refresh removed %s from the executable hook path, retained %s with mode %04o, and kept managed admission active", filepath.Base(legacy), filepath.Base(legacy+disarmedManagedPreservedHookSuffix), disarmed.Mode().Perm())
 }
 
+func TestRefreshManagedPreReceiveHookDisarmsNonExecutableManagedPreservedCopy(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executable mode is POSIX-specific")
+	}
+	bare := t.TempDir()
+	hooks := filepath.Join(bare, "hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	custom := []byte("#!/bin/sh\necho custom\n")
+	active := filepath.Join(hooks, "pre-receive")
+	if err := os.WriteFile(active, custom, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	preserved := filepath.Join(hooks, preservedPreReceiveHook)
+	managed := []byte(PreReceiveHookScript())
+	if err := os.WriteFile(preserved, managed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := RefreshManagedPreReceiveHook(bare)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if !changed {
+		t.Fatal("refresh did not install the managed admission hook")
+	}
+	preservedContent, err := os.ReadFile(preserved)
+	if err != nil {
+		t.Fatalf("read preserved custom hook: %v", err)
+	}
+	if string(preservedContent) != string(custom) {
+		t.Fatalf("preserved hook = %q, want custom hook", preservedContent)
+	}
+	disarmedPath := preserved + disarmedManagedPreservedHookSuffix
+	disarmedInfo, err := os.Stat(disarmedPath)
+	if err != nil {
+		t.Fatalf("stat disarmed managed copy: %v", err)
+	}
+	if disarmedInfo.Mode().Perm() != 0o644 {
+		t.Fatalf("disarmed managed copy mode = %04o, want 0644", disarmedInfo.Mode().Perm())
+	}
+	disarmedContent, err := os.ReadFile(disarmedPath)
+	if err != nil {
+		t.Fatalf("read disarmed managed copy: %v", err)
+	}
+	if string(disarmedContent) != string(managed) {
+		t.Fatal("disarmed evidence does not contain the managed hook copy")
+	}
+}
+
+func TestPreReceiveHookScriptRejectsExecutableNonRegularPreservedHook(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("hook script and FIFO are POSIX-specific")
+	}
+	gate := t.TempDir()
+	hooks := filepath.Join(gate, "hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stub := filepath.Join(gate, "no-slop-stub")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hookPath := filepath.Join(hooks, "pre-receive")
+	if err := os.WriteFile(hookPath, []byte(preReceiveHookScript(stub)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	preserved := filepath.Join(hooks, preservedPreReceiveHook)
+	if output, err := exec.Command("mkfifo", preserved).CombinedOutput(); err != nil {
+		t.Fatalf("mkfifo: %v: %s", err, output)
+	}
+	if err := os.Chmod(preserved, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ready := filepath.Join(gate, "fifo-holder-ready")
+	holder := exec.Command("/bin/sh", "-c", "exec 3<> \"$1\"; : > \"$2\"; sleep 10", "holder", preserved, ready)
+	if err := holder.Start(); err != nil {
+		t.Fatalf("start FIFO holder: %v", err)
+	}
+	defer func() {
+		_ = holder.Process.Kill()
+		_ = holder.Wait()
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("FIFO holder did not become ready")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/sh", hookPath)
+	cmd.WaitDelay = 200 * time.Millisecond
+	cmd.Dir = gate
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		t.Fatalf("hook blocked inspecting an executable FIFO; stderr=%q", stderr.String())
+	}
+	if err == nil {
+		t.Fatalf("hook allowed an executable FIFO at the preserved-hook boundary; stderr=%q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "not a regular file") {
+		t.Fatalf("hook did not identify the unsafe preserved hook type; stderr=%q", stderr.String())
+	}
+}
+
 func TestRefreshManagedPreReceiveHookDisarmsAliasesWithoutDisablingAdmission(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("executable mode and symlink behavior are POSIX-specific")

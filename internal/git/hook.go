@@ -93,6 +93,14 @@ if [ $status -ne 0 ]; then
 fi
 CANONICAL_USER_HOOK="$GATE_DIR/hooks/` + preservedPreReceiveHook + `"
 LEGACY_USER_HOOK="$GATE_DIR/hooks/` + legacyPreservedPreReceiveHook + `"
+if [ -x "$CANONICAL_USER_HOOK" ] && [ ! -f "$CANONICAL_USER_HOOK" ]; then
+  printf 'no-slop: preserved pre-receive hook %s is executable but not a regular file; refusing gate push\n' "$CANONICAL_USER_HOOK" >&2
+  exit 1
+fi
+if [ -x "$LEGACY_USER_HOOK" ] && [ ! -f "$LEGACY_USER_HOOK" ]; then
+  printf 'no-slop: preserved pre-receive hook %s is executable but not a regular file; refusing gate push\n' "$LEGACY_USER_HOOK" >&2
+  exit 1
+fi
 if [ -x "$CANONICAL_USER_HOOK" ] && [ -x "$LEGACY_USER_HOOK" ] && ! cmp -s "$CANONICAL_USER_HOOK" "$LEGACY_USER_HOOK"; then
   printf 'no-slop: preserved pre-receive hook aliases conflict: %s and %s differ\n' "$CANONICAL_USER_HOOK" "$LEGACY_USER_HOOK" >&2
   exit 1
@@ -218,7 +226,7 @@ func disarmManagedPreservedPreReceiveHooks(hooksDir string) error {
 				return err
 			}
 		}
-		if !hookFileRunnable(targetInfo) {
+		if !targetInfo.Mode().IsRegular() {
 			continue
 		}
 		data, err := os.ReadFile(path)
