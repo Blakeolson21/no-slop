@@ -1669,7 +1669,13 @@ func (e *Executor) completeRun(run *db.Run, repo *db.Repo) error {
 	verifiedHead, verified := e.reconcileTerminalRunHead(run)
 	var err error
 	if verified {
-		err = e.db.UpdateRunStatusWithVerifiedHead(run.ID, types.RunCompleted, verifiedHead)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		certifiedRange, certifyErr := certifiedUncertifiedPipelineRange(ctx, e.db, repo.ID, run.Branch, verifiedHead, e.workDir)
+		if certifyErr != nil {
+			return certifyErr
+		}
+		err = e.db.CompleteRunWithVerifiedHead(run.ID, types.RunCompleted, verifiedHead, certifiedRange)
 	} else {
 		err = e.db.UpdateRunStatus(run.ID, types.RunCompleted)
 	}

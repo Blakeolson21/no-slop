@@ -698,6 +698,38 @@ func TestUpdateRunHeadSHAForRevalidationAtomicallyClearsReviewAuthority(t *testi
 	}
 }
 
+func TestCompleteRunWithVerifiedHeadRollsBackWhenCertifiedRangeCannotClear(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/terminal-certification", "git@github.com:user/terminal-certification.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feature", "old-head", "base")
+	if err := d.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, "from", "certified-head", "prior-run"); err != nil {
+		t.Fatal(err)
+	}
+	rng, err := d.GetUncertifiedPipelineRange(repo.ID, run.Branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.sql.Exec(`CREATE TRIGGER refuse_terminal_certified_range_delete BEFORE DELETE ON uncertified_pipeline_ranges BEGIN SELECT RAISE(ABORT, 'refuse delete'); END`); err != nil {
+		t.Fatal(err)
+	}
+
+	err = d.CompleteRunWithVerifiedHead(run.ID, types.RunCompleted, "certified-head", rng)
+	if err == nil {
+		t.Fatal("expected certified range deletion to roll back terminal completion")
+	}
+	gotRun, getErr := d.GetRun(run.ID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	gotRange, getErr := d.GetUncertifiedPipelineRange(repo.ID, run.Branch)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if gotRun.Status != types.RunPending || gotRun.HeadSHA != "old-head" || gotRun.TerminalHeadVerifiedAt != nil || gotRange == nil {
+		t.Fatalf("failed transaction persisted partial terminal certification: run=%#v range=%#v", gotRun, gotRange)
+	}
+}
+
 func TestUpdateRunError(t *testing.T) {
 	d := openTestDB(t)
 	repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")

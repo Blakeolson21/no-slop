@@ -123,6 +123,31 @@ func TestRoundHistoryPromptSection_DoesNotTreatAutoFixFilteringAsUserIgnore(t *t
 	}
 }
 
+func TestRoundHistoryPromptSection_AutoFixPreservesUnselectedFindings(t *testing.T) {
+	sctx, stepID := newRoundHistoryContext(t)
+
+	findings := `{"findings":[{"id":"review-1","severity":"warning","description":"cheap fix","action":"auto-fix"},{"id":"review-2","severity":"error","description":"needs review","action":"ask-user"}],"summary":"2"}`
+	round, err := sctx.DB.InsertStepRound(stepID, 1, "initial", &findings, nil, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := `["review-1"]`
+	if err := sctx.DB.SetStepRoundSelection(round.ID, &selected, db.RoundSelectionSourceAutoFix); err != nil {
+		t.Fatal(err)
+	}
+
+	got := roundHistoryPromptSection(sctx)
+	if !strings.Contains(got, "auto_not_selected_to_fix:") {
+		t.Fatalf("auto-fix round dropped its unselected-findings list:\n%s", got)
+	}
+	if !strings.Contains(got, `"description":"needs review"`) {
+		t.Fatalf("auto-fix unselected-findings list omitted review-2:\n%s", got)
+	}
+	if strings.Contains(got, "user_chose_to_ignore:") {
+		t.Fatalf("automatic filtering was mislabeled as a user decision:\n%s", got)
+	}
+}
+
 func TestRoundHistoryPromptSection_LaterSelectionSupersedesEarlierIgnore(t *testing.T) {
 	sctx, stepID := newRoundHistoryContext(t)
 

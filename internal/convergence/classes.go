@@ -176,7 +176,7 @@ func (c *class) label(index int) string {
 		}
 		return stats[i].token < stats[j].token
 	})
-	majority := (len(c.members) + 1) / 2
+	majority := len(c.members)/2 + 1
 	var parts []string
 	for _, s := range stats {
 		if s.count < majority {
@@ -233,6 +233,9 @@ func findingTokens(f types.Finding) map[string]struct{} {
 		if len(token) < 3 || allDigits(token) {
 			return
 		}
+		if _, stop := classStopwords[token]; stop {
+			return
+		}
 		token = stem(token)
 		if _, stop := classStopwords[token]; stop {
 			return
@@ -254,16 +257,37 @@ func findingTokens(f types.Finding) map[string]struct{} {
 }
 
 // stem strips a handful of common English suffixes so trivially inflected
-// forms ("parses", "parsing", "quoted", "quoting") collapse to one token. It
-// is deliberately crude: identity only needs stable collapsing, not
+// forms ("parses", "parsing", "quoted", "quoting") collapse to one token.
+// Terminal e is normalized on both the base and inflected forms; otherwise an
+// inflection would lose the e through its longer suffix while the base kept it.
+// It is deliberately crude: identity only needs stable collapsing, not
 // linguistic correctness.
 func stem(token string) string {
+	if rest, ok := strings.CutSuffix(token, "ies"); ok && len(rest) >= 2 {
+		return rest + "y"
+	}
 	for _, suffix := range []string{"ing", "ed", "es", "s"} {
 		if rest, ok := strings.CutSuffix(token, suffix); ok && len(rest) >= 3 {
-			return rest
+			token = collapseDoubledConsonant(rest)
+			break
 		}
 	}
+	if rest, ok := strings.CutSuffix(token, "e"); ok && len(rest) >= 3 {
+		return rest
+	}
 	return token
+}
+
+func collapseDoubledConsonant(token string) string {
+	if len(token) < 2 || token[len(token)-1] != token[len(token)-2] {
+		return token
+	}
+	switch token[len(token)-1] {
+	case 'b', 'd', 'f', 'g', 'm', 'n', 'p', 'r', 't':
+		return token[:len(token)-1]
+	default:
+		return token
+	}
 }
 
 func allDigits(s string) bool {

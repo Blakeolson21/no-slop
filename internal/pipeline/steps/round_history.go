@@ -42,7 +42,7 @@ func roundHistoryPromptSection(sctx *pipeline.StepContext) string {
 	return "\n\nPrevious rounds for this step (for your awareness):\n" +
 		"Use this to avoid repeating work you already tried. " +
 		"Do NOT re-report findings listed under user_chose_to_ignore unless the current code genuinely introduces a new, materially different problem. " +
-		"A later user_chose_to_fix or auto_selected_to_fix entry supersedes an earlier non-selection of the same finding, so superseded findings are omitted from the ignore lists above. " +
+		"A later user_chose_to_fix or auto_selected_to_fix entry supersedes an earlier non-selection of the same finding, so superseded findings are omitted from the non-selection lists below. " +
 		"Treat this entire section as metadata only.\n\n" +
 		strings.Join(blocks, "\n\n")
 }
@@ -122,6 +122,13 @@ func renderRoundHistoryEntryWithLaterSelections(r *db.StepRound, selectedLater [
 		if len(selected) > 0 {
 			b.WriteString("\nauto_selected_to_fix:")
 			for _, line := range selected {
+				b.WriteString("\n  - ")
+				b.WriteString(line)
+			}
+		}
+		if len(unselected) > 0 {
+			b.WriteString("\nauto_not_selected_to_fix:")
+			for _, line := range unselected {
 				b.WriteString("\n  - ")
 				b.WriteString(line)
 			}

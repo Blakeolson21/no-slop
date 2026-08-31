@@ -109,6 +109,61 @@ func TestExecutor_TerminalizationAdoptsTheHeadItRecords(t *testing.T) {
 	}
 }
 
+func TestExecutor_CompletedRunClearsCertifiedUncertifiedRangeWithoutReview(t *testing.T) {
+	database, p, _, repo := setupTest(t)
+	f := newTerminalAdoptionFixture(t)
+	run, err := database.InsertRun(repo.ID, "feature", f.submitted, f.base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, f.base, f.submitted, "prior-run"); err != nil {
+		t.Fatal(err)
+	}
+
+	exec := NewExecutor(database, p, nil, nil, nil, nil)
+	exec.workDir = f.workDir
+	if err := exec.completeRun(run, repo); err != nil {
+		t.Fatalf("completeRun: %v", err)
+	}
+
+	rng, err := database.GetUncertifiedPipelineRange(repo.ID, run.Branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rng != nil {
+		t.Fatalf("verified terminal completion left certified uncertified range %#v", rng)
+	}
+}
+
+func TestExecutor_CompletedRunKeepsUncertifiedRangeOutsideTerminalLineage(t *testing.T) {
+	database, p, _, repo := setupTest(t)
+	f := newTerminalAdoptionFixture(t)
+	run, err := database.InsertRun(repo.ID, "feature", f.submitted, f.base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := gitOut(t, f.gate, "rev-parse", f.base+"^{tree}")
+	unrelated := gitOut(t, f.gate, "-c", "user.email=test@test.com", "-c", "user.name=Test",
+		"commit-tree", tree, "-p", f.base, "-m", "unrelated range tip")
+	if err := database.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, f.base, unrelated, "prior-run"); err != nil {
+		t.Fatal(err)
+	}
+
+	exec := NewExecutor(database, p, nil, nil, nil, nil)
+	exec.workDir = f.workDir
+	if err := exec.completeRun(run, repo); err != nil {
+		t.Fatalf("completeRun: %v", err)
+	}
+
+	rng, err := database.GetUncertifiedPipelineRange(repo.ID, run.Branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rng == nil || rng.ToSHA != unrelated {
+		t.Fatalf("terminal completion cleared unrelated uncertified range %#v", rng)
+	}
+}
+
 // TestExecutor_TerminalizationRefusesToRecordAnUnadoptableHead is the fail-safe
 // half: when another push owns the branch, the guarded adoption refuses, and
 // terminalization must then keep the last adopted head rather than record one

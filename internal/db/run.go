@@ -502,6 +502,49 @@ func (d *DB) UpdateRunStatusWithVerifiedHead(id string, status types.RunStatus, 
 	return nil
 }
 
+// CompleteRunWithVerifiedHead atomically records a verified terminal head and
+// retires the exact uncertified range that head certifies. The conditional
+// delete prevents a concurrent replacement range from being cleared.
+func (d *DB) CompleteRunWithVerifiedHead(id string, status types.RunStatus, headSHA string, certifiedRange *UncertifiedPipelineRange) error {
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return fmt.Errorf("begin complete run with verified head: %w", err)
+	}
+	defer tx.Rollback()
+
+	ts := now()
+	result, err := tx.Exec(
+		`UPDATE runs SET status = ?, head_sha = ?, push_active = 0, terminal_head_verified_at = ?, updated_at = ? WHERE id = ?`,
+		status, headSHA, ts, ts, id,
+	)
+	if err != nil {
+		return fmt.Errorf("complete run with verified head: %w", err)
+	}
+	if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+		return fmt.Errorf("complete run with verified head: run row not found")
+	}
+	if certifiedRange != nil {
+		result, err = tx.Exec(
+			`DELETE FROM uncertified_pipeline_ranges
+			 WHERE repo_id = ? AND branch = ? AND from_sha = ? AND to_sha = ? AND source_run_id = ? AND selection_applied = ?
+			   AND repo_id = (SELECT repo_id FROM runs WHERE id = ?)
+			   AND branch = (SELECT branch FROM runs WHERE id = ?)`,
+			certifiedRange.RepoID, certifiedRange.Branch, certifiedRange.FromSHA, certifiedRange.ToSHA,
+			certifiedRange.SourceRunID, certifiedRange.SelectionApplied, id, id,
+		)
+		if err != nil {
+			return fmt.Errorf("clear terminal-certified uncertified pipeline range: %w", err)
+		}
+		if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+			return fmt.Errorf("clear terminal-certified uncertified pipeline range: range changed")
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit completed run with verified head: %w", err)
+	}
+	return nil
+}
+
 // RunIntentSourceAgent is the intent_source value stamped when the driving
 // agent supplied the intent explicitly via `axi run --intent`. It marks an
 // authoritative, author-stated goal (score 1) as opposed to a transcript
