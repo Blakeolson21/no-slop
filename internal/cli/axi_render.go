@@ -417,7 +417,31 @@ func runObjectField(rv runView) toon.Field {
 	return runObjectFieldWithKey("run", rv)
 }
 
+// statusRunObjectField renders the detailed status snapshot. Convergence is
+// status-only because the driving surfaces already render the same persisted
+// report at the active gate; status must also retain it after that gate is no
+// longer active. An absent or unreadable report is explicit rather than
+// looking like a real zero-valued report.
+func statusRunObjectField(rv runView) toon.Field {
+	if gate, ok := rv.awaitingStep(); ok && gate.Name == string(types.StepReview) {
+		if _, hasReport := convergence.ParseReport(gate.ConvergenceJSON); hasReport {
+			// gateFields will render this report at gate.convergence. Avoid
+			// duplicating the potentially large history inside run as well.
+			return runObjectField(rv)
+		}
+	}
+	return runObjectFieldWithKeyAndConvergence("run", rv)
+}
+
 func runObjectFieldWithKey(key string, rv runView) toon.Field {
+	return runObjectFieldWithOptions(key, rv, false)
+}
+
+func runObjectFieldWithKeyAndConvergence(key string, rv runView) toon.Field {
+	return runObjectFieldWithOptions(key, rv, true)
+}
+
+func runObjectFieldWithOptions(key string, rv runView, includeConvergence bool) toon.Field {
 	fields := []toon.Field{
 		{Key: "id", Value: rv.ID},
 		{Key: "branch", Value: rv.Branch},
@@ -436,6 +460,9 @@ func runObjectFieldWithKey(key string, rv runView) toon.Field {
 		fields = append(fields, toon.Field{Key: "pr", Value: rv.PRURL})
 	}
 	fields = append(fields, toon.Field{Key: "findings", Value: rv.findingsTally()})
+	if includeConvergence {
+		fields = append(fields, rv.statusConvergenceField())
+	}
 
 	rows := make([]stepRow, 0, len(rv.Steps))
 	for _, s := range rv.Steps {
@@ -446,6 +473,23 @@ func runObjectFieldWithKey(key string, rv runView) toon.Field {
 		fields = append(fields, toon.Field{Key: "active_steps", Value: activeRows})
 	}
 	return toon.Field{Key: key, Value: toon.NewObject(fields...)}
+}
+
+// statusConvergenceField projects the review step's persisted report into
+// status.
+// The CLI never derives convergence: internal/convergence remains the sole
+// owner of that computation and of deciding whether persisted JSON is usable.
+func (rv runView) statusConvergenceField() toon.Field {
+	for _, step := range rv.Steps {
+		if step.Name != string(types.StepReview) {
+			continue
+		}
+		if report, ok := convergence.ParseReport(step.ConvergenceJSON); ok {
+			return convergenceField(report)
+		}
+		break
+	}
+	return toon.Field{Key: "convergence", Value: "unknown"}
 }
 
 // gateFields renders the active approval gate: the awaiting step, its findings

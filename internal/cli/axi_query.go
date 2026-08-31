@@ -80,7 +80,7 @@ func runAxiStatus(cmd *cobra.Command, runID string) (string, error) {
 	}
 	rv := runViewFromDB(run, steps)
 	annotateRunView(env, &rv)
-	fields := []toon.Field{runObjectField(rv)}
+	fields := []toon.Field{statusRunObjectField(rv)}
 	if syncField := cachedBranchSyncField(cmd, run.ID); syncField != nil {
 		fields = append(fields, *syncField)
 	}

@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"bytes"
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/Blakeolson21/no-slop/internal/types"
+	"github.com/spf13/cobra"
 )
 
 func trippedConvergenceJSON() string {
@@ -87,6 +90,79 @@ func TestGateWithoutConvergenceReportUnchanged(t *testing.T) {
 	out := axiDoc(gateFields(gate)...)
 	if strings.Contains(out, "convergence:") {
 		t.Errorf("gate without a report must not render a convergence block:\n%s", out)
+	}
+}
+
+// An explicit status read keeps the persisted review convergence history
+// visible after the review gate is no longer the active approval surface.
+func TestAxiStatusRunRendersPersistedConvergence(t *testing.T) {
+	repoDir, _, database, repo := setupAxiQueryRepo(t)
+	chdir(t, repoDir)
+
+	run, err := database.InsertRun(repo.ID, "feature/convergence", "head", "base")
+	if err != nil {
+		t.Fatalf("insert run: %v", err)
+	}
+	if err := database.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+		t.Fatalf("mark run running: %v", err)
+	}
+	step, err := database.InsertStepResult(run.ID, types.StepReview)
+	if err != nil {
+		t.Fatalf("insert review step: %v", err)
+	}
+	if err := database.UpdateStepStatus(step.ID, types.StepStatusCompleted); err != nil {
+		t.Fatalf("complete review step: %v", err)
+	}
+	if err := database.SetStepConvergence(step.ID, trippedConvergenceJSON()); err != nil {
+		t.Fatalf("set convergence: %v", err)
+	}
+
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	cmd.SetOut(&out)
+	if _, err := runAxiStatus(cmd, run.ID); err != nil {
+		t.Fatalf("axi status --run: %v\n%s", err, out.String())
+	}
+
+	for _, want := range []string{
+		"  convergence:\n",
+		"    rounds: \"1,1,1,2,3,3,3\"\n",
+		"    review_time: 3h12m\n",
+		"review loop is not converging",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("axi status --run missing %q in:\n%s", want, out.String())
+		}
+	}
+}
+
+// Status must distinguish a run whose review has not produced convergence
+// state yet from a real zero-valued report.
+func TestAxiStatusRunRendersUnknownConvergenceWhenAbsent(t *testing.T) {
+	repoDir, _, database, repo := setupAxiQueryRepo(t)
+	chdir(t, repoDir)
+
+	run, err := database.InsertRun(repo.ID, "feature/no-convergence-yet", "head", "base")
+	if err != nil {
+		t.Fatalf("insert run: %v", err)
+	}
+	if err := database.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+		t.Fatalf("mark run running: %v", err)
+	}
+	if _, err := database.InsertStepResult(run.ID, types.StepReview); err != nil {
+		t.Fatalf("insert review step: %v", err)
+	}
+
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	cmd.SetOut(&out)
+	if _, err := runAxiStatus(cmd, run.ID); err != nil {
+		t.Fatalf("axi status --run: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "  convergence: unknown\n") {
+		t.Fatalf("axi status --run must render absent convergence as unknown:\n%s", out.String())
 	}
 }
 
