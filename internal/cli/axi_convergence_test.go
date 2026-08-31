@@ -166,6 +166,136 @@ func TestAxiStatusRunRendersUnknownConvergenceWhenAbsent(t *testing.T) {
 	}
 }
 
+// While the review gate is the active approval surface it already renders the
+// report, so status must not repeat the same history inside the run object.
+func TestAxiStatusRunDoesNotDuplicateActiveReviewGateConvergence(t *testing.T) {
+	repoDir, _, database, repo := setupAxiQueryRepo(t)
+	chdir(t, repoDir)
+
+	run, err := database.InsertRun(repo.ID, "feature/active-review-gate", "head", "base")
+	if err != nil {
+		t.Fatalf("insert run: %v", err)
+	}
+	if err := database.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+		t.Fatalf("mark run running: %v", err)
+	}
+	step, err := database.InsertStepResult(run.ID, types.StepReview)
+	if err != nil {
+		t.Fatalf("insert review step: %v", err)
+	}
+	if err := database.UpdateStepStatus(step.ID, types.StepStatusAwaitingApproval); err != nil {
+		t.Fatalf("park review step: %v", err)
+	}
+	if err := database.SetStepConvergence(step.ID, trippedConvergenceJSON()); err != nil {
+		t.Fatalf("set convergence: %v", err)
+	}
+
+	out := axiStatusOutput(t, run.ID)
+	if got := strings.Count(out, "rounds: \"1,1,1,2,3,3,3\""); got != 1 {
+		t.Fatalf("round history should be rendered exactly once, got %d:\n%s", got, out)
+	}
+	gateIdx := strings.Index(out, "gate:")
+	convIdx := strings.Index(out, "convergence:")
+	if gateIdx == -1 || convIdx == -1 || convIdx < gateIdx {
+		t.Fatalf("the single convergence block must belong to the gate (gate=%d convergence=%d):\n%s", gateIdx, convIdx, out)
+	}
+	if strings.Contains(out, "convergence: unknown") {
+		t.Fatalf("an active gate report must not also render as unknown:\n%s", out)
+	}
+}
+
+// The non-duplication rule is keyed on the review step holding the gate, not
+// on the run merely being parked somewhere: a gate on another step leaves the
+// review report unrendered unless status projects it.
+func TestAxiStatusRunProjectsConvergenceWhenAnotherStepHoldsTheGate(t *testing.T) {
+	repoDir, _, database, repo := setupAxiQueryRepo(t)
+	chdir(t, repoDir)
+
+	run, err := database.InsertRun(repo.ID, "feature/test-gate", "head", "base")
+	if err != nil {
+		t.Fatalf("insert run: %v", err)
+	}
+	if err := database.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+		t.Fatalf("mark run running: %v", err)
+	}
+	review, err := database.InsertStepResult(run.ID, types.StepReview)
+	if err != nil {
+		t.Fatalf("insert review step: %v", err)
+	}
+	if err := database.UpdateStepStatus(review.ID, types.StepStatusCompleted); err != nil {
+		t.Fatalf("complete review step: %v", err)
+	}
+	if err := database.SetStepConvergence(review.ID, trippedConvergenceJSON()); err != nil {
+		t.Fatalf("set convergence: %v", err)
+	}
+	test, err := database.InsertStepResult(run.ID, types.StepTest)
+	if err != nil {
+		t.Fatalf("insert test step: %v", err)
+	}
+	if err := database.UpdateStepStatus(test.ID, types.StepStatusAwaitingApproval); err != nil {
+		t.Fatalf("park test step: %v", err)
+	}
+
+	out := axiStatusOutput(t, run.ID)
+	if !strings.Contains(out, "rounds: \"1,1,1,2,3,3,3\"") {
+		t.Fatalf("review convergence must stay visible while another step holds the gate:\n%s", out)
+	}
+	gateIdx := strings.Index(out, "gate:")
+	convIdx := strings.Index(out, "convergence:")
+	if gateIdx == -1 || convIdx == -1 || convIdx > gateIdx {
+		t.Fatalf("convergence should be projected into run, above the test gate (gate=%d convergence=%d):\n%s", gateIdx, convIdx, out)
+	}
+}
+
+// A corrupt persisted report is indistinguishable from no measurement, so it
+// must read as unknown and never as a zero-valued report.
+func TestAxiStatusRunRendersUnreadableConvergenceAsUnknown(t *testing.T) {
+	repoDir, _, database, repo := setupAxiQueryRepo(t)
+	chdir(t, repoDir)
+
+	run, err := database.InsertRun(repo.ID, "feature/corrupt-convergence", "head", "base")
+	if err != nil {
+		t.Fatalf("insert run: %v", err)
+	}
+	if err := database.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+		t.Fatalf("mark run running: %v", err)
+	}
+	step, err := database.InsertStepResult(run.ID, types.StepReview)
+	if err != nil {
+		t.Fatalf("insert review step: %v", err)
+	}
+	if err := database.UpdateStepStatus(step.ID, types.StepStatusCompleted); err != nil {
+		t.Fatalf("complete review step: %v", err)
+	}
+	if err := database.SetStepConvergence(step.ID, "{not-json"); err != nil {
+		t.Fatalf("set convergence: %v", err)
+	}
+
+	out := axiStatusOutput(t, run.ID)
+	if !strings.Contains(out, "  convergence: unknown\n") {
+		t.Fatalf("an unreadable report must render as unknown:\n%s", out)
+	}
+	for _, forbidden := range []string{"rounds:", "review_time:"} {
+		if strings.Contains(out, forbidden) {
+			t.Fatalf("unknown convergence must not render measured fields (%q):\n%s", forbidden, out)
+		}
+	}
+}
+
+// axiStatusOutput runs `axi status --run <id>` and returns what an operator
+// would see on stdout.
+func axiStatusOutput(t *testing.T, runID string) string {
+	t.Helper()
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	cmd.SetOut(&out)
+	if _, err := runAxiStatus(cmd, runID); err != nil {
+		t.Fatalf("axi status --run: %v\n%s", err, out.String())
+	}
+	return out.String()
+}
+
 // --yes must stop auto-funding fix rounds the moment the guard trips: a
 // non-converging gate is handed back as an explicit decision point.
 func TestGateResolution_ConvergenceTrippedParksInsteadOfFix(t *testing.T) {

@@ -166,6 +166,9 @@ When the resolved run has a `running` or `fixing` step, the run object includes 
 Each row reports how long the step has been active, the latest meaningful log or native-agent lifecycle activity, the native agent PID if one is currently running, and the current round such as `round 1`, `auto-fix 1/3`, or `fix 2`.
 If no activity arrives for longer than `step_quiet_warning`, `last_activity` is prefixed with `quiet`; this is only a liveness signal and does not cancel the step.
 For older active runs with no recorded activity timestamp, AXI falls back to the step log file modification time.
+The run object also projects the review step's persisted convergence report as a `convergence` block, so the round history stays visible after the review gate has closed and not only while it is the active gate; the report itself is described under [`review.convergence`](/no-slop/reference/repo-config/#reviewconvergence).
+It is omitted only when the review step currently holds the approval gate and already renders the same report at `gate.convergence`, so the history is never printed twice.
+A run whose review has not persisted a readable report renders the literal `convergence: unknown` rather than a zero-valued block that would read like a real measurement.
 Gate summaries and finding descriptions are bounded in this default status view; truncated values disclose their original length, and the gate help points to `no-slop axi logs --step <step> --full` for the complete step log.
 Relevant current-branch states also include a cached `branch_sync` object with full SHAs, the run's status, the persisted pipeline push binding, target kind and ref, relation, safety result, PR lifecycle, and a structured next action.
 Cached home and status rendering performs no network read and labels the remote observation `pipeline_push`; only explicit sync check or apply reports `live` freshness.
