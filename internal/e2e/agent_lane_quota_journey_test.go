@@ -71,9 +71,10 @@ func codexCallCount(t *testing.T, callLog string) int {
 // 01KZ5BV1Z2W2DVV7018PZM7CC0 and a dozen more): every run fell onto an
 // exhausted Codex account and burned a full agent launch rediscovering it.
 //
-// It drives the real binary end to end: the first run must fail over to the
-// healthy lane and persist the outage, and the second run must skip the dead
-// lane without launching it at all.
+// It drives the real binary end to end. Without Quartermaster, a quota outage
+// must fail closed rather than substitute a differently reserved provider
+// lane: the first run detects and persists the outage without invoking Claude,
+// and the second run refuses from that durable mark without launching Codex.
 func TestAgentLaneQuotaCooldownJourney(t *testing.T) {
 	h := NewHarness(t, SetupOpts{Agent: "claude"})
 
@@ -103,13 +104,14 @@ func TestAgentLaneQuotaCooldownJourney(t *testing.T) {
 	h.CommitChange(firstBranch, "first.txt", "first\n", "add first feature")
 	h.PushToGate(firstBranch)
 	first := h.WaitForRun(firstBranch, 120*time.Second)
-	if first.Status != types.RunCompleted {
-		t.Fatalf("first run status = %s, want completed (error=%v)", first.Status, first.Error)
-	}
+	assertQuotaFailedRun(t, first.Status, first.Error)
 
 	discovered := codexCallCount(t, callLog)
 	if discovered == 0 {
 		t.Fatalf("the first run must actually try the codex lane before marking it")
+	}
+	if got := len(h.AgentInvocations()); got != 0 {
+		t.Fatalf("quota failure substituted the reserved Claude lane %d time(s), want 0", got)
 	}
 
 	// The outage is persisted, so it outlives this run and this process.
@@ -155,14 +157,30 @@ func TestAgentLaneQuotaCooldownJourney(t *testing.T) {
 	h.CommitChange(secondBranch, "second.txt", "second\n", "add second feature")
 	h.PushToGate(secondBranch)
 	second := h.WaitForRun(secondBranch, 120*time.Second)
-	if second.Status != types.RunCompleted {
-		t.Fatalf("second run status = %s, want completed (error=%v)", second.Status, second.Error)
-	}
+	assertQuotaFailedRun(t, second.Status, second.Error)
 	if after := codexCallCount(t, callLog); after != discovered {
 		t.Fatalf("codex was launched %d more times on the second run; the marked lane must be skipped", after-discovered)
 	}
+	if got := len(h.AgentInvocations()); got != 0 {
+		t.Fatalf("persisted quota mark substituted the reserved Claude lane %d time(s), want 0", got)
+	}
 
-	t.Logf("first run launched the exhausted codex lane %d time(s) and then failed over to claude", discovered)
+	t.Logf("first run launched the exhausted codex lane %d time(s) and failed closed", discovered)
 	t.Logf("persisted outage: codex until %s", outage.Until.Local().Format("2006-01-02 15:04 MST"))
-	t.Logf("second run launched codex 0 more times and completed on claude")
+	t.Logf("second run launched codex 0 more times and failed closed without substituting claude")
+}
+
+func assertQuotaFailedRun(t *testing.T, status types.RunStatus, runErr *string) {
+	t.Helper()
+	if status != types.RunFailed {
+		t.Fatalf("run status = %s, want failed (error=%v)", status, runErr)
+	}
+	if runErr == nil {
+		t.Fatal("quota-failed run has no persisted error")
+	}
+	for _, want := range []string{"codex", "quota-exhausted", "nowhere to run"} {
+		if !strings.Contains(*runErr, want) {
+			t.Fatalf("quota-failed run error %q does not contain %q", *runErr, want)
+		}
+	}
 }
