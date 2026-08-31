@@ -97,10 +97,13 @@ func setupTestRepo(t *testing.T) string {
 	if out, err := exec.Command("git", "init", "--bare", upstream).CombinedOutput(); err != nil {
 		t.Fatalf("init upstream: %v: %s", err, out)
 	}
+	if out, err := exec.Command("git", "--git-dir="+upstream, "symbolic-ref", "HEAD", "refs/heads/main").CombinedOutput(); err != nil {
+		t.Fatalf("set upstream HEAD: %v: %s", err, out)
+	}
 
 	// Create working repo and add origin.
 	work := filepath.Join(resolveSymlinks(t, t.TempDir()), "work")
-	if out, err := exec.Command("git", "init", work).CombinedOutput(); err != nil {
+	if out, err := exec.Command("git", "init", "-b", "main", work).CombinedOutput(); err != nil {
 		t.Fatalf("init work: %v: %s", err, out)
 	}
 	if out, err := exec.Command("git", "-C", work, "config", "user.email", "test@test.com").CombinedOutput(); err != nil {
@@ -116,6 +119,9 @@ func setupTestRepo(t *testing.T) string {
 	// Make an initial commit so HEAD exists.
 	if out, err := exec.Command("git", "-C", work, "commit", "--allow-empty", "-m", "init").CombinedOutput(); err != nil {
 		t.Fatalf("initial commit: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", work, "push", "origin", "main").CombinedOutput(); err != nil {
+		t.Fatalf("push initial branch: %v: %s", err, out)
 	}
 
 	return work
@@ -1049,6 +1055,94 @@ func TestInitDetectsDefaultBranchFromRemote(t *testing.T) {
 	}
 }
 
+func TestInitRejectsMissingDefaultBranchAtOrigin(t *testing.T) {
+	workDir := setupTestRepo(t)
+	ctx := context.Background()
+	origin, err := gitpkg.GetConfiguredRemoteURL(ctx, workDir, "origin")
+	if err != nil {
+		t.Fatalf("get origin: %v", err)
+	}
+	if out, err := exec.Command("git", "--git-dir="+origin, "symbolic-ref", "HEAD", "refs/heads/main").CombinedOutput(); err != nil {
+		t.Fatalf("set origin HEAD: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", workDir, "push", "origin", "HEAD:refs/heads/available-only").CombinedOutput(); err != nil {
+		t.Fatalf("push alternate origin branch: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "--git-dir="+origin, "update-ref", "-d", "refs/heads/main").CombinedOutput(); err != nil {
+		t.Fatalf("delete default branch from origin: %v: %s", err, out)
+	}
+
+	p := paths.WithRoot(t.TempDir())
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatalf("ensure dirs: %v", err)
+	}
+	d := openTestDB(t, p)
+
+	_, created, err := Init(ctx, d, p, workDir)
+	if err == nil {
+		t.Fatalf("Init error = nil (created=%v), want missing origin default-branch refusal", created)
+	}
+	t.Logf("registration refusal: %v", err)
+	for _, want := range []string{workDir, origin, "refs/heads/main", "refs/heads/available-only"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Init error %q does not name %q", err, want)
+		}
+	}
+	if repo, dbErr := d.GetRepoByPath(workDir); dbErr != nil {
+		t.Fatalf("get repo after refusal: %v", dbErr)
+	} else if repo != nil {
+		t.Errorf("missing-branch registration persisted repo: %+v", repo)
+	}
+	if hasGate, remoteErr := gitpkg.HasRemote(ctx, workDir, RemoteName); remoteErr != nil {
+		t.Fatalf("list remotes after refusal: %v", remoteErr)
+	} else if hasGate {
+		t.Errorf("missing-branch registration created %q remote", RemoteName)
+	}
+}
+
+func TestInitRejectsUnreachableOrigin(t *testing.T) {
+	workDir := setupTestRepo(t)
+	const token = "ghp_unreachable_DO_NOT_LEAK"
+	origin := "https://x-access-token:" + token + "@127.0.0.1:1/o/r.git"
+	if out, err := exec.Command("git", "-C", workDir, "remote", "set-url", "origin", origin).CombinedOutput(); err != nil {
+		t.Fatalf("set unreachable origin: %v: %s", err, out)
+	}
+
+	p := paths.WithRoot(t.TempDir())
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatalf("ensure dirs: %v", err)
+	}
+	d := openTestDB(t, p)
+	ctx := context.Background()
+
+	_, created, err := Init(ctx, d, p, workDir)
+	if err == nil {
+		t.Fatalf("Init error = nil (created=%v), want unreachable-origin refusal", created)
+	}
+	t.Logf("registration refusal: %v", err)
+	for _, want := range []string{workDir, "redacted@127.0.0.1:1/o/r.git", "refs/heads/main", "could not reach origin"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Init error %q does not name %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Errorf("Init error leaked origin credential: %q", err)
+	}
+	if strings.Contains(err.Error(), "advertised instead") {
+		t.Errorf("unreachable origin was misreported as reachable-but-missing: %q", err)
+	}
+	if repo, dbErr := d.GetRepoByPath(workDir); dbErr != nil {
+		t.Fatalf("get repo after refusal: %v", dbErr)
+	} else if repo != nil {
+		t.Errorf("unreachable-origin registration persisted repo: %+v", repo)
+	}
+	if hasGate, remoteErr := gitpkg.HasRemote(ctx, workDir, RemoteName); remoteErr != nil {
+		t.Fatalf("list remotes after refusal: %v", remoteErr)
+	} else if hasGate {
+		t.Errorf("unreachable-origin registration created %q remote", RemoteName)
+	}
+}
+
 func TestEject(t *testing.T) {
 	workDir := setupTestRepo(t)
 	nmRoot := t.TempDir()
@@ -1209,13 +1303,22 @@ func TestInit_PostReceiveSurvivesHooksPathPoisoning(t *testing.T) {
 // credentials (e.g. a fine-grained PAT) is stored redacted in the DB and in the
 // returned repo record, while the bare gate's "origin" remote keeps the full
 // credentialled URL so worktrees carved from it can still authenticate pushes.
-//
-// The upstream host is an unreachable loopback address so DefaultBranch's
-// ls-remote fails fast and falls back to "main" without real network I/O.
 func TestInitRedactsCredentialURL(t *testing.T) {
 	workDir := setupTestRepo(t)
 	const token = "ghp_secret_DO_NOT_LEAK"
-	credURL := "https://x-access-token:" + token + "@127.0.0.1:1/o/r.git"
+	credURL := "https://x-access-token:" + token + "@github.com/parent/project.git"
+	forkURL := "https://github.com/fork/project.git"
+	localOrigin, err := gitpkg.GetConfiguredRemoteURL(context.Background(), workDir, "origin")
+	if err != nil {
+		t.Fatalf("get local origin: %v", err)
+	}
+	localFork := filepath.Join(resolveSymlinks(t, t.TempDir()), "fork.git")
+	if out, err := exec.Command("git", "init", "--bare", localFork).CombinedOutput(); err != nil {
+		t.Fatalf("init local fork: %v: %s", err, out)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig"))
+	configureGitInsteadOf(t, workDir, credURL, localOrigin)
+	configureGitInsteadOf(t, workDir, forkURL, localFork)
 	if out, err := exec.Command("git", "-C", workDir, "remote", "set-url", "origin", credURL).CombinedOutput(); err != nil {
 		t.Fatalf("set credentialled origin: %v: %s", err, out)
 	}
@@ -1228,7 +1331,7 @@ func TestInitRedactsCredentialURL(t *testing.T) {
 	d := openTestDB(t, p)
 	ctx := context.Background()
 
-	repo, _, err := Init(ctx, d, p, workDir)
+	repo, _, err := InitWithFork(ctx, d, p, workDir, forkURL)
 	if err != nil {
 		t.Fatalf("init: %v", err)
 	}
@@ -1238,7 +1341,7 @@ func TestInitRedactsCredentialURL(t *testing.T) {
 	if strings.Contains(repo.UpstreamURL, token) {
 		t.Errorf("returned repo.UpstreamURL leaked credential: %q", repo.UpstreamURL)
 	}
-	if !strings.Contains(repo.UpstreamURL, "redacted@127.0.0.1:1/o/r.git") {
+	if !strings.Contains(repo.UpstreamURL, "redacted@github.com/parent/project.git") {
 		t.Errorf("expected redacted URL, got %q", repo.UpstreamURL)
 	}
 
@@ -1254,7 +1357,7 @@ func TestInitRedactsCredentialURL(t *testing.T) {
 	// The bare gate's origin must still carry the full credential so pushes
 	// from carved worktrees can authenticate.
 	bareDir := p.RepoDir(repo.ID)
-	gateOrigin, err := gitpkg.GetRemoteURL(ctx, bareDir, "origin")
+	gateOrigin, err := gitpkg.GetConfiguredRemoteURL(ctx, bareDir, "origin")
 	if err != nil {
 		t.Fatalf("get gate origin: %v", err)
 	}

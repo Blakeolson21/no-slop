@@ -421,6 +421,44 @@ func TestDefaultBranchEmptyRemote(t *testing.T) {
 	}
 }
 
+func TestInspectRemoteDefaultBranchReportsAdvertisedBranches(t *testing.T) {
+	ctx := context.Background()
+	src := initTestRepo(t)
+	bare := filepath.Join(t.TempDir(), "upstream.git")
+	if err := InitBare(ctx, bare); err != nil {
+		t.Fatal(err)
+	}
+	run(t, bare, "git", "symbolic-ref", "HEAD", "refs/heads/main")
+	run(t, src, "git", "remote", "add", "upstream", bare)
+	run(t, src, "git", "push", "upstream", "HEAD:refs/heads/available-only")
+
+	branch, refs, err := InspectRemoteDefaultBranch(ctx, src, "upstream")
+	if err != nil {
+		t.Fatalf("InspectRemoteDefaultBranch: %v", err)
+	}
+	if branch != "main" {
+		t.Fatalf("default branch = %q, want main fallback", branch)
+	}
+	if len(refs) != 1 || refs[0] != "refs/heads/available-only" {
+		t.Fatalf("advertised branches = %q, want [refs/heads/available-only]", refs)
+	}
+}
+
+func TestInspectRemoteDefaultBranchReturnsUnreachableError(t *testing.T) {
+	ctx := context.Background()
+	src := initTestRepo(t)
+	branch, refs, err := InspectRemoteDefaultBranch(ctx, src, filepath.Join(t.TempDir(), "missing.git"))
+	if err == nil {
+		t.Fatal("InspectRemoteDefaultBranch error = nil, want unreachable error")
+	}
+	if branch != "main" {
+		t.Fatalf("default branch = %q, want main fallback candidate", branch)
+	}
+	if refs != nil {
+		t.Fatalf("advertised branches = %q, want nil on access failure", refs)
+	}
+}
+
 func TestCurrentBranch(t *testing.T) {
 	dir := initTestRepo(t)
 	ctx := context.Background()

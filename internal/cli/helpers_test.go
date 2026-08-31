@@ -152,15 +152,17 @@ func setupTestRepo(t *testing.T) string {
 	// Create a bare "origin" to use as the upstream.
 	originDir := filepath.Join(t.TempDir(), "origin.git")
 	run(t, "", "git", "init", "--bare", originDir)
+	run(t, "", "git", "--git-dir="+originDir, "symbolic-ref", "HEAD", "refs/heads/main")
 
 	// Init repo and add origin.
-	run(t, repoDir, "git", "init")
+	run(t, repoDir, "git", "init", "-b", "main")
 	run(t, repoDir, "git", "config", "user.email", "test@test.com")
 	run(t, repoDir, "git", "config", "user.name", "Test")
 	run(t, repoDir, "git", "remote", "add", "origin", originDir)
 
 	// Create an initial commit so HEAD exists.
 	run(t, repoDir, "git", "commit", "--allow-empty", "-m", "initial")
+	run(t, repoDir, "git", "push", "origin", "main")
 
 	// Save and change to the repo dir.
 	origDir, err := os.Getwd()

@@ -730,6 +730,35 @@ func DefaultBranch(ctx context.Context, dir, remote string) string {
 	return "main"
 }
 
+// InspectRemoteDefaultBranch resolves a remote's HEAD and returns every branch
+// ref that remote advertises. A reachable remote whose HEAD symref is absent or
+// invalid keeps the historical "main" fallback; unlike DefaultBranch, a remote
+// access failure is returned so registration can distinguish unreachable from
+// reachable-but-missing.
+func InspectRemoteDefaultBranch(ctx context.Context, dir, remote string) (string, []string, error) {
+	out, err := Run(ctx, dir, "ls-remote", "--symref", remote, "HEAD", "refs/heads/*")
+	if err != nil {
+		return "main", nil, err
+	}
+
+	defaultBranch := "main"
+	var branchRefs []string
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+		if parts[0] == "ref:" && strings.HasPrefix(parts[1], "refs/heads/") {
+			defaultBranch = strings.TrimPrefix(parts[1], "refs/heads/")
+			continue
+		}
+		if strings.HasPrefix(parts[1], "refs/heads/") {
+			branchRefs = append(branchRefs, parts[1])
+		}
+	}
+	return defaultBranch, branchRefs, nil
+}
+
 // FetchRemoteBranch fetches a single branch into a remote-tracking ref.
 // Uses a force-update refspec (+) so non-fast-forward updates (e.g. after
 // a force push on the remote) are accepted instead of silently rejected.

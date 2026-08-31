@@ -123,6 +123,10 @@ func InitWithFork(ctx context.Context, d *db.DB, p *paths.Paths, workDir, forkUR
 	// can still authenticate pushes; the push step resolves that credential
 	// from the worktree at run time instead of trusting the DB copy.
 	redactedUpstreamURL := safeurl.Redact(upstreamURL)
+	branch, err := preflightOriginDefaultBranch(ctx, absRoot, upstreamURL)
+	if err != nil {
+		return nil, false, err
+	}
 
 	id := repoID(absRoot)
 	if existing != nil {
@@ -144,9 +148,6 @@ func InitWithFork(ctx context.Context, d *db.DB, p *paths.Paths, workDir, forkUR
 		}
 		return nil, false, err
 	}
-
-	// Detect default branch from upstream remote.
-	branch := git.DefaultBranch(ctx, absRoot, "origin")
 
 	if existing != nil {
 		var repo *db.Repo
@@ -173,6 +174,48 @@ func InitWithFork(ctx context.Context, d *db.DB, p *paths.Paths, workDir, forkUR
 
 	slog.Info("gate initialized", "repo_id", id, "path", absRoot, "upstream", redactedUpstreamURL)
 	return repo, true, nil
+}
+
+const advertisedBranchLimit = 8
+
+func preflightOriginDefaultBranch(ctx context.Context, repoPath, originURL string) (string, error) {
+	branch, advertised, err := git.InspectRemoteDefaultBranch(ctx, repoPath, "origin")
+	expected := "refs/heads/" + branch
+	safeOrigin := safeurl.Redact(originURL)
+	if err != nil {
+		return "", fmt.Errorf(
+			"cannot register repository %q: could not reach origin %q while checking default branch %q: %s",
+			repoPath, safeOrigin, expected, safeurl.RedactText(err.Error()))
+	}
+	for _, ref := range advertised {
+		if ref == expected {
+			return branch, nil
+		}
+	}
+	if len(advertised) == 0 {
+		return "", fmt.Errorf(
+			"cannot register repository %q: origin %q does not resolve default branch %q; origin advertised no branch refs",
+			repoPath, safeOrigin, expected)
+	}
+	return "", fmt.Errorf(
+		"cannot register repository %q: origin %q does not resolve default branch %q; origin advertised instead: %s",
+		repoPath, safeOrigin, expected, formatAdvertisedBranches(advertised))
+}
+
+func formatAdvertisedBranches(refs []string) string {
+	shown := refs
+	if len(shown) > advertisedBranchLimit {
+		shown = shown[:advertisedBranchLimit]
+	}
+	quoted := make([]string, 0, len(shown))
+	for _, ref := range shown {
+		quoted = append(quoted, fmt.Sprintf("%q", ref))
+	}
+	result := strings.Join(quoted, ", ")
+	if remaining := len(refs) - len(shown); remaining > 0 {
+		result += fmt.Sprintf(" (and %d more)", remaining)
+	}
+	return result
 }
 
 func validateForkRouting(ctx context.Context, upstreamURL, forkURL string) error {
