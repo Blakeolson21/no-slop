@@ -1143,6 +1143,166 @@ func TestInitRejectsUnreachableOrigin(t *testing.T) {
 	}
 }
 
+// A local branch and a remote-tracking ref are the two refs an operator is most
+// likely to mistake for proof that origin has the default branch. Neither is
+// evidence about origin, and accepting either is the bug this preflight exists
+// to close, so the refusal must survive both being present and resolvable.
+func TestInitRefusesWhenOnlyLocalAndTrackingRefsHaveDefaultBranch(t *testing.T) {
+	workDir := setupTestRepo(t)
+	ctx := context.Background()
+	origin, err := gitpkg.GetConfiguredRemoteURL(ctx, workDir, "origin")
+	if err != nil {
+		t.Fatalf("get origin: %v", err)
+	}
+	if out, err := exec.Command("git", "-C", workDir, "push", "origin", "HEAD:refs/heads/release").CombinedOutput(); err != nil {
+		t.Fatalf("push alternate origin branch: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", workDir, "fetch", "origin").CombinedOutput(); err != nil {
+		t.Fatalf("fetch origin: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "--git-dir="+origin, "update-ref", "-d", "refs/heads/main").CombinedOutput(); err != nil {
+		t.Fatalf("delete default branch from origin: %v: %s", err, out)
+	}
+
+	// Both local refs must still resolve, otherwise the test proves nothing
+	// about which ref the preflight trusted.
+	for _, ref := range []string{"refs/heads/main", "refs/remotes/origin/main"} {
+		if out, err := exec.Command("git", "-C", workDir, "rev-parse", "--verify", ref).CombinedOutput(); err != nil {
+			t.Fatalf("local %s must exist for this test: %v: %s", ref, err, out)
+		}
+	}
+
+	p := paths.WithRoot(t.TempDir())
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatalf("ensure dirs: %v", err)
+	}
+	d := openTestDB(t, p)
+
+	_, created, err := Init(ctx, d, p, workDir)
+	if err == nil {
+		t.Fatalf("Init error = nil (created=%v), want refusal despite local and remote-tracking refs", created)
+	}
+	t.Logf("registration refusal: %v", err)
+	if !strings.Contains(err.Error(), "does not resolve default branch") {
+		t.Errorf("Init error %q is not the reachable-but-absent refusal", err)
+	}
+	if !strings.Contains(err.Error(), "refs/heads/release") {
+		t.Errorf("Init error %q does not name the branch origin actually advertises", err)
+	}
+	if repo, dbErr := d.GetRepoByPath(workDir); dbErr != nil {
+		t.Fatalf("get repo after refusal: %v", dbErr)
+	} else if repo != nil {
+		t.Errorf("registration persisted repo despite missing origin branch: %+v", repo)
+	}
+}
+
+// The absent-branch refusal quotes the origin URL too, so its redaction needs
+// its own coverage: a credentialled origin that is reachable never reaches the
+// unreachable branch of the preflight.
+func TestInitAbsentDefaultBranchRefusalRedactsCredentialledOrigin(t *testing.T) {
+	workDir := setupTestRepo(t)
+	ctx := context.Background()
+	const token = "ghp_absent_DO_NOT_LEAK"
+	credURL := "https://x-access-token:" + token + "@github.com/parent/project.git"
+	forkURL := "https://github.com/fork/project.git"
+
+	localOrigin, err := gitpkg.GetConfiguredRemoteURL(ctx, workDir, "origin")
+	if err != nil {
+		t.Fatalf("get local origin: %v", err)
+	}
+	if out, err := exec.Command("git", "-C", workDir, "push", "origin", "HEAD:refs/heads/release").CombinedOutput(); err != nil {
+		t.Fatalf("push alternate origin branch: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "--git-dir="+localOrigin, "update-ref", "-d", "refs/heads/main").CombinedOutput(); err != nil {
+		t.Fatalf("delete default branch from origin: %v: %s", err, out)
+	}
+	localFork := filepath.Join(resolveSymlinks(t, t.TempDir()), "fork.git")
+	if out, err := exec.Command("git", "init", "--bare", localFork).CombinedOutput(); err != nil {
+		t.Fatalf("init local fork: %v: %s", err, out)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig"))
+	configureGitInsteadOf(t, workDir, credURL, localOrigin)
+	configureGitInsteadOf(t, workDir, forkURL, localFork)
+	if out, err := exec.Command("git", "-C", workDir, "remote", "set-url", "origin", credURL).CombinedOutput(); err != nil {
+		t.Fatalf("set credentialled origin: %v: %s", err, out)
+	}
+
+	p := paths.WithRoot(t.TempDir())
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatalf("ensure dirs: %v", err)
+	}
+	d := openTestDB(t, p)
+
+	_, created, err := InitWithFork(ctx, d, p, workDir, forkURL)
+	if err == nil {
+		t.Fatalf("InitWithFork error = nil (created=%v), want missing origin default-branch refusal", created)
+	}
+	t.Logf("registration refusal: %v", err)
+	if strings.Contains(err.Error(), token) {
+		t.Errorf("absent-branch refusal leaked origin credential: %q", err)
+	}
+	for _, want := range []string{"redacted@github.com/parent/project.git", "does not resolve default branch", "refs/heads/main", "refs/heads/release"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Init error %q does not name %q", err, want)
+		}
+	}
+	if repo, dbErr := d.GetRepoByPath(workDir); dbErr != nil {
+		t.Fatalf("get repo after refusal: %v", dbErr)
+	} else if repo != nil {
+		t.Errorf("credentialled missing-branch registration persisted repo: %+v", repo)
+	}
+}
+
+// A repository with hundreds of branches must not turn the diagnostic itself
+// into unbounded output.
+func TestInitAbsentDefaultBranchRefusalBoundsAdvertisedBranchList(t *testing.T) {
+	workDir := setupTestRepo(t)
+	ctx := context.Background()
+	origin, err := gitpkg.GetConfiguredRemoteURL(ctx, workDir, "origin")
+	if err != nil {
+		t.Fatalf("get origin: %v", err)
+	}
+	push := []string{"-C", workDir, "push", "origin"}
+	var all []string
+	for i := 1; i <= 11; i++ {
+		ref := fmt.Sprintf("refs/heads/b%02d", i)
+		all = append(all, ref)
+		push = append(push, "HEAD:"+ref)
+	}
+	if out, err := exec.Command("git", push...).CombinedOutput(); err != nil {
+		t.Fatalf("push branches: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "--git-dir="+origin, "update-ref", "-d", "refs/heads/main").CombinedOutput(); err != nil {
+		t.Fatalf("delete default branch from origin: %v: %s", err, out)
+	}
+
+	p := paths.WithRoot(t.TempDir())
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatalf("ensure dirs: %v", err)
+	}
+	d := openTestDB(t, p)
+
+	_, _, err = Init(ctx, d, p, workDir)
+	if err == nil {
+		t.Fatal("Init error = nil, want missing origin default-branch refusal")
+	}
+	t.Logf("registration refusal: %v", err)
+	for _, ref := range all[:advertisedBranchLimit] {
+		if !strings.Contains(err.Error(), ref) {
+			t.Errorf("Init error %q omits advertised branch %q", err, ref)
+		}
+	}
+	for _, ref := range all[advertisedBranchLimit:] {
+		if strings.Contains(err.Error(), ref) {
+			t.Errorf("Init error %q lists %q beyond the %d-branch bound", err, ref, advertisedBranchLimit)
+		}
+	}
+	remaining := len(all) - advertisedBranchLimit
+	if want := fmt.Sprintf("(and %d more)", remaining); !strings.Contains(err.Error(), want) {
+		t.Errorf("Init error %q does not report %q", err, want)
+	}
+}
+
 func TestEject(t *testing.T) {
 	workDir := setupTestRepo(t)
 	nmRoot := t.TempDir()

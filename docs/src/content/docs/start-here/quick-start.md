@@ -34,13 +34,15 @@ See [Provider Integration](/no-slop/guides/provider-integration/) for PR/CI setu
 
 ## 3. Initialize a repo
 
-Navigate to any git repo with an `origin` remote:
+Navigate to any git repo whose `origin` remote is reachable and already has its default branch pushed:
 
 ```sh
 no-slop init
 ```
 
 This creates or refreshes a local bare repo at `~/.no-mistakes/repos/<id>.git`, installs managed pre- and post-receive hooks, best-effort isolates the gate's hooks path from shared local Git config writes when Git supports `config --worktree`, adds or repairs a `no-slop` git remote plus the `no-mistakes` compatibility remote in your working repo, installs the `/no-slop` agent skill, and ensures the daemon is running.
+
+`init` checks that default branch against `origin` itself before it creates anything, so a brand-new repository whose default branch has never been pushed - or an `origin` it cannot reach - fails immediately with a message naming the cause, rather than later inside a run. See [`no-slop init`](/no-slop/reference/cli/#no-slop-init).
 
 For GitHub fork contributions, keep `origin` pointed at the parent repository and pass your fork as the push target:
 

@@ -31,14 +31,15 @@ flowchart TD
 
 When you run `no-slop init` in a repo:
 
-1. It creates a local bare gate repo under `~/.no-mistakes/repos/<id>.git`.
-2. It installs a `pre-receive` admission hook and a `post-receive` notification hook in that gate repo.
-3. It enables Git push options for the gate repo.
-4. It best-effort isolates the gate repo's hooks path from shared local Git config writes when Git supports `config --worktree`.
-5. It adds a `no-slop` remote and a `no-mistakes` compatibility remote to your working repo; both point at the same gate.
-6. When `--fork-url` is supplied, it records that GitHub fork as the branch push target while keeping `origin` as the parent repository used for PR bases.
-7. It installs or refreshes the `/no-slop` agent skill at user level, into `~/.claude/skills/no-slop/SKILL.md` and `~/.agents/skills/no-slop/SKILL.md`, on a best-effort basis, following existing symlinks between the home `.claude` and `.agents` skill directories. It writes no skill files into the repo; if the repo still carries a vendored copy from an older version, `init` prints a notice that the copy can be removed.
-8. It makes sure the daemon is running so incoming pushes can start runs.
+1. It asks `origin` for its live ref advertisement and confirms that `refs/heads/<default_branch>` exists there. If it does not, or if `origin` cannot be reached at all, `init` fails here and nothing below is created or recorded. [`no-slop init`](/no-slop/reference/cli/#no-slop-init) owns the exact diagnostics for each of those two cases.
+2. It creates a local bare gate repo under `~/.no-mistakes/repos/<id>.git`.
+3. It installs a `pre-receive` admission hook and a `post-receive` notification hook in that gate repo.
+4. It enables Git push options for the gate repo.
+5. It best-effort isolates the gate repo's hooks path from shared local Git config writes when Git supports `config --worktree`.
+6. It adds a `no-slop` remote and a `no-mistakes` compatibility remote to your working repo; both point at the same gate.
+7. When `--fork-url` is supplied, it records that GitHub fork as the branch push target while keeping `origin` as the parent repository used for PR bases.
+8. It installs or refreshes the `/no-slop` agent skill at user level, into `~/.claude/skills/no-slop/SKILL.md` and `~/.agents/skills/no-slop/SKILL.md`, on a best-effort basis, following existing symlinks between the home `.claude` and `.agents` skill directories. It writes no skill files into the repo; if the repo still carries a vendored copy from an older version, `init` prints a notice that the copy can be removed.
+9. It makes sure the daemon is running so incoming pushes can start runs.
 
 `init` is idempotent.
 If the repo is already initialized, it refreshes the existing gate instead of failing: managed hook installation, push-option support, hook-path isolation, gate and working remotes, origin/default-branch metadata, and the `/no-slop` agent skill are repaired or updated where needed.
