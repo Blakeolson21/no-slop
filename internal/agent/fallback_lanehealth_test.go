@@ -10,7 +10,12 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/lanehealth"
 )
 
-func TestFallbackFailsClosedOnAQuotaOutage(t *testing.T) {
+// Reproduces the 2026-08-04 03:44-03:58 UTC incident: roughly a dozen gate runs
+// (01KZ5DX4Y4R9Z0AQN3B53STP5Y, 01KZ5DHW3R6H8KWFCN29KCBA61, 01KZ5BV1Z2W2DVV7018PZM7CC0,
+// 01KZ5DS8CEXH48J5VG6G6DRC0D, ...) each fell back onto a Codex lane whose quota was
+// exhausted until Aug 7, and each burned a full agent spawn rediscovering it.
+// Once one run has marked the lane, later runs must skip it and use the next lane.
+func TestFallbackSkipsAQuotaMarkedLaneAndUsesTheNextOne(t *testing.T) {
 	now := time.Date(2026, 8, 4, 3, 44, 0, 0, time.Local)
 	store := laneTestStore(t, &now)
 	clock := func() time.Time { return now }
@@ -26,43 +31,25 @@ func TestFallbackFailsClosedOnAQuotaOutage(t *testing.T) {
 		WithLaneHealth(claude, store, clock),
 	})
 
-	_, err := chain.Run(context.Background(), RunOpts{})
-	if err == nil {
-		t.Fatalf("expected quota outage to fail closed")
+	// First run discovers the dead lane the expensive way.
+	if _, err := chain.Run(context.Background(), RunOpts{}); err != nil {
+		t.Fatalf("first run must fail over to claude: %v", err)
 	}
-	if codex.calls != 1 || claude.calls != 0 {
-		t.Fatalf("calls: codex=%d claude=%d, want 1/0", codex.calls, claude.calls)
+	if codex.calls != 1 || claude.calls != 1 {
+		t.Fatalf("first run calls: codex=%d claude=%d, want 1/1", codex.calls, claude.calls)
 	}
-	if !IsQuotaOutage(err) {
-		t.Fatalf("error %v must classify as quota outage", err)
-	}
-}
 
-func TestFallbackDoesNotSubstituteAReservedLaneAfterQuotaOutage(t *testing.T) {
-	now := time.Date(2026, 8, 21, 20, 5, 0, 0, time.Local)
-	store := laneTestStore(t, &now)
-	clock := func() time.Time { return now }
-
-	codex := &fallbackTestAgent{name: "codex", run: func() (*Result, error) {
-		return nil, errors.New(codexQuotaStderr)
-	}}
-	play := &fallbackTestAgent{name: "play", run: func() (*Result, error) {
-		return &Result{Text: "reserved seat burned"}, nil
-	}}
-	chain := NewFallback([]Agent{
-		WithLaneHealth(codex, store, clock),
-		WithLaneHealth(play, store, clock),
-	})
-
-	_, err := chain.Run(context.Background(), RunOpts{})
-	if err == nil {
-		t.Fatalf("expected quota outage to fail closed")
+	// Every later run must consume the persisted mark instead of respawning codex.
+	for i := 0; i < 5; i++ {
+		if _, err := chain.Run(context.Background(), RunOpts{}); err != nil {
+			t.Fatalf("run %d must succeed on claude: %v", i+2, err)
+		}
 	}
-	if play.calls != 0 {
-		t.Fatalf("reserved play lane was invoked %d times, want 0", play.calls)
+	if codex.calls != 1 {
+		t.Fatalf("codex was invoked %d times, want 1 (the marked lane must be skipped)", codex.calls)
 	}
-	if !strings.Contains(err.Error(), "codex") || !strings.Contains(err.Error(), "quota-exhausted") {
-		t.Fatalf("error %q must clearly report the quota refusal", err)
+	if claude.calls != 6 {
+		t.Fatalf("claude calls = %d, want 6", claude.calls)
 	}
 }
 
@@ -89,17 +76,13 @@ func TestFallbackFailsWithEveryLaneResetTimeWhenAllLanesAreExhausted(t *testing.
 	msg := err.Error()
 	for _, want := range []string{
 		"claude",
+		"codex",
 		time.Date(2026, 8, 4, 21, 15, 0, 0, time.Local).Format("2006-01-02 15:04 MST"),
+		time.Date(2026, 8, 7, 23, 6, 0, 0, time.Local).Format("2006-01-02 15:04 MST"),
 	} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("all-lanes-exhausted error %q must contain %q", msg, want)
 		}
-	}
-	if strings.Contains(msg, "codex") {
-		t.Fatalf("all-lanes-exhausted error %q must not name an untried fallback lane", msg)
-	}
-	if codex.calls != 0 {
-		t.Fatalf("codex calls = %d, want 0", codex.calls)
 	}
 	var outageErr *LaneOutageError
 	if errors.As(err, &outageErr) {
@@ -165,7 +148,9 @@ func TestFallbackDoesNotClaimEveryLaneWhenOnlyTheSessionLaneWasTried(t *testing.
 	}
 }
 
-func TestFallbackStopsBeforeANonQuotaFallbackAfterQuotaOutage(t *testing.T) {
+// A last lane that fails for an ordinary reason must still surface that reason,
+// not be recast as a quota problem just because an earlier lane was exhausted.
+func TestFallbackKeepsANonQuotaFinalFailure(t *testing.T) {
 	now := time.Date(2026, 8, 4, 3, 44, 0, 0, time.Local)
 	store := laneTestStore(t, &now)
 	clock := func() time.Time { return now }
@@ -185,11 +170,8 @@ func TestFallbackStopsBeforeANonQuotaFallbackAfterQuotaOutage(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected a failure")
 	}
-	if strings.Contains(err.Error(), "parse failure") {
-		t.Fatalf("error %q must not come from a substituted fallback lane", err)
-	}
-	if claude.calls != 0 {
-		t.Fatalf("claude calls = %d, want 0", claude.calls)
+	if !strings.Contains(err.Error(), "parse failure") {
+		t.Fatalf("error %q must keep the last lane's real failure", err)
 	}
 }
 
@@ -218,12 +200,12 @@ func TestFallbackHonorsMarksWrittenByAnEarlierProcess(t *testing.T) {
 		WithLaneHealth(claude, store, clock),
 	})
 
-	_, err := chain.Run(context.Background(), RunOpts{})
-	if err == nil {
-		t.Fatalf("expected the persisted mark to fail closed")
+	res, err := chain.Run(context.Background(), RunOpts{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
 	}
-	if claude.calls != 0 {
-		t.Fatalf("claude calls = %d, want 0", claude.calls)
+	if res.Text != "ok" {
+		t.Fatalf("Text = %q, want ok", res.Text)
 	}
 	if codex.calls != 0 {
 		t.Fatalf("codex calls = %d, want 0", codex.calls)

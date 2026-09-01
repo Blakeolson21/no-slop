@@ -196,10 +196,14 @@ func (q quartermasterAgent) Run(ctx context.Context, opts RunOpts) (*Result, err
 	}
 	boundEnv, err := quartermasterEnv(q.opts.Pool, lease, q.opts.Home)
 	if err != nil {
-		_ = q.opts.Client.Release(context.Background(), lease, "cancelled")
-		return nil, err
+		return nil, errors.Join(err, q.releaseError(lease, "cancelled"))
 	}
-	opts.Env = append(opts.Env, boundEnv...)
+	// Never append into the caller's backing array: RunOpts is copied by value
+	// but its Env slice is not, so two invocations sharing one RunOpts would
+	// bind each other's leased account home.
+	env := make([]string, 0, len(opts.Env)+len(boundEnv))
+	env = append(env, opts.Env...)
+	opts.Env = append(env, boundEnv...)
 	result, runErr := q.Agent.Run(ctx, opts)
 	outcome := "completed"
 	if runErr != nil {
@@ -217,10 +221,21 @@ func (q quartermasterAgent) Run(ctx context.Context, opts RunOpts) (*Result, err
 			}
 		}
 	}
-	if releaseErr := q.opts.Client.Release(context.Background(), lease, outcome); releaseErr != nil && runErr == nil {
-		return result, releaseErr
+	if releaseErr := q.releaseError(lease, outcome); releaseErr != nil {
+		return result, errors.Join(runErr, releaseErr)
 	}
 	return result, runErr
+}
+
+// releaseError returns the lease-release failure so the caller can surface it
+// alongside whatever the invocation itself returned. A release that fails
+// leaves the account leased until its TTL expires, so it must never be
+// swallowed just because the run also failed.
+func (q quartermasterAgent) releaseError(lease QuartermasterLease, outcome string) error {
+	if err := q.opts.Client.Release(context.Background(), lease, outcome); err != nil {
+		return fmt.Errorf("quartermaster lease %s was not released and stays held until its TTL expires: %w", lease.ID, err)
+	}
+	return nil
 }
 
 func (q quartermasterAgent) SupportsSessionResume() bool {

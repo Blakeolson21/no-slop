@@ -285,16 +285,15 @@ func newLaneAgents(cfg *config.Config, health *lanehealth.Store, evidenceRoots .
 		}
 		// Steer every pipeline agent to keep writes inside the worktree and avoid
 		// mutating system state (e.g. brew/Homebrew touching /Applications), which
-		// triggers macOS App Management prompts. When Quartermaster is enabled it
-		// owns account admission for claude/codex lanes; otherwise lane health
-		// preserves the standalone quota cooldown behavior.
+		// triggers macOS App Management prompts. Quartermaster account admission
+		// is an inner layer: lane health stays outermost on every lane so a
+		// quota-exhausted lane is skipped before a lease is even requested, and
+		// the persisted cooldown that doctor reads keeps being written.
 		decorated := agent.WithSteering(next, evidenceRoot)
 		if qm, ok := quartermasterOptionsForLane(cfg, agent.LaneName(name)); ok {
 			decorated = agent.WithQuartermasterLease(decorated, qm)
-		} else {
-			decorated = agent.WithLaneHealth(decorated, laneHealthStore(health), nil)
 		}
-		created = append(created, decorated)
+		created = append(created, agent.WithLaneHealth(decorated, laneHealthStore(health), nil))
 	}
 	return created, nil
 }

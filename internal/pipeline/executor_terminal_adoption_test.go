@@ -109,7 +109,12 @@ func TestExecutor_TerminalizationAdoptsTheHeadItRecords(t *testing.T) {
 	}
 }
 
-func TestExecutor_CompletedRunClearsCertifiedUncertifiedRangeWithoutReview(t *testing.T) {
+// A run can finish with its review skipped, and the fixer commits a previous
+// run left behind are then still uncertified. Terminal completion must not
+// retire the range on the strength of lineage alone, or the next run's initial
+// reviewer loses the provenance that tells it those commits were never
+// certified by anyone.
+func TestExecutor_CompletedRunKeepsUncertifiedRangeNoReviewCertified(t *testing.T) {
 	database, p, _, repo := setupTest(t)
 	f := newTerminalAdoptionFixture(t)
 	run, err := database.InsertRun(repo.ID, "feature", f.submitted, f.base)
@@ -130,8 +135,8 @@ func TestExecutor_CompletedRunClearsCertifiedUncertifiedRangeWithoutReview(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rng != nil {
-		t.Fatalf("verified terminal completion left certified uncertified range %#v", rng)
+	if rng == nil || rng.ToSHA != f.submitted {
+		t.Fatalf("terminal completion retired an uncertified range no completed review certified: %#v", rng)
 	}
 }
 

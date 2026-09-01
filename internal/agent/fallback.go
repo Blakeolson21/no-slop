@@ -110,8 +110,10 @@ func (a *fallbackAgent) Run(ctx context.Context, opts RunOpts) (*Result, error) 
 		lastErr = err
 		var outage *LaneOutageError
 		if errors.As(err, &outage) {
+			// TODO(2026-08-04 incident follow-up): a quota-dead lane fails over
+			// only to the next provider lane; same-provider account failover does
+			// not exist, so a step can die here while sibling accounts sit idle.
 			outages = append(outages, outage)
-			return nil, allLanesExhausted(outages, len(candidates) == len(a.agents))
 		}
 		if i == len(candidates)-1 {
 			if len(outages) == len(candidates) {
@@ -188,9 +190,12 @@ func isAgentUnavailableError(err error) bool {
 	if err == nil {
 		return false
 	}
+	// A lane skipped because its provider quota is exhausted never launched a
+	// process, so it carries none of the substrings below; it is nonetheless the
+	// clearest case of "this lane cannot serve the request, try the next one".
 	var outage *LaneOutageError
 	if errors.As(err, &outage) {
-		return false
+		return true
 	}
 	msg := strings.ToLower(err.Error())
 	unavailable := []string{

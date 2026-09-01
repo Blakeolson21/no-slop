@@ -1669,13 +1669,13 @@ func (e *Executor) completeRun(run *db.Run, repo *db.Repo) error {
 	verifiedHead, verified := e.reconcileTerminalRunHead(run)
 	var err error
 	if verified {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		certifiedRange, certifyErr := certifiedUncertifiedPipelineRange(ctx, e.db, repo.ID, run.Branch, verifiedHead, e.workDir)
-		if certifyErr != nil {
-			return certifyErr
-		}
-		err = e.db.CompleteRunWithVerifiedHead(run.ID, types.RunCompleted, verifiedHead, certifiedRange)
+		// Certification authority belongs to a COMPLETED review and to nothing
+		// else: a run can finish with its review skipped, and those commits are
+		// then still uncertified. Retiring the range here would erase that
+		// provenance so the next run's initial reviewer came up cold - and it
+		// would also let a transient git or DB fault fail a run that had already
+		// verified. Review's own completion transaction owns the retirement.
+		err = e.db.UpdateRunStatusWithVerifiedHead(run.ID, types.RunCompleted, verifiedHead)
 	} else {
 		err = e.db.UpdateRunStatus(run.ID, types.RunCompleted)
 	}

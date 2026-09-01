@@ -158,8 +158,9 @@ func TestWithLaneHealthPassesThroughAttemptsItDoesNotClassify(t *testing.T) {
 }
 
 // A lane skipped while marked never reaches the adapter that would report it,
-// so the wrapper reports the refusal itself. Without it the fail-closed
-// decision is invisible in attempt telemetry.
+// so the wrapper reports the attempt itself. Without it the skip is invisible
+// whenever a fallback set moves on to another lane, which is exactly when the
+// invocation still costs the operator a lane.
 func TestWithLaneHealthReportsASkippedLaneAsAnAttempt(t *testing.T) {
 	now := time.Date(2026, 8, 4, 3, 44, 0, 0, time.Local)
 	store := laneTestStore(t, &now)
@@ -174,28 +175,35 @@ func TestWithLaneHealthReportsASkippedLaneAsAnAttempt(t *testing.T) {
 	inner := &attemptReportingAgent{name: "codex", runs: []func() (*Result, error){
 		func() (*Result, error) { return &Result{Text: "must not run"}, nil },
 	}}
+	healthy := &attemptReportingAgent{name: "claude", runs: []func() (*Result, error){
+		func() (*Result, error) { return &Result{Text: "ok"}, nil },
+	}}
 	lanes := NewFallback([]Agent{
 		WithLaneHealth(inner, store, func() time.Time { return now }),
-		&attemptReportingAgent{name: "claude", runs: []func() (*Result, error){
-			func() (*Result, error) { return &Result{Text: "must not run"}, nil },
-		}},
+		healthy,
 	})
 
 	var attempts []Attempt
-	_, err := lanes.Run(context.Background(), RunOpts{
+	result, err := lanes.Run(context.Background(), RunOpts{
 		OnAttempt: func(attempt Attempt) { attempts = append(attempts, attempt) },
 	})
-	if err == nil {
-		t.Fatalf("expected marked lane to fail closed")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result == nil || result.Text != "ok" {
+		t.Fatalf("result = %+v, want the healthy lane's ok", result)
 	}
 	if inner.calls != 0 {
 		t.Fatalf("marked lane was invoked %d times, want 0", inner.calls)
 	}
-	if len(attempts) != 1 {
-		t.Fatalf("attempts = %d, want only the skipped lane refusal", len(attempts))
+	if len(attempts) != 2 {
+		t.Fatalf("attempts = %d, want the skipped lane and the healthy one", len(attempts))
 	}
 	if attempts[0].Agent != "codex" || !IsQuotaOutage(attempts[0].Err) {
 		t.Fatalf("first attempt = %q/%v, want the skipped codex lane's quota outage", attempts[0].Agent, attempts[0].Err)
+	}
+	if attempts[1].Agent != "claude" || attempts[1].Err != nil {
+		t.Fatalf("second attempt = %q/%v, want the healthy claude lane", attempts[1].Agent, attempts[1].Err)
 	}
 }
 
@@ -208,21 +216,22 @@ func TestWithLaneHealthDoesNotDoubleReportALaneThatReportsNoAttempts(t *testing.
 	inner := &fallbackTestAgent{name: "codex", run: func() (*Result, error) {
 		return nil, errors.New(codexQuotaStderr)
 	}}
+	healthy := &fallbackTestAgent{name: "claude", run: func() (*Result, error) {
+		return &Result{Text: "ok"}, nil
+	}}
 	lanes := NewFallback([]Agent{
 		WithLaneHealth(inner, store, func() time.Time { return now }),
-		WithLaneHealth(&fallbackTestAgent{name: "claude", run: func() (*Result, error) {
-			return &Result{Text: "must not run"}, nil
-		}}, store, func() time.Time { return now }),
+		WithLaneHealth(healthy, store, func() time.Time { return now }),
 	})
 
 	var attempts []Attempt
 	if _, err := lanes.Run(context.Background(), RunOpts{
 		OnAttempt: func(attempt Attempt) { attempts = append(attempts, attempt) },
-	}); err == nil {
-		t.Fatalf("expected quota outage")
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
-	if len(attempts) != 1 {
-		t.Fatalf("attempts = %d, want only the quota lane", len(attempts))
+	if len(attempts) != 2 {
+		t.Fatalf("attempts = %d, want one per lane", len(attempts))
 	}
 	if !IsQuotaOutage(attempts[0].Err) {
 		t.Fatalf("first attempt error %v must be the quota outage", attempts[0].Err)

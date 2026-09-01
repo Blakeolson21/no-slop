@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -14,6 +16,7 @@ import (
 type fakeQuartermasterClient struct {
 	lease    QuartermasterLease
 	acquire  error
+	release  error
 	released []string
 	requests []QuartermasterAcquireRequest
 }
@@ -30,7 +33,7 @@ func (c *fakeQuartermasterClient) Acquire(_ context.Context, req QuartermasterAc
 
 func (c *fakeQuartermasterClient) Release(_ context.Context, lease QuartermasterLease, outcome string) error {
 	c.released = append(c.released, lease.ID+":"+outcome)
-	return nil
+	return c.release
 }
 
 func TestQuartermasterLeaseBindsCodexHomeFromTheLeasedSeat(t *testing.T) {
@@ -150,6 +153,101 @@ func TestQuartermasterLeaseReleasesFailedRuns(t *testing.T) {
 	if got := strings.Join(client.released, ","); got != "lease-2:failed" {
 		t.Fatalf("released = %q", got)
 	}
+}
+
+// A release that fails leaves the account leased until its TTL expires, so it
+// must reach the operator even when the invocation itself also failed.
+func TestQuartermasterLeaseSurfacesAReleaseFailureAlongsideTheRunFailure(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("NS_QUARTERMASTER_ACCOUNT_REGISTRY", filepath.Join(root, "missing-registry.json"))
+	mkdir(t, root+"/.claude-accounts/nova")
+	releaseErr := errors.New("quartermaster unreachable")
+	client := &fakeQuartermasterClient{
+		lease:   QuartermasterLease{Account: "nova", ID: "lease-3"},
+		release: releaseErr,
+	}
+	runErr := errors.New("agent failed")
+	leased := WithQuartermasterLease(&envCapturingAgent{name: "claude", err: runErr}, QuartermasterOptions{
+		Client: client,
+		Pool:   "claude",
+		Holder: "test-holder",
+		Home:   root,
+	})
+
+	_, err := leased.Run(context.Background(), RunOpts{Purpose: "review-fix"})
+	if !errors.Is(err, runErr) {
+		t.Fatalf("Run error %v must keep the invocation failure", err)
+	}
+	if !errors.Is(err, releaseErr) {
+		t.Fatalf("Run error %v must also report the leaked lease", err)
+	}
+}
+
+// The env binding is per-invocation, so two invocations that share one RunOpts
+// must not bind each other's leased account home. RunOpts is copied by value
+// but its Env slice is not, so appending in place cross-binds under load.
+func TestQuartermasterLeaseBindsPerInvocationEnvUnderConcurrency(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("NS_QUARTERMASTER_ACCOUNT_REGISTRY", filepath.Join(root, "missing-registry.json"))
+	const lanes = 8
+	for i := 0; i < lanes; i++ {
+		mkdir(t, filepath.Join(root, ".codex-accounts", "seat-"+strconv.Itoa(i)))
+	}
+
+	shared := make([]string, 1, 64)
+	shared[0] = "SHARED=1"
+
+	var wg sync.WaitGroup
+	bound := make([]string, lanes)
+	released := make([]string, lanes)
+	for i := 0; i < lanes; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			account := "seat-" + strconv.Itoa(i)
+			inner := &envCapturingAgent{name: "codex"}
+			leased := WithQuartermasterLease(inner, QuartermasterOptions{
+				Client: &concurrentQuartermasterClient{lease: QuartermasterLease{Account: account, ID: "lease-" + account}},
+				Pool:   "codex",
+				Holder: "test-holder",
+				Home:   root,
+			})
+			if _, err := leased.Run(context.Background(), RunOpts{Purpose: "review", Env: shared}); err != nil {
+				t.Errorf("Run %s: %v", account, err)
+				return
+			}
+			bound[i] = envValue(inner.env, "CODEX_HOME")
+			released[i] = envValue(inner.env, "NS_QUARTERMASTER_ACCOUNT")
+		}(i)
+	}
+	wg.Wait()
+
+	for i := 0; i < lanes; i++ {
+		account := "seat-" + strconv.Itoa(i)
+		if want := filepath.Join(root, ".codex-accounts", account); bound[i] != want {
+			t.Fatalf("lane %d bound CODEX_HOME %q, want %q", i, bound[i], want)
+		}
+		if released[i] != account {
+			t.Fatalf("lane %d bound account %q, want %q", i, released[i], account)
+		}
+	}
+	if shared[0] != "SHARED=1" || len(shared) != 1 {
+		t.Fatalf("caller env was mutated: %#v", shared)
+	}
+}
+
+type concurrentQuartermasterClient struct {
+	lease QuartermasterLease
+}
+
+func (c *concurrentQuartermasterClient) Acquire(_ context.Context, req QuartermasterAcquireRequest) (QuartermasterLease, error) {
+	lease := c.lease
+	lease.Pool = req.Pool
+	return lease, nil
+}
+
+func (c *concurrentQuartermasterClient) Release(context.Context, QuartermasterLease, string) error {
+	return nil
 }
 
 func TestCommandQuartermasterReleaseUsesLeaseIDPositionally(t *testing.T) {
