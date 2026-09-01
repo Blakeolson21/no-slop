@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -329,5 +330,98 @@ func mkdir(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		t.Fatalf("mkdir %s: %v", path, err)
+	}
+}
+
+// A missing lease binary is not a policy decision. Reporting it as a bare
+// refusal makes an operator-fixable infrastructure fault indistinguishable
+// from "the pool is full", so the underlying failure must stay reachable.
+func TestCommandQuartermasterAcquireKeepsTheUnderlyingSubprocessFailure(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "no-such-quartermaster")
+
+	_, err := NewCommandQuartermasterClient(missing).Acquire(context.Background(), QuartermasterAcquireRequest{
+		Pool:    "codex",
+		Holder:  "test-holder",
+		Purpose: "review",
+		TTL:     time.Minute,
+	})
+	if err == nil {
+		t.Fatal("expected a missing lease binary to fail")
+	}
+	if !IsQuartermasterRefusal(err) {
+		t.Fatalf("error %v must still classify as a quartermaster refusal", err)
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("error %v must keep the underlying subprocess failure reachable", err)
+	}
+	if strings.Contains(err.Error(), "no lease granted") {
+		t.Fatalf("error %q reports an empty reason instead of naming the fault", err)
+	}
+}
+
+// A caller deadline shorter than the client's own ceiling must surface as a
+// timeout, not as an unexplained refusal.
+func TestCommandQuartermasterAcquireSurfacesACallerTimeout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script fixture is unix-only")
+	}
+	root := t.TempDir()
+	bin := filepath.Join(root, "quartermaster")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nsleep 30\n"), 0o755); err != nil {
+		t.Fatalf("write quartermaster fixture: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, err := NewCommandQuartermasterClient(bin).Acquire(ctx, QuartermasterAcquireRequest{Pool: "codex", Holder: "test-holder"})
+	if err == nil {
+		t.Fatal("expected the caller deadline to fail the acquire")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error %v must report the deadline that stopped it", err)
+	}
+}
+
+// A response naming a LEASE_ID but no ACCOUNT means a seat was granted that
+// this process cannot use. Returning without handing it back holds the account
+// for the whole TTL.
+func TestCommandQuartermasterAcquireHandsBackASeatItCannotUse(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script fixture is unix-only")
+	}
+	root := t.TempDir()
+	calls := filepath.Join(root, "calls")
+	bin := filepath.Join(root, "quartermaster")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "` + calls + `"
+if [ "$1" = "acquire" ]; then
+  printf 'LEASE_ID=lease-orphan\nEXPIRES_AT=1787360823\n'
+fi
+exit 0
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write quartermaster fixture: %v", err)
+	}
+
+	lease, err := NewCommandQuartermasterClient(bin).Acquire(context.Background(), QuartermasterAcquireRequest{
+		Pool:   "codex",
+		Holder: "test-holder",
+		TTL:    time.Minute,
+	})
+	if err == nil {
+		t.Fatal("expected an incomplete lease response to fail")
+	}
+	if !IsQuartermasterRefusal(err) {
+		t.Fatalf("error %v must classify as a quartermaster refusal", err)
+	}
+	if lease.ID != "" {
+		t.Fatalf("returned lease = %+v, want no usable lease", lease)
+	}
+	data, readErr := os.ReadFile(calls)
+	if readErr != nil {
+		t.Fatalf("read calls: %v", readErr)
+	}
+	if !strings.Contains(string(data), "release lease-orphan") {
+		t.Fatalf("the granted seat was never handed back; calls were:\n%s", data)
 	}
 }

@@ -34,6 +34,11 @@ type classEntry struct {
 	round   int
 }
 
+type tokenStat struct {
+	token string
+	count int
+}
+
 type class struct {
 	members    []map[string]struct{}
 	category   string
@@ -161,11 +166,13 @@ func (c *class) bestOverlap(tokens map[string]struct{}) float64 {
 
 // label synthesizes a short content-derived slug for the class: the tokens
 // shared by the most members, most frequent first, alphabetical on ties.
+//
+// Membership is decided pairwise against any existing member, so a class of
+// four or more can be a chain whose vocabulary no strict majority holds. Such
+// a class falls back to the tokens at least two members share before it gives
+// up and reports its ordinal, which is the only label carrying no content at
+// all.
 func (c *class) label(index int) string {
-	type tokenStat struct {
-		token string
-		count int
-	}
 	stats := make([]tokenStat, 0, len(c.tokenCount))
 	for t, n := range c.tokenCount {
 		stats = append(stats, tokenStat{token: t, count: n})
@@ -177,9 +184,21 @@ func (c *class) label(index int) string {
 		return stats[i].token < stats[j].token
 	})
 	majority := len(c.members)/2 + 1
+	if parts := topTokens(stats, majority); len(parts) > 0 {
+		return strings.Join(parts, "-")
+	}
+	if majority > 2 {
+		if parts := topTokens(stats, 2); len(parts) > 0 {
+			return strings.Join(parts, "-")
+		}
+	}
+	return fmt.Sprintf("class-%d", index+1)
+}
+
+func topTokens(stats []tokenStat, min int) []string {
 	var parts []string
 	for _, s := range stats {
-		if s.count < majority {
+		if s.count < min {
 			break
 		}
 		parts = append(parts, s.token)
@@ -187,10 +206,7 @@ func (c *class) label(index int) string {
 			break
 		}
 	}
-	if len(parts) == 0 {
-		return fmt.Sprintf("class-%d", index+1)
-	}
-	return strings.Join(parts, "-")
+	return parts
 }
 
 var classStopwords = map[string]struct{}{}

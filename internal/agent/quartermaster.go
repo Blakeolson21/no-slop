@@ -56,11 +56,18 @@ type QuartermasterOptions struct {
 	Home   string
 }
 
+// QuartermasterRefusalError reports that no usable lease was obtained. Cause
+// carries the underlying subprocess failure when the refusal was not a policy
+// decision at all - a missing binary, a timeout, a non-zero exit - so callers
+// can tell "the authority said no" from "the authority could not be reached".
 type QuartermasterRefusalError struct {
 	Pool    string
 	Purpose string
 	Reason  string
+	Cause   error
 }
+
+func (e *QuartermasterRefusalError) Unwrap() error { return e.Cause }
 
 func (e *QuartermasterRefusalError) Error() string {
 	reason := strings.TrimSpace(e.Reason)
@@ -115,21 +122,39 @@ func (c commandQuartermasterClient) Acquire(ctx context.Context, req Quartermast
 		if reason == "" {
 			reason = strings.TrimSpace(stdout.String())
 		}
+		cause := err
+		// A command killed by its deadline reports only the signal that killed
+		// it, which names neither the deadline nor the authority that missed it.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			cause = errors.Join(ctxErr, err)
+			if reason == "" {
+				reason = fmt.Sprintf("lease command did not answer: %v", ctxErr)
+			}
+		}
+		if reason == "" {
+			reason = err.Error()
+		}
 		return QuartermasterLease{}, &QuartermasterRefusalError{
 			Pool:    req.Pool,
 			Purpose: req.Purpose,
 			Reason:  reason,
+			Cause:   cause,
 		}
 	}
 	values := parseQuartermasterLines(stdout.Bytes())
 	account := values["ACCOUNT"]
 	leaseID := values["LEASE_ID"]
 	if account == "" || leaseID == "" {
-		return QuartermasterLease{}, &QuartermasterRefusalError{
+		refusal := &QuartermasterRefusalError{
 			Pool:    req.Pool,
 			Purpose: req.Purpose,
-			Reason:  "lease response did not name ACCOUNT and LEASE_ID",
+			Reason:  incompleteLeaseReason(account, leaseID),
 		}
+		if leaseID == "" {
+			return QuartermasterLease{}, refusal
+		}
+		stranded := QuartermasterLease{ID: leaseID, Pool: req.Pool, Holder: req.Holder}
+		return QuartermasterLease{}, errors.Join(refusal, c.Release(context.Background(), stranded, "failed"))
 	}
 	lease := QuartermasterLease{Account: account, ID: leaseID, Pool: req.Pool, Holder: req.Holder}
 	if raw := values["EXPIRES_AT"]; raw != "" {
@@ -138,6 +163,20 @@ func (c commandQuartermasterClient) Acquire(ctx context.Context, req Quartermast
 		}
 	}
 	return lease, nil
+}
+
+// incompleteLeaseReason names which half of the lease identity the authority
+// failed to report. Without a LEASE_ID a granted seat cannot be handed back at
+// all, so that case says so rather than implying it was cleaned up.
+func incompleteLeaseReason(account, leaseID string) string {
+	switch {
+	case account == "" && leaseID == "":
+		return "lease response named neither ACCOUNT nor LEASE_ID"
+	case leaseID == "":
+		return "lease response named no LEASE_ID, so any seat it granted cannot be handed back before its TTL expires"
+	default:
+		return "lease response named no ACCOUNT, so the seat it granted was handed back"
+	}
 }
 
 func (c commandQuartermasterClient) Release(ctx context.Context, lease QuartermasterLease, outcome string) error {
