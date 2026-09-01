@@ -36,6 +36,19 @@ func TestStemCollapsesBaseFormsWithInflections(t *testing.T) {
 		{base: "parse", inflection: "parsing"},
 		{base: "quote", inflection: "quoted"},
 		{base: "quote", inflection: "quoting"},
+		// A base form that already ends in the doubled consonant its own
+		// inflections shed must shed it too, or "add" classes separately from
+		// "adds", "added", and "adding".
+		{base: "add", inflection: "adds"},
+		{base: "add", inflection: "added"},
+		{base: "add", inflection: "adding"},
+		{base: "err", inflection: "errs"},
+		{base: "err", inflection: "erred"},
+		{base: "stop", inflection: "stops"},
+		{base: "stop", inflection: "stopped"},
+		{base: "stop", inflection: "stopping"},
+		{base: "call", inflection: "calls"},
+		{base: "call", inflection: "calling"},
 	}
 
 	for _, tt := range tests {

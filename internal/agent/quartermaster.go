@@ -15,9 +15,16 @@ import (
 	"time"
 
 	"github.com/Blakeolson21/no-slop/internal/lanehealth"
+	"github.com/Blakeolson21/no-slop/internal/shellenv"
 )
 
 const defaultQuartermasterTTL = 30 * time.Minute
+
+// quartermasterCommandTimeout bounds each lease subprocess. Release runs on a
+// deliberately uncancellable context so a cancelled step still frees its seat,
+// which without a ceiling of its own means a wedged lease script blocks the
+// agent invocation forever.
+const quartermasterCommandTimeout = 30 * time.Second
 
 type QuartermasterLease struct {
 	Account string
@@ -95,11 +102,14 @@ func (c commandQuartermasterClient) Acquire(ctx context.Context, req Quartermast
 		"--ttl", strconv.Itoa(int(ttl.Seconds())),
 		"--weight", strconv.Itoa(weight),
 	}
+	ctx, cancel := context.WithTimeout(ctx, quartermasterCommandTimeout)
+	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	shellenv.ConfigureShellCommand(cmd)
+	err := shellenv.RunShellCommand(cmd)
 	if err != nil {
 		reason := strings.TrimSpace(stderr.String())
 		if reason == "" {
@@ -145,6 +155,8 @@ func (c commandQuartermasterClient) Release(ctx context.Context, lease Quarterma
 	if holder == "" {
 		holder = defaultQuartermasterHolder()
 	}
+	ctx, cancel := context.WithTimeout(ctx, quartermasterCommandTimeout)
+	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, "release",
 		lease.ID,
 		"--holder", holder,
@@ -152,7 +164,8 @@ func (c commandQuartermasterClient) Release(ctx context.Context, lease Quarterma
 	)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	shellenv.ConfigureShellCommand(cmd)
+	if err := shellenv.RunShellCommand(cmd); err != nil {
 		return fmt.Errorf("release quartermaster lease %s: %w: %s", lease.ID, err, strings.TrimSpace(stderr.String()))
 	}
 	return nil

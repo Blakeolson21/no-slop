@@ -258,20 +258,23 @@ func findingTokens(f types.Finding) map[string]struct{} {
 
 // stem strips a handful of common English suffixes so trivially inflected
 // forms ("parses", "parsing", "quoted", "quoting") collapse to one token.
-// Terminal e is normalized on both the base and inflected forms; otherwise an
-// inflection would lose the e through its longer suffix while the base kept it.
-// It is deliberately crude: identity only needs stable collapsing, not
-// linguistic correctness.
+// Every normalization after the suffix cut runs on the base form too:
+// "adding" loses its doubled consonant through the longer suffix, so bare
+// "add" must lose it as well or the base is orphaned from its own
+// inflections. Terminal e is normalized for the same reason. It is
+// deliberately crude: identity only needs stable collapsing, not linguistic
+// correctness.
 func stem(token string) string {
 	if rest, ok := strings.CutSuffix(token, "ies"); ok && len(rest) >= 2 {
 		return rest + "y"
 	}
 	for _, suffix := range []string{"ing", "ed", "es", "s"} {
 		if rest, ok := strings.CutSuffix(token, suffix); ok && len(rest) >= 3 {
-			token = collapseDoubledConsonant(rest)
+			token = rest
 			break
 		}
 	}
+	token = collapseDoubledConsonant(token)
 	if rest, ok := strings.CutSuffix(token, "e"); ok && len(rest) >= 3 {
 		return rest
 	}

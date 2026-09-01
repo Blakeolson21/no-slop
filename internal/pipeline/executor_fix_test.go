@@ -1190,3 +1190,127 @@ func TestExecutor_PreviousFindingsEmptyOnFirstExecution(t *testing.T) {
 		t.Errorf("PreviousFindings should be empty on first execution, got: %s", capturedFindings)
 	}
 }
+
+// waitForOutstandingReviewGate blocks until the review step parks with exactly
+// the given outstanding finding descriptions, failing if the run completes
+// first. A completed run is the silent-drop failure this guards.
+func waitForOutstandingReviewGate(t *testing.T, database *db.DB, done <-chan error, runID string, want ...string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	var last []string
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-done:
+			t.Fatalf("run completed while findings %v were still outstanding: %v", want, err)
+		default:
+		}
+		steps, err := database.GetStepsByRun(runID)
+		if err == nil && len(steps) == 1 &&
+			(steps[0].Status == types.StepStatusFixReview || steps[0].Status == types.StepStatusAwaitingApproval) &&
+			steps[0].FindingsJSON != nil {
+			parsed, parseErr := types.ParseFindingsJSON(*steps[0].FindingsJSON)
+			if parseErr != nil {
+				t.Fatal(parseErr)
+			}
+			last = nil
+			for _, item := range parsed.Items {
+				last = append(last, item.Description)
+			}
+			slices.Sort(last)
+			sorted := append([]string(nil), want...)
+			slices.Sort(sorted)
+			if slices.Equal(last, sorted) {
+				return
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("review never parked on outstanding findings %v; last saw %v", want, last)
+}
+
+// The auto-fix selection path picks only the auto-fixable subset. The findings
+// it leaves behind must survive a rereview that never mentions them again -
+// otherwise a finding raised in one round silently vanishes in the next and
+// the gate reports a clean run it did not earn.
+func TestExecutor_UnselectedAutoFixRoundFindingSurvivesSilentRereview(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+
+	cfg := &config.Config{AutoFix: config.AutoFix{Review: 3}}
+	initial := `{"findings":[{"id":"review-1","severity":"warning","description":"cheap fix","action":"auto-fix"},{"id":"review-2","severity":"error","description":"needs a human","action":"ask-user"}],"summary":"2 findings"}`
+	silent := `{"findings":[],"summary":"no new findings","risk_level":"low"}`
+
+	calls := 0
+	step := &scopeLimitedAdaptiveCallStep{adaptiveCallStep: adaptiveCallStep{
+		name: types.StepReview,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			calls++
+			if calls == 1 {
+				return &StepOutcome{AutoFixable: true, Findings: initial}, nil
+			}
+			if !sctx.Fixing {
+				t.Error("expected the second round to run as an auto-fix round")
+			}
+			fixable, err := types.ParseFindingsJSON(sctx.PreviousFindings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(fixable.Items) != 1 || fixable.Items[0].Description != "cheap fix" {
+				t.Errorf("auto-fix dispatched %#v, want only the auto-fixable finding", fixable.Items)
+			}
+			return &StepOutcome{Findings: silent, ReviewApprovedHeadSHA: run.HeadSHA}, nil
+		},
+	}}
+
+	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
+	done, _ := startExecutor(t, exec, run, repo, workDir)
+
+	waitForOutstandingReviewGate(t, database, done, run.ID, "needs a human")
+
+	if err := exec.Respond(types.StepReview, types.ActionApprove, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The round-limit path stops spending auto-fix rounds. It must not also stop
+// carrying what those rounds never resolved: with the budget exhausted the
+// gate has to park on the unselected finding rather than fall through to a
+// clean completion.
+func TestExecutor_ExhaustedAutoFixBudgetStillParksOnCarriedFinding(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+
+	cfg := &config.Config{AutoFix: config.AutoFix{Review: 1}}
+	initial := `{"findings":[{"id":"review-1","severity":"warning","description":"cheap fix","action":"auto-fix"},{"id":"review-2","severity":"error","description":"needs a human","action":"ask-user"}],"summary":"2 findings"}`
+	afterBudget := `{"findings":[{"id":"review-3","severity":"warning","description":"another cheap fix","action":"auto-fix"}],"summary":"1 finding"}`
+
+	calls := 0
+	step := &scopeLimitedAdaptiveCallStep{adaptiveCallStep: adaptiveCallStep{
+		name: types.StepReview,
+		fn: func(*StepContext) (*StepOutcome, error) {
+			calls++
+			if calls == 1 {
+				return &StepOutcome{AutoFixable: true, Findings: initial}, nil
+			}
+			return &StepOutcome{AutoFixable: true, Findings: afterBudget, ReviewApprovedHeadSHA: run.HeadSHA}, nil
+		},
+	}}
+
+	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
+	done, _ := startExecutor(t, exec, run, repo, workDir)
+
+	waitForOutstandingReviewGate(t, database, done, run.ID, "needs a human", "another cheap fix")
+
+	if calls != 2 {
+		t.Errorf("step called %d times, want 2 (initial + the single budgeted auto-fix round)", calls)
+	}
+	if err := exec.Respond(types.StepReview, types.ActionApprove, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
