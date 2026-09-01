@@ -32,6 +32,12 @@ agent_args_override:
     - -c
     - model_reasoning_effort="low"
 
+quartermaster:
+  enabled: false
+  bin: ~/.fleet/scripts/quartermaster.py
+  ttl: 30m
+  weight: 1
+
 ci_timeout: "168h"
 
 step_quiet_warning: "10m"
@@ -223,6 +229,35 @@ agent_args_override:
 ```
 
 For Codex, `service_tier` and `model_reasoning_effort` tune different things: `service_tier` selects the speed or priority lane, while `model_reasoning_effort` selects reasoning depth. no-slop reloads global config while setting up each run, so edits made before `no-slop axi run` apply to that run. For repeatable profiles, use separately initialized `NS_HOME` directories; each has its own `config.yaml` and no-slop state.
+
+### quartermaster
+
+Account-lease authority for the `claude` and `codex` lanes.
+When enabled, no-slop asks an external lease authority for a provider account before it launches one of those lanes, and fails the invocation closed if no lease is granted.
+
+|      |          |
+| ---- | -------- |
+| Type | `object` |
+
+| Field                   | Type     | Default                          | Description                                                        |
+| ----------------------- | -------- | -------------------------------- | ------------------------------------------------------------------ |
+| `quartermaster.enabled` | `bool`   | `false`                          | Require a lease before launching the `claude` or `codex` lane      |
+| `quartermaster.bin`     | `string` | `~/.fleet/scripts/quartermaster.py` | Lease authority executable; `~` is expanded                     |
+| `quartermaster.ttl`     | `string` (Go duration) | `30m`              | Lease lifetime requested for each invocation                       |
+| `quartermaster.weight`  | `int`    | `1`                              | Lease weight requested for each invocation; must be positive       |
+
+Only the `claude` and `codex` lanes take leases. Other lanes (`rovodev`, `opencode`, `pi`, `copilot`, and ACP targets) launch unchanged, and the whole feature is inert while `enabled` is false.
+
+Leasing sits *inside* quota-exhaustion cooldown, so a lane recorded as exhausted under [`agent`](#agent) is skipped before a lease is even requested.
+When a lease is granted, the invocation runs with the leased account's home bound (`CLAUDE_CONFIG_DIR` or `CODEX_HOME`) and its identity exported as `NS_QUARTERMASTER_ACCOUNT`, `NS_QUARTERMASTER_LEASE_ID`, and `NS_QUARTERMASTER_POOL`.
+Account homes are resolved from the execution-account registry, falling back to `~/.claude-accounts/<account>` or `~/.codex-accounts/<account>`; see [Environment Variables](/no-slop/reference/environment/#ns_quartermaster_account_registry).
+
+A refusal - the authority declining, an unreachable or unusable lease binary, a lease response missing the account or lease identity, or a missing account home - fails the step rather than probing for another account or falling back to the next configured lane.
+Each lease call is bounded, and the seat is always handed back when the invocation ends, including when the step is cancelled; a hand-back that fails is reported, because the account stays leased until its TTL expires.
+If the leased account itself reports quota exhaustion, the failure names that account and its reset time, and the quota cooldown outside the lease still decides whether the lane is parked and another configured lane runs.
+
+An invalid `ttl` or a negative `weight` fails config load.
+These are global-only: a `quartermaster` block in a repository's `.no-slop.yaml` is ignored, because a repository does not get to name an executable this machine's daemon runs.
 
 ### ci_timeout
 

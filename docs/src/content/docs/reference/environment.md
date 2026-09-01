@@ -42,6 +42,31 @@ Takes precedence over `daemon_connect_timeout` in `config.yaml`. An empty, unpar
 `NM_DAEMON_CONNECT_TIMEOUT` is a compatibility alias. Conflicting values,
 including empty versus non-empty, are returned as alias-conflict errors.
 
+## `NS_QUARTERMASTER_BIN`
+
+Lease authority executable used when [`quartermaster.enabled`](/no-slop/reference/global-config/#quartermaster) is true and `quartermaster.bin` is left blank.
+
+|         |                                     |
+| ------- | ----------------------------------- |
+| Type    | `string`                            |
+| Default | `~/.fleet/scripts/quartermaster.py` |
+
+A configured `quartermaster.bin` takes precedence over this variable.
+
+## `NS_QUARTERMASTER_ACCOUNT_REGISTRY`
+
+Path to the JSON registry that maps a leased account slug to the account home no-slop binds for the invocation.
+
+|         |                                                     |
+| ------- | --------------------------------------------------- |
+| Type    | `string`                                            |
+| Default | `~/.no-mistakes-dashboard/execution-accounts.json` |
+
+Each entry names a `slug`, a `provider` (`claude`/`anthropic` or `codex`/`openai`), and a `home`.
+When the registry is missing, unreadable, or has no matching entry, no-slop falls back to `~/.claude-accounts/<account>` or `~/.codex-accounts/<account>`; if that directory does not exist, the lease is refused and the step fails.
+
+no-slop also *sets* `NS_QUARTERMASTER_ACCOUNT`, `NS_QUARTERMASTER_LEASE_ID`, and `NS_QUARTERMASTER_POOL` (plus `CLAUDE_CONFIG_DIR` or `CODEX_HOME`) in the leased agent process. They are outputs of a lease, not inputs you set.
+
 ## `NS_BITBUCKET_EMAIL`
 
 Bitbucket Cloud account email used for PR creation and CI monitoring.
