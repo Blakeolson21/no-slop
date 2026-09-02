@@ -51,6 +51,25 @@ func Execute() int {
 	return 0
 }
 
+// IsAXIRunInvocation reports whether these process arguments would dispatch to
+// `axi run`, the one command that starts a pipeline run.
+//
+// The Mac gate guard in internal/entrypoint has to refuse before any run row,
+// custody claim, or worktree registration exists, so it cannot ask the command
+// itself. A hand-rolled scan of the first two arguments disagrees with cobra,
+// which strips leading root flags before resolving the subcommand: `no-slop
+// --skip lint axi run` still reaches the run path. Resolving through the real
+// command tree keeps the guard and the dispatcher answering the same question
+// by construction. Building and finding opens no state and runs no command.
+func IsAXIRunInvocation(args []string) bool {
+	cmd, _, err := newRootCmd().Find(args)
+	if err != nil || cmd == nil || cmd.Name() != "run" {
+		return false
+	}
+	parent := cmd.Parent()
+	return parent != nil && parent.Name() == "axi"
+}
+
 func newRootCmd() *cobra.Command {
 	var autoYes bool
 	var skipValue string

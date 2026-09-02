@@ -104,8 +104,12 @@ func run() int {
 // The shell wrapper retains the matching fast-fail for its cheaper path. The
 // shared marker, override name, and message text deliberately make the two
 // surfaces auditable as the same policy.
+//
+// Which invocations count as a run is answered by cli.IsAXIRunInvocation, so
+// no arrangement of leading root flags can route past the guard into the run
+// the CLI would otherwise start.
 func macGateGuard(args []string, goos, override string) (message string, refused bool) {
-	if goos != "darwin" || len(args) < 2 || args[0] != "axi" || args[1] != "run" {
+	if goos != "darwin" || !cli.IsAXIRunInvocation(args) {
 		return "", false
 	}
 	if override == "1" {

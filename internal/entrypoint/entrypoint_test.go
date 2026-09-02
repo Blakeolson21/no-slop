@@ -111,6 +111,25 @@ func TestMacGateGuard(t *testing.T) {
 			wantStop: true,
 		},
 		{
+			name:     "root flags before the subcommand do not skip the guard",
+			args:     []string{"--skip", "lint", "axi", "run", "--intent", "test"},
+			goos:     "darwin",
+			wantMsg:  macGateGuardRefusal,
+			wantStop: true,
+		},
+		{
+			name:     "inline root flag value before the subcommand does not skip the guard",
+			args:     []string{"--skip=lint", "axi", "run"},
+			goos:     "darwin",
+			wantMsg:  macGateGuardRefusal,
+			wantStop: true,
+		},
+		{
+			name: "Darwin permits the AXI parent command",
+			args: []string{"axi"},
+			goos: "darwin",
+		},
+		{
 			name: "Linux permits AXI run",
 			args: []string{"axi", "run"},
 			goos: "linux",
@@ -139,6 +158,26 @@ func TestRunRefusesMacGateBeforeStateInitialization(t *testing.T) {
 
 	previousArgs := os.Args
 	os.Args = []string{"no-slop", "axi", "run", "--intent", "test"}
+	t.Cleanup(func() { os.Args = previousArgs })
+	previousGOOS := runtimeGOOS
+	runtimeGOOS = "darwin"
+	t.Cleanup(func() { runtimeGOOS = previousGOOS })
+
+	if got := run(); got != 1 {
+		t.Fatalf("run() = %d, want 1", got)
+	}
+	if _, err := os.Stat(filepath.Join(stateRoot, "state.sqlite")); !os.IsNotExist(err) {
+		t.Fatalf("state database exists after refused Mac gate: stat err = %v", err)
+	}
+}
+
+func TestRunRefusesMacGateWhenRootFlagsPrecedeTheSubcommand(t *testing.T) {
+	stateRoot := t.TempDir()
+	t.Setenv("NS_HOME", stateRoot)
+	t.Setenv("NM_HOME", stateRoot)
+
+	previousArgs := os.Args
+	os.Args = []string{"no-slop", "--skip", "lint", "axi", "run", "--intent", "test"}
 	t.Cleanup(func() { os.Args = previousArgs })
 	previousGOOS := runtimeGOOS
 	runtimeGOOS = "darwin"
