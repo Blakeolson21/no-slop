@@ -68,6 +68,7 @@ Skill installation is best-effort: if the skill write fails, init reports it and
 Agent eXperience Interface for non-interactive agents.
 Most agent workflows use the installed `/no-slop` skill, which drives this command surface underneath.
 It prints TOON to stdout, prints progress to stderr, and uses structured stdout errors with exit code `1` for operational failures and `2` for bad usage.
+The read-only [`axi plan`](/no-slop/reference/cli/#no-slop-axi-plan) report is the one exception to that output shape: it prints JSON on stdout and its failure reason on stderr, under the same exit codes.
 At the TOON output boundary, unsupported C0 control bytes are rendered as visible `\xNN` escapes while tabs, carriage returns, newlines, printable Unicode, and the underlying durable logs remain unchanged.
 If TOON encoding still fails, AXI prints a structured error instead of returning successful empty stdout.
 The calling agent drives AXI approval gates but does not replace the configured pipeline agent that performs validation.
