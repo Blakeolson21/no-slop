@@ -289,8 +289,8 @@ Everything sent remotely is low-cardinality: command names, statuses, durations,
 Run IDs, repository paths, branch names, session identities, prompts, model outputs, diffs, and per-invocation performance records are never sent.
 
 Detailed performance evidence stays on the machine in the local state database (`<NS_HOME>/state.sqlite`): one `agent_invocations` row per agent invocation, plus each run's accumulated parked-at-gate time.
-Each row records run and step identity, purpose (such as review/review-fix/housekeeping), the reported model and its provider, the cold/started/resumed/fallback session mode, a truncated session-identity hash, timestamps, duration, exit status, and failure category (`quota` when provider quota exhaustion is what failed the invocation, whether the lane was skipped while recorded as exhausted or hit the banner live), alongside the session-fidelity metrics below.
-It never stores prompts, model outputs, diffs, raw command arguments, secret values, or credentials - only bounded counts, low-cardinality categories, and durations.
+Each row records run and step identity, purpose (such as review/review-fix/housekeeping), the configured agent kind, the absolute symlink-resolved executable, the model and provider reported by the adapter, the arguments that select a model/provider, the cold/started/resumed/fallback session mode, a truncated session-identity hash, timestamps, duration, exit status, and failure category (`quota` when provider quota exhaustion is what failed the invocation, whether the lane was skipped while recorded as exhausted or hit the banner live), alongside the session-fidelity metrics below.
+It never stores prompts, model outputs, diffs, full command arguments, secret values, or credentials. Only an allowlisted subset of model/provider selector arguments is retained; missing executable or model evidence remains `NULL` and renders as unknown rather than being inferred from the configured agent kind.
 
 The additive session-fidelity fields are nullable and read back as unknown (rendered `-`) rather than a fabricated zero when the adapter did not report them, so rows written before a field existed, and adapters that do not surface a datum, stay honest.
 The legacy raw input, output, and cache-read token counters render numerically; use the nullable per-round and derived fields to determine whether the adapter reported comparable usage:
@@ -301,7 +301,7 @@ The legacy raw input, output, and cache-read token counters render numerically; 
 - Context: `workload_files`/`workload_lines` (bounded change size), `finding_count` (findings in the structured output), and `fallback_reason` (why a failed resume forced a fresh session, one of transient/parse/exit/spawn/unsupported/quota/other; `quota` means the session's lane was quota-exhausted).
 
 The count and timing definitions live in one authoritative place (`internal/agent/invocationmetrics.go`).
-Inspect the evidence with `no-slop stats --agents` (per-purpose aggregates, including a `METRICS` coverage count so a real zero is distinguishable from missing instrumentation) or `no-slop stats --run <id>` (one run's invocations, the per-round-vs-cumulative token split, and parked time).
+Inspect the evidence with `no-slop stats --agents` (per-purpose aggregates, including a `METRICS` coverage count so a real zero is distinguishable from missing instrumentation) or `no-slop stats --run <id>` (one run's resolved invocation identities, per-round-vs-cumulative token split, and parked time).
 
 ## `NS_TELEMETRY`
 

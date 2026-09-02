@@ -41,6 +41,7 @@ func (a *piAgent) NeutralizesGateInstructions() bool {
 }
 
 func (a *piAgent) Run(ctx context.Context, opts RunOpts) (*Result, error) {
+	opts = withInvocationIdentity(opts, a)
 	return runWithRetry(ctx, "pi", opts, claudeMaxRetries, classifyTransient, nil, func() (*Result, error) {
 		return a.runOnce(ctx, opts)
 	})

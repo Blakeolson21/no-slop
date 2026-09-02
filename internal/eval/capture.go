@@ -73,21 +73,21 @@ type sourceStep struct {
 }
 
 type sourceInvocation struct {
-	StepName             string `json:"step_name"`
-	Round                int    `json:"round"`
-	Purpose              string `json:"purpose"`
-	Agent                string `json:"agent"`
-	Model                string `json:"model,omitempty"`
-	DurationMS           int64  `json:"duration_ms"`
-	InputTokens          int    `json:"input_tokens"`
-	OutputTokens         int    `json:"output_tokens"`
-	CacheReadTokens      int    `json:"cache_read_tokens"`
-	FreshInputTokens     *int   `json:"fresh_input_tokens,omitempty"`
-	DeltaInputTokens     *int   `json:"delta_input_tokens,omitempty"`
-	DeltaOutputTokens    *int   `json:"delta_output_tokens,omitempty"`
-	DeltaCacheReadTokens *int   `json:"delta_cache_read_tokens,omitempty"`
-	ExitStatus           string `json:"exit_status"`
-	FailureCategory      string `json:"failure_category,omitempty"`
+	StepName             string  `json:"step_name"`
+	Round                int     `json:"round"`
+	Purpose              string  `json:"purpose"`
+	Agent                string  `json:"agent"`
+	Model                *string `json:"model,omitempty"`
+	DurationMS           int64   `json:"duration_ms"`
+	InputTokens          int     `json:"input_tokens"`
+	OutputTokens         int     `json:"output_tokens"`
+	CacheReadTokens      int     `json:"cache_read_tokens"`
+	FreshInputTokens     *int    `json:"fresh_input_tokens,omitempty"`
+	DeltaInputTokens     *int    `json:"delta_input_tokens,omitempty"`
+	DeltaOutputTokens    *int    `json:"delta_output_tokens,omitempty"`
+	DeltaCacheReadTokens *int    `json:"delta_cache_read_tokens,omitempty"`
+	ExitStatus           string  `json:"exit_status"`
+	FailureCategory      string  `json:"failure_category,omitempty"`
 }
 
 // ErrNoCapturableReview marks the outcomes where a run simply holds nothing to

@@ -53,17 +53,17 @@ func (a *perfRecordingAgent) Run(ctx context.Context, opts agent.RunOpts) (*agen
 		attemptOpts := opts
 		attemptOpts.Session = attempt.Session
 		attemptOpts.SessionFallback = attempt.SessionFallback
-		a.record(ctx, attemptOpts, attempt.Agent, attempt.Result, attempt.Err, attempt.StartedAt, attempt.CompletedAt)
+		a.record(ctx, attemptOpts, attempt.Agent, attempt.Identity, attempt.Result, attempt.Err, attempt.StartedAt, attempt.CompletedAt)
 	}
 	start := time.Now()
 	result, err := a.inner.Run(ctx, opts)
 	if attempts == 0 {
-		a.record(ctx, opts, a.inner.Name(), result, err, start, time.Now())
+		a.record(ctx, opts, a.inner.Name(), agent.ResolveInvocationIdentity(a.inner), result, err, start, time.Now())
 	}
 	return result, err
 }
 
-func (a *perfRecordingAgent) record(ctx context.Context, opts agent.RunOpts, agentName string, result *agent.Result, runErr error, startedAt, completedAt time.Time) {
+func (a *perfRecordingAgent) record(ctx context.Context, opts agent.RunOpts, agentName string, identity agent.InvocationIdentity, result *agent.Result, runErr error, startedAt, completedAt time.Time) {
 	if a.db == nil {
 		return
 	}
@@ -74,18 +74,24 @@ func (a *perfRecordingAgent) record(ctx context.Context, opts agent.RunOpts, age
 	}
 
 	sessionKey := invocationSessionKey(opts, result)
+	configuredAgent := identity.ConfiguredAgent
+	if configuredAgent == "" {
+		configuredAgent = agentName
+	}
 	inv := db.AgentInvocation{
-		RunID:       a.runID,
-		StepName:    string(a.stepName),
-		Round:       a.round(),
-		Purpose:     purpose,
-		Agent:       agentName,
-		SessionMode: invocationSessionMode(opts),
-		SessionKey:  sessionKey,
-		StartedAt:   startedAt.Unix(),
-		CompletedAt: completedAt.Unix(),
-		DurationMS:  completedAt.Sub(startedAt).Milliseconds(),
-		ExitStatus:  "ok",
+		RunID:              a.runID,
+		StepName:           string(a.stepName),
+		Round:              a.round(),
+		Purpose:            purpose,
+		Agent:              configuredAgent,
+		ResolvedExecutable: identity.Executable,
+		ModelArgs:          cloneStrings(identity.ModelArgs),
+		SessionMode:        invocationSessionMode(opts),
+		SessionKey:         sessionKey,
+		StartedAt:          startedAt.Unix(),
+		CompletedAt:        completedAt.Unix(),
+		DurationMS:         completedAt.Sub(startedAt).Milliseconds(),
+		ExitStatus:         "ok",
 	}
 	if opts.SessionFallback && opts.SessionFallbackReason != "" {
 		reason := opts.SessionFallbackReason
@@ -120,7 +126,10 @@ func (a *perfRecordingAgent) recordResult(inv *db.AgentInvocation, sessionKey st
 	if result == nil {
 		return
 	}
-	inv.Model = result.Model
+	if result.Model != "" {
+		model := result.Model
+		inv.Model = &model
+	}
 	if result.ModelProvider != "" {
 		provider := result.ModelProvider
 		inv.ModelProvider = &provider
@@ -183,6 +192,13 @@ func (a *perfRecordingAgent) recordResult(inv *db.AgentInvocation, sessionKey st
 	if count, ok := countOutputFindings(result.Output); ok {
 		inv.FindingCount = &count
 	}
+}
+
+func cloneStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	return append([]string{}, values...)
 }
 
 // countOutputFindings returns the number of findings in a structured output

@@ -30,10 +30,10 @@ func TestStatsAgentsReportsLocalPerformanceTelemetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	seed := []db.AgentInvocation{
-		{RunID: run.ID, StepName: "review", Round: 1, Purpose: "review", Agent: "codex", Model: "gpt-5.2", SessionMode: db.InvocationModeStarted, SessionKey: "deadbeef00000000", StartedAt: 1, CompletedAt: 2, DurationMS: 60_000, ExitStatus: "ok", InputTokens: 100, OutputTokens: 10, CacheReadTokens: 40, CacheCreationTokens: statsIntPtr(20)},
-		{RunID: run.ID, StepName: "review", Round: 2, Purpose: "review", Agent: "codex", Model: "gpt-5.2", SessionMode: db.InvocationModeResumed, SessionKey: "deadbeef00000000", StartedAt: 3, CompletedAt: 4, DurationMS: 30_000, ExitStatus: "ok", InputTokens: 50, OutputTokens: 5, CacheReadTokens: 45, CacheCreationTokens: statsIntPtr(25)},
-		{RunID: run.ID, StepName: "review", Round: 2, Purpose: "review-fix", Agent: "codex", Model: "gpt-5.2", SessionMode: db.InvocationModeStarted, SessionKey: "feedface00000000", StartedAt: 5, CompletedAt: 6, DurationMS: 45_000, ExitStatus: "ok"},
-		{RunID: run.ID, StepName: "review", Round: 3, Purpose: "review-fix", Agent: "codex", Model: "gpt-5.2", SessionMode: db.InvocationModeCold, StartedAt: 7, CompletedAt: 8, DurationMS: 1_000, ExitStatus: "error", FailureCategory: "quota"},
+		{RunID: run.ID, StepName: "review", Round: 1, Purpose: "review", Agent: "codex", ResolvedExecutable: strPtrCLI("/usr/bin/codex"), Model: strPtrCLI("gpt-5.2"), ModelProvider: strPtrCLI("openai"), ModelArgs: []string{"-m", "gpt-5.2"}, SessionMode: db.InvocationModeStarted, SessionKey: "deadbeef00000000", StartedAt: 1, CompletedAt: 2, DurationMS: 60_000, ExitStatus: "ok", InputTokens: 100, OutputTokens: 10, CacheReadTokens: 40, CacheCreationTokens: statsIntPtr(20)},
+		{RunID: run.ID, StepName: "review", Round: 2, Purpose: "review", Agent: "codex", Model: strPtrCLI("gpt-5.2"), SessionMode: db.InvocationModeResumed, SessionKey: "deadbeef00000000", StartedAt: 3, CompletedAt: 4, DurationMS: 30_000, ExitStatus: "ok", InputTokens: 50, OutputTokens: 5, CacheReadTokens: 45, CacheCreationTokens: statsIntPtr(25)},
+		{RunID: run.ID, StepName: "review", Round: 2, Purpose: "review-fix", Agent: "codex", Model: strPtrCLI("gpt-5.2"), SessionMode: db.InvocationModeStarted, SessionKey: "feedface00000000", StartedAt: 5, CompletedAt: 6, DurationMS: 45_000, ExitStatus: "ok"},
+		{RunID: run.ID, StepName: "review", Round: 3, Purpose: "review-fix", Agent: "codex", Model: strPtrCLI("gpt-5.2"), SessionMode: db.InvocationModeCold, StartedAt: 7, CompletedAt: 8, DurationMS: 1_000, ExitStatus: "error", FailureCategory: "quota"},
 	}
 	for _, inv := range seed {
 		if _, err := d.InsertAgentInvocation(inv); err != nil {
@@ -59,7 +59,7 @@ func TestStatsAgentsReportsLocalPerformanceTelemetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stats --run: %v\n%s", err, out)
 	}
-	for _, want := range []string{run.ID, "parked at gates 1m30s total", "resumed", "deadbeef00000000", "gpt-5.2", "CACHE WR", "20", "error/quota"} {
+	for _, want := range []string{run.ID, "parked at gates 1m30s total", "resumed", "deadbeef00000000", "gpt-5.2", "EXECUTABLE", "/usr/bin/codex", "PROVIDER", "openai", "MODEL ARGS", `["-m","gpt-5.2"]`, "CACHE WR", "20", "error/quota"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stats --run missing %q in:\n%s", want, out)
 		}
@@ -96,7 +96,7 @@ func TestStatsRendersPopulatedFidelityMetrics(t *testing.T) {
 	}
 	inv := db.AgentInvocation{
 		RunID: run.ID, StepName: "review", Round: 2, Purpose: "review-fix", Agent: "codex",
-		Model: "gpt-5.6-sol", ModelProvider: strPtrCLI("openai"),
+		Model: strPtrCLI("gpt-5.6-sol"), ModelProvider: strPtrCLI("openai"),
 		SessionMode: db.InvocationModeResumed, SessionKey: "deadbeef00000000",
 		StartedAt: 1, CompletedAt: 2, DurationMS: 10_000, SubprocessWaitMS: statsInt64Ptr(2_000),
 		ExitStatus: "ok", InputTokens: 2500, OutputTokens: 250, CacheReadTokens: 1800,

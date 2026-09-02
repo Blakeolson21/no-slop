@@ -306,6 +306,10 @@ func (q quartermasterAgent) NeutralizesGateInstructions() bool {
 	return NeutralizesGateInstructions(q.Agent)
 }
 
+func (q quartermasterAgent) InvocationIdentity() InvocationIdentity {
+	return ResolveInvocationIdentity(q.Agent)
+}
+
 func QuartermasterPoolForLane(lane string) (string, bool) {
 	switch strings.TrimSpace(lane) {
 	case "claude":

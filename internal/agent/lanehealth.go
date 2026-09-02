@@ -128,6 +128,10 @@ type laneHealthAgent struct {
 	now   func() time.Time
 }
 
+func (l laneHealthAgent) InvocationIdentity() InvocationIdentity {
+	return ResolveInvocationIdentity(l.Agent)
+}
+
 // WithLaneHealth wraps a single agent lane with persisted quota-outage
 // tracking. A nil store returns the agent unchanged, so demo mode and tests
 // that do not care keep the previous behavior exactly.
@@ -145,6 +149,7 @@ func WithLaneHealth(a Agent, store LaneHealthStore, now func() time.Time) Agent 
 }
 
 func (l laneHealthAgent) Run(ctx context.Context, opts RunOpts) (*Result, error) {
+	opts = withInvocationIdentity(opts, l.Agent)
 	lane := l.Agent.Name()
 	startedAt := l.now()
 	// A lane that reports its own attempts emits them from below this wrapper,

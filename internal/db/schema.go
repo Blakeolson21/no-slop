@@ -89,7 +89,9 @@ CREATE TABLE IF NOT EXISTS agent_invocations (
     round                 INTEGER NOT NULL,
     purpose               TEXT NOT NULL,
     agent                 TEXT NOT NULL,
+	resolved_executable   TEXT,
     model                 TEXT,
+	model_args_json       TEXT,
     model_provider        TEXT,
     session_mode          TEXT NOT NULL,
     session_key           TEXT,
@@ -226,6 +228,8 @@ var migrationStatements = []string{
 	`ALTER TABLE step_results ADD COLUMN certified_head_sha TEXT`,
 	// Session-fidelity telemetry columns (all nullable so pre-existing rows read
 	// back as unknown, never a fabricated zero).
+	`ALTER TABLE agent_invocations ADD COLUMN resolved_executable TEXT`,
+	`ALTER TABLE agent_invocations ADD COLUMN model_args_json TEXT`,
 	`ALTER TABLE agent_invocations ADD COLUMN model_provider TEXT`,
 	`ALTER TABLE agent_invocations ADD COLUMN fallback_reason TEXT`,
 	`ALTER TABLE agent_invocations ADD COLUMN subprocess_wait_ms INTEGER`,

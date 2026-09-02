@@ -1,6 +1,10 @@
 package db
 
-import "fmt"
+import (
+	"database/sql"
+	"encoding/json"
+	"fmt"
+)
 
 // Agent invocation session modes recorded for local performance telemetry.
 const (
@@ -26,9 +30,10 @@ const (
 
 // AgentInvocation is one agent process invocation's local performance
 // evidence. It stores identity, timing, session mode, bounded activity counts,
-// and token usage only - never prompts, model outputs, diffs, raw command
-// arguments, or credentials - and it stays local: no per-invocation record is
-// ever sent to remote telemetry.
+// and token usage only - never prompts, model outputs, diffs, full command
+// arguments, or credentials. The only argv retained is the allowlisted subset
+// that selects a model/provider. The record stays local: no per-invocation
+// identity is ever sent to remote telemetry.
 //
 // Fields typed as pointers are nullable: a nil value means the datum was not
 // reported for this invocation and is recorded as unknown, never a fabricated
@@ -43,8 +48,18 @@ type AgentInvocation struct {
 	// test-evidence, housekeeping, document, lint, pr, intent, or a
 	// step-derived default.
 	Purpose string
-	Agent   string
-	Model   string
+	// Agent is the configured adapter kind (for example claude or codex).
+	Agent string
+	// ResolvedExecutable is the absolute, symlink-resolved executable invoked.
+	// Nil means it could not be resolved before the invocation.
+	ResolvedExecutable *string
+	// Model is the model reported by the adapter. Nil means the adapter did not
+	// surface one; it is never inferred from the configured agent kind.
+	Model *string
+	// ModelArgs contains only argv entries that select a model/provider. A
+	// non-nil empty slice means the invocation argv was inspected and contained
+	// no selectors; nil means argv identity was unavailable (including old rows).
+	ModelArgs []string
 	// ModelProvider is the provider that served the model (openai, anthropic,
 	// ...). Nil when the adapter cannot report it.
 	ModelProvider *string
@@ -113,7 +128,7 @@ type AgentInvocation struct {
 
 // agentInvocationColumns is the canonical column order shared by insert and
 // select so the placeholder list and scan destinations cannot drift apart.
-const agentInvocationColumns = `id, run_id, step_name, round, purpose, agent, model, model_provider,
+const agentInvocationColumns = `id, run_id, step_name, round, purpose, agent, resolved_executable, model, model_args_json, model_provider,
 	session_mode, session_key, fallback_reason,
 	started_at, completed_at, duration_ms, subprocess_wait_ms, exit_status, failure_category,
 	input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
@@ -124,7 +139,7 @@ const agentInvocationColumns = `id, run_id, step_name, round, purpose, agent, mo
 	workload_files, workload_lines, finding_count`
 
 // agentInvocationInsertPlaceholders has one '?' per agentInvocationColumns entry.
-const agentInvocationInsertPlaceholders = `?, ?, ?, ?, ?, ?, ?, ?,
+const agentInvocationInsertPlaceholders = `?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 	?, ?, ?,
 	?, ?, ?, ?, ?, ?,
 	?, ?, ?, ?,
@@ -138,10 +153,15 @@ const agentInvocationInsertPlaceholders = `?, ?, ?, ?, ?, ?, ?, ?,
 // fields are stored as SQL NULL (database/sql dereferences non-nil pointers).
 func (d *DB) InsertAgentInvocation(inv AgentInvocation) (*AgentInvocation, error) {
 	inv.ID = newID()
-	_, err := d.sql.Exec(
+	modelArgsJSON, err := marshalModelArgs(inv.ModelArgs)
+	if err != nil {
+		return nil, fmt.Errorf("insert agent invocation: encode model args: %w", err)
+	}
+	_, err = d.sql.Exec(
 		`INSERT INTO agent_invocations (`+agentInvocationColumns+`)
 		 VALUES (`+agentInvocationInsertPlaceholders+`)`,
-		inv.ID, inv.RunID, inv.StepName, inv.Round, inv.Purpose, inv.Agent, inv.Model, inv.ModelProvider,
+		inv.ID, inv.RunID, inv.StepName, inv.Round, inv.Purpose, inv.Agent,
+		inv.ResolvedExecutable, inv.Model, modelArgsJSON, inv.ModelProvider,
 		inv.SessionMode, inv.SessionKey, inv.FallbackReason,
 		inv.StartedAt, inv.CompletedAt, inv.DurationMS, inv.SubprocessWaitMS, inv.ExitStatus, inv.FailureCategory,
 		inv.InputTokens, inv.OutputTokens, inv.CacheReadTokens, inv.CacheCreationTokens,
@@ -185,8 +205,10 @@ type scanner interface {
 
 func scanAgentInvocation(row scanner) (AgentInvocation, error) {
 	var inv AgentInvocation
+	var modelArgsJSON sql.NullString
 	if err := row.Scan(
-		&inv.ID, &inv.RunID, &inv.StepName, &inv.Round, &inv.Purpose, &inv.Agent, &inv.Model, &inv.ModelProvider,
+		&inv.ID, &inv.RunID, &inv.StepName, &inv.Round, &inv.Purpose, &inv.Agent,
+		&inv.ResolvedExecutable, &inv.Model, &modelArgsJSON, &inv.ModelProvider,
 		&inv.SessionMode, &inv.SessionKey, &inv.FallbackReason,
 		&inv.StartedAt, &inv.CompletedAt, &inv.DurationMS, &inv.SubprocessWaitMS, &inv.ExitStatus, &inv.FailureCategory,
 		&inv.InputTokens, &inv.OutputTokens, &inv.CacheReadTokens, &inv.CacheCreationTokens,
@@ -198,7 +220,32 @@ func scanAgentInvocation(row scanner) (AgentInvocation, error) {
 	); err != nil {
 		return AgentInvocation{}, fmt.Errorf("scan agent invocation: %w", err)
 	}
+	if modelArgsJSON.Valid {
+		if err := json.Unmarshal([]byte(modelArgsJSON.String), &inv.ModelArgs); err != nil {
+			return AgentInvocation{}, fmt.Errorf("scan agent invocation model args: %w", err)
+		}
+		if inv.ModelArgs == nil {
+			inv.ModelArgs = []string{}
+		}
+	}
+	// Before Model became nullable, adapters that did not report it persisted an
+	// empty string. Normalize that legacy sentinel to the same honest unknown as
+	// a SQL NULL instead of making old rows look like observed identity.
+	if inv.Model != nil && *inv.Model == "" {
+		inv.Model = nil
+	}
 	return inv, nil
+}
+
+func marshalModelArgs(args []string) (any, error) {
+	if args == nil {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(args)
+	if err != nil {
+		return nil, err
+	}
+	return string(encoded), nil
 }
 
 // LatestSessionCumulative returns the most recent prior invocation's cumulative

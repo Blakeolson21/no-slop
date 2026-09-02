@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -131,14 +132,15 @@ func renderRunAgentPerf(w io.Writer, database *db.DB, runID string) error {
 	// Table 1: session, timing split, activity, workload, and findings.
 	fmt.Fprintln(w)
 	tw := tabwriter.NewWriter(w, 2, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "STEP\tROUND\tPURPOSE\tAGENT\tMODEL\tSESSION\tKEY\tDURATION\tMODEL\tSUBPROC\tRT\tTOOLS (w/t/e/r/g/o)\tFIND\tWORK (f/l)\tFALLBACK\tEXIT")
+	fmt.Fprintln(tw, "STEP\tROUND\tPURPOSE\tAGENT\tEXECUTABLE\tMODEL\tPROVIDER\tMODEL ARGS\tSESSION\tKEY\tDURATION\tMODEL TIME\tSUBPROC\tRT\tTOOLS (w/t/e/r/g/o)\tFIND\tWORK (f/l)\tFALLBACK\tEXIT")
 	for _, inv := range invocations {
 		exit := inv.ExitStatus
 		if inv.FailureCategory != "" && inv.FailureCategory != inv.ExitStatus {
 			exit += "/" + inv.FailureCategory
 		}
-		fmt.Fprintf(tw, "%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			inv.StepName, inv.Round, inv.Purpose, inv.Agent, orUnknown(inv.Model),
+		fmt.Fprintf(tw, "%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			inv.StepName, inv.Round, inv.Purpose, inv.Agent, orUnknown(deref(inv.ResolvedExecutable)),
+			orUnknown(deref(inv.Model)), orUnknown(deref(inv.ModelProvider)), formatModelArgs(inv.ModelArgs),
 			inv.SessionMode, inv.SessionKey,
 			formatMS(inv.DurationMS), formatModelTime(inv), optMS(inv.SubprocessWaitMS),
 			optInt(inv.ModelRoundtrips), formatToolHistogram(inv), optInt(inv.FindingCount),
@@ -163,6 +165,17 @@ func renderRunAgentPerf(w io.Writer, database *db.DB, runID string) error {
 		)
 	}
 	return tw.Flush()
+}
+
+func formatModelArgs(args []string) string {
+	if args == nil {
+		return "-"
+	}
+	encoded, err := json.Marshal(args)
+	if err != nil {
+		return "-"
+	}
+	return string(encoded)
 }
 
 func formatMS(ms int64) string {

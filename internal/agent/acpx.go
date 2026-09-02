@@ -16,9 +16,10 @@ import (
 const acpxScannerMaxTokenSize = 256 * 1024 * 1024
 
 type acpxAgent struct {
-	bin        string
-	target     string
-	rawCommand string
+	bin             string
+	target          string
+	rawCommand      string
+	configuredAgent string
 }
 
 func (a *acpxAgent) Name() string { return acpAgentName(a.target) }
@@ -31,6 +32,7 @@ func acpAgentName(target string) string { return "acp:" + target }
 func (a *acpxAgent) ReportsAgentAttempts() bool { return true }
 
 func (a *acpxAgent) Run(ctx context.Context, opts RunOpts) (*Result, error) {
+	opts = withInvocationIdentity(opts, a)
 	return runWithRetry(ctx, a.Name(), opts, claudeMaxRetries, classifyTransient, nil, func() (*Result, error) {
 		return a.runOnce(ctx, opts)
 	})

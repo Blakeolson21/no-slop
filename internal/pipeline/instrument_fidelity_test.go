@@ -127,8 +127,8 @@ func TestPerfRecording_ResumedSessionRecordsPerRoundDeltas(t *testing.T) {
 	assertPtr(t, "r2 workload lines", r2.WorkloadLines, 120)
 	assertPtr(t, "r2 finding count", r2.FindingCount, 2)
 	// Model identity.
-	if r2.Model != "gpt-5.6-sol" || r2.ModelProvider == nil || *r2.ModelProvider != "openai" {
-		t.Fatalf("model/provider = %q/%v", r2.Model, r2.ModelProvider)
+	if r2.Model == nil || *r2.Model != "gpt-5.6-sol" || r2.ModelProvider == nil || *r2.ModelProvider != "openai" {
+		t.Fatalf("model/provider = %v/%v", r2.Model, r2.ModelProvider)
 	}
 	// Cache creation is unknown (codex does not report it), not a fabricated 0.
 	if r2.CacheCreationTokens != nil {

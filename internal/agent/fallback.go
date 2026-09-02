@@ -92,6 +92,7 @@ func (a *fallbackAgent) Run(ctx context.Context, opts RunOpts) (*Result, error) 
 	outages := make([]*LaneOutageError, 0, len(candidates))
 	for i, current := range candidates {
 		currentOpts := opts
+		currentOpts = withInvocationIdentity(currentOpts, current)
 		if currentOpts.Session != nil && currentOpts.Session.ID == "" && !SupportsSessionResume(current) {
 			currentOpts.Session = nil
 			currentOpts.SessionFallback = false

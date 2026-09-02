@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -36,6 +40,68 @@ func (u *usageAgent) Run(_ context.Context, opts agent.RunOpts) (*agent.Result, 
 		}
 	}
 	return result, nil
+}
+
+// TestPerfRecordingAgent_RecordsResolvedSymlinkTargetAndUnknownModel executes
+// a Claude-compatible wrapper through a symlink and proves the durable row
+// describes what actually launched. The helper deliberately reports no model,
+// so the row must preserve unknown instead of inferring "claude".
+func TestPerfRecordingAgent_RecordsResolvedSymlinkTargetAndUnknownModel(t *testing.T) {
+	database, _, run, _ := setupTest(t)
+	t.Setenv("NS_REVIEW_IDENTITY_HELPER", "1")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	link := filepath.Join(dir, "configured-claude-wrapper")
+	if err := os.Symlink(executable, link); err != nil {
+		t.Fatal(err)
+	}
+	inner, err := agent.New(types.AgentClaude, link, []string{
+		"-test.run=^TestReviewerIdentityHelperProcess$", "--",
+		"--model", "z-ai/glm-5.3-flash",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapper := &perfRecordingAgent{
+		inner: inner, db: database, runID: run.ID, stepName: types.StepReview,
+		round: func() int { return 1 },
+	}
+	if _, err := wrapper.Run(context.Background(), agent.RunOpts{Purpose: "review"}); err != nil {
+		t.Fatalf("run wrapper: %v", err)
+	}
+
+	invs, err := database.GetAgentInvocationsByRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(invs) != 1 {
+		t.Fatalf("got %d rows, want 1", len(invs))
+	}
+	got := invs[0]
+	realExecutable, err := filepath.EvalSymlinks(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Agent != "claude" || got.ResolvedExecutable == nil || *got.ResolvedExecutable != realExecutable {
+		t.Fatalf("recorded agent/executable = %q/%v, want claude/%q", got.Agent, got.ResolvedExecutable, realExecutable)
+	}
+	if !reflect.DeepEqual(got.ModelArgs, []string{"--model", "z-ai/glm-5.3-flash"}) {
+		t.Fatalf("model args = %#v", got.ModelArgs)
+	}
+	if got.Model != nil {
+		t.Fatalf("unreported model must be unknown, got %q", *got.Model)
+	}
+}
+
+func TestReviewerIdentityHelperProcess(t *testing.T) {
+	if os.Getenv("NS_REVIEW_IDENTITY_HELPER") != "1" {
+		return
+	}
+	fmt.Fprintln(os.Stdout, `{"type":"assistant","session_id":"wrapper-session","message":{"usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"ok"}]}}`)
+	fmt.Fprintln(os.Stdout, `{"type":"result","subtype":"success","session_id":"wrapper-session","structured_output":{}}`)
 }
 
 type fallbackUsageAgent struct {
@@ -97,8 +163,8 @@ func TestExecutor_RecordsAgentInvocationsLocally(t *testing.T) {
 	if review.SessionKey == "" || review.SessionKey == "sess-new" {
 		t.Fatalf("session key must be a fingerprint, not empty or the raw id: %q", review.SessionKey)
 	}
-	if review.Agent != "usage-agent" || review.Model != "test-model-1" {
-		t.Fatalf("agent/model = %q/%q", review.Agent, review.Model)
+	if review.Agent != "usage-agent" || review.Model == nil || *review.Model != "test-model-1" {
+		t.Fatalf("agent/model = %q/%v", review.Agent, review.Model)
 	}
 	if review.InputTokens != 100 || review.OutputTokens != 20 || review.CacheReadTokens != 60 {
 		t.Fatalf("token usage not recorded: %+v", review)
@@ -145,7 +211,7 @@ func TestPerfRecordingAgent_RecordsFallbackAttemptsSeparately(t *testing.T) {
 	if got := byAgent["codex"]; got.ExitStatus != "error" || got.FailureCategory != "spawn" {
 		t.Fatalf("codex invocation = %+v", got)
 	}
-	if got := byAgent["claude"]; got.ExitStatus != "ok" || got.Model != "test-model-2" {
+	if got := byAgent["claude"]; got.ExitStatus != "ok" || got.Model == nil || *got.Model != "test-model-2" {
 		t.Fatalf("claude invocation = %+v", got)
 	}
 }

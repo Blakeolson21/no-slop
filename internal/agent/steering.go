@@ -62,6 +62,10 @@ func (s steeredAgent) NeutralizesGateInstructions() bool {
 	return NeutralizesGateInstructions(s.Agent)
 }
 
+func (s steeredAgent) InvocationIdentity() InvocationIdentity {
+	return ResolveInvocationIdentity(s.Agent)
+}
+
 // WithSteering wraps an agent so every invocation is steered to keep writes
 // inside the worktree, naming evidenceRoot as the one permitted out-of-worktree
 // destination. Wrapping is idempotent: an already-steered agent is returned

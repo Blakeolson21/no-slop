@@ -97,6 +97,7 @@ func emitAgentAttempt(opts RunOpts, name string, result *Result, err error, star
 	}
 	opts.OnAttempt(Attempt{
 		Agent:           name,
+		Identity:        invocationIdentityFromOpts(opts),
 		Result:          result,
 		Err:             err,
 		StartedAt:       startedAt,
@@ -104,6 +105,17 @@ func emitAgentAttempt(opts RunOpts, name string, result *Result, err error, star
 		Session:         cloneSessionRef(opts.Session),
 		SessionFallback: opts.SessionFallback,
 	})
+}
+
+func invocationIdentityFromOpts(opts RunOpts) InvocationIdentity {
+	if opts.invocationIdentity == nil {
+		return InvocationIdentity{}
+	}
+	identity := *opts.invocationIdentity
+	if identity.ModelArgs != nil {
+		identity.ModelArgs = append([]string{}, identity.ModelArgs...)
+	}
+	return identity
 }
 
 func cloneSessionRef(session *SessionRef) *SessionRef {

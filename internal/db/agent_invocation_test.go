@@ -2,6 +2,7 @@ package db
 
 import (
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -15,7 +16,9 @@ func TestAgentInvocations_InsertAndReadBack(t *testing.T) {
 		Round:               2,
 		Purpose:             "review-fix",
 		Agent:               "codex",
-		Model:               "gpt-5.2-codex",
+		ResolvedExecutable:  strPtr("/opt/bin/codex-real"),
+		Model:               strPtr("gpt-5.2-codex"),
+		ModelArgs:           []string{"--model", "gpt-5.2-codex"},
 		SessionMode:         InvocationModeResumed,
 		SessionKey:          "abcd1234abcd1234",
 		StartedAt:           1_700_000_000,
@@ -40,7 +43,9 @@ func TestAgentInvocations_InsertAndReadBack(t *testing.T) {
 	}
 	back := got[0]
 	if back.Purpose != "review-fix" || back.Round != 2 || back.SessionMode != InvocationModeResumed ||
-		back.DurationMS != 90_000 || back.InputTokens != 1000 || back.CacheReadTokens != 800 || back.Model != "gpt-5.2-codex" {
+		back.DurationMS != 90_000 || back.InputTokens != 1000 || back.CacheReadTokens != 800 ||
+		back.Model == nil || *back.Model != "gpt-5.2-codex" || back.ResolvedExecutable == nil ||
+		*back.ResolvedExecutable != "/opt/bin/codex-real" || !reflect.DeepEqual(back.ModelArgs, []string{"--model", "gpt-5.2-codex"}) {
 		t.Fatalf("readback mismatch: %+v", back)
 	}
 	if back.CacheCreationTokens == nil || *back.CacheCreationTokens != 50 {
@@ -59,7 +64,8 @@ func TestAgentInvocations_NullableFidelityFieldsRoundTrip(t *testing.T) {
 	// Fully populated row.
 	full := AgentInvocation{
 		RunID: run.ID, StepName: "review", Round: 2, Purpose: "review", Agent: "codex",
-		Model: "gpt-5.6-sol", ModelProvider: strPtr("openai"),
+		ResolvedExecutable: strPtr("/usr/local/bin/codex"), Model: strPtr("gpt-5.6-sol"),
+		ModelArgs: []string{"-m", "gpt-5.6-sol"}, ModelProvider: strPtr("openai"),
 		SessionMode: InvocationModeFallback, SessionKey: "key1", FallbackReason: strPtr(FallbackReasonExit),
 		StartedAt: 1, CompletedAt: 2, DurationMS: 5000, SubprocessWaitMS: int64Ptr(1200),
 		ExitStatus: "ok", InputTokens: 2500, OutputTokens: 250, CacheReadTokens: 1800,
@@ -101,16 +107,19 @@ func TestAgentInvocations_NullableFidelityFieldsRoundTrip(t *testing.T) {
 	}
 	m := got[1]
 	for name, isNil := range map[string]bool{
-		"ModelProvider":    m.ModelProvider == nil,
-		"FallbackReason":   m.FallbackReason == nil,
-		"SubprocessWaitMS": m.SubprocessWaitMS == nil,
-		"CacheCreation":    m.CacheCreationTokens == nil,
-		"FreshInput":       m.FreshInputTokens == nil,
-		"DeltaInput":       m.DeltaInputTokens == nil,
-		"ModelRoundtrips":  m.ModelRoundtrips == nil,
-		"ToolCalls":        m.ToolCalls == nil,
-		"WorkloadFiles":    m.WorkloadFiles == nil,
-		"FindingCount":     m.FindingCount == nil,
+		"ResolvedExecutable": m.ResolvedExecutable == nil,
+		"Model":              m.Model == nil,
+		"ModelArgs":          m.ModelArgs == nil,
+		"ModelProvider":      m.ModelProvider == nil,
+		"FallbackReason":     m.FallbackReason == nil,
+		"SubprocessWaitMS":   m.SubprocessWaitMS == nil,
+		"CacheCreation":      m.CacheCreationTokens == nil,
+		"FreshInput":         m.FreshInputTokens == nil,
+		"DeltaInput":         m.DeltaInputTokens == nil,
+		"ModelRoundtrips":    m.ModelRoundtrips == nil,
+		"ToolCalls":          m.ToolCalls == nil,
+		"WorkloadFiles":      m.WorkloadFiles == nil,
+		"FindingCount":       m.FindingCount == nil,
 	} {
 		if !isNil {
 			t.Fatalf("minimal row %s should read back as unknown (nil)", name)
@@ -440,5 +449,52 @@ func TestOpenMigratesSessionFidelityColumns(t *testing.T) {
 		ModelRoundtrips: intPtr(3), ToolCalls: intPtr(2), SubprocessWaitMS: int64Ptr(500),
 	}); err != nil {
 		t.Fatalf("insert after migration: %v", err)
+	}
+}
+
+// TestOpenMigratesReviewerIdentityColumns proves an existing invocation table
+// gains resolved identity fields without inventing history for legacy rows.
+func TestOpenMigratesReviewerIdentityColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.sqlite")
+	d, err := Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	repo, err := d.InsertRepo("/tmp/repo", "https://github.com/test/repo", "main")
+	if err != nil {
+		t.Fatalf("insert repo: %v", err)
+	}
+	run, err := d.InsertRun(repo.ID, "b", "h", "b")
+	if err != nil {
+		t.Fatalf("insert run: %v", err)
+	}
+	for _, col := range []string{"resolved_executable", "model_args_json"} {
+		if _, err := d.sql.Exec(`ALTER TABLE agent_invocations DROP COLUMN ` + col); err != nil {
+			t.Fatalf("drop %s: %v", col, err)
+		}
+	}
+	if _, err := d.sql.Exec(`INSERT INTO agent_invocations
+		(id, run_id, step_name, round, purpose, agent, model, session_mode, session_key, exit_status, failure_category, started_at, completed_at, duration_ms, input_tokens, output_tokens, cache_read_tokens)
+		VALUES ('legacy-identity', ?, 'review', 1, 'review', 'claude', '', 'cold', '', 'ok', '', 1, 2, 1, 0, 0, 0)`, run.ID); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	d, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer d.Close()
+	got, err := d.GetAgentInvocationsByRun(run.ID)
+	if err != nil {
+		t.Fatalf("get migrated row: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d rows, want 1", len(got))
+	}
+	if got[0].ResolvedExecutable != nil || got[0].Model != nil || got[0].ModelArgs != nil {
+		t.Fatalf("legacy identity must stay unknown, got %+v", got[0])
 	}
 }

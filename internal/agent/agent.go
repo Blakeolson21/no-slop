@@ -55,6 +55,10 @@ type RunOpts struct {
 	// fallback-provider attempts, after it completes. It is instrumentation
 	// only and must not change invocation behavior.
 	OnAttempt func(Attempt)
+	// invocationIdentity is populated by the concrete adapter immediately
+	// before its retry loop. It is deliberately internal instrumentation rather
+	// than caller input: recorded launch identity must be observed, not claimed.
+	invocationIdentity *InvocationIdentity
 }
 
 // Attempt describes one completed concrete adapter attempt for an agent
@@ -62,6 +66,7 @@ type RunOpts struct {
 // failures or moves to a fallback provider.
 type Attempt struct {
 	Agent           string
+	Identity        InvocationIdentity
 	Result          *Result
 	Err             error
 	StartedAt       time.Time
@@ -815,7 +820,7 @@ func New(name types.AgentName, bin string, extraArgs []string) (Agent, error) {
 func NewWithOptions(name types.AgentName, bin string, extraArgs []string, opts Options) (Agent, error) {
 	if target, ok := types.ACPTargetFor(name); ok {
 		rawCommand := types.ACPRawCommand(target, opts.ACPRegistryOverrides)
-		return &acpxAgent{bin: bin, target: target, rawCommand: rawCommand}, nil
+		return &acpxAgent{bin: bin, target: target, rawCommand: rawCommand, configuredAgent: string(name)}, nil
 	}
 	switch name {
 	case types.AgentClaude:
