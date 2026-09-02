@@ -115,6 +115,120 @@ func TestTestStep_WithoutConfiguredSuiteDeadAgentStillFails(t *testing.T) {
 	}
 }
 
+// Preservation is deliberately not gated on agent.IsAgentUnavailable: a passed
+// suite is authoritative no matter why its narrator died, and gating it would
+// make the fix fragile against the very empty-tail exit that caused the
+// incident. The classifier instead has to keep the two causes tellable apart,
+// so a reproducible agent defect is never filed as a transient lane outage.
+func TestTestStep_PreservedEvidenceFailureNamesWhetherItWasALaneOutage(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name          string
+		narratorErr   error
+		wantOutage    bool
+		wantInLabel   string
+		wantNotInText string
+	}{
+		{
+			name:          "quota outage that ended the 2026-09-02 run",
+			narratorErr:   errors.New("claude exited: exit status 1: "),
+			wantOutage:    true,
+			wantInLabel:   "evidence-unavailable (agent unavailable)",
+			wantNotInText: "not a lane outage",
+		},
+		{
+			name:          "deterministic agent defect",
+			narratorErr:   errors.New("codex returned no structured output"),
+			wantOutage:    false,
+			wantInLabel:   "evidence-unavailable (evidence agent failed, not a lane outage)",
+			wantNotInText: "(agent unavailable)",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := agent.IsAgentUnavailable(tc.narratorErr); got != tc.wantOutage {
+				t.Fatalf("IsAgentUnavailable(%v) = %v, want %v; the test no longer covers the branch it names", tc.narratorErr, got, tc.wantOutage)
+			}
+			dir, baseSHA, headSHA := setupGitRepo(t)
+			ag := &mockAgent{
+				name: "test",
+				runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+					return nil, tc.narratorErr
+				},
+			}
+			sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{Test: "printf 'suite passed\\n'"})
+			sctx.UserIntent = "Show the measured behavior"
+
+			outcome, err := (&TestStep{}).Execute(sctx)
+			if err != nil {
+				t.Fatalf("Execute error = %v, want the measured suite result preserved", err)
+			}
+			if outcome.NeedsApproval || outcome.AutoFixable {
+				t.Fatalf("outcome = %+v, want a non-blocking completion", outcome)
+			}
+			var findings Findings
+			if err := json.Unmarshal([]byte(outcome.Findings), &findings); err != nil {
+				t.Fatalf("decode findings: %v", err)
+			}
+			if len(findings.Items) != 1 {
+				t.Fatalf("findings = %#v, want exactly the evidence warning", findings.Items)
+			}
+			got := findings.Items[0].Description
+			if !strings.Contains(got, tc.wantInLabel) {
+				t.Fatalf("description = %q, want it to name the cause %q", got, tc.wantInLabel)
+			}
+			if strings.Contains(got, tc.wantNotInText) {
+				t.Fatalf("description = %q must not also claim %q", got, tc.wantNotInText)
+			}
+			if !strings.HasPrefix(findings.TestingSummary, "unavailable: ") {
+				t.Fatalf("testing_summary = %q, want the intent's unavailable prefix", findings.TestingSummary)
+			}
+		})
+	}
+}
+
+// The finding description and testing_summary are rendered into the PR body, so
+// a dying agent's multi-line stderr must arrive as one bounded line.
+func TestTestStep_PreservedEvidenceReasonIsOneBoundedLine(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	noisy := "claude exited: exit status 1:\r\n" + strings.Repeat("  stack frame  at some/very/long/path.go:1234\n", 40)
+	ag := &mockAgent{
+		name: "test",
+		runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+			return nil, errors.New(noisy)
+		},
+	}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{Test: "printf 'suite passed\\n'"})
+	sctx.UserIntent = "Show the measured behavior"
+
+	outcome, err := (&TestStep{}).Execute(sctx)
+	if err != nil {
+		t.Fatalf("Execute error = %v, want the measured suite result preserved", err)
+	}
+	var findings Findings
+	if err := json.Unmarshal([]byte(outcome.Findings), &findings); err != nil {
+		t.Fatalf("decode findings: %v", err)
+	}
+	reason := strings.TrimPrefix(findings.TestingSummary, "unavailable: ")
+	if reason == findings.TestingSummary {
+		t.Fatalf("testing_summary = %q, want the intent's unavailable prefix", findings.TestingSummary)
+	}
+	if strings.ContainsAny(findings.TestingSummary, "\n\r") || strings.ContainsAny(findings.Items[0].Description, "\n\r") {
+		t.Fatalf("multi-line stderr reached the PR narrative: summary=%q description=%q", findings.TestingSummary, findings.Items[0].Description)
+	}
+	if got := len([]rune(reason)); got != 300 {
+		t.Fatalf("reason rune length = %d, want it bounded at 300", got)
+	}
+	if !strings.HasSuffix(reason, "...") {
+		t.Fatalf("reason = %q, want truncation to be visible", reason)
+	}
+	if strings.Contains(reason, "  ") {
+		t.Fatalf("reason = %q, want collapsed whitespace", reason)
+	}
+}
+
 // Preserving a measured suite result must never swallow an explicit
 // cancellation, including one that reaches the step only through the agent's
 // error chain.

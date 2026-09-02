@@ -291,12 +291,12 @@ func evidenceUnavailableOutcome(sctx *pipeline.StepContext, err error, tested []
 	if runes := []rune(reason); len(runes) > maxReasonRunes {
 		reason = string(runes[:maxReasonRunes-3]) + "..."
 	}
-	description := "evidence-unavailable: " + reason
+	description := "evidence-unavailable (evidence agent failed, not a lane outage): " + reason
 	if agent.IsAgentUnavailable(err) {
 		description = "evidence-unavailable (agent unavailable): " + reason
 		sctx.Log("evidence agent unavailable after configured tests passed; preserving measured result")
 	} else {
-		sctx.Log("evidence collection failed after configured tests passed; preserving measured result")
+		sctx.Log("evidence collection failed and is not a lane outage; preserving measured result")
 	}
 	findingsJSON, _ := json.Marshal(Findings{
 		Items: []Finding{{
