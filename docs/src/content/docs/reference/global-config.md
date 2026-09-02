@@ -104,8 +104,9 @@ agent: [codex, claude]
 The list is filtered to entries available to the daemon at run startup, and the first available entry becomes the primary agent.
 After resolving `auto`, entries that resolve to the same ACP target are deduplicated in list order, so `cursor` and `acp:cursor` provide one fallback and preserve whichever spelling appears first.
 If no entry is available, the gate fails before its first pipeline step.
-If a pipeline invocation fails because that agent process cannot start or exits with an error, no-slop retries that invocation with the next available fallback.
+If a pipeline invocation fails because that agent lane could not serve it - the process cannot start, it exits with an error, it times out, or the provider returns a transient failure such as a rate limit - no-slop retries that invocation with the next available fallback.
 Structured findings and schema/output validation problems do not trigger fallback.
+Neither does a cancelled or timed-out run: the next entry would inherit the same dead deadline, so the chain stops there instead of spending another agent launch to rediscover it.
 
 When an invocation fails with a provider quota-exhaustion banner, that entry is recorded as unusable until its quota resets, and later invocations skip it without launching the process.
 The reset time comes from the provider's own banner when it states one, and otherwise defaults to one hour.
