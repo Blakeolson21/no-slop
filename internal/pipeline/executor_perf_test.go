@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -93,6 +94,57 @@ func TestPerfRecordingAgent_RecordsResolvedSymlinkTargetAndUnknownModel(t *testi
 	}
 	if got.Model != nil {
 		t.Fatalf("unreported model must be unknown, got %q", *got.Model)
+	}
+}
+
+// TestPerfRecordingAgent_DoesNotPersistCredentialArgv launches a wrapper whose
+// configured argv carries a credential next to a model selector and proves the
+// durable row keeps only the selector. The identity filter is applied before
+// persistence, so this asserts the boundary that matters: nothing readable back
+// out of the invocation record contains the secret.
+func TestPerfRecordingAgent_DoesNotPersistCredentialArgv(t *testing.T) {
+	const secret = "sk-must-not-be-recorded"
+	database, _, run, _ := setupTest(t)
+	t.Setenv("NS_REVIEW_IDENTITY_HELPER", "1")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inner, err := agent.New(types.AgentClaude, executable, []string{
+		"-test.run=^TestReviewerIdentityHelperProcess$", "--",
+		"--model", "z-ai/glm-5.3-flash",
+		"--api-key", secret,
+		"--dangerously-log-everything",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapper := &perfRecordingAgent{
+		inner: inner, db: database, runID: run.ID, stepName: types.StepReview,
+		round: func() int { return 1 },
+	}
+	if _, err := wrapper.Run(context.Background(), agent.RunOpts{Purpose: "review"}); err != nil {
+		t.Fatalf("run wrapper: %v", err)
+	}
+
+	invs, err := database.GetAgentInvocationsByRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(invs) != 1 {
+		t.Fatalf("got %d rows, want 1", len(invs))
+	}
+	if !reflect.DeepEqual(invs[0].ModelArgs, []string{"--model", "z-ai/glm-5.3-flash"}) {
+		t.Fatalf("model args = %#v, want only the model selector", invs[0].ModelArgs)
+	}
+	persisted, err := json.Marshal(invs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{secret, "--api-key", "--dangerously-log-everything"} {
+		if strings.Contains(string(persisted), forbidden) {
+			t.Fatalf("persisted invocation record leaked %q: %s", forbidden, persisted)
+		}
 	}
 }
 
