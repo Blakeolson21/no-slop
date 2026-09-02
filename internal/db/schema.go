@@ -226,10 +226,13 @@ var migrationStatements = []string{
 	// non-review steps read back as "no report", never a fabricated one.
 	`ALTER TABLE step_results ADD COLUMN convergence_json TEXT`,
 	`ALTER TABLE step_results ADD COLUMN certified_head_sha TEXT`,
-	// Session-fidelity telemetry columns (all nullable so pre-existing rows read
-	// back as unknown, never a fabricated zero).
+	// Observed launch-identity columns: nullable so a legacy row, and an
+	// invocation whose adapter could not observe its own launch, both stay
+	// unknown instead of being backfilled from the configured agent kind.
 	`ALTER TABLE agent_invocations ADD COLUMN resolved_executable TEXT`,
 	`ALTER TABLE agent_invocations ADD COLUMN model_args_json TEXT`,
+	// Session-fidelity telemetry columns (all nullable so pre-existing rows read
+	// back as unknown, never a fabricated zero).
 	`ALTER TABLE agent_invocations ADD COLUMN model_provider TEXT`,
 	`ALTER TABLE agent_invocations ADD COLUMN fallback_reason TEXT`,
 	`ALTER TABLE agent_invocations ADD COLUMN subprocess_wait_ms INTEGER`,
