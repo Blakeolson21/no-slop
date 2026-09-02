@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Blakeolson21/no-slop/internal/lanehealth"
@@ -49,6 +50,42 @@ func IsQuotaOutage(err error) bool {
 	}
 	var all *allLanesOutageError
 	return errors.As(err, &all)
+}
+
+// IsAgentUnavailable reports whether an invocation failed because the agent
+// lane could not serve it, rather than because the work the agent was asked to
+// assess produced a negative result. Agent adapters return successful Result
+// values for structured findings; launch failures, provider outages, timeouts,
+// and process exits arrive as errors.
+//
+// This is the single availability classifier used both by fallback routing and
+// by callers that must preserve an independently measured result when a later
+// narration invocation dies. Keep quota recognition structural through
+// IsQuotaOutage: matching its rendered text here would recreate the competing
+// outage classifier this package exists to avoid.
+func IsAgentUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if IsQuotaOutage(err) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	if _, transient := classifyTransient(err); transient {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	for _, needle := range []string{
+		" start:",
+		"start server ",
+		" server: start server ",
+		" exited:",
+		" reported exit code ",
+	} {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 // LaneHealthStore is the slice of lanehealth.Store this package needs, kept as

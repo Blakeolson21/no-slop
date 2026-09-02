@@ -3,6 +3,7 @@ package steps
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,8 +12,107 @@ import (
 
 	"github.com/Blakeolson21/no-slop/internal/agent"
 	"github.com/Blakeolson21/no-slop/internal/config"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/pipeline"
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
+
+func TestTestStep_PassingConfiguredSuiteSurvivesUnavailableEvidenceAgent(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	testCmd := "printf 'suite passed\\n'"
+	narratorErr := errors.New("claude exited: exit status 1: ")
+	database, err := db.Open(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+	repo, err := database.InsertRepo(dir, "https://github.com/test/repo", "main")
+	if err != nil {
+		t.Fatalf("insert repo: %v", err)
+	}
+	run, err := database.InsertRunWithIntent(repo.ID, "refs/heads/feature", headSHA, baseSHA, &db.RunIntent{
+		Summary: "Show the measured behavior",
+		Source:  db.RunIntentSourceAgent,
+		Score:   1,
+	})
+	if err != nil {
+		t.Fatalf("insert run: %v", err)
+	}
+
+	ag := &mockAgent{
+		name: "test",
+		runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+			return nil, narratorErr
+		},
+	}
+	cfg := &config.Config{Agent: types.AgentClaude, Commands: config.Commands{Test: testCmd}}
+	exec := pipeline.NewExecutor(database, paths.WithRoot(t.TempDir()), cfg, ag, []pipeline.Step{&TestStep{}}, nil)
+	if err := exec.Execute(context.Background(), run, repo, dir); err != nil {
+		t.Fatalf("passing configured suite was overwritten by narrator error: %v", err)
+	}
+	steps, err := database.GetStepsByRun(run.ID)
+	if err != nil {
+		t.Fatalf("get steps: %v", err)
+	}
+	if len(steps) != 1 || steps[0].Status != types.StepStatusCompleted || steps[0].FindingsJSON == nil {
+		t.Fatalf("steps = %#v, want completed test step with persisted evidence warning", steps)
+	}
+
+	var findings Findings
+	if err := json.Unmarshal([]byte(*steps[0].FindingsJSON), &findings); err != nil {
+		t.Fatalf("decode findings: %v", err)
+	}
+	if findings.TestingSummary != "unavailable: claude exited: exit status 1:" {
+		t.Fatalf("testing_summary = %q", findings.TestingSummary)
+	}
+	if len(findings.Tested) != 1 || findings.Tested[0] != testCmd {
+		t.Fatalf("tested = %#v, want authoritative configured command", findings.Tested)
+	}
+	if len(findings.Items) != 1 || findings.Items[0].Severity != "warning" || findings.Items[0].Action != types.ActionNoOp ||
+		!strings.Contains(findings.Items[0].Description, "evidence-unavailable") {
+		t.Fatalf("evidence-unavailable flag = %#v", findings.Items)
+	}
+}
+
+func TestTestStep_FailingConfiguredSuiteStillFails(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	ag := &mockAgent{
+		name: "test",
+		runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+			t.Fatal("evidence agent must not run after a failing configured suite")
+			return nil, nil
+		},
+	}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{Test: "printf 'real assertion failure\\n'; exit 7"})
+	sctx.UserIntent = "Show the measured behavior"
+
+	outcome, err := (&TestStep{}).Execute(sctx)
+	if err != nil {
+		t.Fatalf("Execute returned infrastructure error: %v", err)
+	}
+	if !outcome.NeedsApproval || !outcome.AutoFixable || outcome.ExitCode != 7 {
+		t.Fatalf("outcome = %+v, want failing suite to remain a blocking exit 7", outcome)
+	}
+}
+
+func TestTestStep_WithoutConfiguredSuiteDeadAgentStillFails(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	ag := &mockAgent{
+		name: "test",
+		runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+			return nil, errors.New("codex exited: exit status 1: ")
+		},
+	}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+
+	if outcome, err := (&TestStep{}).Execute(sctx); err == nil || outcome != nil {
+		t.Fatalf("outcome = %+v, err = %v; want agent-as-measurement death to fail", outcome, err)
+	}
+}
 
 func TestTestStep_FixMode(t *testing.T) {
 	t.Parallel()

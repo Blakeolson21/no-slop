@@ -1,12 +1,17 @@
 package steps
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/Blakeolson21/no-slop/internal/agent"
+	"github.com/Blakeolson21/no-slop/internal/intent"
 	"github.com/Blakeolson21/no-slop/internal/pipeline"
+	"github.com/Blakeolson21/no-slop/internal/safeurl"
 	"github.com/Blakeolson21/no-slop/internal/testguidance"
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
@@ -201,6 +206,14 @@ Rules:
 			OnChunk:    sctx.LogChunk,
 		})
 		if err != nil {
+			// With no configured command, this invocation is the measurement and
+			// its death must fail the step. With a configured command, the suite
+			// already produced the authoritative result above; this invocation is
+			// only narration, so its failure is recorded without rewriting that
+			// measured result. Explicit cancellation still stops the pipeline.
+			if testCmd != "" && !errors.Is(ctx.Err(), context.Canceled) {
+				return evidenceUnavailableOutcome(sctx, err, tested, fixSummary), nil
+			}
 			return nil, fmt.Errorf("agent run tests: %w", err)
 		}
 
@@ -267,4 +280,36 @@ Rules:
 	sctx.Log("all tests passed")
 	findingsJSON, _ := json.Marshal(Findings{Tested: tested})
 	return &pipeline.StepOutcome{Findings: string(findingsJSON), FixSummary: fixSummary}, nil
+}
+
+func evidenceUnavailableOutcome(sctx *pipeline.StepContext, err error, tested []string, fixSummary string) *pipeline.StepOutcome {
+	reason := sanitizePromptText(safeurl.RedactText(intent.RedactSecrets(err.Error())))
+	if reason == "" {
+		reason = "agent returned no failure detail"
+	}
+	const maxReasonRunes = 300
+	if runes := []rune(reason); len(runes) > maxReasonRunes {
+		reason = string(runes[:maxReasonRunes-3]) + "..."
+	}
+	description := "evidence-unavailable: " + reason
+	if agent.IsAgentUnavailable(err) {
+		description = "evidence-unavailable (agent unavailable): " + reason
+		sctx.Log("evidence agent unavailable after configured tests passed; preserving measured result")
+	} else {
+		sctx.Log("evidence collection failed after configured tests passed; preserving measured result")
+	}
+	findingsJSON, _ := json.Marshal(Findings{
+		Items: []Finding{{
+			Severity:    "warning",
+			Action:      types.ActionNoOp,
+			Description: description,
+		}},
+		Summary:        "configured test command passed; evidence unavailable",
+		Tested:         append([]string{}, tested...),
+		TestingSummary: "unavailable: " + strings.TrimSpace(reason),
+	})
+	return &pipeline.StepOutcome{
+		Findings:   string(findingsJSON),
+		FixSummary: fixSummary,
+	}
 }

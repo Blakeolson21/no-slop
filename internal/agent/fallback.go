@@ -121,7 +121,7 @@ func (a *fallbackAgent) Run(ctx context.Context, opts RunOpts) (*Result, error) 
 			}
 			return nil, err
 		}
-		if !isAgentUnavailableError(err) {
+		if !IsAgentUnavailable(err) {
 			return nil, err
 		}
 		next := candidates[i+1]
@@ -184,33 +184,6 @@ func (a *fallbackAgent) Close() error {
 		return fmt.Errorf("close fallback agents: %s", strings.Join(errs, "; "))
 	}
 	return nil
-}
-
-func isAgentUnavailableError(err error) bool {
-	if err == nil {
-		return false
-	}
-	// A lane skipped because its provider quota is exhausted never launched a
-	// process, so it carries none of the substrings below; it is nonetheless the
-	// clearest case of "this lane cannot serve the request, try the next one".
-	var outage *LaneOutageError
-	if errors.As(err, &outage) {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	unavailable := []string{
-		" start:",
-		"start server ",
-		" server: start server ",
-		" exited:",
-		" reported exit code ",
-	}
-	for _, needle := range unavailable {
-		if strings.Contains(msg, needle) {
-			return true
-		}
-	}
-	return false
 }
 
 func fallbackReason(err error) string {

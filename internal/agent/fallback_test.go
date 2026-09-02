@@ -108,6 +108,27 @@ func TestFallbackAgentDoesNotFallBackOnStructuredOutputError(t *testing.T) {
 	}
 }
 
+func TestIsAgentUnavailableClassifiesNarratorDeathsAcrossAgents(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "non-claude empty exit message", err: errors.New("acpx exited: exit status 1: "), want: true},
+		{name: "rate limit", err: errors.New("provider request failed with HTTP 429: rate limited"), want: true},
+		{name: "timeout", err: context.DeadlineExceeded, want: true},
+		{name: "test failure is not an agent death", err: errors.New("tests failed with exit code 1"), want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsAgentUnavailable(tc.err); got != tc.want {
+				t.Fatalf("IsAgentUnavailable(%q) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestFallbackAgent_ForwardsSessionCapability(t *testing.T) {
 	first := &fallbackTestAgent{name: "codex", resumable: true, run: func() (*Result, error) { return &Result{}, nil }}
 	second := &fallbackTestAgent{name: "claude", resumable: true, run: func() (*Result, error) { return &Result{}, nil }}
