@@ -166,6 +166,13 @@ func TestExecutor_RecordsAgentInvocationsLocally(t *testing.T) {
 	if review.Agent != "usage-agent" || review.Model == nil || *review.Model != "test-model-1" {
 		t.Fatalf("agent/model = %q/%v", review.Agent, review.Model)
 	}
+	// usageAgent reports no launch identity, so the configured kind is still
+	// retained in Agent while the fields that can only come from an observed
+	// launch stay explicitly unknown rather than being invented from that kind.
+	if review.ResolvedExecutable != nil || review.ModelArgs != nil {
+		t.Fatalf("unobserved launch identity must stay unknown, got executable=%v args=%#v",
+			review.ResolvedExecutable, review.ModelArgs)
+	}
 	if review.InputTokens != 100 || review.OutputTokens != 20 || review.CacheReadTokens != 60 {
 		t.Fatalf("token usage not recorded: %+v", review)
 	}
