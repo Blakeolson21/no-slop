@@ -1487,6 +1487,10 @@ func (a *gateStepBoundaryAgent) NeutralizesGateInstructions() bool {
 	return agent.NeutralizesGateInstructions(a.inner)
 }
 
+func (a *gateStepBoundaryAgent) InvocationIdentity() agent.InvocationIdentity {
+	return agent.ResolveInvocationIdentity(a.inner)
+}
+
 type lifecycleAgent struct {
 	inner       agent.Agent
 	onLifecycle func(agent.LifecycleEvent)
@@ -1525,6 +1529,14 @@ func (a *lifecycleAgent) SupportsSessionProvider(provider string) bool {
 
 func (a *lifecycleAgent) ReportsAgentAttempts() bool {
 	return agent.ReportsAgentAttempts(a.inner)
+}
+
+// InvocationIdentity forwards the wrapped adapter's observed launch identity.
+// Both wrappers below the perf recorder must forward it: an adapter that emits
+// no attempts is recorded from the recorder's own resolution of its inner
+// agent, which a wrapper that swallows the capability would report as unknown.
+func (a *lifecycleAgent) InvocationIdentity() agent.InvocationIdentity {
+	return agent.ResolveInvocationIdentity(a.inner)
 }
 
 const (

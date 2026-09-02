@@ -4,20 +4,44 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
+// identityTempDir returns a temp dir with symlinks already resolved, so a path
+// built from it is directly comparable with one the resolver ran through
+// filepath.EvalSymlinks. On macOS t.TempDir() lives under /var, which is itself
+// a symlink to /private/var, and on Windows it can be an 8.3 short path.
+func identityTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// identityExecutableName gives a filename exec.LookPath can resolve on this
+// platform. Windows finds only names carrying a PATHEXT extension, so an
+// extension-less unix-style wrapper name is not an executable there.
+func identityExecutableName(name string) string {
+	if runtime.GOOS == "windows" {
+		return name + ".exe"
+	}
+	return name
+}
+
 func TestInvocationIdentityResolvesSymlinkAndKeepsOnlyModelSelectors(t *testing.T) {
-	dir := t.TempDir()
-	target := filepath.Join(dir, "real-reviewer")
+	dir := identityTempDir(t)
+	target := filepath.Join(dir, identityExecutableName("real-reviewer"))
 	if err := os.WriteFile(target, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(dir, "claude-wrapper")
+	link := filepath.Join(dir, identityExecutableName("claude-wrapper"))
 	if err := os.Symlink(target, link); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks unavailable: %v", err)
 	}
 
 	ag, err := New(types.AgentClaude, link, []string{
@@ -58,8 +82,8 @@ func TestInvocationIdentityMissingExecutableIsUnknown(t *testing.T) {
 // nil (unknown) rather than the known-empty slice that would claim argv was
 // examined, and configured extra args must not be recorded as if they had been.
 func TestInvocationIdentityACPWrapperLeavesUninspectedArgvUnknown(t *testing.T) {
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "acpx")
+	dir := identityTempDir(t)
+	bin := filepath.Join(dir, identityExecutableName("acpx"))
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}

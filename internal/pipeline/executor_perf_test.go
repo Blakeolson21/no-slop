@@ -55,9 +55,11 @@ func TestPerfRecordingAgent_RecordsResolvedSymlinkTargetAndUnknownModel(t *testi
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	link := filepath.Join(dir, "configured-claude-wrapper")
+	// Windows resolves only names carrying a PATHEXT extension, so the wrapper
+	// has to keep the real executable's suffix to be launchable there.
+	link := filepath.Join(dir, "configured-claude-wrapper"+filepath.Ext(executable))
 	if err := os.Symlink(executable, link); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks unavailable: %v", err)
 	}
 	inner, err := agent.New(types.AgentClaude, link, []string{
 		"-test.run=^TestReviewerIdentityHelperProcess$", "--",
@@ -237,6 +239,74 @@ func TestExecutor_RecordsAgentInvocationsLocally(t *testing.T) {
 	evidence := invocations[1]
 	if evidence.SessionMode != db.InvocationModeCold || evidence.Purpose != "review" {
 		t.Fatalf("evidence row = %+v", evidence)
+	}
+}
+
+// identityOnlyAgent observes a launch identity but emits no per-attempt
+// callbacks, which is what drives the recorder's own resolution path.
+type identityOnlyAgent struct{ identity agent.InvocationIdentity }
+
+func (i *identityOnlyAgent) Name() string { return "identity-agent" }
+func (i *identityOnlyAgent) Close() error { return nil }
+
+func (i *identityOnlyAgent) InvocationIdentity() agent.InvocationIdentity { return i.identity }
+
+func (i *identityOnlyAgent) Run(_ context.Context, _ agent.RunOpts) (*agent.Result, error) {
+	return &agent.Result{Output: json.RawMessage(`{}`)}, nil
+}
+
+// TestExecutor_NoAttemptInvocationRecordsIdentityThroughStepWrappers proves an
+// adapter that emits no attempts still gets its observed identity recorded when
+// it runs through the executor. The executor stacks a gate-boundary wrapper and
+// a lifecycle wrapper between the recorder and the adapter, and that path
+// resolves identity from the stack rather than from an attempt, so a wrapper
+// that fails to forward the capability downgrades every such invocation to
+// unknown - exactly the inference-free unknown that is supposed to mean the
+// adapter could not observe its own launch.
+func TestExecutor_NoAttemptInvocationRecordsIdentityThroughStepWrappers(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+
+	executable := filepath.Join(t.TempDir(), "real-reviewer")
+	wantArgs := []string{"--model", "z-ai/glm-5.3-flash"}
+	inner := &identityOnlyAgent{identity: agent.InvocationIdentity{
+		ConfiguredAgent: "claude",
+		Executable:      &executable,
+		ModelArgs:       wantArgs,
+	}}
+
+	step := &adaptiveCallStep{
+		name: types.StepReview,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			if _, err := sctx.Agent.Run(sctx.Ctx, agent.RunOpts{Prompt: "review", Purpose: "review"}); err != nil {
+				return nil, err
+			}
+			return &StepOutcome{}, nil
+		},
+	}
+
+	cfg := &config.Config{Agent: types.AgentClaude}
+	exec := NewExecutor(database, p, cfg, inner, []Step{step}, nil)
+	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	invocations, err := database.GetAgentInvocationsByRun(run.ID)
+	if err != nil {
+		t.Fatalf("get invocations: %v", err)
+	}
+	if len(invocations) != 1 {
+		t.Fatalf("got %d invocation rows, want 1", len(invocations))
+	}
+	got := invocations[0]
+	if got.Agent != "claude" {
+		t.Fatalf("configured agent = %q, want claude", got.Agent)
+	}
+	if got.ResolvedExecutable == nil || *got.ResolvedExecutable != executable {
+		t.Fatalf("resolved executable = %v, want %q", got.ResolvedExecutable, executable)
+	}
+	if !reflect.DeepEqual(got.ModelArgs, wantArgs) {
+		t.Fatalf("model args = %#v, want %#v", got.ModelArgs, wantArgs)
 	}
 }
 
