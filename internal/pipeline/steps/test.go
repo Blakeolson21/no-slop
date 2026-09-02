@@ -212,7 +212,7 @@ Rules:
 			// only narration, so its failure is recorded without rewriting that
 			// measured result. Explicit cancellation still stops the pipeline.
 			if testCmd != "" && ctx.Err() == nil && !errors.Is(err, context.Canceled) {
-				return evidenceUnavailableOutcome(sctx, err, tested, fixSummary), nil
+				return evidenceUnavailableOutcome(sctx, err, tested, fixSummary)
 			}
 			return nil, fmt.Errorf("agent run tests: %w", err)
 		}
@@ -282,7 +282,7 @@ Rules:
 	return &pipeline.StepOutcome{Findings: string(findingsJSON), FixSummary: fixSummary}, nil
 }
 
-func evidenceUnavailableOutcome(sctx *pipeline.StepContext, err error, tested []string, fixSummary string) *pipeline.StepOutcome {
+func evidenceUnavailableOutcome(sctx *pipeline.StepContext, err error, tested []string, fixSummary string) (*pipeline.StepOutcome, error) {
 	reason := sanitizePromptText(safeurl.RedactText(intent.RedactSecrets(err.Error())))
 	if reason == "" {
 		reason = "agent returned no failure detail"
@@ -298,7 +298,7 @@ func evidenceUnavailableOutcome(sctx *pipeline.StepContext, err error, tested []
 	} else {
 		sctx.Log("evidence collection failed and is not a lane outage; preserving measured result")
 	}
-	findingsJSON, _ := json.Marshal(Findings{
+	findingsJSON, marshalErr := json.Marshal(Findings{
 		Items: []Finding{{
 			Severity:    "warning",
 			Action:      types.ActionNoOp,
@@ -308,8 +308,11 @@ func evidenceUnavailableOutcome(sctx *pipeline.StepContext, err error, tested []
 		Tested:         append([]string{}, tested...),
 		TestingSummary: "unavailable: " + strings.TrimSpace(reason),
 	})
+	if marshalErr != nil {
+		return nil, fmt.Errorf("encode evidence-unavailable findings: %w", marshalErr)
+	}
 	return &pipeline.StepOutcome{
 		Findings:   string(findingsJSON),
 		FixSummary: fixSummary,
-	}
+	}, nil
 }
