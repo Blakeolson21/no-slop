@@ -125,7 +125,8 @@ On startup, the daemon checks for runs that were left in `pending` or `running` 
 - Removes orphaned worktree directories via `git worktree remove --force` - but never one whose run is still `pending` or `running`; only leftovers from terminal runs or directories with no matching run record are removed
 - Migrates gates named by authoritative repository records, plus legacy directories with the strict `<repoID>.git` shape. Before changing an unstamped candidate, it validates that the directory is a bare repository without relying on the current directory or ancestor Git discovery; unrelated and malformed directories are rejected without hook or Git mutation
 - For a validated legacy gate, installs or refreshes the no-slop-managed pre-receive admission and post-receive notification hooks using the [gate's hook-preservation and managed-copy safety rules](/no-slop/concepts/gate-model/#receive-hooks), then enables push-option support and reapplies per-worktree hook-path isolation
-- Records a content-versioned gate configuration stamp only after the whole migration succeeds. Normal restarts check current stamped gates from the filesystem without rerunning the mutating Git commands
+- Configures the gate so the [reviewed-tree evidence refs](/no-slop/concepts/gate-model/#bare-gate-repo) survive garbage collection, for migrated gates and for gates whose stamp is already current
+- Records a content-versioned gate configuration stamp only after the whole migration succeeds. Normal restarts check current stamped gates from the filesystem and only read back that retention policy, without rerunning the migration's mutating Git commands; a gate missing the policy has those config keys reinstalled and nothing else rewritten
 - Clears any parked-awaiting-agent marker so a recovered failed run is not shown as still waiting for `axi respond`
 
 ## Logging

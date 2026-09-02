@@ -17,6 +17,9 @@ type terminalAdoptionFixture struct {
 	workDir   string
 	base      string
 	submitted string
+	// seed is the developer's own clone: a separate repository with its own
+	// ref store, so tests can assert gate custody metadata never lands there.
+	seed string
 }
 
 func newTerminalAdoptionFixture(t *testing.T) *terminalAdoptionFixture {
@@ -49,7 +52,7 @@ func newTerminalAdoptionFixture(t *testing.T) *terminalAdoptionFixture {
 	execGit(t, workDir, "config", "user.email", "test@test.com")
 	execGit(t, workDir, "config", "user.name", "Test")
 
-	return &terminalAdoptionFixture{gate: gate, workDir: workDir, base: base, submitted: submitted}
+	return &terminalAdoptionFixture{gate: gate, workDir: workDir, base: base, submitted: submitted, seed: seed}
 }
 
 // selfCommit models the fix-round agent committing on its own: the head moves

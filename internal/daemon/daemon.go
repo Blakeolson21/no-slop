@@ -558,7 +558,10 @@ var ensureGateHooksPathIsolation = git.EnsureHooksPathIsolation
 // directories with the strict <id>.git shape. Every unstamped candidate is
 // structurally checked and explicitly verified as bare before any hook or Git
 // mutation. A completed, content-versioned stamp makes normal restarts a cheap
-// filesystem-only pass instead of six Git subprocesses per gate.
+// pass instead of six Git subprocesses per gate: a filesystem stamp check plus
+// the read-only config lookups that confirm the reviewed-tree evidence
+// retention policy, whose keys postdate the stamp and so cannot be inferred
+// from it.
 func migrateGateConfigs(ctx context.Context, d *db.DB, p *paths.Paths) gateMigrationStats {
 	var stats gateMigrationStats
 	candidates := make(map[string]struct{})

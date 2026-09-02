@@ -94,6 +94,11 @@ instead of relying on working-directory discovery, so hardened environments
 that set `safe.bareRepository=explicit` (common in agent harnesses and CI)
 work unchanged.
 
+Besides the branches you push, the gate holds the reviewed-tree evidence refs
+under `refs/gate-evidence/`, which `init` and daemon startup configure to
+survive garbage collection for the life of the gate. The
+[Review step](/no-slop/reference/pipeline-steps/#review) owns that contract.
+
 ### Daemon
 
 The daemon owns long-running work: creating worktrees, running the pipeline,
