@@ -14,6 +14,7 @@ import (
 
 	"github.com/Blakeolson21/no-slop/internal/db"
 	"github.com/Blakeolson21/no-slop/internal/gate"
+	"github.com/Blakeolson21/no-slop/internal/identity"
 	"github.com/Blakeolson21/no-slop/internal/paths"
 	"github.com/Blakeolson21/no-slop/internal/types"
 	"github.com/spf13/cobra"
@@ -109,14 +110,17 @@ func TestAxiPlanUsesTheRunCommandsPflagGrammarForBooleanFalse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Yes != wantYes || plan.Yes {
-		t.Fatalf("plan yes = %v, backend yes = %v; --yes=false must remain false", plan.Yes, wantYes)
+	if plan.Yes != wantYes {
+		t.Fatalf("plan yes = %v, real run flag set yes = %v", plan.Yes, wantYes)
+	}
+	if plan.Yes {
+		t.Fatal("plan yes = true; --yes=false must remain false")
 	}
 	if !reflect.DeepEqual(plan.Skip, wantSkip) {
-		t.Fatalf("plan skip = %v, backend skip = %v", plan.Skip, wantSkip)
+		t.Fatalf("plan skip = %v, real run flag set skip = %v", plan.Skip, wantSkip)
 	}
 	if plan.Intent != wantIntent {
-		t.Fatalf("plan intent = %q, backend intent = %q", plan.Intent, wantIntent)
+		t.Fatalf("plan intent = %q, real run flag set intent = %q", plan.Intent, wantIntent)
 	}
 }
 
@@ -139,14 +143,20 @@ func TestAxiPlanUsesTheRunCommandsPflagTerminatorSemantics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Yes != wantYes || !plan.Yes {
-		t.Fatalf("plan yes = %v, backend yes = %v", plan.Yes, wantYes)
+	if plan.Yes != wantYes {
+		t.Fatalf("plan yes = %v, real run flag set yes = %v", plan.Yes, wantYes)
 	}
-	if !slices.Equal(plan.Skip, wantSkip) || len(plan.Skip) != 0 {
-		t.Fatalf("plan skip = %v, backend skip = %v; post-terminator --skip became a flag", plan.Skip, wantSkip)
+	if !plan.Yes {
+		t.Fatal("plan yes = false; --yes before the terminator must stay true")
+	}
+	if !slices.Equal(plan.Skip, wantSkip) {
+		t.Fatalf("plan skip = %v, real run flag set skip = %v", plan.Skip, wantSkip)
+	}
+	if len(plan.Skip) != 0 {
+		t.Fatalf("plan skip = %v; post-terminator --skip became a flag", plan.Skip)
 	}
 	if !reflect.DeepEqual(plan.PositionalArgs, backend.Flags().Args()) {
-		t.Fatalf("plan positional args = %q, backend positional args = %q", plan.PositionalArgs, backend.Flags().Args())
+		t.Fatalf("plan positional args = %q, real run flag set positional args = %q", plan.PositionalArgs, backend.Flags().Args())
 	}
 	wantArgs := []string{"--skip", "push"}
 	if !reflect.DeepEqual(plan.PositionalArgs, wantArgs) {
@@ -174,11 +184,23 @@ func TestAxiPlanMatchesRunGrammarForRepeatedAndEmptyFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantIntent, _ := backend.Flags().GetString("intent")
-	if plan.Yes != wantYes || !slices.Equal(plan.Skip, wantSkip) || plan.Intent != wantIntent {
-		t.Fatalf("plan parsed (%v, %v, %q), backend parsed (%v, %v, %q)", plan.Yes, plan.Skip, plan.Intent, wantYes, wantSkip, wantIntent)
+	if plan.Yes != wantYes {
+		t.Fatalf("plan yes = %v, real run flag set yes = %v", plan.Yes, wantYes)
 	}
-	if plan.Yes || len(plan.Skip) != 0 || plan.Intent != `last "quoted" intent` {
-		t.Fatalf("last repeated values did not win: %#v", plan)
+	if !slices.Equal(plan.Skip, wantSkip) {
+		t.Fatalf("plan skip = %v, real run flag set skip = %v", plan.Skip, wantSkip)
+	}
+	if plan.Intent != wantIntent {
+		t.Fatalf("plan intent = %q, real run flag set intent = %q", plan.Intent, wantIntent)
+	}
+	if plan.Yes {
+		t.Fatal("plan yes = true; the last repeated --yes=false must win")
+	}
+	if len(plan.Skip) != 0 {
+		t.Fatalf("plan skip = %v; the last repeated empty --skip must win", plan.Skip)
+	}
+	if plan.Intent != `last "quoted" intent` {
+		t.Fatalf("plan intent = %q; the last repeated --intent must win", plan.Intent)
 	}
 }
 
@@ -253,7 +275,10 @@ func TestAxiPlanServesItsOwnHelpAndKeepsItPositionalAfterTheTerminator(t *testin
 	if err := backend.ParseFlags([]string{"--", "--help"}); err != nil {
 		t.Fatalf("real axi run flag set rejected argv: %v", err)
 	}
-	if !reflect.DeepEqual(plan.PositionalArgs, backend.Flags().Args()) || !reflect.DeepEqual(plan.PositionalArgs, []string{"--help"}) {
+	if !reflect.DeepEqual(plan.PositionalArgs, backend.Flags().Args()) {
+		t.Fatalf("plan positional args = %q, real run flag set positional args = %q", plan.PositionalArgs, backend.Flags().Args())
+	}
+	if !reflect.DeepEqual(plan.PositionalArgs, []string{"--help"}) {
 		t.Fatalf("post-terminator --help = %q, want positional %q", plan.PositionalArgs, []string{"--help"})
 	}
 }
@@ -309,8 +334,39 @@ func TestAxiPlanFailureNeverEchoesOriginCredentials(t *testing.T) {
 		t.Fatalf("failed plan emitted partial stdout %q", scrubPlanTestCredential(out))
 	}
 	assertNoPlanTestCredential(t, "plan failure", err.Error())
-	if !strings.Contains(err.Error(), "example.invalid") {
-		t.Fatalf("plan failure did not name the unreachable origin: %v", scrubPlanTestCredential(err.Error()))
+	// The credentialled URL reaches the failing fetch's argv, so the error
+	// naming its redacted form is what separates "redaction rewrote it" from
+	// "the URL never surfaced at all", which would satisfy the absence
+	// assertion above without proving anything.
+	if !strings.Contains(err.Error(), "redacted@example.invalid") {
+		t.Fatalf("plan failure did not name the redacted unreachable origin: %v", scrubPlanTestCredential(err.Error()))
+	}
+}
+
+// TestAxiPlanWithoutATrustedConfigDoesNotAdoptThePushedBranchesAgent pins the
+// absent-trusted-config merge path: the trusted default branch carries no repo
+// config, so the pushed branch's code-executing agent selection must be
+// discarded in favor of the operator's global lane rather than panicking or
+// letting the proposed branch pick the process the run would launch.
+func TestAxiPlanWithoutATrustedConfigDoesNotAdoptThePushedBranchesAgent(t *testing.T) {
+	_, repoDir := setupAxiPlanRepo(t)
+	pushedConfig := filepath.Join(repoDir, identity.RepoConfigName)
+	if err := os.WriteFile(pushedConfig, []byte("agent: claude\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(t, repoDir, "git", "add", identity.RepoConfigName)
+	run(t, repoDir, "git", "commit", "-m", "pushed branch selects its own agent")
+
+	out, err := executeCmd("axi", "plan", "--intent", "inspect only")
+	if err != nil {
+		t.Fatalf("axi plan failed with no trusted config on the default branch: %v\n%s", err, out)
+	}
+	plan := decodeAxiRunPlan(t, out)
+	if plan.Agent.Primary != types.AgentCodex {
+		t.Fatalf("agent primary = %q, want the global %q; an absent trusted config must not let the pushed branch select the lane", plan.Agent.Primary, types.AgentCodex)
+	}
+	if !reflect.DeepEqual(plan.Agent.Fallbacks, []types.AgentName{types.AgentCodex}) {
+		t.Fatalf("agent fallbacks = %#v, want only the global codex lane", plan.Agent.Fallbacks)
 	}
 }
 
