@@ -115,6 +115,99 @@ func TestTestStep_WithoutConfiguredSuiteDeadAgentStillFails(t *testing.T) {
 	}
 }
 
+// The invariant that stops this branch from inverting itself: only a suite that
+// actually ran and PASSED lets a dead narrator complete the step. Keying that on
+// the measured verdict rather than on "a command was configured" is what makes it
+// hold for every call path, including any future one that reaches the evidence
+// agent after a failing suite instead of returning early the way Execute does
+// today (covered by TestTestStep_FailingConfiguredSuiteStillFails).
+func TestPreserveMeasuredSuiteResult_OnlyAPassedSuiteMaySoftenADeadNarrator(t *testing.T) {
+	t.Parallel()
+	deadNarrator := errors.New("claude exited: exit status 1: ")
+	tests := []struct {
+		name     string
+		suite    configuredSuiteOutcome
+		ctxErr   error
+		agentErr error
+		want     bool
+	}{
+		{
+			name:     "passed suite keeps its measurement authoritative",
+			suite:    configuredSuitePassed,
+			agentErr: deadNarrator,
+			want:     true,
+		},
+		{
+			name:     "failed suite is never softened by a dead narrator",
+			suite:    configuredSuiteFailed,
+			agentErr: deadNarrator,
+			want:     false,
+		},
+		{
+			name:     "absent suite leaves the agent as the measurement",
+			suite:    configuredSuiteAbsent,
+			agentErr: deadNarrator,
+			want:     false,
+		},
+		{
+			name:     "cancelled step context stops even after a passed suite",
+			suite:    configuredSuitePassed,
+			ctxErr:   context.Canceled,
+			agentErr: deadNarrator,
+			want:     false,
+		},
+		{
+			name:     "expired step context stops even after a passed suite",
+			suite:    configuredSuitePassed,
+			ctxErr:   context.DeadlineExceeded,
+			agentErr: deadNarrator,
+			want:     false,
+		},
+		{
+			name:     "cancellation reaching only the agent error chain stops too",
+			suite:    configuredSuitePassed,
+			agentErr: fmt.Errorf("claude exited: %w", context.Canceled),
+			want:     false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := preserveMeasuredSuiteResult(tc.suite, tc.ctxErr, tc.agentErr); got != tc.want {
+				t.Fatalf("preserveMeasuredSuiteResult(%v, %v, %v) = %v, want %v", tc.suite, tc.ctxErr, tc.agentErr, got, tc.want)
+			}
+		})
+	}
+}
+
+// The measured verdict must come from the suite's exit status, so a failing
+// configured suite records configuredSuiteFailed and can never be read as the
+// passed measurement that preservation requires.
+func TestTestStep_FailingConfiguredSuiteIsRecordedAsAFailedMeasurement(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	ag := &mockAgent{
+		name: "test",
+		runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+			t.Fatal("evidence agent must not run after a failing configured suite")
+			return nil, nil
+		},
+	}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{Test: "printf 'assertion failed\\n'; exit 3"})
+	sctx.UserIntent = "Show the measured behavior"
+
+	outcome, err := (&TestStep{}).Execute(sctx)
+	if err != nil {
+		t.Fatalf("Execute returned infrastructure error: %v", err)
+	}
+	if !outcome.NeedsApproval || outcome.ExitCode != 3 {
+		t.Fatalf("outcome = %+v, want the failing suite to stay blocking", outcome)
+	}
+	if preserveMeasuredSuiteResult(configuredSuiteFailed, nil, errors.New("claude exited: exit status 1: ")) {
+		t.Fatal("a failing suite must never authorize preserving a dead narrator's step")
+	}
+}
+
 // Preservation is deliberately not gated on agent.IsAgentUnavailable: a passed
 // suite is authoritative no matter why its narrator died, and gating it would
 // make the fix fragile against the very empty-tail exit that caused the

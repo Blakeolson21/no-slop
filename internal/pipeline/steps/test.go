@@ -95,6 +95,7 @@ Previous test findings to address:
 
 	testCmd := sctx.Config.Commands.Test
 	tested := []string{}
+	suiteResult := configuredSuiteAbsent
 	if testCmd != "" {
 		sctx.Log(fmt.Sprintf("running tests: %s", testCmd))
 		output, exitCode, err := runStepShellCommand(sctx, testCmd)
@@ -102,6 +103,10 @@ Previous test findings to address:
 			return nil, fmt.Errorf("run test command: %w", err)
 		}
 		tested = append(tested, testCmd)
+		suiteResult = configuredSuiteFailed
+		if exitCode == 0 {
+			suiteResult = configuredSuitePassed
+		}
 
 		projectedOutput := logConfiguredCommandOutput(sctx, output, types.StepTest)
 
@@ -206,12 +211,12 @@ Rules:
 			OnChunk:    sctx.LogChunk,
 		})
 		if err != nil {
-			// With no configured command, this invocation is the measurement and
-			// its death must fail the step. With a configured command, the suite
-			// already produced the authoritative result above; this invocation is
-			// only narration, so its failure is recorded without rewriting that
+			// Unless a configured suite actually passed, this invocation is the
+			// measurement and its death must fail the step. Once one has passed it
+			// already produced the authoritative result above, so this invocation is
+			// only narration and its failure is recorded without rewriting that
 			// measured result. Explicit cancellation still stops the pipeline.
-			if testCmd != "" && ctx.Err() == nil && !errors.Is(err, context.Canceled) {
+			if preserveMeasuredSuiteResult(suiteResult, ctx.Err(), err) {
 				return evidenceUnavailableOutcome(sctx, err, tested, fixSummary)
 			}
 			return nil, fmt.Errorf("agent run tests: %w", err)
@@ -280,6 +285,31 @@ Rules:
 	sctx.Log("all tests passed")
 	findingsJSON, _ := json.Marshal(Findings{Tested: tested})
 	return &pipeline.StepOutcome{Findings: string(findingsJSON), FixSummary: fixSummary}, nil
+}
+
+// configuredSuiteOutcome is the measured verdict of commands.test for this
+// step. The three states are kept distinct because only a suite that actually
+// ran and passed is an authoritative measurement a dead narrator may not
+// overwrite; an absent suite means no measurement exists yet, and a failed one
+// is a real failure that nothing downstream is allowed to soften.
+type configuredSuiteOutcome int
+
+const (
+	configuredSuiteAbsent configuredSuiteOutcome = iota
+	configuredSuiteFailed
+	configuredSuitePassed
+)
+
+// preserveMeasuredSuiteResult reports whether a failed evidence-agent
+// invocation may complete the step on the strength of an earlier measurement.
+// It reads the measured suite verdict rather than the mere presence of a
+// configured command, so "a genuinely failing suite still fails" holds for
+// every call path instead of only for the ones that return early.
+func preserveMeasuredSuiteResult(suite configuredSuiteOutcome, ctxErr, agentErr error) bool {
+	if suite != configuredSuitePassed {
+		return false
+	}
+	return ctxErr == nil && !errors.Is(agentErr, context.Canceled)
 }
 
 func evidenceUnavailableOutcome(sctx *pipeline.StepContext, err error, tested []string, fixSummary string) (*pipeline.StepOutcome, error) {
