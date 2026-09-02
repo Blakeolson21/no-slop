@@ -94,6 +94,13 @@ fail before the fix and pass after it.
 Everything below - preconditions, intent, the validate-and-decide loop - applies
 the same way once the work is committed on a feature branch.
 
+To inspect a proposed run without starting it, use `no-slop axi plan <run flags...>`.
+It parses those arguments with the installed `axi run` command's own Cobra/Pflag
+flag set and prints the effective skip set, consent value, intent, target, and
+resolved agent/seat selection as JSON. It does not start or contact the daemon,
+create a run, claim custody, register a worktree, or acquire a seat. Treat a
+non-zero exit as a refusal; a failed plan never emits partial JSON.
+
 ## Before you start
 
 - The work you want validated must be **committed** on a branch. The gate

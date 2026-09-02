@@ -131,6 +131,26 @@ Use `no-slop rerun` only after that monitor is no longer running, such as a clos
 Successful outcomes (`checks-passed` and `passed`) also carry `help` instructions telling the agent to summarize the run.
 When the pipeline applied fixes, they include a `fixes` table and a `help` instruction to acknowledge the misses and list those fixes for the user's review.
 
+## no-slop axi plan
+
+Print the effective configuration for a proposed `axi run` invocation without starting a run.
+
+```sh
+no-slop axi plan --yes=false --skip test,lint --intent "the user's goal"
+```
+
+`axi plan` passes every proposed argument to a freshly constructed `axi run` command and invokes that command's own Cobra/Pflag parser.
+It does not maintain a second flag grammar, so boolean assignments such as `--yes=false`, repeated flags, and the `--` terminator have the same meaning as they do for `axi run`.
+Tokens after `--` appear in `positional_args` and are not interpreted as flags.
+
+On success, stdout contains one JSON object with `skip`, `yes`, `intent`, `positional_args`, the target `repo`, `branch`, and `head_sha`, plus the resolved agent fallback lanes and their seat source.
+For quartermaster-backed Claude and Codex lanes, the report names the pool but leaves seat selection as `deferred-until-invocation`; planning never asks the lease authority for an account.
+The command reads the existing registration without migrating it, resolves the live trusted default-branch configuration in temporary scratch, and probes the configured agent exactly as run setup would.
+It does not contact or start the daemon, create a run row, claim branch custody, add a managed worktree, change repository refs, or acquire a seat.
+
+Invalid or unknown run flags, invalid skip steps, unreadable configuration, an unavailable agent, or a repository that has not been initialized produce a non-zero exit with a clear error on stderr and no stdout JSON.
+Repository URLs are redacted before they enter the report, and agent and seat configuration reports selection identities rather than credential or account contents.
+
 ## no-slop axi respond
 
 Answer the current approval gate and continue until the next gate, CI-ready decision point, or final outcome.
