@@ -67,6 +67,17 @@ When the registry is missing, unreadable, or has no matching entry, no-slop fall
 
 no-slop also *sets* `NS_QUARTERMASTER_ACCOUNT`, `NS_QUARTERMASTER_LEASE_ID`, and `NS_QUARTERMASTER_POOL` (plus `CLAUDE_CONFIG_DIR` or `CODEX_HOME`) in the leased agent process. They are outputs of a lease, not inputs you set.
 
+## `MO_ALLOW_MAC_GATE`
+
+Allow `no-slop axi run` to start a gate on macOS.
+
+|         |                                                 |
+| ------- | ----------------------------------------------- |
+| Type    | `1` to allow; any other value keeps the refusal |
+| Default | unset (macOS gate runs are refused)             |
+
+Only the exact value `1` lifts the refusal, and when it does the override announces itself on stderr. The [CLI reference](/no-slop/reference/cli/#no-slop-axi-run) owns what that refusal is and when it fires.
+
 ## `NS_BITBUCKET_EMAIL`
 
 Bitbucket Cloud account email used for PR creation and CI monitoring.

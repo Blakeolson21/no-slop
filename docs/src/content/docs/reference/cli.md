@@ -92,6 +92,8 @@ A fresh run re-validates the current branch state, so already-resolved findings 
 Start or reattach to validation for the current branch, blocking until the first approval gate, CI-ready decision point, or final outcome.
 An active run on another branch does not block starting validation for the current branch.
 
+In this build the Mac is a lead-only seat, so on macOS the binary refuses every `axi run` invocation on stderr and exits non-zero before it opens any state: no run row, custody claim, or worktree registration is created. No arrangement of flags skips it, and [`MO_ALLOW_MAC_GATE=1`](/no-slop/reference/environment/#mo_allow_mac_gate) is the only override. Other commands, including read-only `axi status`, still run on macOS.
+
 ```sh
 no-slop axi run --intent "the user's goal"
 no-slop axi run --intent "the user's goal" --skip test,lint
