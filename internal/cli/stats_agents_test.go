@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -73,42 +74,76 @@ func TestStatsAgentsReportsLocalPerformanceTelemetry(t *testing.T) {
 	// Every rendered table must carry a value for each header column: a format
 	// string that drifts out of step with its arguments as columns are added
 	// silently corrupts the report with a printf error marker instead of failing.
-	assertReportColumnsAreComplete(t, out)
+	assertReportColumnsAreComplete(t, out, runReportHeaders)
 }
 
 func statsIntPtr(v int) *int       { return &v }
 func statsInt64Ptr(v int64) *int64 { return &v }
 
-// assertReportColumnsAreComplete parses the rendered report into its tabwriter
-// tables and asserts each data row has exactly as many columns as its header,
-// and that no cell holds a printf formatting error.
-func assertReportColumnsAreComplete(t *testing.T, out string) {
+var reportColumnGap = regexp.MustCompile(`\s{2,}`)
+
+// reportTables parses the rendered report into its tabwriter tables. Tables are
+// blank-line separated blocks whose first line splits into more than one padded
+// column, which is what separates them from the report's single-column prose.
+func reportTables(out string) [][][]string {
+	var tables [][][]string
+	for _, block := range strings.Split(out, "\n\n") {
+		var rows [][]string
+		for _, line := range strings.Split(block, "\n") {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			rows = append(rows, reportColumnGap.Split(strings.TrimRight(line, " "), -1))
+		}
+		if len(rows) == 0 || len(rows[0]) < 2 {
+			continue
+		}
+		tables = append(tables, rows)
+	}
+	return tables
+}
+
+// assertReportColumnsAreComplete asserts the rendered report carries no printf
+// formatting error and that its tables are the expected ones, pinned by their
+// exact header columns. Pinning the headers is what keeps the guard honest: a
+// detection heuristic that stops matching would otherwise make it silently
+// vacuous rather than failing.
+//
+// Data rows are checked only for excess columns. A tabwriter renders an empty
+// cell as pure padding, which merges with the neighbouring column gap, so a row
+// with a legitimately empty cell parses as fewer columns than its header; a
+// missing or extra argument instead surfaces as the "%!" marker checked above.
+func assertReportColumnsAreComplete(t *testing.T, out string, wantHeaders [][]string) {
 	t.Helper()
 	if strings.Contains(out, "%!") {
 		t.Fatalf("report contains a printf formatting error:\n%s", out)
 	}
-	columnGap := regexp.MustCompile(`\s{2,}`)
-	var header string
-	var headerCols int
-	for _, line := range strings.Split(out, "\n") {
-		if strings.TrimSpace(line) == "" {
-			header = ""
-			continue
+	tables := reportTables(out)
+	if len(tables) != len(wantHeaders) {
+		t.Fatalf("parsed %d tables, want %d:\n%s", len(tables), len(wantHeaders), out)
+	}
+	for i, want := range wantHeaders {
+		header := tables[i][0]
+		if !reflect.DeepEqual(header, want) {
+			t.Fatalf("table %d header = %#v, want %#v", i, header, want)
 		}
-		cols := len(columnGap.Split(strings.TrimRight(line, " "), -1))
-		if header == "" {
-			// A table starts at the first all-caps header line; prose lines
-			// before it are not tables.
-			if line == strings.ToUpper(line) && strings.Contains(line, "STEP") {
-				header, headerCols = line, cols
+		for _, row := range tables[i][1:] {
+			if len(row) > len(header) {
+				t.Fatalf("table %d row has %d columns but header has %d:\nrow: %#v\nfull report:\n%s",
+					i, len(row), len(header), row, out)
 			}
-			continue
-		}
-		if cols != headerCols {
-			t.Fatalf("row has %d columns but header %q has %d:\nrow: %q\nfull report:\n%s",
-				cols, header, headerCols, line, out)
 		}
 	}
+}
+
+// runReportHeaders is the column contract of `stats --run`: the identity
+// columns this change added (EXECUTABLE, MODEL, PROVIDER, MODEL ARGS) are part
+// of the report's public shape.
+var runReportHeaders = [][]string{
+	{"STEP", "ROUND", "PURPOSE", "AGENT", "EXECUTABLE", "MODEL", "PROVIDER", "MODEL ARGS", "SESSION", "KEY",
+		"DURATION", "MODEL TIME", "SUBPROC", "RT", "TOOLS (w/t/e/r/g/o)", "FIND", "WORK (f/l)", "FALLBACK", "EXIT"},
+	{"STEP", "ROUND", "PURPOSE", "SESSION", "Δ IN (round)", "Δ OUT", "Δ CACHE RD", "IN (raw)", "OUT (raw)",
+		"CACHE RD (raw)", "CACHE WR", "FRESH IN", "REASON"},
 }
 
 // TestStatsRendersPopulatedFidelityMetrics proves the report surfaces the new
@@ -170,7 +205,7 @@ func TestStatsRendersPopulatedFidelityMetrics(t *testing.T) {
 			t.Fatalf("stats --run missing %q in:\n%s", want, out)
 		}
 	}
-	assertReportColumnsAreComplete(t, out)
+	assertReportColumnsAreComplete(t, out, runReportHeaders)
 }
 
 func strPtrCLI(s string) *string { return &s }
