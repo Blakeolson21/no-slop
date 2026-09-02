@@ -211,7 +211,7 @@ Rules:
 			// already produced the authoritative result above; this invocation is
 			// only narration, so its failure is recorded without rewriting that
 			// measured result. Explicit cancellation still stops the pipeline.
-			if testCmd != "" && !errors.Is(ctx.Err(), context.Canceled) {
+			if testCmd != "" && ctx.Err() == nil && !errors.Is(err, context.Canceled) {
 				return evidenceUnavailableOutcome(sctx, err, tested, fixSummary), nil
 			}
 			return nil, fmt.Errorf("agent run tests: %w", err)

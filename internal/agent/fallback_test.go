@@ -3,8 +3,10 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fallbackTestAgent struct {
@@ -116,9 +118,24 @@ func TestIsAgentUnavailableClassifiesNarratorDeathsAcrossAgents(t *testing.T) {
 		want bool
 	}{
 		{name: "non-claude empty exit message", err: errors.New("acpx exited: exit status 1: "), want: true},
-		{name: "rate limit", err: errors.New("provider request failed with HTTP 429: rate limited"), want: true},
+		{
+			name: "structurally marked quota lane",
+			err: &LaneOutageError{
+				Lane:   "codex",
+				Until:  time.Date(2026, 9, 3, 4, 0, 0, 0, time.Local),
+				Reason: "You've hit your usage limit",
+			},
+			want: true,
+		},
+		{
+			name: "aggregate quota outage",
+			err:  allLanesExhausted([]*LaneOutageError{{Lane: "codex", Until: time.Date(2026, 9, 3, 4, 0, 0, 0, time.Local)}}, true),
+			want: true,
+		},
+		{name: "transient http 429 in provider text", err: errors.New("provider request failed with HTTP 429: rate limited"), want: true},
 		{name: "timeout", err: context.DeadlineExceeded, want: true},
 		{name: "test failure is not an agent death", err: errors.New("tests failed with exit code 1"), want: false},
+		{name: "quota-shaped prose without a process death is not an agent death", err: errors.New("the change removes the usage limit banner"), want: false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -126,6 +143,33 @@ func TestIsAgentUnavailableClassifiesNarratorDeathsAcrossAgents(t *testing.T) {
 				t.Fatalf("IsAgentUnavailable(%q) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+// Timeout and transient-network errors now route to the next lane, so the
+// chain must still stop when the invoking context itself died: the next lane
+// would inherit the same dead context and bury the cancellation.
+func TestFallbackAgentStopsAtCancellationInsteadOfSpendingTheNextLane(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	first := &fallbackTestAgent{name: "codex", run: func() (*Result, error) {
+		cancel()
+		return nil, fmt.Errorf("codex exited: %w", context.Canceled)
+	}}
+	second := &fallbackTestAgent{name: "claude", run: func() (*Result, error) {
+		return &Result{Text: "ok"}, nil
+	}}
+
+	result, err := NewFallback([]Agent{first, second}).Run(ctx, RunOpts{})
+	if err == nil {
+		t.Fatalf("cancelled run returned result %+v, want the cancellation error", result)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want it to carry context.Canceled", err)
+	}
+	if second.calls != 0 {
+		t.Fatalf("claude was invoked %d times, want 0 after cancellation", second.calls)
 	}
 }
 

@@ -121,6 +121,13 @@ func (a *fallbackAgent) Run(ctx context.Context, opts RunOpts) (*Result, error) 
 			}
 			return nil, err
 		}
+		// A dead invoking context ends the chain: the next lane would inherit the
+		// same cancelled or expired context, so advancing could only spend another
+		// spawn to rediscover it and would bury the cancellation behind that lane's
+		// own failure.
+		if ctx.Err() != nil {
+			return nil, err
+		}
 		if !IsAgentUnavailable(err) {
 			return nil, err
 		}

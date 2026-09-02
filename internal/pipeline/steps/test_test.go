@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -111,6 +112,30 @@ func TestTestStep_WithoutConfiguredSuiteDeadAgentStillFails(t *testing.T) {
 
 	if outcome, err := (&TestStep{}).Execute(sctx); err == nil || outcome != nil {
 		t.Fatalf("outcome = %+v, err = %v; want agent-as-measurement death to fail", outcome, err)
+	}
+}
+
+// Preserving a measured suite result must never swallow an explicit
+// cancellation, including one that reaches the step only through the agent's
+// error chain.
+func TestTestStep_PassingConfiguredSuiteStillFailsOnExplicitCancellation(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	ag := &mockAgent{
+		name: "test",
+		runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+			return nil, fmt.Errorf("claude exited: %w", context.Canceled)
+		},
+	}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{Test: "printf 'suite passed\\n'"})
+	sctx.UserIntent = "Show the measured behavior"
+
+	outcome, err := (&TestStep{}).Execute(sctx)
+	if err == nil {
+		t.Fatalf("outcome = %+v, want explicit cancellation to fail the step", outcome)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Execute error = %v, want it to carry context.Canceled", err)
 	}
 }
 
