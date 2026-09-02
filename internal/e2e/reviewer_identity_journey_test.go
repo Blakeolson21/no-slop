@@ -21,13 +21,13 @@ import (
 // wrapper path, must keep the configured kind in its own column, and must show
 // the model only when the adapter actually reported one.
 //
-// The two legs also cover both ways identity reaches the recorder. Claude does
-// not report per-attempt results, so its row comes from the recorder's own
-// direct path; codex reports attempts, so its row comes from the attempt the
-// adapter emitted. Codex additionally reports no model here (it resolves one
-// from a rollout in a real user HOME, which the harness does not have), so that
-// leg is the unknown case: the report must say unknown rather than inferring a
-// model from the configured kind.
+// Both native adapters emit concrete attempts from their retry loops, so these
+// rows exercise the attempt-reporting path. The recorder's direct fallback for
+// adapters that emit no attempts is covered by
+// TestExecutor_RecordsAgentInvocationsLocally. Codex additionally reports no
+// model here (it resolves one from a rollout in a real user HOME, which the
+// harness does not have), so that leg is the unknown case: the report must say
+// unknown rather than inferring a model from the configured kind.
 func TestStatsRunReportsResolvedReviewerIdentity(t *testing.T) {
 	for _, tc := range []struct {
 		agent     string
