@@ -47,10 +47,27 @@ var commitSummarySchema = json.RawMessage(fmt.Sprintf(`{
 	"required": ["summary"]
 }`, config.MaxFixMessageSummaryBytes))
 
-// hasBlockingFindings returns true if any finding has error or warning severity.
-func hasBlockingFindings(items []Finding) bool {
+// hasBlockingFindings returns true when any finding meets the configured
+// severity floor. Unknown finding severities fail closed: an unclassified
+// finding must not silently become advisory.
+func hasBlockingFindings(items []Finding, floor string) bool {
+	if floor == "" {
+		floor = config.DefaultBlockingSeverity
+	}
+	if floor != config.BlockingSeverityWarning && floor != config.BlockingSeverityError {
+		return len(items) > 0
+	}
 	for _, f := range items {
-		if f.Severity == "error" || f.Severity == "warning" {
+		switch f.Severity {
+		case "error":
+			return true
+		case "warning":
+			if floor == config.BlockingSeverityWarning {
+				return true
+			}
+		case "info":
+			// Informational findings are advisory under both supported floors.
+		default:
 			return true
 		}
 	}

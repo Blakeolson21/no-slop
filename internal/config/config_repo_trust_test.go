@@ -467,6 +467,26 @@ func TestEffectiveRepoConfig_NoCITrustedOnly(t *testing.T) {
 	}
 }
 
+func TestEffectiveRepoConfig_BlockingSeverityTrustedOnly(t *testing.T) {
+	got := EffectiveRepoConfig(
+		&RepoConfig{BlockingSeverity: BlockingSeverityError},
+		&RepoConfig{BlockingSeverity: BlockingSeverityWarning},
+		true,
+	)
+	if got.BlockingSeverity != BlockingSeverityWarning {
+		t.Fatalf("pushed branch changed blocking severity to %q, want trusted %q", got.BlockingSeverity, BlockingSeverityWarning)
+	}
+
+	got = EffectiveRepoConfig(
+		&RepoConfig{BlockingSeverity: BlockingSeverityError},
+		nil,
+		true,
+	)
+	if got.BlockingSeverity != "" {
+		t.Fatalf("blocking severity without trusted config = %q, want empty so Merge preserves the strict default", got.BlockingSeverity)
+	}
+}
+
 // TestMerge_CarriesNoCI proves the resolved Config carries the trusted-resolved
 // no_ci declaration into the pipeline.
 func TestMerge_CarriesNoCI(t *testing.T) {

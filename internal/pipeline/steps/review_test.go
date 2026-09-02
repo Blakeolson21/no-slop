@@ -16,6 +16,33 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
+// The default is deliberately strict: repositories that do not configure a
+// blocking severity must continue to park on warning-only review findings.
+func TestReviewStep_DefaultBlockingSeverityPreservesWarningGate(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+
+	ag := &mockAgent{
+		name: "test",
+		runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+			return &agent.Result{Output: json.RawMessage(`{"findings":[{"severity":"warning","description":"review warning"}]}`)}, nil
+		},
+	}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Config = config.Merge(config.DefaultGlobalConfig(), &config.RepoConfig{})
+
+	outcome, err := (&ReviewStep{}).Execute(sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sctx.Config.BlockingSeverity != config.DefaultBlockingSeverity {
+		t.Fatalf("default blocking severity = %q, want %q", sctx.Config.BlockingSeverity, config.DefaultBlockingSeverity)
+	}
+	if !outcome.NeedsApproval {
+		t.Fatal("warning-only review finding did not require approval with no blocking_severity configured")
+	}
+}
+
 func TestReviewStep_FixMode(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)

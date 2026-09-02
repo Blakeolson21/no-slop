@@ -34,6 +34,14 @@ import (
 // explicitly via `no-slop axi abort --run <id>` rather than by a short
 // timeout.
 const (
+	// BlockingSeverityWarning preserves the historical gate policy: errors and
+	// warnings require a decision, while informational findings are advisory.
+	BlockingSeverityWarning = "warning"
+	// BlockingSeverityError makes warnings advisory for repositories that opt in.
+	BlockingSeverityError = "error"
+	// DefaultBlockingSeverity is intentionally strict for compatibility.
+	DefaultBlockingSeverity = BlockingSeverityWarning
+
 	// DefaultCITimeout is the monitor's idle timeout when ci_timeout is unset.
 	DefaultCITimeout = 7 * 24 * time.Hour
 	// DefaultStepQuietWarning is how long a running/fixing step can go without
@@ -146,6 +154,9 @@ type RepoConfig struct {
 	Agents         []types.AgentName `yaml:"-"`
 	Commands       Commands          `yaml:"commands"`
 	IgnorePatterns []string          `yaml:"ignore_patterns"`
+	// BlockingSeverity is the minimum recognized severity that parks a gate.
+	// It is trusted-only so a pushed branch cannot make its own warnings advisory.
+	BlockingSeverity string `yaml:"blocking_severity"`
 	// AllowRepoCommands opts in to honoring the code-executing selection
 	// fields (commands.{test,lint,format} and agent) from a contributor's
 	// pushed branch instead of the trusted default-branch copy. It is read
@@ -381,6 +392,7 @@ func (c *RepoConfig) UnmarshalYAML(value *yaml.Node) error {
 		Agent                  agentList   `yaml:"agent"`
 		Commands               Commands    `yaml:"commands"`
 		IgnorePatterns         []string    `yaml:"ignore_patterns"`
+		BlockingSeverity       string      `yaml:"blocking_severity"`
 		AllowRepoCommands      bool        `yaml:"allow_repo_commands"`
 		AutoFix                AutoFixRaw  `yaml:"auto_fix"`
 		CI                     CIRaw       `yaml:"ci"`
@@ -401,6 +413,7 @@ func (c *RepoConfig) UnmarshalYAML(value *yaml.Node) error {
 	c.Agents = copyAgents(raw.Agent)
 	c.Commands = raw.Commands
 	c.IgnorePatterns = raw.IgnorePatterns
+	c.BlockingSeverity = raw.BlockingSeverity
 	c.AllowRepoCommands = raw.AllowRepoCommands
 	c.AutoFix = raw.AutoFix
 	c.CI = raw.CI
@@ -480,6 +493,7 @@ type Config struct {
 	Eval                  Eval
 	Commands              Commands
 	IgnorePatterns        []string
+	BlockingSeverity      string
 	AutoFix               AutoFix
 	CI                    CI
 	Commit                Commit
@@ -1667,11 +1681,23 @@ func parseRepoConfig(data []byte) (*RepoConfig, error) {
 	if err := validateSlopRaw(cfg.Slop); err != nil {
 		return nil, fmt.Errorf("parse repo config: %w", err)
 	}
+	if err := validateBlockingSeverity(cfg.BlockingSeverity); err != nil {
+		return nil, fmt.Errorf("parse repo config: %w", err)
+	}
 	if cfg.AutoFix.CI == nil {
 		cfg.AutoFix.CI = cfg.AutoFix.Babysit
 	}
 
 	return cfg, nil
+}
+
+func validateBlockingSeverity(severity string) error {
+	switch severity {
+	case "", BlockingSeverityWarning, BlockingSeverityError:
+		return nil
+	default:
+		return fmt.Errorf("blocking_severity must be %q or %q, got %q", BlockingSeverityWarning, BlockingSeverityError, severity)
+	}
 }
 
 func validateSlopRaw(slop SlopRaw) error {
@@ -1816,7 +1842,9 @@ func validatePathInstructionGlob(pattern string) error {
 // project-instruction boundary. NoCI is trusted-only so a pushed branch cannot
 // self-declare no-CI and bypass its own checks, and CI (the transient-rerun
 // budget) is trusted-only because every rerun it authorizes is another
-// provider-side workflow run billed to the repository. All five ignore
+// provider-side workflow run billed to the repository. BlockingSeverity is
+// trusted-only as well, because lowering it would let a contributor make its
+// own warning findings advisory. These fields ignore
 // allowRepoCommands, which scopes only the code-executing selection fields.
 // When allowRepoCommands is
 // true the maintainer has explicitly opted in (via allow_repo_commands on the
@@ -1839,6 +1867,7 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 	}
 	effective := *pushed
 	if trusted != nil {
+		effective.BlockingSeverity = trusted.BlockingSeverity
 		effective.Document = trusted.Document
 		// Slop selects validation depth and private-name policy. A pushed branch
 		// must not lower its own tier or suppress an outbound or leak check.
@@ -1873,6 +1902,7 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		// branch without its marker file, so this is defense in depth.
 		effective.Test.Evidence.Branch = trusted.Test.Evidence.Branch
 	} else {
+		effective.BlockingSeverity = ""
 		effective.Document = DocumentRaw{}
 		effective.Slop = SlopRaw{}
 		effective.Review = ReviewRaw{}
@@ -2210,6 +2240,10 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 	}
 
 	slop := resolveSlop(repo.Slop)
+	blockingSeverity := repo.BlockingSeverity
+	if blockingSeverity == "" {
+		blockingSeverity = DefaultBlockingSeverity
+	}
 
 	cfg := &Config{
 		Agent:                global.Agent,
@@ -2225,6 +2259,7 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		Eval:                 global.Eval,
 		Commands:             repo.Commands,
 		IgnorePatterns:       repo.IgnorePatterns,
+		BlockingSeverity:     blockingSeverity,
 		AutoFix:              af,
 		CI:                   ci,
 		Commit:               commit,

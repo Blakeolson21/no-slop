@@ -12,7 +12,7 @@ only `.no-slop.yaml`.
 :::caution[Security: gate-control fields are read from the default branch]
 `commands.*` execute arbitrary shell on the daemon host via `sh -c` / `cmd.exe /c`, and `agent` selects which process launches there (including ordered fallback lists, ACP aliases such as `cursor`, and `acp:` targets) with the maintainer's credentials.
 To prevent a supply-chain attack where a contributor lands a hostile value on a gated branch, the daemon always reads **`commands` and `agent` from your default branch** (e.g. `origin/main`), never from the pushed SHA, and reads them at the exact commit a fresh fetch resolved (so a stale `origin/<default>` ref cannot serve a value the live default branch removed).
-The daemon also reads `document.instructions`, the `review` section (`review.path_instructions`, `review.convergence`), `disable_project_settings`, `no_ci`, and `ci.rerun_transient` only from that trusted copy.
+The daemon also reads `document.instructions`, the `review` section (`review.path_instructions`, `review.convergence`), `blocking_severity`, `disable_project_settings`, `no_ci`, and `ci.rerun_transient` only from that trusted copy.
 If the default branch cannot be fetched and resolved to a readable commit, or its present repo config (`.no-slop.yaml` or the `.no-mistakes.yaml` compatibility filename) cannot be read and parsed, the run aborts before launching an agent.
 A readable default-branch tree with neither config file is valid and uses defaults.
 Commit the gate-control settings you want to your default branch.
@@ -59,6 +59,10 @@ disable_project_settings: true
 # Positive declaration that this repository intentionally has no CI.
 # Read only from the trusted default branch. Defaults to false (CI expected).
 # no_ci: true
+
+# Keep the historical default (warning), or opt in to warning-only findings
+# being advisory. Read only from the trusted default branch.
+# blocking_severity: error
 
 auto_fix:
   rebase: 3
@@ -238,6 +242,22 @@ If checks still appear on a declared no-CI repository, their actual states are p
 
 This field is honored **only from the trusted default-branch copy** of `.no-slop.yaml`, regardless of `allow_repo_commands`.
 A feature branch cannot self-declare `no_ci: true` to bypass checks, and cannot clear a trusted declaration either.
+
+### blocking_severity
+
+Set the minimum recognized finding severity that parks review, test, and agent-driven lint gates for a decision.
+
+| | |
+| --- | --- |
+| Type | `string` |
+| Values | `warning`, `error` |
+| Default | `warning` |
+
+The default preserves the historical behavior: both errors and warnings block. Setting `blocking_severity: error` makes warning-only findings advisory for this repository; errors continue to block. Informational findings remain advisory under either floor.
+
+An unknown or empty finding severity blocks under either floor. This fail-closed rule prevents an unclassified finding from silently bypassing the gate. An unsupported configured value is rejected while loading the repository config; an omitted config value resolves to the `warning` default.
+
+This field is honored **only from the trusted default-branch copy** of `.no-slop.yaml`, regardless of `allow_repo_commands`. A feature branch cannot loosen the gate that is evaluating that same branch.
 
 ### commands.test
 

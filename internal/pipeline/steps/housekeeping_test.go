@@ -212,6 +212,35 @@ func TestLintStep_ConsumesCombinedResultWithoutAgentPass(t *testing.T) {
 	}
 }
 
+func TestLintStep_CombinedResultUnclassifiedSeverityFailsClosed(t *testing.T) {
+	for _, severity := range []string{"mystery", ""} {
+		severity := severity
+		name := severity
+		if name == "" {
+			name = "empty"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir, baseSHA, headSHA := setupGitRepo(t)
+			sctx := newHousekeepingContext(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+			sctx.Config.BlockingSeverity = config.BlockingSeverityError
+			findingsJSON, err := json.Marshal(Findings{Items: []Finding{{Severity: severity, Description: "unclassified lint finding"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			sctx.Shared.SetHousekeepingLint(pipeline.HousekeepingLintResult{FindingsJSON: string(findingsJSON), Summary: "housekeeping"})
+
+			outcome, err := (&LintStep{}).Execute(sctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !outcome.NeedsApproval {
+				t.Fatalf("finding severity %q passed at error floor; want fail-closed approval gate", severity)
+			}
+		})
+	}
+}
+
 // TestLintStep_RunsOwnPassWithoutCombinedResult proves the lint duty is
 // never silently dropped: with no stashed result (document step skipped or
 // failed to produce trustworthy output) the lint step runs its own pass.

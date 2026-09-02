@@ -286,7 +286,7 @@ Risk assessment (after listing all findings):
 	}
 	findings = reconciled
 
-	needsApproval := hasBlockingFindings(findings.Items)
+	needsApproval := hasBlockingFindings(findings.Items, sctx.Config.BlockingSeverity)
 	findingsJSON, _ := json.Marshal(findings)
 
 	return approvedReviewOutcome(reviewTargetSHA, &pipeline.StepOutcome{

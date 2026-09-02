@@ -820,3 +820,27 @@ func TestTestStep_InitialAgent_NoTargetedEvidenceRequiresHonestFinding(t *testin
 		}
 	}
 }
+
+// A repository may deliberately make warnings advisory while keeping errors
+// blocking by setting blocking_severity: error on its trusted default branch.
+func TestTestStep_ErrorBlockingSeverityMakesWarningAdvisory(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+
+	ag := &mockAgent{
+		name: "test",
+		runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+			return &agent.Result{Output: json.RawMessage(`{"findings":[{"severity":"warning","description":"advisory test warning"}],"tested":["focused check"]}`)}, nil
+		},
+	}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Config.BlockingSeverity = config.BlockingSeverityError
+
+	outcome, err := (&TestStep{}).Execute(sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.NeedsApproval || outcome.AutoFixable {
+		t.Fatalf("warning-only test outcome = %+v, want advisory completion at error floor", outcome)
+	}
+}

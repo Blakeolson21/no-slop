@@ -233,7 +233,7 @@ Rules:
 			findings.Tested = append(append([]string{}, tested...), findings.Tested...)
 		}
 
-		needsApproval := hasBlockingFindings(findings.Items)
+		needsApproval := hasBlockingFindings(findings.Items, sctx.Config.BlockingSeverity)
 		autoFixable := needsApproval
 
 		// Record any new test files the agent wrote as informational (no-op)

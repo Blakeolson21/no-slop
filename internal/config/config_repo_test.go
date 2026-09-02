@@ -31,6 +31,27 @@ func TestLoadRepo_Defaults(t *testing.T) {
 	if len(cfg.IgnorePatterns) != 0 {
 		t.Errorf("ignore_patterns = %v, want empty", cfg.IgnorePatterns)
 	}
+	if got := Merge(DefaultGlobalConfig(), cfg).BlockingSeverity; got != DefaultBlockingSeverity {
+		t.Errorf("blocking severity = %q, want default %q", got, DefaultBlockingSeverity)
+	}
+}
+
+func TestLoadRepo_BlockingSeverityErrorOptIn(t *testing.T) {
+	cfg, err := LoadRepoFromBytes([]byte("blocking_severity: error\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := Merge(DefaultGlobalConfig(), cfg).BlockingSeverity; got != BlockingSeverityError {
+		t.Fatalf("blocking severity = %q, want %q", got, BlockingSeverityError)
+	}
+}
+
+func TestLoadRepo_RejectsUnknownBlockingSeverity(t *testing.T) {
+	if _, err := LoadRepoFromBytes([]byte("blocking_severity: notice\n")); err == nil {
+		t.Fatal("LoadRepoFromBytes accepted unknown blocking_severity")
+	} else if !strings.Contains(err.Error(), "blocking_severity") {
+		t.Fatalf("error = %v, want blocking_severity context", err)
+	}
 }
 
 func TestLoadRepo_FromFile(t *testing.T) {

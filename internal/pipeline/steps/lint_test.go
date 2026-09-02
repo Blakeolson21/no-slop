@@ -201,3 +201,29 @@ func TestLintStep_NoConfiguredLint_UnresolvedFindingsNeedApprovalWithoutAutoFixL
 		t.Error("expected no-config lint prompt to report only unresolved issues")
 	}
 }
+
+func TestLintStep_NoConfiguredLint_ErrorBlocksAtEveryFloor(t *testing.T) {
+	for _, floor := range []string{config.BlockingSeverityWarning, config.BlockingSeverityError} {
+		floor := floor
+		t.Run(floor, func(t *testing.T) {
+			t.Parallel()
+			dir, baseSHA, headSHA := setupGitRepo(t)
+			ag := &mockAgent{
+				name: "test",
+				runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+					return &agent.Result{Output: json.RawMessage(`{"findings":[{"severity":"error","description":"lint error"}],"summary":"lint failed"}`)}, nil
+				},
+			}
+			sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+			sctx.Config.BlockingSeverity = floor
+
+			outcome, err := (&LintStep{}).Execute(sctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !outcome.NeedsApproval {
+				t.Fatalf("error finding did not require approval at %q floor", floor)
+			}
+		})
+	}
+}

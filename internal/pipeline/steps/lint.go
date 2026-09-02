@@ -98,7 +98,7 @@ Previous lint findings to address:
 			return nil, err
 		}
 
-		needsApproval := hasBlockingFindings(findings.Items)
+		needsApproval := hasBlockingFindings(findings.Items, sctx.Config.BlockingSeverity)
 		findingsJSON, _ := json.Marshal(findings)
 		return &pipeline.StepOutcome{
 			NeedsApproval: needsApproval,
@@ -197,7 +197,7 @@ func lintOutcomeFromHousekeeping(sctx *pipeline.StepContext, stash pipeline.Hous
 	}
 	sctx.Log(fmt.Sprintf("lint assessed in the combined document+lint housekeeping pass: %d unresolved items", len(findings.Items)))
 	return &pipeline.StepOutcome{
-		NeedsApproval: hasBlockingFindings(findings.Items),
+		NeedsApproval: hasBlockingFindings(findings.Items, sctx.Config.BlockingSeverity),
 		AutoFixable:   false,
 		Findings:      stash.FindingsJSON,
 		FixSummary:    stash.Summary,
