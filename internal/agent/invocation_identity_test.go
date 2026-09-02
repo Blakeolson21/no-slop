@@ -51,3 +51,31 @@ func TestInvocationIdentityMissingExecutableIsUnknown(t *testing.T) {
 		t.Fatalf("inspected argv without a model selector should be known empty, got %#v", identity.ModelArgs)
 	}
 }
+
+// TestInvocationIdentityACPWrapperLeavesUninspectedArgvUnknown pins the two
+// halves of the nil-vs-known-empty convention for the ACP wrapper, whose model
+// lives inside an opaque rawCommand that is never inspected: ModelArgs must stay
+// nil (unknown) rather than the known-empty slice that would claim argv was
+// examined, and configured extra args must not be recorded as if they had been.
+func TestInvocationIdentityACPWrapperLeavesUninspectedArgvUnknown(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "acpx")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ag, err := New(types.AgentCursor, bin, []string{"--model", "never-inspected"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := ResolveInvocationIdentity(ag)
+	if identity.ModelArgs != nil {
+		t.Fatalf("uninspected argv must stay unknown (nil), got %#v", identity.ModelArgs)
+	}
+	if identity.ConfiguredAgent != string(types.AgentCursor) {
+		t.Fatalf("configured agent = %q, want %q", identity.ConfiguredAgent, types.AgentCursor)
+	}
+	if identity.Executable == nil || *identity.Executable != bin {
+		t.Fatalf("resolved executable = %v, want %q", identity.Executable, bin)
+	}
+}

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -69,10 +70,46 @@ func TestStatsAgentsReportsLocalPerformanceTelemetry(t *testing.T) {
 	if !strings.Contains(out, "-") {
 		t.Fatalf("stats --run should render unknown metric fields as \"-\":\n%s", out)
 	}
+	// Every rendered table must carry a value for each header column: a format
+	// string that drifts out of step with its arguments as columns are added
+	// silently corrupts the report with a printf error marker instead of failing.
+	assertReportColumnsAreComplete(t, out)
 }
 
 func statsIntPtr(v int) *int       { return &v }
 func statsInt64Ptr(v int64) *int64 { return &v }
+
+// assertReportColumnsAreComplete parses the rendered report into its tabwriter
+// tables and asserts each data row has exactly as many columns as its header,
+// and that no cell holds a printf formatting error.
+func assertReportColumnsAreComplete(t *testing.T, out string) {
+	t.Helper()
+	if strings.Contains(out, "%!") {
+		t.Fatalf("report contains a printf formatting error:\n%s", out)
+	}
+	columnGap := regexp.MustCompile(`\s{2,}`)
+	var header string
+	var headerCols int
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) == "" {
+			header = ""
+			continue
+		}
+		cols := len(columnGap.Split(strings.TrimRight(line, " "), -1))
+		if header == "" {
+			// A table starts at the first all-caps header line; prose lines
+			// before it are not tables.
+			if line == strings.ToUpper(line) && strings.Contains(line, "STEP") {
+				header, headerCols = line, cols
+			}
+			continue
+		}
+		if cols != headerCols {
+			t.Fatalf("row has %d columns but header %q has %d:\nrow: %q\nfull report:\n%s",
+				cols, header, headerCols, line, out)
+		}
+	}
+}
 
 // TestStatsRendersPopulatedFidelityMetrics proves the report surfaces the new
 // activity histogram, subprocess/model time split, and per-round token deltas
@@ -133,6 +170,7 @@ func TestStatsRendersPopulatedFidelityMetrics(t *testing.T) {
 			t.Fatalf("stats --run missing %q in:\n%s", want, out)
 		}
 	}
+	assertReportColumnsAreComplete(t, out)
 }
 
 func strPtrCLI(s string) *string { return &s }
