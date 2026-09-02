@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/evidence"
 	"github.com/Blakeolson21/no-slop/internal/gatecontext"
 	"github.com/Blakeolson21/no-slop/internal/git"
 	"github.com/Blakeolson21/no-slop/internal/paths"
@@ -255,6 +256,9 @@ func provisionGate(ctx context.Context, bareDir, absRoot, upstreamURL, reposDir 
 		return fmt.Errorf("isolate hooks path: %w", err)
 	}
 	if isolated {
+		if err := evidence.EnsureGateGCProtection(ctx, bareDir); err != nil {
+			return fmt.Errorf("configure gate evidence retention: %w", err)
+		}
 		if err := git.MarkGateConfigCurrent(bareDir); err != nil {
 			return fmt.Errorf("stamp gate config: %w", err)
 		}

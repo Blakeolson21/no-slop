@@ -16,6 +16,7 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/agent"
 	"github.com/Blakeolson21/no-slop/internal/config"
 	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/evidence"
 	"github.com/Blakeolson21/no-slop/internal/gateguidance"
 	"github.com/Blakeolson21/no-slop/internal/git"
 	"github.com/Blakeolson21/no-slop/internal/ipc"
@@ -56,6 +57,7 @@ type Executor struct {
 	sessions *RunSessions
 	shared   *RunShared
 	workDir  string
+	gateDir  string
 
 	mu          sync.Mutex
 	approvalCh  chan approvalResponse // buffered channel for approval responses
@@ -74,6 +76,16 @@ func (e *Executor) SetOnPRMerged(fn func(context.Context, string)) {
 		return
 	}
 	e.onPRMerged = fn
+}
+
+// SetGateDir identifies the managed bare mirror where reviewed-tree evidence
+// refs are retained. It is separate from the step worktree so developer refs
+// are never polluted by gate custody metadata.
+func (e *Executor) SetGateDir(gateDir string) {
+	if e == nil {
+		return
+	}
+	e.gateDir = gateDir
 }
 
 // SetSkippedSteps configures steps that should be marked skipped without running.
@@ -1086,6 +1098,22 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			slog.Warn("failed to insert step round", "step", stepName, "round", roundNum, "error", dbErr)
 		} else {
 			currentRoundID = roundInsertID(currentRoundID, inserted, nil)
+		}
+		if stepName == types.StepReview && inserted != nil && strings.TrimSpace(e.gateDir) != "" {
+			pin, pinErr := evidence.PinReviewedTree(ctx, evidence.GateEvidencePinRequest{
+				GateDir:         e.gateDir,
+				RunID:           run.ID,
+				Round:           roundNum,
+				ReviewedHeadSHA: inserted.ReviewedHeadSHA,
+			})
+			if pinErr != nil {
+				return false, "", fmt.Errorf("retain reviewed tree for run %s round %d: %w", run.ID, roundNum, pinErr)
+			}
+			if pin.Pinned {
+				writeLog(fmt.Sprintf("pinned reviewed tree %s at %s", pin.SHA, pin.Ref))
+			} else {
+				writeLog(fmt.Sprintf("review round %d has no reviewed head; no evidence ref pinned", roundNum))
+			}
 		}
 
 		// If the step produced a PR URL, propagate it to the run and emit an update.

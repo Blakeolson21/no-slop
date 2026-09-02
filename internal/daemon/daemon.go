@@ -18,6 +18,7 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/agent"
 	"github.com/Blakeolson21/no-slop/internal/config"
 	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/evidence"
 	"github.com/Blakeolson21/no-slop/internal/gatecontext"
 	"github.com/Blakeolson21/no-slop/internal/git"
 	"github.com/Blakeolson21/no-slop/internal/ipc"
@@ -610,6 +611,11 @@ func migrateGateConfigs(ctx context.Context, d *db.DB, p *paths.Paths) gateMigra
 		}
 		if git.GateConfigCurrent(bareDir) {
 			stats.Gates++
+			if err := evidence.EnsureGateGCProtection(ctx, bareDir); err != nil {
+				stats.Failed++
+				slog.Warn("ensure current gate evidence retention failed", "bare", bareDir, "error", err)
+				continue
+			}
 			stats.Current++
 			continue
 		}
@@ -642,6 +648,9 @@ func migrateGateConfig(ctx context.Context, bareDir string) error {
 	}
 	if !isolated {
 		return fmt.Errorf("isolate hooks path: git config --worktree is unsupported")
+	}
+	if err := evidence.EnsureGateGCProtection(ctx, bareDir); err != nil {
+		return fmt.Errorf("configure gate evidence retention: %w", err)
 	}
 	if err := git.MarkGateConfigCurrent(bareDir); err != nil {
 		return fmt.Errorf("stamp gate config: %w", err)
