@@ -139,9 +139,10 @@ Print the effective configuration for a proposed `axi run` invocation without st
 no-slop axi plan --yes=false --skip test,lint --intent "the user's goal"
 ```
 
-`axi plan` passes every proposed argument to a freshly constructed `axi run` command and invokes that command's own Cobra/Pflag parser.
+`axi plan` passes every proposed argument to a freshly constructed `axi run` command and invokes that command's own Cobra/Pflag parser, then the required-flag and flag-group validation that command applies after parsing.
 It does not maintain a second flag grammar, so boolean assignments such as `--yes=false`, repeated flags, and the `--` terminator have the same meaning as they do for `axi run`.
-Tokens after `--` appear in `positional_args` and are not interpreted as flags.
+Tokens after `--` appear in `positional_args` and are not interpreted as flags; `axi plan` reports them rather than rejecting them, so a plan describes how that flag set read the proposal even where `axi run` would refuse the leftover arguments.
+`--help` and `-h` print this command's usage instead of being read as proposed run flags, and after `--` they stay positional like any other token.
 
 On success, stdout contains one JSON object with `skip`, `yes`, `intent`, `positional_args`, the target `repo`, `branch`, and `head_sha`, plus the resolved agent fallback lanes and their seat source.
 For quartermaster-backed Claude and Codex lanes, the report names the pool but leaves seat selection as `deferred-until-invocation`; planning never asks the lease authority for an account.

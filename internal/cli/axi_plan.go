@@ -77,7 +77,7 @@ func runAxiPlan(cmd *cobra.Command, proposedArgs []string) error {
 	// does not register a second set of flags: Cobra/Pflag remains the only
 	// grammar for boolean values, terminators, repeats, and future run flags.
 	runCmd := newAxiRunCmd()
-	if err := runCmd.ParseFlags(proposedArgs); err != nil {
+	if err := acceptProposedRunInvocation(runCmd, proposedArgs); err != nil {
 		return &exitError{code: 2, err: fmt.Errorf("parse proposed axi run invocation: %w", err)}
 	}
 
@@ -113,6 +113,26 @@ func runAxiPlan(cmd *cobra.Command, proposedArgs []string) error {
 		return &exitError{code: 1, err: fmt.Errorf("encode effective config: %w", err)}
 	}
 	return nil
+}
+
+// acceptProposedRunInvocation applies every acceptance check the run command's
+// own flag set performs: Pflag parsing plus the Cobra required-flag and
+// flag-group validation that `axi run` reaches after parsing. Parsing alone
+// would accept a proposal the real command rejects the moment a run flag is
+// marked required or grouped, which is the divergence a second grammar would
+// have introduced anyway.
+//
+// The Args validator is deliberately not applied. Post-terminator tokens are
+// reported as positional_args so the caller can see how this flag set read
+// them; classifying them is the whole point of the report.
+func acceptProposedRunInvocation(runCmd *cobra.Command, proposedArgs []string) error {
+	if err := runCmd.ParseFlags(proposedArgs); err != nil {
+		return err
+	}
+	if err := runCmd.ValidateRequiredFlags(); err != nil {
+		return err
+	}
+	return runCmd.ValidateFlagGroups()
 }
 
 func resolveAxiRunPlan(ctx context.Context) (axiRunPlan, error) {

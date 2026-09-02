@@ -16,6 +16,7 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/gate"
 	"github.com/Blakeolson21/no-slop/internal/paths"
 	"github.com/Blakeolson21/no-slop/internal/types"
+	"github.com/spf13/cobra"
 )
 
 func setupAxiPlanRepo(t *testing.T) (*paths.Paths, string) {
@@ -178,6 +179,117 @@ func TestAxiPlanFailsLoudlyWithoutPartialJSON(t *testing.T) {
 				t.Fatalf("failure did not name the proposed invocation: %v", err)
 			}
 		})
+	}
+}
+
+func TestAxiPlanEnforcesTheRunFlagSetsOwnValidationNotJustItsParser(t *testing.T) {
+	newProposalCmd := func() *cobra.Command {
+		cmd := &cobra.Command{Use: "run", RunE: func(*cobra.Command, []string) error { return nil }}
+		cmd.Flags().String("intent", "", "")
+		cmd.Flags().Bool("yes", false, "")
+		cmd.Flags().Bool("no", false, "")
+		if err := cmd.MarkFlagRequired("intent"); err != nil {
+			t.Fatal(err)
+		}
+		cmd.MarkFlagsMutuallyExclusive("yes", "no")
+		return cmd
+	}
+	if err := acceptProposedRunInvocation(newProposalCmd(), []string{"--yes"}); err == nil {
+		t.Fatal("proposal missing a required run flag was accepted")
+	}
+	if err := acceptProposedRunInvocation(newProposalCmd(), []string{"--intent", "x", "--yes", "--no"}); err == nil {
+		t.Fatal("proposal violating a run flag group was accepted")
+	}
+	if err := acceptProposedRunInvocation(newProposalCmd(), []string{"--intent", "x", "--yes"}); err != nil {
+		t.Fatalf("valid proposal rejected: %v", err)
+	}
+}
+
+func TestAxiPlanServesItsOwnHelpAndKeepsItPositionalAfterTheTerminator(t *testing.T) {
+	setupAxiPlanRepo(t)
+	for _, argv := range [][]string{{"--help"}, {"-h"}} {
+		t.Run(strings.Join(argv, "_"), func(t *testing.T) {
+			out, err := executeCmd(append([]string{"axi", "plan"}, argv...)...)
+			if err != nil {
+				t.Fatalf("axi plan %q failed instead of showing usage: %v\n%s", argv, err, out)
+			}
+			if !strings.Contains(out, "no-slop axi plan") {
+				t.Fatalf("axi plan %q did not print its own usage: %q", argv, out)
+			}
+			if strings.Contains(out, `"head_sha"`) {
+				t.Fatalf("help request emitted a plan report: %q", out)
+			}
+		})
+	}
+
+	out, err := executeCmd("axi", "plan", "--", "--help")
+	if err != nil {
+		t.Fatalf("axi plan -- --help failed: %v\n%s", err, out)
+	}
+	plan := decodeAxiRunPlan(t, out)
+	backend := newAxiRunCmd()
+	if err := backend.ParseFlags([]string{"--", "--help"}); err != nil {
+		t.Fatalf("real axi run flag set rejected argv: %v", err)
+	}
+	if !reflect.DeepEqual(plan.PositionalArgs, backend.Flags().Args()) || !reflect.DeepEqual(plan.PositionalArgs, []string{"--help"}) {
+		t.Fatalf("post-terminator --help = %q, want positional %q", plan.PositionalArgs, []string{"--help"})
+	}
+}
+
+func TestAxiPlanRedactsRegisteredUpstreamCredentials(t *testing.T) {
+	p, _ := setupAxiPlanRepo(t)
+	const secret = "s3cr3t-plan-token"
+	database, err := db.Open(p.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repos, err := database.GetRepos()
+	if err != nil || len(repos) != 1 {
+		_ = database.Close()
+		t.Fatalf("registered repos = %d, %v", len(repos), err)
+	}
+	if _, err := database.UpdateRepoMetadata(repos[0].ID, "https://plan-user:"+secret+"@example.com/owner/repo.git", repos[0].DefaultBranch); err != nil {
+		_ = database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := executeCmd("axi", "plan", "--intent", "inspect only")
+	if err != nil {
+		t.Fatalf("axi plan failed: %v\n%s", err, out)
+	}
+	if strings.Contains(out, secret) {
+		t.Fatalf("plan report leaked the registered upstream credential: %q", out)
+	}
+	plan := decodeAxiRunPlan(t, out)
+	if plan.Repo.Upstream != "https://redacted@example.com/owner/repo.git" {
+		t.Fatalf("reported upstream = %q, want the credential replaced", plan.Repo.Upstream)
+	}
+}
+
+func TestAxiPlanFailureNeverEchoesOriginCredentials(t *testing.T) {
+	_, repoDir := setupAxiPlanRepo(t)
+	const secret = "s3cr3t-plan-token"
+	credentialURL := "https://plan-user:" + secret + "@example.invalid/owner/repo.git"
+	run(t, repoDir, "git", "remote", "set-url", "origin", credentialURL)
+	// Refuse the transport locally so the failing fetch is offline and
+	// deterministic while still carrying the credentialled URL in its argv.
+	t.Setenv("GIT_ALLOW_PROTOCOL", "file")
+
+	out, err := executeCmd("axi", "plan", "--intent", "inspect only")
+	if err == nil {
+		t.Fatalf("axi plan succeeded against an unreachable origin: %s", out)
+	}
+	if out != "" {
+		t.Fatalf("failed plan emitted partial stdout %q", out)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("plan failure leaked the origin credential: %v", err)
+	}
+	if !strings.Contains(err.Error(), "example.invalid") {
+		t.Fatalf("plan failure did not name the unreachable origin: %v", err)
 	}
 }
 
