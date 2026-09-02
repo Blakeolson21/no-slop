@@ -79,6 +79,79 @@ func TestRunRejectsStateRootAliasConflict(t *testing.T) {
 	}
 }
 
+func TestMacGateGuard(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		goos     string
+		override string
+		wantMsg  string
+		wantStop bool
+	}{
+		{
+			name:     "Darwin refuses AXI run before pipeline setup",
+			args:     []string{"axi", "run", "--intent", "test"},
+			goos:     "darwin",
+			wantMsg:  macGateGuardRefusal,
+			wantStop: true,
+		},
+		{
+			name:     "documented override announces and permits AXI run",
+			args:     []string{"axi", "run", "--intent", "test"},
+			goos:     "darwin",
+			override: "1",
+			wantMsg:  macGateGuardOverride,
+		},
+		{
+			name:     "other override values do not permit AXI run",
+			args:     []string{"axi", "run"},
+			goos:     "darwin",
+			override: "true",
+			wantMsg:  macGateGuardRefusal,
+			wantStop: true,
+		},
+		{
+			name: "Linux permits AXI run",
+			args: []string{"axi", "run"},
+			goos: "linux",
+		},
+		{
+			name: "Darwin permits read-only AXI status",
+			args: []string{"axi", "status"},
+			goos: "darwin",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			message, stopped := macGateGuard(tt.args, tt.goos, tt.override)
+			if message != tt.wantMsg || stopped != tt.wantStop {
+				t.Fatalf("macGateGuard(%q, %q, %q) = (%q, %v), want (%q, %v)", tt.args, tt.goos, tt.override, message, stopped, tt.wantMsg, tt.wantStop)
+			}
+		})
+	}
+}
+
+func TestRunRefusesMacGateBeforeStateInitialization(t *testing.T) {
+	stateRoot := t.TempDir()
+	t.Setenv("NS_HOME", stateRoot)
+	t.Setenv("NM_HOME", stateRoot)
+
+	previousArgs := os.Args
+	os.Args = []string{"no-slop", "axi", "run", "--intent", "test"}
+	t.Cleanup(func() { os.Args = previousArgs })
+	previousGOOS := runtimeGOOS
+	runtimeGOOS = "darwin"
+	t.Cleanup(func() { runtimeGOOS = previousGOOS })
+
+	if got := run(); got != 1 {
+		t.Fatalf("run() = %d, want 1", got)
+	}
+	if _, err := os.Stat(filepath.Join(stateRoot, "state.sqlite")); !os.IsNotExist(err) {
+		t.Fatalf("state database exists after refused Mac gate: stat err = %v", err)
+	}
+}
+
 func TestCLILogWriterAppendsToFileWhenLogsDirExists(t *testing.T) {
 	nmHome := t.TempDir()
 	t.Setenv("NS_HOME", nmHome)

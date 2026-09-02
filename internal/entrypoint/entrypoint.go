@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -18,11 +19,25 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/update"
 )
 
+// runtimeGOOS is a variable so tests can exercise the Mac gate guard on every
+// supported host. Production always uses the Go runtime's target OS.
+var runtimeGOOS = runtime.GOOS
+
+const macGateGuardRefusal = "mac-gate-guard: REFUSED - gates do not run on the Mac."
+
+const macGateGuardOverride = "mac-gate-guard: OVERRIDE - MO_ALLOW_MAC_GATE=1, running this gate on the Mac anyway."
+
 func Main() {
 	os.Exit(run())
 }
 
 func run() int {
+	if message, refused := macGateGuard(os.Args[1:], runtimeGOOS, os.Getenv("MO_ALLOW_MAC_GATE")); refused {
+		fmt.Fprintln(os.Stderr, message)
+		return 1
+	} else if message != "" {
+		fmt.Fprintln(os.Stderr, message)
+	}
 	if err := validateIdentityAliasConflicts(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -79,6 +94,24 @@ func run() int {
 	}()
 
 	return cli.Execute()
+}
+
+// macGateGuard is the binary backstop for the Mac lead-seat rule. Keep it
+// before every initialization path in run: opening AXI resources can create
+// gate state, while a refusal must leave no run row, custody claim, or
+// worktree registration behind.
+//
+// The shell wrapper retains the matching fast-fail for its cheaper path. The
+// shared marker, override name, and message text deliberately make the two
+// surfaces auditable as the same policy.
+func macGateGuard(args []string, goos, override string) (message string, refused bool) {
+	if goos != "darwin" || len(args) < 2 || args[0] != "axi" || args[1] != "run" {
+		return "", false
+	}
+	if override == "1" {
+		return macGateGuardOverride, false
+	}
+	return macGateGuardRefusal, true
 }
 
 func validateIdentityAliasConflicts() error {
