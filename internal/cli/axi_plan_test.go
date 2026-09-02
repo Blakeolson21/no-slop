@@ -53,9 +53,31 @@ func decodeAxiRunPlan(t *testing.T, out string) axiRunPlan {
 	t.Helper()
 	var plan axiRunPlan
 	if err := json.Unmarshal([]byte(out), &plan); err != nil {
-		t.Fatalf("decode plan JSON %q: %v", out, err)
+		t.Fatalf("decode plan JSON %q: %v", scrubPlanTestCredential(out), err)
 	}
 	return plan
+}
+
+// planTestCredential is the fabricated secret the redaction tests plant in the
+// registered upstream and in the worktree's origin remote.
+const planTestCredential = "s3cr3t-plan-token"
+
+// scrubPlanTestCredential strips the planted secret from a diagnostic. It never
+// calls the redaction code under test, so a failure report stays safe even when
+// that code is the thing that is broken.
+func scrubPlanTestCredential(text string) string {
+	return strings.ReplaceAll(text, planTestCredential, "<credential>")
+}
+
+// assertNoPlanTestCredential is the single owner of the "this surface must not
+// carry the credential" check. Test output is itself a published surface, so
+// the failure it raises reports the offending text with the secret removed
+// rather than reproducing what the assertion exists to keep out of sight.
+func assertNoPlanTestCredential(t *testing.T, surface, text string) {
+	t.Helper()
+	if strings.Contains(text, planTestCredential) {
+		t.Fatalf("%s leaked the planted credential: %s", surface, scrubPlanTestCredential(text))
+	}
 }
 
 func TestAxiPlanUsesTheRunCommandsPflagGrammarForBooleanFalse(t *testing.T) {
@@ -238,7 +260,6 @@ func TestAxiPlanServesItsOwnHelpAndKeepsItPositionalAfterTheTerminator(t *testin
 
 func TestAxiPlanRedactsRegisteredUpstreamCredentials(t *testing.T) {
 	p, _ := setupAxiPlanRepo(t)
-	const secret = "s3cr3t-plan-token"
 	database, err := db.Open(p.DB())
 	if err != nil {
 		t.Fatal(err)
@@ -248,9 +269,9 @@ func TestAxiPlanRedactsRegisteredUpstreamCredentials(t *testing.T) {
 		_ = database.Close()
 		t.Fatalf("registered repos = %d, %v", len(repos), err)
 	}
-	if _, err := database.UpdateRepoMetadata(repos[0].ID, "https://plan-user:"+secret+"@example.com/owner/repo.git", repos[0].DefaultBranch); err != nil {
+	if _, err := database.UpdateRepoMetadata(repos[0].ID, "https://plan-user:"+planTestCredential+"@example.com/owner/repo.git", repos[0].DefaultBranch); err != nil {
 		_ = database.Close()
-		t.Fatal(err)
+		t.Fatalf("register credentialled upstream: %v", scrubPlanTestCredential(err.Error()))
 	}
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
@@ -258,38 +279,38 @@ func TestAxiPlanRedactsRegisteredUpstreamCredentials(t *testing.T) {
 
 	out, err := executeCmd("axi", "plan", "--intent", "inspect only")
 	if err != nil {
-		t.Fatalf("axi plan failed: %v\n%s", err, out)
+		t.Fatalf("axi plan failed: %v\n%s", scrubPlanTestCredential(err.Error()), scrubPlanTestCredential(out))
 	}
-	if strings.Contains(out, secret) {
-		t.Fatalf("plan report leaked the registered upstream credential: %q", out)
-	}
+	assertNoPlanTestCredential(t, "plan report", out)
 	plan := decodeAxiRunPlan(t, out)
 	if plan.Repo.Upstream != "https://redacted@example.com/owner/repo.git" {
-		t.Fatalf("reported upstream = %q, want the credential replaced", plan.Repo.Upstream)
+		t.Fatalf("reported upstream = %q, want the credential replaced", scrubPlanTestCredential(plan.Repo.Upstream))
 	}
 }
 
 func TestAxiPlanFailureNeverEchoesOriginCredentials(t *testing.T) {
 	_, repoDir := setupAxiPlanRepo(t)
-	const secret = "s3cr3t-plan-token"
-	credentialURL := "https://plan-user:" + secret + "@example.invalid/owner/repo.git"
-	run(t, repoDir, "git", "remote", "set-url", "origin", credentialURL)
+	credentialURL := "https://plan-user:" + planTestCredential + "@example.invalid/owner/repo.git"
+	// Set the remote without the shared run helper, which echoes its argv on
+	// failure and would put the credential in the test log.
+	setOrigin := exec.Command("git", "-C", repoDir, "remote", "set-url", "origin", credentialURL)
+	if out, err := setOrigin.CombinedOutput(); err != nil {
+		t.Fatalf("set credentialled origin: %v\n%s", err, scrubPlanTestCredential(string(out)))
+	}
 	// Refuse the transport locally so the failing fetch is offline and
 	// deterministic while still carrying the credentialled URL in its argv.
 	t.Setenv("GIT_ALLOW_PROTOCOL", "file")
 
 	out, err := executeCmd("axi", "plan", "--intent", "inspect only")
 	if err == nil {
-		t.Fatalf("axi plan succeeded against an unreachable origin: %s", out)
+		t.Fatalf("axi plan succeeded against an unreachable origin: %s", scrubPlanTestCredential(out))
 	}
 	if out != "" {
-		t.Fatalf("failed plan emitted partial stdout %q", out)
+		t.Fatalf("failed plan emitted partial stdout %q", scrubPlanTestCredential(out))
 	}
-	if strings.Contains(err.Error(), secret) {
-		t.Fatalf("plan failure leaked the origin credential: %v", err)
-	}
+	assertNoPlanTestCredential(t, "plan failure", err.Error())
 	if !strings.Contains(err.Error(), "example.invalid") {
-		t.Fatalf("plan failure did not name the unreachable origin: %v", err)
+		t.Fatalf("plan failure did not name the unreachable origin: %v", scrubPlanTestCredential(err.Error()))
 	}
 }
 
