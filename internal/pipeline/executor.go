@@ -1000,6 +1000,12 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		sctx.ReviewStartingHeadSHA = reviewStartingHeadSHA
 		sctx.KnownReviewLineages = knownLineages
 		outcome, err := step.Execute(sctx)
+		// A cross-run recovered selection skips exactly one duplicate fixer
+		// invocation. Any later explicit or automatic fix in this execution
+		// must run normally.
+		if sctx.SkipFixExecution {
+			sctx.SkipFixExecution = false
+		}
 		roundNum++
 		roundDuration := time.Since(phaseStart).Milliseconds()
 		if err != nil {

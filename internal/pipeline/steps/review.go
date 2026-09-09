@@ -139,6 +139,14 @@ Previous review findings to address:
 
 	if len(reviewablePaths(changed, sctx.Config.IgnorePatterns)) == 0 {
 		sctx.Log("no changes to review")
+		if sctx.UncertifiedSelectedFindings != "" {
+			return approvedReviewOutcome(reviewTargetSHA, &pipeline.StepOutcome{
+				NeedsApproval: true,
+				AutoFixable:   true,
+				Findings:      sctx.UncertifiedSelectedFindings,
+				FixSummary:    fixSummary,
+			})
+		}
 		noChangeFindings := Findings{
 			RiskLevel:     "low",
 			RiskRationale: "no reviewable changes",

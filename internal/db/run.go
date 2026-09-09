@@ -451,23 +451,18 @@ func (d *DB) UpdateRunReviewApprovedHeadSHA(id, headSHA string) error {
 	return nil
 }
 
-// UpdateRunHeadSHA updates the run head SHA and timestamp.
+// UpdateRunHeadSHA promotes a new run head through the single persistence
+// writer. Every changed head revokes authority and findings from a completed
+// Review in the same transaction, so callers cannot remember only part of the
+// adjudication invalidation protocol.
 func (d *DB) UpdateRunHeadSHA(id, headSHA string) error {
-	_, err := d.sql.Exec(`UPDATE runs SET head_sha = ?, updated_at = ? WHERE id = ?`, headSHA, now(), id)
-	if err != nil {
-		return fmt.Errorf("update run head sha: %w", err)
-	}
-	return nil
+	return d.promoteRunHead(id, headSHA, nil)
 }
 
 // UpdateRunHeadSHAForRevalidation records a late repair while revoking the
 // previous review binding so the repaired head must pass review before push.
 func (d *DB) UpdateRunHeadSHAForRevalidation(id, headSHA string) error {
-	_, err := d.sql.Exec(`UPDATE runs SET head_sha = ?, review_approved_head_sha = NULL, updated_at = ? WHERE id = ?`, headSHA, now(), id)
-	if err != nil {
-		return fmt.Errorf("update run head sha for revalidation: %w", err)
-	}
-	return nil
+	return d.promoteRunHead(id, headSHA, nil)
 }
 
 // UpdateRunError sets the error message on a run.
@@ -485,19 +480,121 @@ func (d *DB) UpdateRunErrorStatus(id, errMsg string, status types.RunStatus) err
 }
 
 func (d *DB) UpdateRunErrorStatusWithVerifiedHead(id, errMsg string, status types.RunStatus, headSHA string) error {
-	ts := now()
-	_, err := d.sql.Exec(`UPDATE runs SET error = ?, status = ?, head_sha = ?, push_active = 0, terminal_head_verified_at = ?, updated_at = ? WHERE id = ?`, errMsg, status, headSHA, ts, ts, id)
-	if err != nil {
-		return fmt.Errorf("update run error with verified head: %w", err)
-	}
-	return nil
+	return d.promoteRunHead(id, headSHA, &terminalHeadPromotion{status: status, errMsg: &errMsg})
 }
 
 func (d *DB) UpdateRunStatusWithVerifiedHead(id string, status types.RunStatus, headSHA string) error {
-	ts := now()
-	_, err := d.sql.Exec(`UPDATE runs SET status = ?, head_sha = ?, push_active = 0, terminal_head_verified_at = ?, updated_at = ? WHERE id = ?`, status, headSHA, ts, ts, id)
+	return d.promoteRunHead(id, headSHA, &terminalHeadPromotion{status: status})
+}
+
+type terminalHeadPromotion struct {
+	status types.RunStatus
+	errMsg *string
+}
+
+// promoteRunHead is the only runs.head_sha writer after insertion. Keeping the
+// terminal status mutation in this transaction closes the crash boundary where
+// terminal reconciliation used to advance the head while leaving the previous
+// Review's approval and findings authoritative.
+func (d *DB) promoteRunHead(id, headSHA string, terminal *terminalHeadPromotion) error {
+	id = strings.TrimSpace(id)
+	headSHA = strings.TrimSpace(headSHA)
+	if id == "" || headSHA == "" {
+		return fmt.Errorf("promote run head: run id and head sha are required")
+	}
+	tx, err := d.sql.Begin()
 	if err != nil {
-		return fmt.Errorf("update run status with verified head: %w", err)
+		return fmt.Errorf("begin run head promotion: %w", err)
+	}
+	defer tx.Rollback()
+
+	var currentHead, repoID, branch string
+	if err := tx.QueryRow(`SELECT head_sha, repo_id, branch FROM runs WHERE id = ?`, id).Scan(&currentHead, &repoID, &branch); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("promote run head: run %s not found", id)
+		}
+		return fmt.Errorf("read run head before promotion: %w", err)
+	}
+	ts := now()
+	if currentHead != headSHA {
+		var reviewStepID string
+		var findings sql.NullString
+		reviewErr := tx.QueryRow(
+			`SELECT id, findings_json FROM step_results
+			 WHERE run_id = ? AND step_name = ? AND status = ? LIMIT 1`,
+			id, types.StepReview, types.StepStatusCompleted,
+		).Scan(&reviewStepID, &findings)
+		if reviewErr != nil && reviewErr != sql.ErrNoRows {
+			return fmt.Errorf("snapshot completed review before head promotion: %w", reviewErr)
+		}
+		if reviewErr == nil {
+			var selected sql.NullString
+			if err := tx.QueryRow(
+				`SELECT selected_finding_ids FROM step_rounds WHERE step_result_id = ? ORDER BY round DESC LIMIT 1`,
+				reviewStepID,
+			).Scan(&selected); err != nil && err != sql.ErrNoRows {
+				return fmt.Errorf("snapshot completed review selection before head promotion: %w", err)
+			}
+			// Normal fix paths prepare this row before moving the branch ref. The
+			// conflict arm only fills missing snapshots; it never overwrites the
+			// explicit state transition already chosen by the recovery owner.
+			if _, err := tx.Exec(
+				`INSERT INTO uncertified_pipeline_ranges
+				 (repo_id, branch, from_sha, to_sha, source_run_id, selection_applied, recovery_state, findings_json, selected_finding_ids, created_at)
+				 VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+				 ON CONFLICT(repo_id, branch) DO UPDATE SET
+				   findings_json = COALESCE(uncertified_pipeline_ranges.findings_json, excluded.findings_json),
+				   selected_finding_ids = COALESCE(uncertified_pipeline_ranges.selected_finding_ids, excluded.selected_finding_ids)`,
+				repoID, branch, currentHead, headSHA, id, ReviewRecoverySelectionApplied, findings, selected, ts,
+			); err != nil {
+				return fmt.Errorf("snapshot review recovery before head promotion: %w", err)
+			}
+		}
+		if _, err := tx.Exec(
+			`UPDATE step_results
+			 SET findings_json = NULL, certified_head_sha = NULL
+			 WHERE run_id = ? AND step_name = ? AND status = ?`,
+			id, types.StepReview, types.StepStatusCompleted,
+		); err != nil {
+			return fmt.Errorf("revoke completed review truth before head promotion: %w", err)
+		}
+		result, err := tx.Exec(
+			`UPDATE runs
+			 SET head_sha = ?, review_approved_head_sha = NULL,
+			     ci_ready_at = NULL, ci_ready_no_ci = 0,
+			     terminal_head_verified_at = NULL, updated_at = ?
+			 WHERE id = ?`,
+			headSHA, ts, id,
+		)
+		if err != nil {
+			return fmt.Errorf("promote run head: %w", err)
+		}
+		if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+			return fmt.Errorf("promote run head: run %s not found", id)
+		}
+	}
+	if terminal != nil {
+		var result sql.Result
+		if terminal.errMsg != nil {
+			result, err = tx.Exec(
+				`UPDATE runs SET error = ?, status = ?, push_active = 0, terminal_head_verified_at = ?, updated_at = ? WHERE id = ?`,
+				*terminal.errMsg, terminal.status, ts, ts, id,
+			)
+		} else {
+			result, err = tx.Exec(
+				`UPDATE runs SET status = ?, push_active = 0, terminal_head_verified_at = ?, updated_at = ? WHERE id = ?`,
+				terminal.status, ts, ts, id,
+			)
+		}
+		if err != nil {
+			return fmt.Errorf("complete verified terminal head promotion: %w", err)
+		}
+		if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+			return fmt.Errorf("complete verified terminal head promotion: run %s not found", id)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit run head promotion: %w", err)
 	}
 	return nil
 }

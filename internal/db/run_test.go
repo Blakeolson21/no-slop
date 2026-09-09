@@ -673,8 +673,87 @@ func TestUpdateRunHeadSHA(t *testing.T) {
 	if got.HeadSHA != "xyz" {
 		t.Errorf("head sha = %q, want %q", got.HeadSHA, "xyz")
 	}
-	if got.ReviewApprovedHeadSHA == nil || *got.ReviewApprovedHeadSHA != "abc" {
-		t.Fatalf("ordinary head update cleared review authority: %#v", got.ReviewApprovedHeadSHA)
+	if got.ReviewApprovedHeadSHA != nil {
+		t.Fatalf("ordinary head promotion retained stale review authority: %#v", got.ReviewApprovedHeadSHA)
+	}
+}
+
+func TestEveryRunHeadPromotionRevokesCompletedReviewTruth(t *testing.T) {
+	tests := []struct {
+		name    string
+		promote func(*DB, string) error
+	}{
+		{"ordinary", func(d *DB, id string) error { return d.UpdateRunHeadSHA(id, "promoted") }},
+		{"revalidation", func(d *DB, id string) error { return d.UpdateRunHeadSHAForRevalidation(id, "promoted") }},
+		{"failed-terminal", func(d *DB, id string) error {
+			return d.UpdateRunErrorStatusWithVerifiedHead(id, "failed", types.RunFailed, "promoted")
+		}},
+		{"completed-terminal", func(d *DB, id string) error {
+			return d.UpdateRunStatusWithVerifiedHead(id, types.RunCompleted, "promoted")
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := openTestDB(t)
+			repo, _ := d.InsertRepo("/tmp/promotion-"+tt.name, "https://example.com/repo.git", "main")
+			run, _ := d.InsertRun(repo.ID, "feature", "reviewed", "base")
+			step, _ := d.InsertStepResult(run.ID, types.StepReview)
+			findings := `{"findings":[{"id":"review-a","severity":"error","description":"adjudicated"}]}`
+			if err := d.SetStepFindings(step.ID, findings); err != nil {
+				t.Fatal(err)
+			}
+			if err := d.CompleteReviewStep(step.ID, run.ID, "reviewed", 0, 1, "review.log", nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := d.SetRunCIReady(run.ID, true); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := tt.promote(d, run.ID); err != nil {
+				t.Fatal(err)
+			}
+			gotRun, _ := d.GetRun(run.ID)
+			gotStep, _ := d.GetStepResult(step.ID)
+			if gotRun.HeadSHA != "promoted" || gotRun.ReviewApprovedHeadSHA != nil || gotRun.CIReadyAt != nil {
+				t.Fatalf("promotion retained stale run truth: head=%q approval=%#v ci_ready=%#v", gotRun.HeadSHA, gotRun.ReviewApprovedHeadSHA, gotRun.CIReadyAt)
+			}
+			if gotStep.FindingsJSON != nil || gotStep.CertifiedHeadSHA != nil {
+				t.Fatalf("promotion retained completed Review truth: findings=%#v certified=%#v", gotStep.FindingsJSON, gotStep.CertifiedHeadSHA)
+			}
+		})
+	}
+}
+
+func TestRunHeadPromotionRollsBackWhenReviewTruthCannotBeRevoked(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/tmp/promotion-rollback", "https://example.com/repo.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feature", "reviewed", "base")
+	step, _ := d.InsertStepResult(run.ID, types.StepReview)
+	findings := `{"findings":[{"id":"review-a","severity":"error","description":"adjudicated"}]}`
+	if err := d.SetStepFindings(step.ID, findings); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.CompleteReviewStep(step.ID, run.ID, "reviewed", 0, 1, "review.log", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.sql.Exec(`CREATE TRIGGER reject_review_revocation
+		BEFORE UPDATE OF findings_json ON step_results
+		WHEN OLD.status = 'completed' AND OLD.step_name = 'review'
+		BEGIN SELECT RAISE(ABORT, 'injected review revocation failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+
+	err := d.UpdateRunErrorStatusWithVerifiedHead(run.ID, "failed", types.RunFailed, "promoted")
+	if err == nil {
+		t.Fatal("terminal head promotion succeeded without revoking completed Review truth")
+	}
+	gotRun, _ := d.GetRun(run.ID)
+	gotStep, _ := d.GetStepResult(step.ID)
+	if gotRun.HeadSHA != "reviewed" || gotRun.Status != types.RunPending || gotRun.ReviewApprovedHeadSHA == nil {
+		t.Fatalf("failed promotion partially changed run: %#v", gotRun)
+	}
+	if gotStep.FindingsJSON == nil || gotStep.CertifiedHeadSHA == nil {
+		t.Fatalf("failed promotion partially cleared Review truth: %#v", gotStep)
 	}
 }
 

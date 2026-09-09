@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 // terminalAdoptionFixture models the production topology the custody deadlock
@@ -109,6 +110,48 @@ func TestExecutor_TerminalizationAdoptsTheHeadItRecords(t *testing.T) {
 	}
 	if gateHead := gitOut(t, f.gate, "rev-parse", "refs/heads/feature"); gateHead != selfCommit {
 		t.Fatalf("gate branch ref = %s, but the run recorded head_sha = %s; the recorded terminal head is referenced by nothing, which strands the branch in pipeline custody", gateHead, selfCommit)
+	}
+}
+
+func TestExecutor_TerminalHeadPromotionRevokesReviewAndSnapshotsRecovery(t *testing.T) {
+	database, p, _, repo := setupTest(t)
+	f := newTerminalAdoptionFixture(t)
+	run, err := database.InsertRun(repo.ID, "feature", f.submitted, f.base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	review, err := database.InsertStepResult(run.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings := `{"findings":[{"id":"review-a","severity":"error","description":"adjudicated"}]}`
+	if err := database.SetStepFindings(review.ID, findings); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CompleteReviewStep(review.ID, run.ID, f.submitted, 0, 1, "review.log", nil); err != nil {
+		t.Fatal(err)
+	}
+	selfCommit := f.selfCommit(t, "feature, repaired after review\n")
+
+	exec := NewExecutor(database, p, nil, nil, nil, nil)
+	exec.workDir = f.workDir
+	if err := exec.completeRun(run, repo); err != nil {
+		t.Fatal(err)
+	}
+	gotRun, _ := database.GetRun(run.ID)
+	gotReview, _ := database.GetStepResult(review.ID)
+	if gotRun.HeadSHA != selfCommit || gotRun.ReviewApprovedHeadSHA != nil {
+		t.Fatalf("terminal promotion retained stale run review truth: %#v", gotRun)
+	}
+	if gotReview.FindingsJSON != nil || gotReview.CertifiedHeadSHA != nil {
+		t.Fatalf("terminal promotion retained stale completed Review truth: %#v", gotReview)
+	}
+	rng, err := database.GetUncertifiedPipelineRange(repo.ID, run.Branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rng == nil || rng.ToSHA != selfCommit || rng.FindingsJSON == nil || *rng.FindingsJSON != findings {
+		t.Fatalf("terminal promotion did not snapshot recovery truth: %#v", rng)
 	}
 }
 

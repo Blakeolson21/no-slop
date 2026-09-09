@@ -71,7 +71,7 @@ func TestLoadUncertifiedPriorReviewKeepsEffectiveFindingsWhenRoundsFail(t *testi
 		steps:     []*db.StepResult{{ID: "review-step", StepName: types.StepReview, FindingsJSON: &findings}},
 		roundsErr: errors.New("round history unavailable"),
 	}
-	rounds, got, lineages, err := loadUncertifiedPriorReview(store, "source-run", false)
+	rounds, got, lineages, _, err := loadUncertifiedPriorReview(store, "source-run", false, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestLoadUncertifiedPriorReviewKeepsEffectiveFindingsWhenRoundsFail(t *testi
 
 func TestLoadUncertifiedPriorReviewFailsWhenEffectiveTruthCannotBeRead(t *testing.T) {
 	store := &failingUncertifiedReviewStore{stepsErr: errors.New("step truth unavailable")}
-	if _, _, _, err := loadUncertifiedPriorReview(store, "source-run", false); err == nil || !strings.Contains(err.Error(), "source-run steps") {
+	if _, _, _, _, err := loadUncertifiedPriorReview(store, "source-run", false, nil, nil); err == nil || !strings.Contains(err.Error(), "source-run steps") {
 		t.Fatalf("loadUncertifiedPriorReview() error = %v, want critical read failure", err)
 	}
 }
@@ -93,7 +93,7 @@ func TestLoadUncertifiedPriorReviewFailsWhenSelectionCannotBeRead(t *testing.T) 
 		steps:     []*db.StepResult{{ID: "review-step", StepName: types.StepReview, FindingsJSON: &findings}},
 		selectErr: errors.New("selection unavailable"),
 	}
-	if _, _, _, err := loadUncertifiedPriorReview(store, "source-run", false); err == nil || !strings.Contains(err.Error(), "source-run selection") {
+	if _, _, _, _, err := loadUncertifiedPriorReview(store, "source-run", false, nil, nil); err == nil || !strings.Contains(err.Error(), "source-run selection") {
 		t.Fatalf("loadUncertifiedPriorReview() error = %v, want critical selection failure", err)
 	}
 }
@@ -105,7 +105,7 @@ func TestLoadUncertifiedPriorReviewPreservesSelectedTruthBeforeFixAdoption(t *te
 		steps:     []*db.StepResult{{ID: "review-step", StepName: types.StepReview, FindingsJSON: &findings}},
 		selection: &selection,
 	}
-	_, got, _, err := loadUncertifiedPriorReview(store, "source-run", false)
+	_, got, _, _, err := loadUncertifiedPriorReview(store, "source-run", false, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,6 +153,13 @@ func TestBindUncertifiedPipelineRangeUsesDurableSelectionProgress(t *testing.T) 
 	}); err != nil {
 		t.Fatal(err)
 	}
+	pending, err := database.GetUncertifiedPipelineRange(repo.ID, source.Branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.RecoveryState != db.ReviewRecoverySelectionRecoveredNoDelta {
+		t.Fatalf("selection state before fixer delta = %q", pending.RecoveryState)
+	}
 
 	beforeRun, err := database.InsertRun(repo.ID, source.Branch, h1, source.BaseSHA)
 	if err != nil {
@@ -166,12 +173,26 @@ func TestBindUncertifiedPipelineRangeUsesDurableSelectionProgress(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(beforeFindings.Items) != 2 {
-		t.Fatalf("pre-adoption recovery findings = %#v", beforeFindings.Items)
+	if len(beforeFindings.Items) != 1 || beforeFindings.Items[0].ID != "review-b" {
+		t.Fatalf("pre-adoption carried findings = %#v, want only the unselected finding", beforeFindings.Items)
+	}
+	beforeSelected, err := types.ParseFindingsJSON(before.UncertifiedSelectedFindings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(beforeSelected.Items) != 1 || beforeSelected.Items[0].ID != "review-a" || !before.Fixing || !before.SkipFixExecution {
+		t.Fatalf("pre-adoption selected recovery = %#v, fixing %v skip-fix %v", beforeSelected.Items, before.Fixing, before.SkipFixExecution)
 	}
 
 	if err := PersistUncertifiedPipelineRange(&StepContext{Ctx: context.Background(), DB: database, Repo: repo, Run: source, WorkDir: dir}, h1, h2); err != nil {
 		t.Fatal(err)
+	}
+	applied, err := database.GetUncertifiedPipelineRange(repo.ID, source.Branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied.RecoveryState != db.ReviewRecoverySelectionRecoveredWithDelta {
+		t.Fatalf("selection state after fixer delta = %q", applied.RecoveryState)
 	}
 	afterRun, err := database.InsertRun(repo.ID, source.Branch, h2, source.BaseSHA)
 	if err != nil {
@@ -187,6 +208,55 @@ func TestBindUncertifiedPipelineRangeUsesDurableSelectionProgress(t *testing.T) 
 	}
 	if len(afterFindings.Items) != 1 || afterFindings.Items[0].ID != "review-b" {
 		t.Fatalf("post-adoption recovery findings = %#v", afterFindings.Items)
+	}
+	if !after.Fixing || !after.SkipFixExecution {
+		t.Fatalf("post-adoption recovery repeated the fixer: fixing %v skip-fix %v", after.Fixing, after.SkipFixExecution)
+	}
+}
+
+func TestBindUncertifiedPipelineRangeUsesReviewOnlyRoundForRecoveredNoDeltaSelection(t *testing.T) {
+	database, _, source, repo := setupTest(t)
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	head := currentSHA(t, dir)
+	if err := database.UpdateRunHeadSHA(source.ID, head); err != nil {
+		t.Fatal(err)
+	}
+	source.HeadSHA = head
+	review, err := database.InsertStepResult(source.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings := `{"findings":[{"id":"review-a","severity":"error","description":"selected defect","action":"auto-fix"}]}`
+	round, err := database.InsertEffectiveReviewStepRoundWithProvenance(review.ID, 1, "initial", &findings, nil, head, head, "", nil, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := `["review-a"]`
+	if err := database.PersistReviewFixSelection(db.ReviewFixSelection{
+		RoundID: round.ID, StepResultID: review.ID, RepoID: repo.ID, Branch: source.Branch,
+		FromSHA: head, HeadSHA: head, SourceRunID: source.ID, RoundFindingsJSON: findings,
+		StepFindingsJSON: findings, SelectedFindingIDs: &selected, SelectionSource: db.RoundSelectionSourceAutoFix,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := database.InsertRun(repo.ID, source.Branch, head, source.BaseSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sctx := &StepContext{Ctx: context.Background(), DB: database, Repo: repo, Run: replacement, WorkDir: dir}
+	if err := BindUncertifiedPipelineRange(sctx); err != nil {
+		t.Fatal(err)
+	}
+	if !sctx.Fixing || !sctx.SkipFixExecution {
+		t.Fatalf("same-head recovery mode = fixing %v skip-fix %v, want one review-only fix round", sctx.Fixing, sctx.SkipFixExecution)
+	}
+	parsed, err := types.ParseFindingsJSON(sctx.UncertifiedSelectedFindings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Items) != 1 || parsed.Items[0].ID != "review-a" {
+		t.Fatalf("same-head recovery dropped selected finding: %#v", parsed.Items)
 	}
 }
 

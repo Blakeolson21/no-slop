@@ -64,6 +64,11 @@ type StepContext struct {
 	UncertifiedPriorRounds   []*db.StepRound
 	UncertifiedPriorFindings string
 	UncertifiedPriorLineages string
+	// UncertifiedSelectedFindings is the selected subset a recovered
+	// review-only round must verify. It is kept separate from carried findings:
+	// silence may resolve it after a real review, but an ignored-only delta must
+	// return it to the gate instead of silently approving.
+	UncertifiedSelectedFindings string
 	// Sessions manages the run's durable review-fixer session. The session
 	// machinery remains role-generic for legacy recovery; nil runs every
 	// invocation cold.

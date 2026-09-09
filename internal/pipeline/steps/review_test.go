@@ -147,6 +147,27 @@ func TestReviewStep_FixMode(t *testing.T) {
 	}
 }
 
+func TestReviewStep_RecoveredSelectionSurvivesIgnoredOnlyFixDelta(t *testing.T) {
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	ag := &mockAgent{name: "test"}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Config.IgnorePatterns = []string{"feature.txt"}
+	sctx.Fixing = true
+	sctx.SkipFixExecution = true
+	sctx.UncertifiedSelectedFindings = `{"findings":[{"id":"review-a","severity":"error","file":"feature.txt","description":"selected defect","action":"auto-fix"}]}`
+
+	outcome, err := (&ReviewStep{}).Execute(sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ag.calls) != 0 {
+		t.Fatalf("ignored-only recovery spent %d agent calls, want none", len(ag.calls))
+	}
+	if !outcome.NeedsApproval || !outcome.AutoFixable || outcome.Findings != sctx.UncertifiedSelectedFindings {
+		t.Fatalf("ignored-only recovery cleared selected finding: %#v", outcome)
+	}
+}
+
 // A deterministic fake finding exercises the ordinary review gate, repair,
 // and rereview flow without claiming that the fake agent can judge tests.
 func TestReviewStep_SourceContentFindingFollowsNormalFixFlow(t *testing.T) {

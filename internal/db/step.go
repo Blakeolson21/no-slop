@@ -284,10 +284,10 @@ func (d *DB) CompleteReviewStep(id, runID, approvedHeadSHA string, exitCode int,
 	if certifiedRange != nil {
 		result, err = tx.Exec(
 			`DELETE FROM uncertified_pipeline_ranges
-			 WHERE repo_id = ? AND branch = ? AND from_sha = ? AND to_sha = ? AND source_run_id = ?
+			 WHERE repo_id = ? AND branch = ? AND from_sha = ? AND to_sha = ? AND source_run_id = ? AND recovery_state = ?
 			   AND repo_id = (SELECT repo_id FROM runs WHERE id = ?)
 			   AND branch = (SELECT branch FROM runs WHERE id = ?)`,
-			certifiedRange.RepoID, certifiedRange.Branch, certifiedRange.FromSHA, certifiedRange.ToSHA, certifiedRange.SourceRunID,
+			certifiedRange.RepoID, certifiedRange.Branch, certifiedRange.FromSHA, certifiedRange.ToSHA, certifiedRange.SourceRunID, certifiedRange.RecoveryState,
 			runID, runID,
 		)
 		if err != nil {

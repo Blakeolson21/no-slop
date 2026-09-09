@@ -87,10 +87,58 @@ func TestOpenCreatesSchema(t *testing.T) {
 	if !hasColumn(t, d, "uncertified_pipeline_ranges", "selection_applied") {
 		t.Fatal("uncertified_pipeline_ranges.selection_applied column missing from fresh schema")
 	}
+	if !hasColumn(t, d, "uncertified_pipeline_ranges", "recovery_state") {
+		t.Fatal("uncertified_pipeline_ranges.recovery_state column missing from fresh schema")
+	}
+	for _, column := range []string{"findings_json", "selected_finding_ids"} {
+		if !hasColumn(t, d, "uncertified_pipeline_ranges", column) {
+			t.Fatalf("uncertified_pipeline_ranges.%s column missing from fresh schema", column)
+		}
+	}
 	for _, column := range []string{"last_activity_at", "last_activity", "agent_pid", "ci_fix_attempts", "certified_head_sha"} {
 		if !hasColumn(t, d, "step_results", column) {
 			t.Fatalf("step_results.%s column missing from fresh schema", column)
 		}
+	}
+}
+
+func TestOpenMigratesLegacySelectionAppliedToExplicitRecoveryState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "recovery-state.sqlite")
+	database, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, _ := database.InsertRepo("/tmp/recovery-migration", "https://example.com/repo.git", "main")
+	run, _ := database.InsertRun(repo.ID, "pending", "head", "base")
+	if _, err := database.sql.Exec(
+		`INSERT INTO uncertified_pipeline_ranges (repo_id, branch, from_sha, to_sha, source_run_id, selection_applied, recovery_state, created_at)
+		 VALUES (?, 'pending', 'same', 'same', ?, 0, 'legacy', 1),
+		        (?, 'applied', 'from', 'to', ?, 1, 'legacy', 1)`,
+		repo.ID, run.ID, repo.ID, run.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	pending, err := database.GetUncertifiedPipelineRange(repo.ID, "pending")
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied, err := database.GetUncertifiedPipelineRange(repo.ID, "applied")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.RecoveryState != ReviewRecoverySelectionRecoveredNoDelta || pending.SelectionApplied {
+		t.Fatalf("legacy pending state = %#v", pending)
+	}
+	if applied.RecoveryState != ReviewRecoverySelectionApplied || !applied.SelectionApplied {
+		t.Fatalf("legacy applied state = %#v", applied)
 	}
 }
 

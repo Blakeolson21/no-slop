@@ -146,9 +146,9 @@ CREATE TABLE IF NOT EXISTS intent_cache (
 );
 
 -- Per-branch boundary for durable review truth whose verification did not
--- complete. selection_applied records whether a selected fix reached the
--- branch. PRIMARY KEY per branch: the latest uncertified HEAD replaces an
--- older boundary.
+-- complete. recovery_state records the adjudication stage explicitly;
+-- selection_applied remains for migration compatibility. PRIMARY KEY per
+-- branch: the latest uncertified HEAD replaces an older boundary.
 CREATE TABLE IF NOT EXISTS uncertified_pipeline_ranges (
     repo_id       TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
     branch        TEXT NOT NULL,
@@ -156,6 +156,9 @@ CREATE TABLE IF NOT EXISTS uncertified_pipeline_ranges (
     to_sha        TEXT NOT NULL,
     source_run_id TEXT NOT NULL,
     selection_applied INTEGER NOT NULL DEFAULT 0,
+    recovery_state TEXT NOT NULL DEFAULT 'selection_applied',
+    findings_json TEXT,
+    selected_finding_ids TEXT,
     created_at    INTEGER NOT NULL,
     PRIMARY KEY (repo_id, branch)
 );
@@ -191,6 +194,12 @@ var migrationStatements = []string{
 	`ALTER TABLE runs ADD COLUMN ci_rerun_state TEXT`,
 	`ALTER TABLE runs ADD COLUMN ci_attestation_state TEXT`,
 	`ALTER TABLE uncertified_pipeline_ranges ADD COLUMN selection_applied INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE uncertified_pipeline_ranges ADD COLUMN recovery_state TEXT NOT NULL DEFAULT 'legacy'`,
+	`UPDATE uncertified_pipeline_ranges
+	 SET recovery_state = CASE WHEN selection_applied = 0 THEN 'selection_recovered_no_delta' ELSE 'selection_applied' END
+	 WHERE recovery_state = 'legacy'`,
+	`ALTER TABLE uncertified_pipeline_ranges ADD COLUMN findings_json TEXT`,
+	`ALTER TABLE uncertified_pipeline_ranges ADD COLUMN selected_finding_ids TEXT`,
 	// Branch synchronization provenance is intentionally nullable. Historical
 	// rows stay unbound because mutable head_sha cannot prove a successful push.
 	`ALTER TABLE runs ADD COLUMN submitted_head_sha TEXT`,

@@ -308,15 +308,18 @@ func (d *DB) PersistReviewFixSelection(selection ReviewFixSelection) error {
 		return err
 	}
 	_, err = tx.Exec(
-		`INSERT INTO uncertified_pipeline_ranges (repo_id, branch, from_sha, to_sha, source_run_id, selection_applied, created_at)
-		 VALUES (?, ?, ?, ?, ?, 0, ?)
+		`INSERT INTO uncertified_pipeline_ranges (repo_id, branch, from_sha, to_sha, source_run_id, selection_applied, recovery_state, findings_json, selected_finding_ids, created_at)
+		 VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
 		 ON CONFLICT(repo_id, branch) DO UPDATE SET
 		   from_sha = excluded.from_sha,
 		   to_sha = excluded.to_sha,
 		   source_run_id = excluded.source_run_id,
 		   selection_applied = 0,
+		   recovery_state = excluded.recovery_state,
+		   findings_json = excluded.findings_json,
+		   selected_finding_ids = excluded.selected_finding_ids,
 		   created_at = excluded.created_at`,
-		selection.RepoID, selection.Branch, selection.FromSHA, selection.HeadSHA, selection.SourceRunID, now(),
+		selection.RepoID, selection.Branch, selection.FromSHA, selection.HeadSHA, selection.SourceRunID, ReviewRecoverySelectionRecoveredNoDelta, selection.StepFindingsJSON, selection.SelectedFindingIDs, now(),
 	)
 	if err != nil {
 		return fmt.Errorf("set durable review recovery marker: %w", err)

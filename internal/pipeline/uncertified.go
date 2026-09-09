@@ -30,6 +30,10 @@ func BindUncertifiedPipelineRange(sctx *StepContext) error {
 	if rng == nil {
 		return nil
 	}
+	plan, err := reconcileReviewFixSelection(rng, false)
+	if err != nil {
+		return fmt.Errorf("reconcile uncertified review: %w", err)
+	}
 	head := strings.TrimSpace(sctx.Run.HeadSHA)
 	if head == "" {
 		head = strings.TrimSpace(sctx.ReviewStartingHeadSHA)
@@ -42,9 +46,20 @@ func BindUncertifiedPipelineRange(sctx *StepContext) error {
 		warnUncertifiedRangeSkipped(sctx, rng, "uncertified range %s..%s not in gate; not applying provenance")
 		return nil
 	}
-	priorRounds, priorFindings, priorLineages, err := loadUncertifiedPriorReview(sctx.DB, rng.SourceRunID, rng.SelectionApplied)
+	priorRounds, priorFindings, priorLineages, selectedFindings, err := loadUncertifiedPriorReview(
+		sctx.DB, rng.SourceRunID, plan.selectionApplied, rng.FindingsJSON, rng.SelectedFindingIDs,
+	)
 	if err != nil {
 		return err
+	}
+	if plan.reviewOnly {
+		if selectedFindings == "" {
+			return fmt.Errorf("load uncertified review: recovered selection has no selected findings")
+		}
+		priorFindings = excludeFindingsJSON(priorFindings, findingIDList(selectedFindings))
+		sctx.Fixing = true
+		sctx.SkipFixExecution = true
+		sctx.PreviousFindings = selectedFindings
 	}
 	sctx.UncertifiedFromSHA = rng.FromSHA
 	sctx.UncertifiedToSHA = rng.ToSHA
@@ -52,7 +67,42 @@ func BindUncertifiedPipelineRange(sctx *StepContext) error {
 	sctx.UncertifiedPriorRounds = priorRounds
 	sctx.UncertifiedPriorFindings = priorFindings
 	sctx.UncertifiedPriorLineages = priorLineages
+	sctx.UncertifiedSelectedFindings = selectedFindings
 	return nil
+}
+
+type reviewFixRecoveryPlan struct {
+	state            db.ReviewRecoveryState
+	selectionApplied bool
+	reviewOnly       bool
+}
+
+// reconcileReviewFixSelection is the single state transition used by both an
+// in-run fixer head promotion and every cross-run bind. The persisted state,
+// not from_sha/to_sha equality, decides whether a recovered selection needs a
+// review-only post-fix round and whether it has reached the branch.
+func reconcileReviewFixSelection(rng *db.UncertifiedPipelineRange, headPromoted bool) (reviewFixRecoveryPlan, error) {
+	state := db.ReviewRecoverySelectionApplied
+	if rng != nil {
+		state = rng.RecoveryState
+	}
+	if !state.Valid() {
+		return reviewFixRecoveryPlan{}, fmt.Errorf("invalid recovery state %q", state)
+	}
+	if headPromoted {
+		switch state {
+		case db.ReviewRecoverySelectionRecoveredNoDelta, db.ReviewRecoverySelectionRecoveredWithDelta:
+			state = db.ReviewRecoverySelectionRecoveredWithDelta
+		case db.ReviewRecoverySelectionApplied:
+			// An ordinary post-review promotion carries no pending Review
+			// selection, but its delta still requires certification.
+		}
+	}
+	return reviewFixRecoveryPlan{
+		state:            state,
+		selectionApplied: state != db.ReviewRecoverySelectionRecoveredNoDelta,
+		reviewOnly:       state == db.ReviewRecoverySelectionRecoveredNoDelta || state == db.ReviewRecoverySelectionRecoveredWithDelta,
+	}, nil
 }
 
 // PersistUncertifiedPipelineRange records a post-review commit span until a
@@ -84,7 +134,11 @@ func PersistUncertifiedPipelineRangeWithRollback(sctx *StepContext, fromSHA, toS
 			fromSHA = existing.FromSHA
 		}
 	}
-	if err := sctx.DB.UpsertUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch, fromSHA, toSHA, sctx.Run.ID); err != nil {
+	plan, err := reconcileReviewFixSelection(existing, true)
+	if err != nil {
+		return nil, fmt.Errorf("reconcile review recovery before persist: %w", err)
+	}
+	if err := sctx.DB.UpsertUncertifiedPipelineRangeRecovery(sctx.Repo.ID, sctx.Run.Branch, fromSHA, toSHA, sctx.Run.ID, plan.state); err != nil {
 		return nil, err
 	}
 	current := db.UncertifiedPipelineRange{
@@ -93,7 +147,8 @@ func PersistUncertifiedPipelineRangeWithRollback(sctx *StepContext, fromSHA, toS
 		FromSHA:          fromSHA,
 		ToSHA:            toSHA,
 		SourceRunID:      sctx.Run.ID,
-		SelectionApplied: true,
+		RecoveryState:    plan.state,
+		SelectionApplied: plan.selectionApplied,
 	}
 	rollback := func() error {
 		restored, err := sctx.DB.RestoreUncertifiedPipelineRangeIfCurrent(current, existing)
@@ -190,10 +245,10 @@ func RemapUncertifiedPipelineRangeAfterRebase(sctx *StepContext, oldHead, newHea
 	if err != nil || newFrom == "" || newTo == "" || newFrom == newTo {
 		return nil, fmt.Errorf("resolve remapped uncertified range end after rebase")
 	}
-	if err := sctx.DB.UpsertUncertifiedPipelineRangeState(sctx.Repo.ID, sctx.Run.Branch, newFrom, newTo, rng.SourceRunID, rng.SelectionApplied); err != nil {
+	if err := sctx.DB.UpsertUncertifiedPipelineRangeRecovery(sctx.Repo.ID, sctx.Run.Branch, newFrom, newTo, rng.SourceRunID, rng.RecoveryState); err != nil {
 		return nil, fmt.Errorf("persist remapped uncertified pipeline range: %w", err)
 	}
-	current := db.UncertifiedPipelineRange{RepoID: rng.RepoID, Branch: rng.Branch, FromSHA: newFrom, ToSHA: newTo, SourceRunID: rng.SourceRunID, SelectionApplied: rng.SelectionApplied}
+	current := db.UncertifiedPipelineRange{RepoID: rng.RepoID, Branch: rng.Branch, FromSHA: newFrom, ToSHA: newTo, SourceRunID: rng.SourceRunID, RecoveryState: rng.RecoveryState, SelectionApplied: rng.SelectionApplied}
 	rollback := func() error {
 		restored, err := sctx.DB.RestoreUncertifiedPipelineRangeIfCurrent(current, rng)
 		if err != nil {
@@ -302,14 +357,14 @@ type uncertifiedReviewStore interface {
 	GetLatestStepRoundSelection(string) (*string, error)
 }
 
-func loadUncertifiedPriorReview(database uncertifiedReviewStore, sourceRunID string, selectionApplied bool) ([]*db.StepRound, string, string, error) {
+func loadUncertifiedPriorReview(database uncertifiedReviewStore, sourceRunID string, selectionApplied bool, snapshotFindings, snapshotSelection *string) ([]*db.StepRound, string, string, string, error) {
 	sourceRunID = strings.TrimSpace(sourceRunID)
 	if database == nil || sourceRunID == "" {
-		return nil, "", "", fmt.Errorf("load uncertified review: missing source run")
+		return nil, "", "", "", fmt.Errorf("load uncertified review: missing source run")
 	}
 	steps, err := database.GetStepsByRun(sourceRunID)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("read uncertified source-run steps: %w", err)
+		return nil, "", "", "", fmt.Errorf("read uncertified source-run steps: %w", err)
 	}
 	for _, step := range steps {
 		if step.StepName != types.StepReview {
@@ -317,30 +372,41 @@ func loadUncertifiedPriorReview(database uncertifiedReviewStore, sourceRunID str
 		}
 		findings := ""
 		lineages := ""
-		if step.FindingsJSON != nil {
-			findings = *step.FindingsJSON
+		findingsSource := step.FindingsJSON
+		if snapshotFindings != nil {
+			findingsSource = snapshotFindings
+		}
+		if findingsSource != nil {
+			findings = *findingsSource
 			if _, err := types.ParseFindingsJSON(findings); err != nil {
-				return nil, "", "", fmt.Errorf("read uncertified source-run findings: %w", err)
+				return nil, "", "", "", fmt.Errorf("read uncertified source-run findings: %w", err)
 			}
 			lineages = findings
 		}
-		selectedRaw, err := database.GetLatestStepRoundSelection(step.ID)
-		if err != nil {
-			return nil, "", "", fmt.Errorf("read uncertified source-run selection: %w", err)
+		selectedRaw := snapshotSelection
+		if selectedRaw == nil {
+			selectedRaw, err = database.GetLatestStepRoundSelection(step.ID)
+			if err != nil {
+				return nil, "", "", "", fmt.Errorf("read uncertified source-run selection: %w", err)
+			}
 		}
-		if selectedRaw != nil && selectionApplied {
+		selectedFindings := ""
+		if selectedRaw != nil {
 			var selected []string
 			if err := json.Unmarshal([]byte(*selectedRaw), &selected); err != nil {
-				return nil, "", "", fmt.Errorf("read uncertified source-run selection: %w", err)
+				return nil, "", "", "", fmt.Errorf("read uncertified source-run selection: %w", err)
 			}
-			findings = excludeFindingsJSON(findings, selected)
+			selectedFindings = filterFindingsJSON(findings, selected)
+			if selectionApplied {
+				findings = excludeFindingsJSON(findings, selected)
+			}
 		}
 		rounds, err := database.GetRoundsByStep(step.ID)
 		if err != nil {
 			slog.Warn("failed to read uncertified source-run review rounds", "run_id", sourceRunID, "error", err)
-			return nil, findings, lineages, nil
+			return nil, findings, lineages, selectedFindings, nil
 		}
-		return rounds, findings, lineages, nil
+		return rounds, findings, lineages, selectedFindings, nil
 	}
-	return nil, "", "", fmt.Errorf("uncertified source run %s has no review step", sourceRunID)
+	return nil, "", "", "", fmt.Errorf("uncertified source run %s has no review step", sourceRunID)
 }
