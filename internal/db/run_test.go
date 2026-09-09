@@ -725,35 +725,51 @@ func TestEveryRunHeadPromotionRevokesCompletedReviewTruth(t *testing.T) {
 }
 
 func TestRunHeadPromotionRollsBackWhenReviewTruthCannotBeRevoked(t *testing.T) {
-	d := openTestDB(t)
-	repo, _ := d.InsertRepo("/tmp/promotion-rollback", "https://example.com/repo.git", "main")
-	run, _ := d.InsertRun(repo.ID, "feature", "reviewed", "base")
-	step, _ := d.InsertStepResult(run.ID, types.StepReview)
-	findings := `{"findings":[{"id":"review-a","severity":"error","description":"adjudicated"}]}`
-	if err := d.SetStepFindings(step.ID, findings); err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name    string
+		promote func(*DB, string) error
+	}{
+		{"ordinary", func(d *DB, id string) error { return d.UpdateRunHeadSHA(id, "promoted") }},
+		{"revalidation", func(d *DB, id string) error { return d.UpdateRunHeadSHAForRevalidation(id, "promoted") }},
+		{"failed-terminal", func(d *DB, id string) error {
+			return d.UpdateRunErrorStatusWithVerifiedHead(id, "failed", types.RunFailed, "promoted")
+		}},
+		{"completed-terminal", func(d *DB, id string) error {
+			return d.UpdateRunStatusWithVerifiedHead(id, types.RunCompleted, "promoted")
+		}},
 	}
-	if err := d.CompleteReviewStep(step.ID, run.ID, "reviewed", 0, 1, "review.log", nil); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := d.sql.Exec(`CREATE TRIGGER reject_review_revocation
-		BEFORE UPDATE OF findings_json ON step_results
-		WHEN OLD.status = 'completed' AND OLD.step_name = 'review'
-		BEGIN SELECT RAISE(ABORT, 'injected review revocation failure'); END`); err != nil {
-		t.Fatal(err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := openTestDB(t)
+			repo, _ := d.InsertRepo("/tmp/promotion-rollback-"+tt.name, "https://example.com/repo.git", "main")
+			run, _ := d.InsertRun(repo.ID, "feature", "reviewed", "base")
+			step, _ := d.InsertStepResult(run.ID, types.StepReview)
+			findings := `{"findings":[{"id":"review-a","severity":"error","description":"adjudicated"}]}`
+			if err := d.SetStepFindings(step.ID, findings); err != nil {
+				t.Fatal(err)
+			}
+			if err := d.CompleteReviewStep(step.ID, run.ID, "reviewed", 0, 1, "review.log", nil); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := d.sql.Exec(`CREATE TRIGGER reject_review_revocation
+				BEFORE UPDATE OF findings_json ON step_results
+				WHEN OLD.status = 'completed' AND OLD.step_name = 'review'
+				BEGIN SELECT RAISE(ABORT, 'injected review revocation failure'); END`); err != nil {
+				t.Fatal(err)
+			}
 
-	err := d.UpdateRunErrorStatusWithVerifiedHead(run.ID, "failed", types.RunFailed, "promoted")
-	if err == nil {
-		t.Fatal("terminal head promotion succeeded without revoking completed Review truth")
-	}
-	gotRun, _ := d.GetRun(run.ID)
-	gotStep, _ := d.GetStepResult(step.ID)
-	if gotRun.HeadSHA != "reviewed" || gotRun.Status != types.RunPending || gotRun.ReviewApprovedHeadSHA == nil {
-		t.Fatalf("failed promotion partially changed run: %#v", gotRun)
-	}
-	if gotStep.FindingsJSON == nil || gotStep.CertifiedHeadSHA == nil {
-		t.Fatalf("failed promotion partially cleared Review truth: %#v", gotStep)
+			if err := tt.promote(d, run.ID); err == nil {
+				t.Fatal("head promotion succeeded without revoking completed Review truth")
+			}
+			gotRun, _ := d.GetRun(run.ID)
+			gotStep, _ := d.GetStepResult(step.ID)
+			if gotRun.HeadSHA != "reviewed" || gotRun.Status != types.RunPending || gotRun.ReviewApprovedHeadSHA == nil {
+				t.Fatalf("failed promotion partially changed run: %#v", gotRun)
+			}
+			if gotStep.FindingsJSON == nil || gotStep.CertifiedHeadSHA == nil {
+				t.Fatalf("failed promotion partially cleared Review truth: %#v", gotStep)
+			}
+		})
 	}
 }
 
