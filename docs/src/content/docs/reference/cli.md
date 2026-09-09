@@ -168,9 +168,9 @@ no-slop axi respond --action skip
 | ------------------- | -------- | ------------------ | -------------------------------------------------------------------------- |
 | `--action`          | `string` | (none)             | `approve`, `fix`, or `skip`; required except for receipt lookup             |
 | `--run`             | `string` | current active run | Explicit run, including completed runs for receipt lookup or replay         |
-| `--idempotency-key` | `string` | generated          | Stable key for one ruling; requires explicit `--run` and `--step`           |
+| `--idempotency-key` | `string` | generated          | Stable ruling key; requires `--run` and, except with `--receipt`, `--step`   |
 | `--no-wait`         | `bool`   | `false`            | Return acceptance without waiting for the next gate                        |
-| `--receipt`         | `bool`   | `false`            | Read acceptance locally; requires `--run` and `--idempotency-key`           |
+| `--receipt`         | `bool`   | `false`            | Local lookup; requires `--run` and `--idempotency-key`; forbids all other response flags |
 | `--step`            | `string` | awaiting step      | Step to respond to                                                         |
 | `--findings`        | `string` | (none)             | Comma-separated finding IDs for `--action fix`                             |
 | `--instructions`    | `string` | (none)             | Guidance applied to selected findings                                      |
