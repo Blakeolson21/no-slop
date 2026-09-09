@@ -64,6 +64,7 @@ func TestAxiReadSurfacesEmitNoPageview(t *testing.T) {
 		{"home", []string{"axi"}, "/axi", "axi-home"},
 		{"status", []string{"axi", "status"}, "/axi/status", "axi-status"},
 		{"logs", []string{"axi", "logs", "--step", "review"}, "/axi/logs", "axi-logs"},
+		{"receipt", []string{"axi", "respond", "--receipt", "--run", "run-1", "--idempotency-key", "key-1"}, "/axi/respond", "axi-receipt"},
 	}
 
 	for _, tc := range cases {

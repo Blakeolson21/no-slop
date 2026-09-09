@@ -570,19 +570,7 @@ func gateResolution(gate stepView, fixRoundsUsed int) (action types.ApprovalActi
 	return types.ActionFix, ids, true
 }
 
-// waitStepLeavesGate blocks until the named step moves past the gate we just
-// answered, or the run terminates. This prevents a double-approve race:
-// respond is asynchronous, so without waiting the next event reconciliation
-// could still observe the same gate and approve it twice.
-//
-// A status change alone is not a sufficient progress signal: a fix round
-// starts and finishes between two reconciliations when the fix agent is fast,
-// and the step re-parks with the same fix_review status it had before, so
-// waiting on status inequality alone never returns. The persisted fix-round
-// count only ever grows and is written when a round completes, so a count
-// above the gate's snapshot (gateFixRounds) proves the answered gate was
-// consumed even when the status round-tripped unobserved.
-func waitStepLeavesGate(ctx context.Context, socketPath, runID, step, gateStatus string, gateFixRounds int) error {
+func waitStepLeavesAcceptedGate(ctx context.Context, socketPath, runID, step string, acceptedRound int) error {
 	reconciler := newRunReconciler(&ipcRunStateSource{socketPath: socketPath}, runID)
 	defer reconciler.Close()
 	for {
@@ -593,13 +581,19 @@ func waitStepLeavesGate(ctx context.Context, socketPath, runID, step, gateStatus
 		if run == nil || terminalStatus(string(run.Status)) {
 			return nil
 		}
+		found := false
 		for _, s := range run.Steps {
 			if string(s.StepName) == step {
-				if string(s.Status) != gateStatus || s.FixRoundCount > gateFixRounds {
+				found = true
+				parked := s.Status == types.StepStatusAwaitingApproval || s.Status == types.StepStatusFixReview
+				if !parked || s.RoundCount > acceptedRound {
 					return nil
 				}
 				break
 			}
+		}
+		if !found {
+			return nil
 		}
 	}
 }
@@ -733,7 +727,8 @@ func newAxiRespondCmd() *cobra.Command {
 			"explicit adjudication.\n\n" +
 			"Use --no-wait to return an acceptance receipt immediately. Supply a stable\n" +
 			"--idempotency-key with --run and --step when retrying a ruling. Replays\n" +
-			"return the original receipt without funding another round. Check acceptance\n" +
+			"reuse the original receipt without funding another round and keep driving\n" +
+			"unless --no-wait is set. Check acceptance\n" +
 			"with --receipt --run <id> --idempotency-key <key>; inspect execution with\n" +
 			"axi status --run <id>. Acceptance does not mean execution completed.\n\n" +
 			preserveGateFixCommitsGuidance,
@@ -741,29 +736,36 @@ func newAxiRespondCmd() *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			responseArgs := respondArgs{
+				action:         action,
+				runID:          runID,
+				idempotencyKey: idempotencyKey,
+				noWait:         noWait,
+				receipt:        receipt,
+				step:           step,
+				findings:       findings,
+				instructions:   instructions,
+				addFinding:     addFinding,
+				autoYes:        autoYes,
+			}
+			if receipt {
+				return trackReadSurface("axi-receipt", nil, func() (string, string, error) {
+					fingerprint, err := runAxiReceipt(cmd, responseArgs)
+					return fingerprint, "", err
+				})
+			}
 			return trackAxiSurface("axi-respond", "/axi/respond", telemetry.Fields{
 				"action":   sanitizeAxiTelemetryAction(action),
 				"auto_yes": autoYes,
 			}, func() error {
-				return runAxiRespond(cmd, respondArgs{
-					action:         action,
-					runID:          runID,
-					idempotencyKey: idempotencyKey,
-					noWait:         noWait,
-					receipt:        receipt,
-					step:           step,
-					findings:       findings,
-					instructions:   instructions,
-					addFinding:     addFinding,
-					autoYes:        autoYes,
-				})
+				return runAxiRespond(cmd, responseArgs)
 			})
 		},
 	}
 	cmd.Flags().StringVar(&runID, "run", "", "respond to this run, including receipt lookup after completion")
 	cmd.Flags().StringVar(&idempotencyKey, "idempotency-key", "", "stable key for one ruling; requires --run and --step (except --receipt)")
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "return the acceptance receipt without waiting for execution")
-	cmd.Flags().BoolVar(&receipt, "receipt", false, "look up acceptance without sending a ruling; requires --run and --idempotency-key")
+	cmd.Flags().BoolVar(&receipt, "receipt", false, "read acceptance locally without mutation; requires --run and --idempotency-key")
 	cmd.Flags().StringVar(&action, "action", "", "approve | fix | skip (required)")
 	cmd.Flags().StringVar(&step, "step", "", "step to respond to (default: the step awaiting approval)")
 	cmd.Flags().StringVar(&findings, "findings", "", "comma-separated finding IDs to fix (with --action fix)")
@@ -787,16 +789,16 @@ type respondArgs struct {
 }
 
 func runAxiRespond(cmd *cobra.Command, ra respondArgs) error {
+	if ra.receipt {
+		_, err := runAxiReceipt(cmd, ra)
+		return err
+	}
 	ctx := cmd.Context()
 	if err := ipc.ValidateResponseKey(ra.idempotencyKey); err != nil {
 		return emitError(cmd, 2, err.Error())
 	}
 
-	if ra.receipt {
-		if ra.runID == "" || ra.idempotencyKey == "" || ra.action != "" || ra.autoYes || ra.noWait || ra.findings != "" || ra.instructions != "" || ra.addFinding != "" {
-			return emitError(cmd, 2, "--receipt requires --run and --idempotency-key, without an action or fix options")
-		}
-	} else if ra.idempotencyKey != "" && (ra.runID == "" || ra.step == "") {
+	if ra.idempotencyKey != "" && (ra.runID == "" || ra.step == "") {
 		return emitError(cmd, 2, "--idempotency-key requires --run and --step so retries target the same ruling")
 	}
 	if ra.noWait && ra.autoYes {
@@ -806,9 +808,6 @@ func runAxiRespond(cmd *cobra.Command, ra respondArgs) error {
 	switch act {
 	case types.ActionApprove, types.ActionFix, types.ActionSkip:
 	case "":
-		if ra.receipt {
-			break
-		}
 		return emitError(cmd, 2, "--action is required",
 			"Run `no-slop axi respond --action approve|fix|skip`")
 	default:
@@ -816,25 +815,11 @@ func runAxiRespond(cmd *cobra.Command, ra respondArgs) error {
 			"Valid actions: approve, fix, skip")
 	}
 
-	env, err := openAxiEnvWithOptions(axiEnvOptions{ensureDaemonConn: !ra.receipt, deferGlobalConfigErrorForRunningDaemon: true, explicitRunID: ra.runID})
+	env, err := openAxiEnvWithOptions(axiEnvOptions{ensureDaemonConn: true, deferGlobalConfigErrorForRunningDaemon: true, explicitRunID: ra.runID})
 	if err != nil {
 		return emitError(cmd, 1, err.Error(), repoInitHelp(err)...)
 	}
 	defer env.close()
-	if ra.receipt {
-		receipt, err := env.d.GetResponseReceipt(ra.runID, ra.idempotencyKey)
-		if err != nil {
-			return emitError(cmd, 1, fmt.Sprintf("read response receipt: %v", err))
-		}
-		result := &ipc.RespondResult{RunID: ra.runID, IdempotencyKey: ra.idempotencyKey}
-		if receipt != nil {
-			result.OK = true
-			result.Step = receipt.Step
-			result.Round = receipt.Round
-		}
-		renderResponseReceipt(cmd, result)
-		return nil
-	}
 	runID := ra.runID
 	if runID == "" {
 		branch, err := git.CurrentBranch(ctx, ".")
@@ -902,14 +887,12 @@ func runAxiRespond(cmd *cobra.Command, ra respondArgs) error {
 		return emitError(cmd, 1, fmt.Sprintf("respond to %s: %v", stepName, err))
 	}
 	fmt.Fprintf(cmd.ErrOrStderr(), "Accepted response: run %s, step %s, round %d, idempotency key %s\n", result.RunID, result.Step, result.Round, result.IdempotencyKey)
-	if ra.noWait || result.Replayed {
+	if ra.noWait {
 		renderResponseReceipt(cmd, result)
 		return nil
 	}
 
-	// Let the executor consume the response before we re-read state, so we
-	// don't immediately observe the same gate we just answered.
-	if err := waitStepLeavesGate(ctx, env.p.Socket(), runID, string(stepName), gateStatusFor(rv, string(stepName)), gateFixRoundsFor(rv, string(stepName))); err != nil {
+	if err := waitStepLeavesAcceptedGate(ctx, env.p.Socket(), runID, string(stepName), result.Round); err != nil {
 		return emitError(cmd, 1, fmt.Sprintf("response accepted (key %s); wait for %s: %v", key, stepName, err), responseReceiptCommand(runID, key))
 	}
 
@@ -918,29 +901,6 @@ func runAxiRespond(cmd *cobra.Command, ra respondArgs) error {
 		return emitError(cmd, 1, fmt.Sprintf("response accepted (key %s); drive run: %v", key, err), responseReceiptCommand(runID, key))
 	}
 	return renderDriveResult(cmd, final, ciReady)
-}
-
-// gateStatusFor returns the current status of step in rv, defaulting to the
-// awaiting-approval status so the post-respond wait still functions if the step
-// was not found.
-func gateStatusFor(rv runView, step string) string {
-	for _, s := range rv.Steps {
-		if s.Name == step {
-			return s.Status
-		}
-	}
-	return string(types.StepStatusAwaitingApproval)
-}
-
-// gateFixRoundsFor returns the fix-round count of step in rv, the baseline the
-// post-respond wait uses to recognize a completed fix round as progress.
-func gateFixRoundsFor(rv runView, step string) int {
-	for _, s := range rv.Steps {
-		if s.Name == step {
-			return s.FixRoundCount
-		}
-	}
-	return 0
 }
 
 func newAxiAbortCmd() *cobra.Command {

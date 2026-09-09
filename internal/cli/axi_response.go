@@ -5,8 +5,11 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"strings"
 
+	"github.com/Blakeolson21/no-slop/internal/db"
 	"github.com/Blakeolson21/no-slop/internal/ipc"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 	"github.com/spf13/cobra"
 	toon "github.com/toon-format/toon-go"
 )
@@ -35,6 +38,38 @@ func sendResponse(ctx context.Context, client *ipc.Client, params ipc.RespondPar
 		return nil, fmt.Errorf("daemon accepted the ruling without a matching receipt; it may be an older daemon without retry protection. Do not resend this ruling")
 	}
 	return &result, nil
+}
+
+func runAxiReceipt(cmd *cobra.Command, args respondArgs) (string, error) {
+	if err := ipc.ValidateResponseKey(args.idempotencyKey); err != nil {
+		return "", emitError(cmd, 2, err.Error())
+	}
+	if args.runID == "" || args.idempotencyKey == "" || args.action != "" || args.autoYes || args.noWait || args.step != "" || args.findings != "" || args.instructions != "" || args.addFinding != "" {
+		return "", emitError(cmd, 2, "--receipt requires --run and --idempotency-key, without an action, step, or fix options")
+	}
+	p, err := paths.New()
+	if err != nil {
+		return "", emitError(cmd, 1, fmt.Sprintf("resolve paths: %v", err))
+	}
+	database, err := db.OpenReadOnlyNoCreate(p.DB())
+	if err != nil {
+		return "", emitError(cmd, 1, fmt.Sprintf("open response receipts read-only: %v", err))
+	}
+	defer database.Close()
+	receipt, err := database.GetResponseReceipt(args.runID, args.idempotencyKey)
+	if err != nil {
+		return "", emitError(cmd, 1, fmt.Sprintf("read response receipt: %v", err))
+	}
+	result := &ipc.RespondResult{RunID: args.runID, IdempotencyKey: args.idempotencyKey}
+	fingerprint := strings.Join([]string{args.runID, args.idempotencyKey, "missing"}, "|")
+	if receipt != nil {
+		result.OK = true
+		result.Step = receipt.Step
+		result.Round = receipt.Round
+		fingerprint = strings.Join([]string{receipt.RunID, receipt.IdempotencyKey, string(receipt.Step), fmt.Sprint(receipt.Round)}, "|")
+	}
+	renderResponseReceipt(cmd, result)
+	return fingerprint, nil
 }
 
 func renderResponseReceipt(cmd *cobra.Command, result *ipc.RespondResult) {

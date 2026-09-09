@@ -223,8 +223,9 @@ Run the pipeline and decide on its findings as they come up:
     By default, ` + "`respond`" + ` blocks until the next ` + "`gate:`" + `, ` + "`checks-passed`" + ` decision point, or final outcome.
     ` + "`--no-wait`" + ` instead returns the acceptance receipt immediately; it cannot be combined with ` + "`--yes`" + `.
     For retryable rulings, supply ` + "`--run <id> --step <name> --idempotency-key <key>`" + `.
-    Reuse that key only for the identical ruling: a replay returns the original
-    receipt without funding another round, even after the run advances or ends.
+    Reuse that key only for the identical ruling: a replay reuses the original
+    receipt without funding another round, then resumes synchronous observation
+    unless ` + "`--no-wait`" + ` was supplied, even after the run advances or ends.
     Every response prints its generated or supplied key before sending. After a
     timeout, check ` + "`no-slop axi respond --receipt --run <id> --idempotency-key <key>`" + `;
     retry only with the same run, step, key and ruling. A missing receipt can still

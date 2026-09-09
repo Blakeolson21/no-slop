@@ -47,10 +47,24 @@ func Open(path string) (*DB, error) {
 // It is used by pre-mutation authorization, where even schema repair would be
 // an unacceptable side effect before the caller is classified.
 func OpenReadOnly(path string) (*DB, error) {
+	return openReadOnly(path, false)
+}
+
+func OpenReadOnlyNoCreate(path string) (*DB, error) {
+	_, walErr := os.Stat(path + "-wal")
+	_, shmErr := os.Stat(path + "-shm")
+	return openReadOnly(path, os.IsNotExist(walErr) || os.IsNotExist(shmErr))
+}
+
+func openReadOnly(path string, immutable bool) (*DB, error) {
 	if _, err := os.Stat(path); err != nil {
 		return nil, err
 	}
-	sqlDB, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_pragma=busy_timeout(5000)")
+	dsn := "file:" + path + "?mode=ro&_pragma=busy_timeout(5000)"
+	if immutable {
+		dsn += "&immutable=1"
+	}
+	sqlDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open db read-only: %w", err)
 	}
