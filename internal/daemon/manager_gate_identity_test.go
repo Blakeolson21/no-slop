@@ -303,6 +303,24 @@ func TestBranchTouchesCodeClassification(t *testing.T) {
 		t.Fatal("docs-only delta must not classify as code")
 	}
 
+	// Executable files under docs/ and .txt configuration are CODE, not docs
+	// (review finding: docs/package.json must not bypass the refusal).
+	if err := os.MkdirAll(filepath.Join(dir, "docs", "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "docs", "src", "widget.ts"), []byte("export {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("pyautogui\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, dir, "add", ".")
+	gitCmd(t, dir, "commit", "-m", "executable under docs")
+	exeHead := gitOutput(t, dir, "rev-parse", "HEAD")
+	if !branchTouchesCode(ctx, dir, base, exeHead) {
+		t.Fatal("docs/package.json-style deltas (code under docs/, .txt config) must classify as code")
+	}
+
 	// Code head.
 	if err := os.WriteFile(filepath.Join(dir, "app.go"), []byte("package main\nfunc main() {}\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -314,8 +332,131 @@ func TestBranchTouchesCodeClassification(t *testing.T) {
 		t.Fatal("code delta must classify as code")
 	}
 
+	// Unresolved base fails closed as code (review finding: comparing the
+	// head with itself must never permit a suite-less run).
+	if !branchTouchesCode(ctx, dir, "", base) {
+		t.Fatal("unresolved base must fail closed as code")
+	}
+
 	// Unresolvable diff fails closed as code.
 	if !branchTouchesCode(ctx, dir, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", base) {
 		t.Fatal("unresolvable diff must fail closed as code")
+	}
+}
+
+func TestStartRun_RefusesWhitespaceOnlyTrustedTestCommand(t *testing.T) {
+	ctx := context.Background()
+	p, database := newRefreshRunFixture(t)
+
+	repo, _ := setupTestGitRepo(t, p, database, "identity-ws-test-cmd")
+	work := repo.WorkingPath
+	// Trusted main carries a whitespace-only test command: it would execute
+	// as a shell no-op and must not count as a resolvable test command.
+	if err := os.WriteFile(filepath.Join(work, ".no-slop.yaml"), []byte("commands:\n  test: \"   \"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, work, "add", ".")
+	gitCmd(t, work, "commit", "-m", "whitespace test command")
+	gitCmd(t, work, "push", "gate", "HEAD:refs/heads/main")
+	wsBase := gitOutput(t, work, "rev-parse", "HEAD")
+	if err := os.WriteFile(filepath.Join(work, "app.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, work, "add", ".")
+	gitCmd(t, work, "commit", "-m", "code change")
+	head := gitOutput(t, work, "rev-parse", "HEAD")
+	gitCmd(t, work, "push", "gate", "HEAD:refs/heads/main")
+
+	manager := NewRunManager(database, p, nil)
+	t.Cleanup(manager.Shutdown)
+
+	_, err := manager.startRun(ctx, repo, "main", head, wsBase, "test", nil, "")
+	if err == nil {
+		t.Fatalf("whitespace-only trusted test command must refuse a code branch; persisted error = %q", runErrorForRepo(t, database, repo.ID))
+	}
+	if !strings.Contains(err.Error(), "no trusted test command resolvable - refusing agent-graded tests") {
+		t.Fatalf("refusal must name the reason, got: %v", err)
+	}
+}
+
+// makeRecoveryCodeFixture builds a work repo (base A, code head B, bare gate
+// at B) for the loadRecoveredConfig no-test-command sibling guard.
+func makeRecoveryCodeFixture(t *testing.T) (workDir, bare, baseSHA, headSHA string) {
+	t.Helper()
+	workDir = filepath.Join(t.TempDir(), "recovery-work")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, workDir, "init")
+	gitCmd(t, workDir, "config", "user.email", "test@test.com")
+	gitCmd(t, workDir, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(workDir, ".no-slop.yaml"), []byte("commands:\n  lint: echo trusted\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, workDir, "add", ".")
+	gitCmd(t, workDir, "commit", "-m", "base")
+	baseSHA = gitOutput(t, workDir, "rev-parse", "HEAD")
+	if err := os.WriteFile(filepath.Join(workDir, "app.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, workDir, "add", ".")
+	gitCmd(t, workDir, "commit", "-m", "code change")
+	headSHA = gitOutput(t, workDir, "rev-parse", "HEAD")
+	bare = filepath.Join(t.TempDir(), "recovery.git")
+	gitCmd(t, "", "init", "--bare", bare)
+	gitCmd(t, workDir, "remote", "add", "origin", bare)
+	gitCmd(t, workDir, "push", "origin", "HEAD:refs/heads/main")
+	return workDir, bare, baseSHA, headSHA
+}
+
+func TestLoadRecoveredConfig_RefusesUnsettledCodeRunWithNoTestCommand(t *testing.T) {
+	p, database := newRefreshRunFixture(t)
+	workDir, bare, baseSHA, headSHA := makeRecoveryCodeFixture(t)
+
+	mgr := NewRunManager(database, p, nil)
+	_, err := mgr.loadRecoveredConfig(context.Background(),
+		&db.Run{ID: "recovery-run", BaseSHA: baseSHA, HeadSHA: headSHA},
+		&db.Repo{DefaultBranch: "main", UpstreamURL: bare},
+		workDir)
+	if err == nil {
+		t.Fatal("recovery must refuse an unsettled code run with no trusted test command")
+	}
+	if !strings.Contains(err.Error(), "no trusted test command resolvable - refusing agent-graded tests") {
+		t.Fatalf("recovery refusal must name the reason, got: %v", err)
+	}
+}
+
+func TestLoadRecoveredConfig_AllowsRecoveredRunWithSettledTestStep(t *testing.T) {
+	p, database := newRefreshRunFixture(t)
+	workDir, bare, baseSHA, headSHA := makeRecoveryCodeFixture(t)
+
+	// The run's test step already measured (completed) before recovery: the
+	// no-test-command refusal must NOT strand this legitimate recovery.
+	repoRow, err := database.InsertRepo(workDir, bare, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runRow, err := database.InsertRun(repoRow.ID, "main", headSHA, baseSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := database.InsertStepResult(runRow.ID, types.StepTest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpdateStepStatus(result.ID, types.StepStatusCompleted); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := NewRunManager(database, p, nil)
+	cfg, err := mgr.loadRecoveredConfig(context.Background(),
+		&db.Run{ID: runRow.ID, BaseSHA: baseSHA, HeadSHA: headSHA},
+		&db.Repo{DefaultBranch: "main", UpstreamURL: bare},
+		workDir)
+	if err != nil {
+		t.Fatalf("settled test step must not be refused at recovery: %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("expected recovered config")
 	}
 }

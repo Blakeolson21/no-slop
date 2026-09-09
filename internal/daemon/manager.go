@@ -253,12 +253,49 @@ func (m *RunManager) loadRecoveredConfig(ctx context.Context, run *db.Run, repo 
 		return nil, err
 	}
 	cfg.TrustedConfigSHA = trustedSHA
+
+	// SILENT-SKIP FAIL-CLOSED (recovery sibling of startRunWithIntentSource):
+	// a recovered code-branch run must not resume into an agent-graded test
+	// step with no trusted test command - that is how run 4373 landed
+	// review-approved but suite-unverified. Runs whose test step already
+	// completed, or was explicitly skipped, before the recovery are left
+	// alone: their measurement (or deliberate waiver) predates the recovery
+	// and re-refusing them would strand legitimate push/PR/CI recoveries.
+	demoMode, demoErr := steps.DemoMode()
+	if demoErr != nil {
+		return nil, demoErr
+	}
+	if !demoMode && strings.TrimSpace(cfg.Commands.Test) == "" && !recoveredTestStepSettled(m.db, run.ID) {
+		if branchTouchesCode(ctx, workDir, branchDiffBase(ctx, workDir, run.BaseSHA, run.HeadSHA, trustedSHA), run.HeadSHA) {
+			return nil, fmt.Errorf("no trusted test command resolvable - refusing agent-graded tests")
+		}
+	}
 	if globalCfg.Eval.CaptureProvenance {
 		if err := cfg.EnableEvalProvenance(globalCfg, effectiveRepoCfg); err != nil {
 			return nil, err
 		}
 	}
 	return cfg, nil
+}
+
+// recoveredTestStepSettled reports whether the run's test step already
+// reached a terminal-measurement state (completed) or was explicitly skipped
+// before the recovery. Unknown states - no step row, or any other status -
+// count as NOT settled so the no-test-command refusal applies (fail closed).
+func recoveredTestStepSettled(database *db.DB, runID string) bool {
+	if database == nil {
+		return false
+	}
+	steps, err := database.GetStepsByRun(runID)
+	if err != nil {
+		return false
+	}
+	for _, s := range steps {
+		if s.StepName == types.StepTest {
+			return s.Status == types.StepStatusCompleted || s.Status == types.StepStatusSkipped
+		}
+	}
+	return false
 }
 
 // laneHealth returns the agent lane-health store for this daemon root. The
@@ -846,25 +883,28 @@ func assertTrustedHeadSharedHistory(ctx context.Context, wtDir, trustedSHA, head
 }
 
 // isDocsPath reports whether a changed path is documentation-only material.
-// Deliberately narrow: only clearly-prose paths count as docs, so anything
-// ambiguous counts as code and the no-test-command refusal below fails
-// closed. (Measured against the pipeline at main: there is no pre-existing
-// docs-only classifier to reuse, so this is the minimal one.)
+// Deliberately narrow: only clearly-prose artifacts count as docs, so anything
+// ambiguous (docs/package.json, docs/src/widget.ts, requirements.txt, source
+// or config files under a docs directory) counts as code and the
+// no-test-command refusal below fails closed. (Measured against the pipeline
+// at main: there is no pre-existing docs-only classifier to reuse, so this is
+// the minimal one.)
 func isDocsPath(p string) bool {
-	if strings.HasPrefix(p, "docs/") {
-		return true
-	}
 	switch strings.ToLower(filepath.Ext(p)) {
-	case ".md", ".mdx", ".rst", ".adoc", ".txt":
+	case ".md", ".mdx", ".rst", ".adoc", ".markdown":
 		return true
 	}
 	return false
 }
 
 // branchTouchesCode reports whether the diff base..head touches any
-// non-documentation path. Any error resolving the diff counts as code so the
-// refusal below fails closed.
+// non-documentation path. It fails CLOSED: an unresolved base (empty string)
+// and any diff error both count as code, because "could not determine whether
+// code changed" must refuse a suite-less run, never permit one.
 func branchTouchesCode(ctx context.Context, wtDir, base, head string) bool {
+	if strings.TrimSpace(base) == "" {
+		return true
+	}
 	files, err := git.DiffNameOnly(ctx, wtDir, base, head)
 	if err != nil {
 		return true
@@ -880,7 +920,9 @@ func branchTouchesCode(ctx context.Context, wtDir, base, head string) bool {
 // branchDiffBase resolves the base for the code-touch classification. A zero
 // or missing base (new-branch push) falls back to the merge-base with the
 // trusted default-branch commit, which assertTrustedHeadSharedHistory has
-// already proven shares history with the head.
+// already proven shares history with the head. When NO base can be resolved
+// it returns the empty string, which branchTouchesCode treats as code
+// (fail closed) rather than diffing the head against itself.
 func branchDiffBase(ctx context.Context, wtDir, baseSHA, headSHA, trustedSHA string) string {
 	if baseSHA != "" && !git.IsZeroSHA(baseSHA) {
 		return baseSHA
@@ -890,7 +932,7 @@ func branchDiffBase(ctx context.Context, wtDir, baseSHA, headSHA, trustedSHA str
 			return strings.TrimSpace(base)
 		}
 	}
-	return headSHA
+	return ""
 }
 
 // skipsStep reports whether the named step is in the run's skip set.
@@ -1206,14 +1248,16 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 	// trusted snapshots with no test command the test step skipped and the
 	// branch landed review-approved but suite-unverified. Refuse such a run
 	// with a named reason instead. Docs-only branches keep running, an
-	// explicit --skip test is honored, and demo recordings are untouched.
+	// explicit --skip test is honored, and demo recordings are untouched. A
+	// whitespace-only command is no command: it would execute as a shell
+	// no-op and complete the step without measuring anything.
 	demoMode, demoErr := steps.DemoMode()
 	if demoErr != nil {
 		m.db.UpdateRunError(run.ID, demoErr.Error())
 		trackStartFailure("demo_mode")
 		return "", demoErr
 	}
-	if !demoMode && cfg.Commands.Test == "" && !skipsStep(skipSteps, types.StepTest) {
+	if !demoMode && strings.TrimSpace(cfg.Commands.Test) == "" && !skipsStep(skipSteps, types.StepTest) {
 		if branchTouchesCode(ctx, wtDir, branchDiffBase(ctx, wtDir, baseSHA, headSHA, trustedSHA), headSHA) {
 			err := fmt.Errorf("no trusted test command resolvable - refusing agent-graded tests")
 			m.db.UpdateRunError(run.ID, err.Error())
