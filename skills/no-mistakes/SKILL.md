@@ -151,7 +151,7 @@ Run the pipeline and decide on its findings as they come up:
    ```sh
    no-slop axi run --intent "<what the user set out to accomplish>"
    ```
-   `axi run` and every `axi respond` block synchronously - the review, test,
+   `axi run` and `axi respond` block synchronously by default - the review, test,
    and CI steps can each take **several minutes**, so a single call may not
    return for a while. That is normal; allow a long timeout and do not cancel
    or re-issue the command because it seems slow. To check progress without
@@ -209,7 +209,17 @@ Run the pipeline and decide on its findings as they come up:
    runs (after a `failed` or `cancelled` outcome), never to circumvent a
    gate.
 
-    Each `respond` blocks until the next `gate:`, `checks-passed` decision point, or final outcome.
+    By default, `respond` blocks until the next `gate:`, `checks-passed` decision point, or final outcome.
+    `--no-wait` instead returns the acceptance receipt immediately; it cannot be combined with `--yes`.
+    For retryable rulings, supply `--run <id> --step <name> --idempotency-key <key>`.
+    Reuse that key only for the identical ruling: a replay returns the original
+    receipt without funding another round, even after the run advances or ends.
+    Every response prints its generated or supplied key before sending. After a
+    timeout, check `no-slop axi respond --receipt --run <id> --idempotency-key <key>`;
+    retry only with the same run, step, key and ruling. A missing receipt can still
+    mean the first request is in flight. Acceptance is not completion: inspect
+    execution with `no-slop axi status --run <id>`, and do not infer acceptance
+    from a gate disappearing or a fix-round count that has not updated yet.
 
     Two extra flags are available on `respond` when you need them:
     - `--add-finding '<json>'` (with `--action fix`) folds a finding you

@@ -63,6 +63,16 @@ CREATE TABLE IF NOT EXISTS step_results (
     certified_head_sha TEXT
 );
 
+CREATE TABLE IF NOT EXISTS response_receipts (
+    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    idempotency_key TEXT NOT NULL,
+    step_name TEXT NOT NULL,
+    round INTEGER NOT NULL,
+    request_hash TEXT NOT NULL,
+    accepted_at INTEGER NOT NULL,
+    PRIMARY KEY (run_id, idempotency_key)
+);
+
 CREATE TABLE IF NOT EXISTS step_rounds (
     id                   TEXT PRIMARY KEY,
     step_result_id       TEXT NOT NULL REFERENCES step_results(id) ON DELETE CASCADE,

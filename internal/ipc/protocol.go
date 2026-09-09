@@ -9,20 +9,21 @@ import (
 
 // JSON-RPC 2.0 method names.
 const (
-	MethodPushReceived   = "push_received"
-	MethodGetRun         = "get_run"
-	MethodGetStepDiff    = "get_step_diff"
-	MethodGetRuns        = "get_runs"
-	MethodGetRunsForHead = "get_runs_for_head"
-	MethodGetActiveRun   = "get_active_run"
-	MethodRerun          = "rerun"
-	MethodSubscribe      = "subscribe"
-	MethodRespond        = "respond"
-	MethodCancelRun      = "cancel_run"
-	MethodGateContext    = "gate_context"
-	MethodAdmitPush      = "admit_push"
-	MethodHealth         = "health"
-	MethodShutdown       = "shutdown"
+	MethodPushReceived       = "push_received"
+	MethodGetRun             = "get_run"
+	MethodGetStepDiff        = "get_step_diff"
+	MethodGetRuns            = "get_runs"
+	MethodGetRunsForHead     = "get_runs_for_head"
+	MethodGetActiveRun       = "get_active_run"
+	MethodRerun              = "rerun"
+	MethodSubscribe          = "subscribe"
+	MethodRespond            = "respond"
+	MethodGetResponseReceipt = "get_response_receipt"
+	MethodCancelRun          = "cancel_run"
+	MethodGateContext        = "gate_context"
+	MethodAdmitPush          = "admit_push"
+	MethodHealth             = "health"
+	MethodShutdown           = "shutdown"
 )
 
 // JSON-RPC 2.0 error codes.
@@ -142,13 +143,22 @@ type SubscribeParams struct {
 // AddedFindings carries user-authored findings that are merged into the round
 // alongside agent-produced ones. Both fields only apply when Action triggers
 // a fix round.
+// IdempotencyKey scopes a durable acceptance receipt to this run. Repeating
+// an identical keyed request returns its receipt without resolving another gate.
 type RespondParams struct {
-	RunID         string               `json:"run_id"`
-	Step          types.StepName       `json:"step"`
-	Action        types.ApprovalAction `json:"action"`
-	FindingIDs    []string             `json:"finding_ids,omitempty"`
-	Instructions  map[string]string    `json:"instructions,omitempty"`
-	AddedFindings []types.Finding      `json:"added_findings,omitempty"`
+	IdempotencyKey string               `json:"idempotency_key,omitempty"`
+	RunID          string               `json:"run_id"`
+	Step           types.StepName       `json:"step"`
+	Action         types.ApprovalAction `json:"action"`
+	FindingIDs     []string             `json:"finding_ids,omitempty"`
+	Instructions   map[string]string    `json:"instructions,omitempty"`
+	AddedFindings  []types.Finding      `json:"added_findings,omitempty"`
+}
+
+// ResponseReceiptParams queries acceptance without submitting a ruling.
+type ResponseReceiptParams struct {
+	RunID          string `json:"run_id"`
+	IdempotencyKey string `json:"idempotency_key"`
 }
 
 // CancelRunParams cancels an active pipeline run.
@@ -202,9 +212,15 @@ type RerunResult struct {
 	RunID string `json:"run_id"`
 }
 
-// RespondResult confirms the action was accepted.
+// RespondResult confirms acceptance, not completion. Round is the round
+// whose gate was answered, rather than the fix round being funded.
 type RespondResult struct {
-	OK bool `json:"ok"`
+	OK             bool           `json:"ok"`
+	RunID          string         `json:"run_id,omitempty"`
+	Step           types.StepName `json:"step,omitempty"`
+	Round          int            `json:"round"`
+	IdempotencyKey string         `json:"idempotency_key,omitempty"`
+	Replayed       bool           `json:"replayed,omitempty"`
 }
 
 // CancelRunResult confirms the run cancellation request was accepted.

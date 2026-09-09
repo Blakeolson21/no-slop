@@ -59,10 +59,12 @@ type Executor struct {
 	workDir  string
 	gateDir  string
 
-	mu          sync.Mutex
-	approvalCh  chan approvalResponse // buffered channel for approval responses
-	waiting     bool                  // true when blocked on approval
-	waitingStep types.StepName        // which step is currently awaiting approval
+	mu                  sync.Mutex
+	approvalCh          chan approvalResponse // buffered channel for approval responses
+	waiting             bool                  // true when blocked on approval
+	waitingRunID        string
+	waitingStepResultID string
+	waitingStep         types.StepName // which step is currently awaiting approval
 
 	gateReconcileInterval time.Duration
 	gateReconcileTimeout  time.Duration
@@ -159,24 +161,22 @@ func (e *Executor) Respond(step types.StepName, action types.ApprovalAction, fin
 // findings on a fix action before the fix agent runs.
 func (e *Executor) RespondWithOverrides(step types.StepName, action types.ApprovalAction, findingIDs []string, instructions map[string]string, addedFindings []types.Finding) error {
 	e.mu.Lock()
+	defer e.mu.Unlock()
 	if !e.waiting {
-		e.mu.Unlock()
 		return fmt.Errorf("no step awaiting approval")
 	}
 	if step != e.waitingStep {
-		e.mu.Unlock()
 		return fmt.Errorf("step mismatch: responding to %q but %q is awaiting approval", step, e.waitingStep)
 	}
-	e.waiting = false
-	e.mu.Unlock()
-
-	e.approvalCh <- approvalResponse{
-		action:        action,
-		findingIDs:    findingIDs,
-		instructions:  instructions,
-		addedFindings: addedFindings,
-	}
+	e.enqueueResponse(approvalResponse{action: action, findingIDs: findingIDs, instructions: instructions, addedFindings: addedFindings})
 	return nil
+}
+
+// enqueueResponse requires e.mu and a successfully claimed waiting gate.
+// The single-slot channel cannot be full while that gate is waiting.
+func (e *Executor) enqueueResponse(response approvalResponse) {
+	e.waiting = false
+	e.approvalCh <- response
 }
 
 // Execute runs the pipeline steps sequentially for a given run.
@@ -521,6 +521,8 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	e.mu.Lock()
 	e.waiting = true
 	e.waitingStep = gate.step.Name()
+	e.waitingRunID = run.ID
+	e.waitingStepResultID = gate.stepResult.ID
 	e.mu.Unlock()
 	e.emitStepEventWithFindingsAndError(
 		ipc.EventStepCompleted,
@@ -1221,13 +1223,14 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			approvalStatus = types.StepStatusFixReview
 		}
 
-		// Mark executor as ready to receive approval before updating DB or
-		// emitting events, so that callers who poll the DB status can
-		// immediately call Respond once they see it.
+		// Publish the gate under the response-admission lock. A caller that
+		// observes the persisted park can respond immediately, but cannot
+		// enqueue a ruling before parking has committed successfully.
 		e.mu.Lock()
 		e.waiting = true
 		e.waitingStep = stepName
-		e.mu.Unlock()
+		e.waitingRunID = run.ID
+		e.waitingStepResultID = sr.ID
 
 		// Parking starts before the gate becomes observable. This includes the
 		// small handoff from publishing the gate to receiving a response, and
@@ -1239,12 +1242,12 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		// to drive this gate (versus actively running/fixing/ci). Observability
 		// only: it does not change the wait below. Cleared once the wait ends.
 		if dbErr := e.db.ParkStepForApproval(run.ID, sr.ID, approvalStatus, executionMS, findingsPtr); dbErr != nil {
-			e.mu.Lock()
 			e.waiting = false
 			e.waitingStep = ""
 			e.mu.Unlock()
 			return false, "", fmt.Errorf("persist %s approval gate: %w", stepName, dbErr)
 		}
+		e.mu.Unlock()
 		e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(approvalStatus), effectiveFindings, "", &executionMS)
 
 		response, reconciled, err := e.waitForApprovalOrReconcile(ctx, step, sctx, true)

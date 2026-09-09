@@ -1403,6 +1403,20 @@ func (m *RunManager) HandleRespondWithOverrides(runID string, step types.StepNam
 	return exec.RespondWithOverrides(step, action, findingIDs, instructions, addedFindings)
 }
 
+// AcceptResponse returns acceptance independently of subsequent pipeline work.
+func (m *RunManager) AcceptResponse(params ipc.RespondParams) (*ipc.RespondResult, error) {
+	m.mu.Lock()
+	executor := m.executors[params.RunID]
+	m.mu.Unlock()
+	if executor != nil {
+		return executor.AcceptResponse(params)
+	}
+	if receipt, err := pipeline.ReplayResponse(m.db, params); receipt != nil || err != nil {
+		return receipt, err
+	}
+	return nil, fmt.Errorf("no active executor for run %s", params.RunID)
+}
+
 // Shutdown cancels all active runs. Called during daemon shutdown to prevent
 // orphaned goroutines from continuing agent calls and git operations.
 func (m *RunManager) Shutdown() {

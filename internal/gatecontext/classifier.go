@@ -89,7 +89,7 @@ func (i Inspector) Inspect(ctx context.Context, req Request) (Result, error) {
 		}
 	}
 
-	active, err := i.activeAgentSteps()
+	active, err := i.activeAgentSteps(ctx)
 	if err != nil {
 		return result, err
 	}
@@ -108,7 +108,7 @@ func (i Inspector) Inspect(ctx context.Context, req Request) (Result, error) {
 		}
 		var matches []activeAgentStep
 		for _, step := range active {
-			if step.agentPID > 0 && chain[step.agentPID] {
+			if step.AgentPID > 0 && chain[step.AgentPID] {
 				matches = append(matches, step)
 			}
 		}
@@ -120,8 +120,8 @@ func (i Inspector) Inspect(ctx context.Context, req Request) (Result, error) {
 		// the enclosing run only when authenticated ancestry identifies exactly
 		// one active phase; refusal itself does not depend on this metadata.
 		if len(matches) == 1 {
-			result.RunID = matches[0].runID
-			result.Phase = matches[0].phase
+			result.RunID = matches[0].RunID
+			result.Phase = matches[0].Phase
 		}
 	}
 
@@ -130,13 +130,13 @@ func (i Inspector) Inspect(ctx context.Context, req Request) (Result, error) {
 	// DB record agree exactly; otherwise omit them rather than guessing.
 	if result.ManagedGit && result.RunID == "" && managedRepoID != "" && worktreeRoot != "" {
 		for _, step := range active {
-			if step.repoID != managedRepoID {
+			if step.RepoID != managedRepoID {
 				continue
 			}
-			want := i.Paths.WorktreeDir(step.repoID, step.runID)
+			want := i.Paths.WorktreeDir(step.RepoID, step.RunID)
 			if sameCanonicalPath(worktreeRoot, want) {
-				result.RunID = step.runID
-				result.Phase = step.phase
+				result.RunID = step.RunID
+				result.Phase = step.Phase
 				break
 			}
 		}
@@ -144,48 +144,13 @@ func (i Inspector) Inspect(ctx context.Context, req Request) (Result, error) {
 	return result, nil
 }
 
-type activeAgentStep struct {
-	runID    string
-	repoID   string
-	phase    types.StepName
-	agentPID int
-}
+type activeAgentStep = db.ActiveGateStep
 
-func (i Inspector) activeAgentSteps() ([]activeAgentStep, error) {
+func (i Inspector) activeAgentSteps(ctx context.Context) ([]activeAgentStep, error) {
 	if i.DB == nil {
 		return nil, nil
 	}
-	runs, err := i.DB.GetActiveRuns()
-	if err != nil {
-		return nil, fmt.Errorf("gate execution context: list active runs: %w", err)
-	}
-	var out []activeAgentStep
-	for _, run := range runs {
-		steps, err := i.DB.GetStepsByRun(run.ID)
-		if err != nil {
-			return nil, fmt.Errorf("gate execution context: list steps for active run: %w", err)
-		}
-		for _, step := range steps {
-			if !activeStepStatus(step.Status) {
-				continue
-			}
-			pid := 0
-			if step.AgentPID != nil {
-				pid = *step.AgentPID
-			}
-			out = append(out, activeAgentStep{runID: run.ID, repoID: run.RepoID, phase: step.StepName, agentPID: pid})
-		}
-	}
-	return out, nil
-}
-
-func activeStepStatus(status types.StepStatus) bool {
-	switch status {
-	case types.StepStatusRunning, types.StepStatusFixing, types.StepStatusAwaitingApproval, types.StepStatusFixReview:
-		return true
-	default:
-		return false
-	}
+	return i.DB.ActiveGateSteps(ctx)
 }
 
 func (i Inspector) registeredManagedCommonDir(commonDir string) (string, bool, error) {

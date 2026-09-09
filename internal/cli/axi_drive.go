@@ -492,7 +492,7 @@ func driveRunWithReconciler(ctx context.Context, progress io.Writer, client *ipc
 			if action == types.ActionFix {
 				fixedSteps[gate.Name] = used + 1
 			}
-			if err := sendRespond(client, runID, types.StepName(gate.Name), action, findingIDs, nil, nil); err != nil {
+			if err := sendRespond(ctx, client, runID, types.StepName(gate.Name), action, findingIDs, nil, nil); err != nil {
 				return nil, false, fmt.Errorf("auto-resolve %s: %w", gate.Name, err)
 			}
 			pendingGate = gateKey
@@ -613,23 +613,9 @@ func getRunInfo(client *ipc.Client, runID string) (*ipc.RunInfo, error) {
 }
 
 // sendRespond issues an approval action to the daemon for a step.
-func sendRespond(client *ipc.Client, runID string, step types.StepName, action types.ApprovalAction, findingIDs []string, instructions map[string]string, added []types.Finding) error {
-	params := &ipc.RespondParams{
-		RunID:         runID,
-		Step:          step,
-		Action:        action,
-		FindingIDs:    findingIDs,
-		Instructions:  instructions,
-		AddedFindings: added,
-	}
-	var result ipc.RespondResult
-	if err := client.Call(ipc.MethodRespond, params, &result); err != nil {
-		return err
-	}
-	if !result.OK {
-		return fmt.Errorf("daemon rejected the response")
-	}
-	return nil
+func sendRespond(ctx context.Context, client *ipc.Client, runID string, step types.StepName, action types.ApprovalAction, findingIDs []string, instructions map[string]string, added []types.Finding) error {
+	_, err := sendResponse(ctx, client, ipc.RespondParams{RunID: runID, Step: step, Action: action, FindingIDs: findingIDs, Instructions: instructions, AddedFindings: added, IdempotencyKey: newResponseKey()})
+	return err
 }
 
 // renderDriveResult prints the run snapshot plus one of: the active gate (exit
@@ -733,7 +719,8 @@ func successReportHelp(fixes []fixRow) []string {
 }
 
 func newAxiRespondCmd() *cobra.Command {
-	var action, step, findings, instructions, addFinding string
+	var action, step, findings, instructions, addFinding, runID, idempotencyKey string
+	var noWait, receipt bool
 	var autoYes bool
 
 	cmd := &cobra.Command{
@@ -744,6 +731,11 @@ func newAxiRespondCmd() *cobra.Command {
 			"--yes it funds up to 3 fix rounds per step and approves clean or no-op gates;\n" +
 			"if actionable findings survive that budget, it leaves the run parked for\n" +
 			"explicit adjudication.\n\n" +
+			"Use --no-wait to return an acceptance receipt immediately. Supply a stable\n" +
+			"--idempotency-key with --run and --step when retrying a ruling. Replays\n" +
+			"return the original receipt without funding another round. Check acceptance\n" +
+			"with --receipt --run <id> --idempotency-key <key>; inspect execution with\n" +
+			"axi status --run <id>. Acceptance does not mean execution completed.\n\n" +
 			preserveGateFixCommitsGuidance,
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
@@ -754,16 +746,24 @@ func newAxiRespondCmd() *cobra.Command {
 				"auto_yes": autoYes,
 			}, func() error {
 				return runAxiRespond(cmd, respondArgs{
-					action:       action,
-					step:         step,
-					findings:     findings,
-					instructions: instructions,
-					addFinding:   addFinding,
-					autoYes:      autoYes,
+					action:         action,
+					runID:          runID,
+					idempotencyKey: idempotencyKey,
+					noWait:         noWait,
+					receipt:        receipt,
+					step:           step,
+					findings:       findings,
+					instructions:   instructions,
+					addFinding:     addFinding,
+					autoYes:        autoYes,
 				})
 			})
 		},
 	}
+	cmd.Flags().StringVar(&runID, "run", "", "respond to this run, including receipt lookup after completion")
+	cmd.Flags().StringVar(&idempotencyKey, "idempotency-key", "", "stable key for one ruling; requires --run and --step (except --receipt)")
+	cmd.Flags().BoolVar(&noWait, "no-wait", false, "return the acceptance receipt without waiting for execution")
+	cmd.Flags().BoolVar(&receipt, "receipt", false, "look up acceptance without sending a ruling; requires --run and --idempotency-key")
 	cmd.Flags().StringVar(&action, "action", "", "approve | fix | skip (required)")
 	cmd.Flags().StringVar(&step, "step", "", "step to respond to (default: the step awaiting approval)")
 	cmd.Flags().StringVar(&findings, "findings", "", "comma-separated finding IDs to fix (with --action fix)")
@@ -774,21 +774,41 @@ func newAxiRespondCmd() *cobra.Command {
 }
 
 type respondArgs struct {
-	action       string
-	step         string
-	findings     string
-	instructions string
-	addFinding   string
-	autoYes      bool
+	runID          string
+	idempotencyKey string
+	noWait         bool
+	receipt        bool
+	action         string
+	step           string
+	findings       string
+	instructions   string
+	addFinding     string
+	autoYes        bool
 }
 
 func runAxiRespond(cmd *cobra.Command, ra respondArgs) error {
 	ctx := cmd.Context()
+	if err := ipc.ValidateResponseKey(ra.idempotencyKey); err != nil {
+		return emitError(cmd, 2, err.Error())
+	}
 
+	if ra.receipt {
+		if ra.runID == "" || ra.idempotencyKey == "" || ra.action != "" || ra.autoYes || ra.noWait || ra.findings != "" || ra.instructions != "" || ra.addFinding != "" {
+			return emitError(cmd, 2, "--receipt requires --run and --idempotency-key, without an action or fix options")
+		}
+	} else if ra.idempotencyKey != "" && (ra.runID == "" || ra.step == "") {
+		return emitError(cmd, 2, "--idempotency-key requires --run and --step so retries target the same ruling")
+	}
+	if ra.noWait && ra.autoYes {
+		return emitError(cmd, 2, "--no-wait cannot be combined with --yes")
+	}
 	act := types.ApprovalAction(strings.TrimSpace(ra.action))
 	switch act {
 	case types.ActionApprove, types.ActionFix, types.ActionSkip:
 	case "":
+		if ra.receipt {
+			break
+		}
 		return emitError(cmd, 2, "--action is required",
 			"Run `no-slop axi respond --action approve|fix|skip`")
 	default:
@@ -796,25 +816,40 @@ func runAxiRespond(cmd *cobra.Command, ra respondArgs) error {
 			"Valid actions: approve, fix, skip")
 	}
 
-	env, err := openAxiDaemonEnv()
+	env, err := openAxiEnvWithOptions(axiEnvOptions{ensureDaemonConn: !ra.receipt, deferGlobalConfigErrorForRunningDaemon: true, explicitRunID: ra.runID})
 	if err != nil {
 		return emitError(cmd, 1, err.Error(), repoInitHelp(err)...)
 	}
 	defer env.close()
-	branch, err := git.CurrentBranch(ctx, ".")
-	if err != nil {
-		return emitError(cmd, 1, fmt.Sprintf("get current branch: %v", err))
+	if ra.receipt {
+		receipt, err := env.d.GetResponseReceipt(ra.runID, ra.idempotencyKey)
+		if err != nil {
+			return emitError(cmd, 1, fmt.Sprintf("read response receipt: %v", err))
+		}
+		result := &ipc.RespondResult{RunID: ra.runID, IdempotencyKey: ra.idempotencyKey}
+		if receipt != nil {
+			result.OK = true
+			result.Step = receipt.Step
+			result.Round = receipt.Round
+		}
+		renderResponseReceipt(cmd, result)
+		return nil
 	}
-
-	var active ipc.GetActiveRunResult
-	if err := env.client.Call(ipc.MethodGetActiveRun, activeRunLookupParams(env.repo.ID, branch), &active); err != nil {
-		return emitError(cmd, 1, fmt.Sprintf("get active run: %v", err))
+	runID := ra.runID
+	if runID == "" {
+		branch, err := git.CurrentBranch(ctx, ".")
+		if err != nil {
+			return emitError(cmd, 1, fmt.Sprintf("get current branch: %v", err))
+		}
+		var active ipc.GetActiveRunResult
+		if err := env.client.Call(ipc.MethodGetActiveRun, activeRunLookupParams(env.repo.ID, branch), &active); err != nil {
+			return emitError(cmd, 1, fmt.Sprintf("get active run: %v", err))
+		}
+		if active.Run == nil {
+			return emitError(cmd, 1, "no active run to respond to", "Run `no-slop axi run --intent \"...\"` to start one")
+		}
+		runID = active.Run.ID
 	}
-	if active.Run == nil {
-		return emitError(cmd, 1, "no active run to respond to",
-			"Run `no-slop axi run --intent \"...\"` to start one")
-	}
-	runID := active.Run.ID
 
 	run, err := getRunInfo(env.client, runID)
 	if err != nil || run == nil {
@@ -857,19 +892,30 @@ func runAxiRespond(cmd *cobra.Command, ra respondArgs) error {
 		}
 	}
 
-	if err := sendRespond(env.client, runID, stepName, act, findingIDs, instructions, added); err != nil {
+	key := ra.idempotencyKey
+	if key == "" {
+		key = newResponseKey()
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "Response acceptance check: %s\n", responseReceiptCommand(runID, key))
+	result, err := sendResponse(ctx, env.client, ipc.RespondParams{RunID: runID, Step: stepName, Action: act, FindingIDs: findingIDs, Instructions: instructions, AddedFindings: added, IdempotencyKey: key})
+	if err != nil {
 		return emitError(cmd, 1, fmt.Sprintf("respond to %s: %v", stepName, err))
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "Accepted response: run %s, step %s, round %d, idempotency key %s\n", result.RunID, result.Step, result.Round, result.IdempotencyKey)
+	if ra.noWait || result.Replayed {
+		renderResponseReceipt(cmd, result)
+		return nil
 	}
 
 	// Let the executor consume the response before we re-read state, so we
 	// don't immediately observe the same gate we just answered.
 	if err := waitStepLeavesGate(ctx, env.p.Socket(), runID, string(stepName), gateStatusFor(rv, string(stepName)), gateFixRoundsFor(rv, string(stepName))); err != nil {
-		return emitError(cmd, 1, fmt.Sprintf("wait for %s: %v", stepName, err))
+		return emitError(cmd, 1, fmt.Sprintf("response accepted (key %s); wait for %s: %v", key, stepName, err), responseReceiptCommand(runID, key))
 	}
 
 	final, ciReady, err := driveRun(ctx, cmd.ErrOrStderr(), env.client, env.p.Socket(), runID, ra.autoYes)
 	if err != nil {
-		return emitError(cmd, 1, fmt.Sprintf("drive run: %v", err))
+		return emitError(cmd, 1, fmt.Sprintf("response accepted (key %s); drive run: %v", key, err), responseReceiptCommand(runID, key))
 	}
 	return renderDriveResult(cmd, final, ciReady)
 }
