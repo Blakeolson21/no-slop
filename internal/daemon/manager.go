@@ -226,6 +226,20 @@ func (m *RunManager) loadRecoveredConfig(ctx context.Context, run *db.Run, repo 
 			trustedSHA = sha
 		}
 	}
+	// IDENTITY (see startRunWithIntentSource): a recovered run must also
+	// refuse a trusted snapshot that shares no history with the head it is
+	// resuming - the registration defect can be repaired between a run's
+	// start and its recovery, but the trusted copy still has to be the same
+	// repository as the branch under test before its commands may run.
+	if trustedSHA != "" {
+		originURL, urlErr := git.GetRemoteURL(ctx, workDir, "origin")
+		if urlErr != nil || strings.TrimSpace(originURL) == "" {
+			originURL = repo.UpstreamURL
+		}
+		if err := assertTrustedHeadSharedHistory(ctx, workDir, trustedSHA, run.HeadSHA, originURL); err != nil {
+			return nil, err
+		}
+	}
 	// SECURITY: a trusted-config fetch failure must abort, not silently disable
 	// the disable_project_settings opt-out (see assertGateTrustedConfigReadable).
 	if err := assertGateTrustedConfigReadable(ctx, workDir, repo.DefaultBranch, trustedSHA); err != nil {
@@ -812,6 +826,83 @@ func assertGateTrustedConfigReadable(ctx context.Context, wtDir, defaultBranch, 
 	return nil
 }
 
+// assertTrustedHeadSharedHistory refuses to run when the trusted
+// default-branch commit shares no git history with the pushed head. A gate
+// bare repo whose registered origin points at the WRONG repository resolves
+// trustedSHA to that foreign repo's default branch (measured live:
+// remote.origin.url = Remote-Comp while the gated branches are
+// Master-Orchestrator heads; `git merge-base` between them exits 1 with no
+// common ancestor). The trusted snapshot then carries the foreign repo's
+// commands - including a dead test command - and the run parks on a failure
+// caused by another repository's config, or skips the test step entirely on
+// older snapshots. Requiring a common ancestor refuses every mis-registered
+// store in one check and fails CLOSED: the run aborts, it never falls back
+// to the pushed branch's commands/agent.
+func assertTrustedHeadSharedHistory(ctx context.Context, wtDir, trustedSHA, headSHA, originURL string) error {
+	if _, err := git.Run(ctx, wtDir, "merge-base", trustedSHA, headSHA); err != nil {
+		return fmt.Errorf("trusted default-branch commit %s shares no history with pushed head %s; registered origin %s is not the repository under test - refusing to run its commands", trustedSHA, headSHA, safeurl.Redact(strings.TrimSpace(originURL)))
+	}
+	return nil
+}
+
+// isDocsPath reports whether a changed path is documentation-only material.
+// Deliberately narrow: only clearly-prose paths count as docs, so anything
+// ambiguous counts as code and the no-test-command refusal below fails
+// closed. (Measured against the pipeline at main: there is no pre-existing
+// docs-only classifier to reuse, so this is the minimal one.)
+func isDocsPath(p string) bool {
+	if strings.HasPrefix(p, "docs/") {
+		return true
+	}
+	switch strings.ToLower(filepath.Ext(p)) {
+	case ".md", ".mdx", ".rst", ".adoc", ".txt":
+		return true
+	}
+	return false
+}
+
+// branchTouchesCode reports whether the diff base..head touches any
+// non-documentation path. Any error resolving the diff counts as code so the
+// refusal below fails closed.
+func branchTouchesCode(ctx context.Context, wtDir, base, head string) bool {
+	files, err := git.DiffNameOnly(ctx, wtDir, base, head)
+	if err != nil {
+		return true
+	}
+	for _, f := range files {
+		if !isDocsPath(f) {
+			return true
+		}
+	}
+	return false
+}
+
+// branchDiffBase resolves the base for the code-touch classification. A zero
+// or missing base (new-branch push) falls back to the merge-base with the
+// trusted default-branch commit, which assertTrustedHeadSharedHistory has
+// already proven shares history with the head.
+func branchDiffBase(ctx context.Context, wtDir, baseSHA, headSHA, trustedSHA string) string {
+	if baseSHA != "" && !git.IsZeroSHA(baseSHA) {
+		return baseSHA
+	}
+	if trustedSHA != "" {
+		if base, err := git.Run(ctx, wtDir, "merge-base", trustedSHA, headSHA); err == nil {
+			return strings.TrimSpace(base)
+		}
+	}
+	return headSHA
+}
+
+// skipsStep reports whether the named step is in the run's skip set.
+func skipsStep(skipSteps []types.StepName, name types.StepName) bool {
+	for _, s := range skipSteps {
+		if s == name {
+			return true
+		}
+	}
+	return false
+}
+
 // HandlePushReceived processes a push notification from the post-receive hook.
 // It creates a run, sets up a worktree, and launches pipeline execution in the background.
 func (m *RunManager) HandlePushReceived(ctx context.Context, params *ipc.PushReceivedParams) (string, error) {
@@ -1035,6 +1126,28 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 		}
 	}()
 
+	// IDENTITY: the trusted snapshot is only trustworthy if it comes from the
+	// SAME repository as the branch under test. A gate bare repo with a
+	// mis-registered origin can resolve trustedSHA to a FOREIGN repo's
+	// default-branch commit that shares no git history with headSHA; running
+	// that snapshot's commands would execute another repository's config on
+	// this host. Require a common ancestor and refuse the run otherwise,
+	// naming both commits and the registered origin. This check never relaxes
+	// the trusted-source rule below: on refusal the run aborts outright - it
+	// never falls back to the pushed branch's commands/agent and never drops
+	// the test step silently.
+	if trustedSHA != "" {
+		originURL, urlErr := git.GetRemoteURL(ctx, wtDir, "origin")
+		if urlErr != nil || strings.TrimSpace(originURL) == "" {
+			originURL = repo.UpstreamURL
+		}
+		if err := assertTrustedHeadSharedHistory(ctx, wtDir, trustedSHA, headSHA, originURL); err != nil {
+			m.db.UpdateRunError(run.ID, err.Error())
+			trackStartFailure("trusted_history_mismatch")
+			return "", err
+		}
+	}
+
 	globalCfg, err := config.LoadGlobal(m.paths.ConfigFile())
 	if err != nil {
 		m.db.UpdateRunError(run.ID, fmt.Sprintf("load config: %s", err))
@@ -1086,6 +1199,28 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 		return "", err
 	}
 	cfg.TrustedConfigSHA = trustedSHA
+
+	// SILENT-SKIP FAIL-CLOSED: a code branch whose effective (trusted) config
+	// resolves NO test command must not reach an agent-graded test step that
+	// can silently pass. Measured live (gate-responder, runs 4287/4373): on
+	// trusted snapshots with no test command the test step skipped and the
+	// branch landed review-approved but suite-unverified. Refuse such a run
+	// with a named reason instead. Docs-only branches keep running, an
+	// explicit --skip test is honored, and demo recordings are untouched.
+	demoMode, demoErr := steps.DemoMode()
+	if demoErr != nil {
+		m.db.UpdateRunError(run.ID, demoErr.Error())
+		trackStartFailure("demo_mode")
+		return "", demoErr
+	}
+	if !demoMode && cfg.Commands.Test == "" && !skipsStep(skipSteps, types.StepTest) {
+		if branchTouchesCode(ctx, wtDir, branchDiffBase(ctx, wtDir, baseSHA, headSHA, trustedSHA), headSHA) {
+			err := fmt.Errorf("no trusted test command resolvable - refusing agent-graded tests")
+			m.db.UpdateRunError(run.ID, err.Error())
+			trackStartFailure("no_trusted_test_command")
+			return "", err
+		}
+	}
 	if globalCfg.Eval.CaptureProvenance {
 		if err := cfg.EnableEvalProvenance(globalCfg, effectiveRepoCfg); err != nil {
 			m.db.UpdateRunError(run.ID, err.Error())
@@ -1096,12 +1231,6 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 
 	// Create agent. In demo mode, skip resolution and use a no-op agent.
 	var ag agent.Agent
-	demoMode, err := steps.DemoMode()
-	if err != nil {
-		m.db.UpdateRunError(run.ID, err.Error())
-		trackStartFailure("demo_mode")
-		return "", err
-	}
 	if demoMode {
 		ag = agent.NewNoop()
 	} else {
