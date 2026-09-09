@@ -430,8 +430,8 @@ func TestLoadRecoveredConfig_AllowsRecoveredRunWithSettledTestStep(t *testing.T)
 	p, database := newRefreshRunFixture(t)
 	workDir, bare, baseSHA, headSHA := makeRecoveryCodeFixture(t)
 
-	// The run's test step already measured (completed) before recovery: the
-	// no-test-command refusal must NOT strand this legitimate recovery.
+	// A COMPLETED test step is a real measurement: the no-test-command
+	// refusal must NOT strand this legitimate recovery.
 	repoRow, err := database.InsertRepo(workDir, bare, "main")
 	if err != nil {
 		t.Fatal(err)
@@ -454,9 +454,42 @@ func TestLoadRecoveredConfig_AllowsRecoveredRunWithSettledTestStep(t *testing.T)
 		&db.Repo{DefaultBranch: "main", UpstreamURL: bare},
 		workDir)
 	if err != nil {
-		t.Fatalf("settled test step must not be refused at recovery: %v", err)
+		t.Fatalf("completed test step must not be refused at recovery: %v", err)
 	}
 	if cfg == nil {
 		t.Fatal("expected recovered config")
+	}
+}
+
+// TestLoadRecoveredConfig_RefusesSkippedTestRow pins the review finding: a
+// skipped test row cannot prove an explicit waiver (the pre-fix daemon also
+// wrote skipped rows for silently-skipped suites), so recovery must refuse.
+func TestLoadRecoveredConfig_RefusesSkippedTestRow(t *testing.T) {
+	p, database := newRefreshRunFixture(t)
+	workDir, bare, baseSHA, headSHA := makeRecoveryCodeFixture(t)
+
+	repoRow, err := database.InsertRepo(workDir, bare, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runRow, err := database.InsertRun(repoRow.ID, "main", headSHA, baseSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := database.InsertStepResult(runRow.ID, types.StepTest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpdateStepStatus(result.ID, types.StepStatusSkipped); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := NewRunManager(database, p, nil)
+	_, err = mgr.loadRecoveredConfig(context.Background(),
+		&db.Run{ID: runRow.ID, BaseSHA: baseSHA, HeadSHA: headSHA},
+		&db.Repo{DefaultBranch: "main", UpstreamURL: bare},
+		workDir)
+	if err == nil || !strings.Contains(err.Error(), "no trusted test command resolvable - refusing agent-graded tests") {
+		t.Fatalf("skipped test row must not count as a settled measurement, got: %v", err)
 	}
 }

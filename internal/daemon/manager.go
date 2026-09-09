@@ -257,10 +257,11 @@ func (m *RunManager) loadRecoveredConfig(ctx context.Context, run *db.Run, repo 
 	// SILENT-SKIP FAIL-CLOSED (recovery sibling of startRunWithIntentSource):
 	// a recovered code-branch run must not resume into an agent-graded test
 	// step with no trusted test command - that is how run 4373 landed
-	// review-approved but suite-unverified. Runs whose test step already
-	// completed, or was explicitly skipped, before the recovery are left
-	// alone: their measurement (or deliberate waiver) predates the recovery
-	// and re-refusing them would strand legitimate push/PR/CI recoveries.
+	// review-approved but suite-unverified. Only a COMPLETED test step
+	// predates the recovery as a real measurement; a skipped row cannot prove
+	// an explicit waiver (see recoveredTestStepSettled), so it refuses too
+	// and legitimate push/PR/CI recoveries of runs whose suite already ran
+	// are the only recoveries left alone.
 	demoMode, demoErr := steps.DemoMode()
 	if demoErr != nil {
 		return nil, demoErr
@@ -279,9 +280,12 @@ func (m *RunManager) loadRecoveredConfig(ctx context.Context, run *db.Run, repo 
 }
 
 // recoveredTestStepSettled reports whether the run's test step already
-// reached a terminal-measurement state (completed) or was explicitly skipped
-// before the recovery. Unknown states - no step row, or any other status -
-// count as NOT settled so the no-test-command refusal applies (fail closed).
+// reached a COMPLETED measurement before the recovery. Unknown states - no
+// step row, or any other status - count as NOT settled so the no-test-command
+// refusal applies (fail closed). A Skipped row deliberately does NOT count:
+// skip provenance is not persisted, and on the deployed pre-fix daemon a
+// silently-skipped test step (the exact defect being repaired) also wrote a
+// skipped row, so an unprovable waiver must not stand in for a measurement.
 func recoveredTestStepSettled(database *db.DB, runID string) bool {
 	if database == nil {
 		return false
@@ -292,7 +296,7 @@ func recoveredTestStepSettled(database *db.DB, runID string) bool {
 	}
 	for _, s := range steps {
 		if s.StepName == types.StepTest {
-			return s.Status == types.StepStatusCompleted || s.Status == types.StepStatusSkipped
+			return s.Status == types.StepStatusCompleted
 		}
 	}
 	return false
