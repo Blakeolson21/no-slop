@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/db"
 	"github.com/Blakeolson21/no-slop/internal/ipc"
 	"github.com/Blakeolson21/no-slop/internal/paths"
+	"github.com/Blakeolson21/no-slop/internal/telemetry"
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
@@ -95,6 +97,21 @@ func TestAxiReceiptReadsAcceptanceWithoutDaemonOrWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	beforeDBBytes, err := os.ReadFile(p.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeConfig, err := os.Stat(p.ConfigFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeConfigBytes, err := os.ReadFile(p.ConfigFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := &telemetryRecorder{}
+	restoreTelemetry := telemetry.SetDefaultForTesting(recorder)
+	defer restoreTelemetry()
 	t.Chdir(t.TempDir())
 	out, err := executeCmd("axi", "respond", "--receipt", "--run", run.ID, "--idempotency-key", "offline-ruling")
 	if err != nil {
@@ -112,8 +129,9 @@ func TestAxiReceiptReadsAcceptanceWithoutDaemonOrWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if entryNames(beforeEntries) != entryNames(afterEntries) {
-		t.Fatalf("receipt lookup changed resources: before=%v after=%v", entryNames(beforeEntries), entryNames(afterEntries))
+	dbBase := filepath.Base(p.DB())
+	if applicationEntryNames(beforeEntries, dbBase) != applicationEntryNames(afterEntries, dbBase) {
+		t.Fatalf("receipt lookup changed application resources: before=%v after=%v", applicationEntryNames(beforeEntries, dbBase), applicationEntryNames(afterEntries, dbBase))
 	}
 	afterDB, err := os.Stat(p.DB())
 	if err != nil {
@@ -121,6 +139,32 @@ func TestAxiReceiptReadsAcceptanceWithoutDaemonOrWorktree(t *testing.T) {
 	}
 	if beforeDB.Size() != afterDB.Size() || !beforeDB.ModTime().Equal(afterDB.ModTime()) {
 		t.Fatalf("receipt lookup modified database: before=%v after=%v", beforeDB, afterDB)
+	}
+	afterDBBytes, err := os.ReadFile(p.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(beforeDBBytes, afterDBBytes) {
+		t.Fatal("receipt lookup changed database contents or schema")
+	}
+	afterConfig, err := os.Stat(p.ConfigFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterConfigBytes, err := os.ReadFile(p.ConfigFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(beforeConfigBytes, afterConfigBytes) || !beforeConfig.ModTime().Equal(afterConfig.ModTime()) {
+		t.Fatal("receipt lookup changed global configuration")
+	}
+	if recorder.count("command") != 0 || recorder.count("pageview") != 0 {
+		t.Fatal("receipt lookup emitted telemetry")
+	}
+	for _, telemetryPath := range []string{p.TelemetryGateFile(), p.TelemetryGateFile() + ".lock"} {
+		if _, err := os.Stat(telemetryPath); !os.IsNotExist(err) {
+			t.Fatalf("receipt lookup created telemetry state %q: %v", telemetryPath, err)
+		}
 	}
 	out, err = executeCmd("axi", "respond", "--receipt", "--run", run.ID, "--idempotency-key", "unseen")
 	if err != nil {
@@ -131,10 +175,13 @@ func TestAxiReceiptReadsAcceptanceWithoutDaemonOrWorktree(t *testing.T) {
 	}
 }
 
-func entryNames(entries []os.DirEntry) string {
-	names := make([]string, len(entries))
-	for i, entry := range entries {
-		names[i] = entry.Name()
+func applicationEntryNames(entries []os.DirEntry, dbBase string) string {
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Name() == dbBase+"-wal" || entry.Name() == dbBase+"-shm" {
+			continue
+		}
+		names = append(names, entry.Name())
 	}
 	return strings.Join(names, ",")
 }

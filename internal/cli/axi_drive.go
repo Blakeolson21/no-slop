@@ -749,10 +749,7 @@ func newAxiRespondCmd() *cobra.Command {
 				autoYes:        autoYes,
 			}
 			if receipt {
-				return trackReadSurface("axi-receipt", nil, func() (string, string, error) {
-					fingerprint, err := runAxiReceipt(cmd, responseArgs)
-					return fingerprint, "", err
-				})
+				return runAxiReceipt(cmd, responseArgs)
 			}
 			return trackAxiSurface("axi-respond", "/axi/respond", telemetry.Fields{
 				"action":   sanitizeAxiTelemetryAction(action),
@@ -790,8 +787,7 @@ type respondArgs struct {
 
 func runAxiRespond(cmd *cobra.Command, ra respondArgs) error {
 	if ra.receipt {
-		_, err := runAxiReceipt(cmd, ra)
-		return err
+		return runAxiReceipt(cmd, ra)
 	}
 	ctx := cmd.Context()
 	if err := ipc.ValidateResponseKey(ra.idempotencyKey); err != nil {
