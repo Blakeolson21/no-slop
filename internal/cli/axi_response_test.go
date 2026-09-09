@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -48,6 +49,34 @@ func TestSendResponseUncertainTransportNamesReceiptCheck(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 	for _, want := range []string{"may have been accepted", "no-slop axi respond --receipt --run run-8 --idempotency-key ruling-8", "same --run, --step and --idempotency-key"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err, want)
+		}
+	}
+}
+
+func TestSendResponseBrokenConnectionNamesReceiptCheck(t *testing.T) {
+	srv := ipc.NewServer()
+	received := make(chan struct{})
+	srv.Handle(ipc.MethodRespond, func(context.Context, json.RawMessage) (interface{}, error) {
+		close(received)
+		// Simulate a daemon connection disappearing after it has read the
+		// request but before it can send the acceptance acknowledgement.
+		runtime.Goexit()
+		return nil, nil
+	})
+	client, _ := startDriveTestServer(t, srv)
+	params := ipc.RespondParams{RunID: "run-8", Step: types.StepReview, Action: types.ActionFix, IdempotencyKey: "broken-ruling"}
+	_, err := sendResponse(context.Background(), client, params)
+	if err == nil {
+		t.Fatal("broken connection returned success")
+	}
+	select {
+	case <-received:
+	case <-time.After(5 * time.Second):
+		t.Fatal("server did not receive request")
+	}
+	for _, want := range []string{"may have been accepted", "no-slop axi respond --receipt --run run-8 --idempotency-key broken-ruling", "same --run, --step and --idempotency-key"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q missing %q", err, want)
 		}
