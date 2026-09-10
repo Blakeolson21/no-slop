@@ -14,7 +14,11 @@ func (a *opencodeAgent) ensureServer(ctx context.Context, cwd string, env []stri
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.server != nil {
-		return a.server.baseURL(), nil
+		if a.server.matchesLaunch(cwd, env) {
+			return a.server.baseURL(), nil
+		}
+		a.server.shutdown()
+		a.server = nil
 	}
 	port, err := getAvailablePort()
 	if err != nil {

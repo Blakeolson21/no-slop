@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -56,6 +57,9 @@ type managedServer struct {
 	waitErr       error         // result of cmd.Wait; only read after exited is closed
 	healthTimeout time.Duration // health-check deadline; defaults to defaultHealthTimeout when zero
 	stopping      atomic.Bool
+	launchCWD     string
+	launchEnv     []string
+	launchTracked bool
 }
 
 // getAvailablePort finds an ephemeral port by binding to :0 and releasing.
@@ -104,7 +108,16 @@ func startServerWithPort(ctx context.Context, agentName, bin string, args []stri
 		StartedAt:      time.Now().UTC(),
 	})
 
-	srv := &managedServer{cmd: cmd, port: port, pidFile: pidFile, exited: make(chan struct{}), healthTimeout: defaultHealthTimeout}
+	srv := &managedServer{
+		cmd:           cmd,
+		port:          port,
+		pidFile:       pidFile,
+		exited:        make(chan struct{}),
+		healthTimeout: defaultHealthTimeout,
+		launchCWD:     cwd,
+		launchEnv:     slices.Clone(cmd.Env),
+		launchTracked: true,
+	}
 	go func() {
 		srv.waitErr = cmd.Wait()
 		if srv.stopping.Load() {
@@ -131,6 +144,10 @@ func startServerWithPort(ctx context.Context, agentName, bin string, args []stri
 // baseURL returns the server's base URL.
 func (s *managedServer) baseURL() string {
 	return fmt.Sprintf("http://127.0.0.1:%d", s.port)
+}
+
+func (s *managedServer) matchesLaunch(cwd string, env []string) bool {
+	return !s.launchTracked || s.launchCWD == cwd && slices.Equal(s.launchEnv, gitSafeEnv(cwd, env))
 }
 
 // formatHealthTimeout renders a health-check deadline for error messages,

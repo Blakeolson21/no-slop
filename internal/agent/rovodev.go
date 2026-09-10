@@ -88,7 +88,11 @@ func (a *rovodevAgent) ensureServer(ctx context.Context, cwd string, env []strin
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.server != nil {
-		return a.server.baseURL(), nil
+		if a.server.matchesLaunch(cwd, env) {
+			return a.server.baseURL(), nil
+		}
+		a.server.shutdown()
+		a.server = nil
 	}
 	port, err := getAvailablePort()
 	if err != nil {
