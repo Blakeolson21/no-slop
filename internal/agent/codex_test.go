@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCodexAgent_BuildArgs(t *testing.T) {
@@ -545,4 +546,109 @@ func argsContainPair(args []string, flag, value string) bool {
 		}
 	}
 	return false
+}
+
+// Exercise execve and the stdin pipe, not just the argument constructor: Linux
+// rejects a single argv element at 128 KiB on a 4 KiB-page host.
+func TestCodexAgent_RunStreamsLargePrompt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX fake executable")
+	}
+	prompt := strings.Repeat("prompt bytes: λ\t\"quoted\"\n", 65536) + "trailing bytes\n\n"
+	if len(prompt) < 1<<20 {
+		t.Fatal("regression prompt must exceed 1 MiB")
+	}
+	for _, resumeID := range []string{"", "thread-resume-123"} {
+		t.Run("resume="+resumeID, func(t *testing.T) {
+			dir := t.TempDir()
+			bin := writeFakeCodex(t, dir, `#!/bin/sh
+set -eu
+printf '%s\n' "$@" > args.txt
+cat > stdin.txt
+schema=""
+for arg do
+  if [ "$schema" = next ]; then
+    cp "$arg" schema.json
+    printf '%s' "$arg" > schema-path.txt
+    break
+  fi
+  if [ "$arg" = --output-schema ]; then schema=next; fi
+done
+printf '%s\n' '{"type":"thread.started","thread_id":"thread-resume-123"}'
+printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"{\"ok\":true}"}}'
+printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":2}}'
+`, "")
+			opts := RunOpts{Prompt: prompt, CWD: dir, JSONSchema: json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"]}`)}
+			if resumeID != "" {
+				opts.Session = &SessionRef{ID: resumeID}
+			}
+			var chunks strings.Builder
+			opts.OnChunk = func(chunk string) { chunks.WriteString(chunk) }
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			result, err := (&codexAgent{bin: bin}).Run(ctx, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stdin, err := os.ReadFile(filepath.Join(dir, "stdin.txt"))
+			if err != nil || string(stdin) != prompt {
+				t.Fatalf("stdin is not byte-exact: got %d bytes, want %d, err=%v", len(stdin), len(prompt), err)
+			}
+			schemaPath, err := os.ReadFile(filepath.Join(dir, "schema-path.txt"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []string{"exec"}
+			if resumeID != "" {
+				want = append(want, "resume", resumeID)
+			}
+			want = append(want, "-", "--json", "--output-schema", string(schemaPath), "--dangerously-bypass-approvals-and-sandbox")
+			if resumeID == "" {
+				want = append(want, "--color", "never")
+			}
+			args, err := os.ReadFile(filepath.Join(dir, "args.txt"))
+			if err != nil || string(args) != strings.Join(want, "\n")+"\n" {
+				t.Fatalf("argv did not contain only expected options and stdin sentinel: %q, err=%v", args, err)
+			}
+			if _, err := os.Stat(string(schemaPath)); !os.IsNotExist(err) {
+				t.Fatalf("schema temporary file not removed: %v", err)
+			}
+			schema, err := os.ReadFile(filepath.Join(dir, "schema.json"))
+			if err != nil || string(schema) != `{"additionalProperties":false,"properties":{"ok":{"type":"boolean"}},"required":["ok"],"type":"object"}` {
+				t.Fatalf("normalized schema changed: %s, err=%v", schema, err)
+			}
+			if string(result.Output) != `{"ok":true}` || chunks.String() != `{"ok":true}` || result.SessionID != "thread-resume-123" || result.Resumed != (resumeID != "") || !result.SessionUsageCumulative {
+				t.Fatalf("output/session handling changed: %+v, chunks=%q", result, chunks.String())
+			}
+		})
+	}
+}
+
+func TestCodexAgent_RunCancelsWithUnreadLargeStdin(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX fake executable")
+	}
+	for _, resumeID := range []string{"", "thread-cancel"} {
+		t.Run("resume="+resumeID, func(t *testing.T) {
+			dir := t.TempDir()
+			bin := writeFakeCodex(t, dir, `#!/bin/sh
+printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"ready"}}'
+exec sleep 60
+`, "")
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			ready := false
+			opts := RunOpts{CWD: dir, Prompt: strings.Repeat("x", 1<<20), OnChunk: func(string) {
+				ready = true
+				cancel()
+			}}
+			if resumeID != "" {
+				opts.Session = &SessionRef{ID: resumeID}
+			}
+			_, err := (&codexAgent{bin: bin}).Run(ctx, opts)
+			if !ready || err == nil || ctx.Err() != context.Canceled {
+				t.Fatalf("failed to cancel a started child with a blocked stdin writer: ready=%v err=%v context=%v", ready, err, ctx.Err())
+			}
+		})
+	}
 }

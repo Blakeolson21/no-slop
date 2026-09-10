@@ -970,3 +970,41 @@ func mustLatestRoundID(t *testing.T, sctx *pipeline.StepContext) string {
 	}
 	return rounds[len(rounds)-1].ID
 }
+
+func TestReviewStep_DeliversBoundedHistoryAndFullCurrentFindings(t *testing.T) {
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	ag := &mockAgent{name: "test", runFn: func(context.Context, agent.RunOpts) (*agent.Result, error) {
+		return &agent.Result{Output: json.RawMessage(`{"findings":[]}`)}, nil
+	}}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sr, err := sctx.DB.InsertStepResult(sctx.Run.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sctx.StepResultID = sr.ID
+	description := strings.Repeat("current actionable detail ", 8192) + "CURRENT-END"
+	encoded, err := json.Marshal(Findings{Items: []types.Finding{{ID: "current", Description: description, Action: "ask-user"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := string(encoded)
+	summary := strings.Repeat("old evidence ", 8192)
+	for round := 1; round <= 10; round++ {
+		if _, err := sctx.DB.InsertStepRound(sctx.StepResultID, round, "auto_fix", &raw, &summary, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := (&ReviewStep{}).Execute(sctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(ag.calls) != 1 {
+		t.Fatalf("expected one reviewer invocation, got %d", len(ag.calls))
+	}
+	prompt := ag.calls[0].Prompt
+	if strings.Count(prompt, description) != 1 || strings.Contains(prompt, summary) {
+		t.Fatal("reviewer lost current finding detail or repeated historical evidence")
+	}
+	if len(prompt) > len(raw)+64*1024 {
+		t.Fatalf("reviewer historical overhead is unbounded: %d bytes", len(prompt)-len(raw))
+	}
+}

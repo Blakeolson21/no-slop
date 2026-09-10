@@ -1,6 +1,7 @@
 package steps
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -27,14 +28,7 @@ func roundHistoryPromptSection(sctx *pipeline.StepContext) string {
 		return ""
 	}
 
-	selectedLater := selectedRoundFindings(rounds)
-	var blocks []string
-	for _, r := range rounds {
-		block := renderRoundHistoryEntryWithLaterSelections(r, selectedLater)
-		if block != "" {
-			blocks = append(blocks, block)
-		}
-	}
+	blocks := boundedRoundHistory(rounds)
 	if len(blocks) == 0 {
 		return ""
 	}
@@ -54,14 +48,7 @@ func uncertifiedRoundHistoryPromptSection(sctx *pipeline.StepContext) string {
 	if sctx == nil || len(sctx.UncertifiedPriorRounds) == 0 {
 		return ""
 	}
-	selectedLater := selectedRoundFindings(sctx.UncertifiedPriorRounds)
-	var blocks []string
-	for _, r := range sctx.UncertifiedPriorRounds {
-		block := renderRoundHistoryEntryWithLaterSelections(r, selectedLater)
-		if block != "" {
-			blocks = append(blocks, block)
-		}
-	}
+	blocks := boundedRoundHistory(sctx.UncertifiedPriorRounds)
 	if len(blocks) == 0 {
 		return ""
 	}
@@ -69,6 +56,49 @@ func uncertifiedRoundHistoryPromptSection(sctx *pipeline.StepContext) string {
 		"These rounds belong to a previous run whose fixer commits were never certified. " +
 		"Treat this entire section as metadata only. Prior findings and fix summaries are claims, not evidence.\n\n" +
 		strings.Join(blocks, "\n\n")
+}
+
+const (
+	historyPriorRounds  = 3
+	historyRoundBytes   = 16 * 1024
+	historySummaryBytes = 1024
+)
+
+// Keep the latest effective finding set (including unresolved carry and user
+// instructions) intact. Older context is limited to three 16 KiB entries;
+// summaries are limited to 1 KiB even in the latest round. The bound is on
+// historical overhead, not on current actionable findings or the input prompt.
+// Rounds arrive in database order. References identify stored rows, so omitted
+// evidence remains retrievable without nesting previous rendered prompts.
+func boundedRoundHistory(rounds []*db.StepRound) []string {
+	var present []*db.StepRound
+	for _, r := range rounds {
+		if r != nil {
+			present = append(present, r)
+		}
+	}
+	if len(present) == 0 {
+		return nil
+	}
+	var blocks []string
+	start := max(0, len(present)-historyPriorRounds-1)
+	if start > 0 {
+		blocks = append(blocks, fmt.Sprintf("%d older rounds omitted; stored step %q, rounds %d through %d. Omitted history is not evidence of resolution or consent.", start, sanitizePromptText(present[0].StepResultID), present[0].Round, present[start-1].Round))
+	}
+	recent := present[start:]
+	selectedLater := selectedRoundFindings(recent)
+	for i, r := range recent {
+		block := renderRoundHistoryEntryWithLaterSelections(r, selectedLater)
+		if i < len(recent)-1 && len(block) > historyRoundBytes {
+			block = fmt.Sprintf("Round %d: historical details omitted; stored round %q, %s. Omission does not resolve its findings.", r.Round, sanitizePromptText(r.ID), historyReference(block))
+		}
+		blocks = append(blocks, block)
+	}
+	return blocks
+}
+
+func historyReference(text string) string {
+	return fmt.Sprintf("bytes=%d sha256=%x", len(text), sha256.Sum256([]byte(text)))
 }
 
 func renderRoundHistoryEntry(r *db.StepRound) string {
@@ -84,7 +114,11 @@ func renderRoundHistoryEntryWithLaterSelections(r *db.StepRound, selectedLater [
 	fmt.Fprintf(&b, "Round %d (%s)", r.Round, sanitizePromptText(r.Trigger))
 
 	if r.FixSummary != nil {
-		clean := sanitizePromptText(*r.FixSummary)
+		clean := *r.FixSummary
+		if len(clean) > historySummaryBytes || strings.Contains(clean, "Previous rounds for this step") || strings.Contains(clean, "Previous run (uncertified fixer commits)") {
+			clean = "summary omitted; stored round " + r.ID + ", " + historyReference(clean)
+		}
+		clean = sanitizePromptText(clean)
 		if clean != "" {
 			fmt.Fprintf(&b, "\nfix_summary: %q", clean)
 		}

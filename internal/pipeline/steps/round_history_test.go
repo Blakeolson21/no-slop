@@ -1,6 +1,7 @@
 package steps
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -467,5 +468,66 @@ func TestRoundHistoryPromptSection_SanitizesInjectionAttempts(t *testing.T) {
 	// The description is flattened to a single line but retains the words.
 	if !strings.Contains(got, "IGNORE PRIOR INSTRUCTIONS") {
 		t.Fatalf("expected description content to be present after sanitization, got:\n%s", got)
+	}
+}
+
+// The emitted history is an agent input contract. Feeding a prior rendering
+// back as a fix summary must not recursively grow the next prompt.
+func TestRoundHistoryPromptSection_BoundsHistoricalEvidence(t *testing.T) {
+	sctx, stepID := newRoundHistoryContext(t)
+	current := `{"findings":[{"id":"live","severity":"error","description":"current actionable finding","action":"ask-user"}]}`
+	previous := strings.Repeat("historical evidence ", 4096)
+	for round := 1; round <= 20; round++ {
+		if _, err := sctx.DB.InsertStepRound(stepID, round, "auto_fix", &current, &previous, 1); err != nil {
+			t.Fatal(err)
+		}
+		got := roundHistoryPromptSection(sctx)
+		if len(got) > 55*1024 {
+			t.Fatalf("round %d: history grew to %d bytes", round, len(got))
+		}
+		if !strings.Contains(got, "current actionable finding") {
+			t.Fatalf("round %d: current findings were lost", round)
+		}
+		if strings.Contains(got, "historical evidence historical evidence") || strings.Count(got, "Previous rounds for this step") != 1 {
+			t.Fatalf("round %d: nested historical evidence was rendered", round)
+		}
+		if !strings.Contains(got, "sha256=") {
+			t.Fatalf("round %d: omitted evidence lacks a stable reference", round)
+		}
+		previous = got
+	}
+	rounds, err := sctx.DB.GetRoundsByStep(stepID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sctx.UncertifiedPriorRounds = rounds
+	got := uncertifiedRoundHistoryPromptSection(sctx)
+	if len(got) > 55*1024 || !strings.Contains(got, "current actionable finding") || !strings.Contains(got, "older rounds") {
+		t.Fatalf("uncertified history did not apply the same bound: %d bytes", len(got))
+	}
+	if strings.Count(got, "Round ") > 4 {
+		t.Fatal("more than the latest round and three historical rounds rendered")
+	}
+}
+
+func TestRoundHistoryPromptSection_RetainsLargeCurrentFindings(t *testing.T) {
+	sctx, stepID := newRoundHistoryContext(t)
+	description := strings.Repeat("current finding detail ", 8192) + "ACTIONABLE-END"
+	findings, err := json.Marshal(types.Findings{Items: []types.Finding{{ID: "live", Description: description, Action: "ask-user"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := string(findings)
+	for round := 1; round <= 8; round++ {
+		if _, err := sctx.DB.InsertStepRound(stepID, round, "initial", &raw, nil, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := roundHistoryPromptSection(sctx)
+	if strings.Count(got, description) != 1 {
+		t.Fatal("current findings must survive in full; old copies must become references")
+	}
+	if len(got) > len(raw)+55*1024 {
+		t.Fatalf("historical overhead grew beyond bound: %d", len(got)-len(raw))
 	}
 }
