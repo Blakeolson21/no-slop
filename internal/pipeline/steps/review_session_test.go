@@ -60,7 +60,7 @@ func (m *sessionMockAgent) snapshot() []agent.RunOpts {
 
 // reviewSessionHarness wires a real executor around real steps with a
 // session-capable mock agent and real git worktree.
-func reviewSessionHarness(t *testing.T, mock *sessionMockAgent, steps []pipeline.Step) (*pipeline.Executor, *db.DB, *db.Run, *db.Repo, string) {
+func reviewSessionHarness(t *testing.T, mock *sessionMockAgent, steps []pipeline.Step, onEvent ...pipeline.EventFunc) (*pipeline.Executor, *db.DB, *db.Run, *db.Repo, string) {
 	t.Helper()
 	workDir, baseSHA, headSHA := setupGitRepo(t)
 
@@ -84,7 +84,11 @@ func reviewSessionHarness(t *testing.T, mock *sessionMockAgent, steps []pipeline
 		AutoFix:      config.AutoFix{Review: 3},
 		SessionReuse: true,
 	}
-	exec := pipeline.NewExecutor(database, paths.WithRoot(t.TempDir()), cfg, mock, steps, nil)
+	var emit pipeline.EventFunc
+	if len(onEvent) > 0 {
+		emit = onEvent[0]
+	}
+	exec := pipeline.NewExecutor(database, paths.WithRoot(t.TempDir()), cfg, mock, steps, emit)
 	return exec, database, run, repo, workDir
 }
 

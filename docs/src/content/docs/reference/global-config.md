@@ -10,6 +10,10 @@ Global configuration lives at `~/.no-mistakes/config.yaml`. Set `NS_HOME` to rel
 
 agent: auto
 
+concurrency:
+  reviews: 9
+  suites: 1
+
 acpx_path: acpx
 
 acp_registry_overrides:
@@ -75,6 +79,19 @@ test:
 ```
 
 ## Fields
+
+### concurrency
+
+Independent execution limits for the host's no-slop daemon. Both values must be positive integers and are global-only; repository configuration cannot override them.
+
+| Key | Default | Occupied while |
+| --- | --- | --- |
+| `reviews` | `9` | A review or its fix-and-rereview turn executes |
+| `suites` | `1` | A Test or Lint step executes, including repairs |
+
+All runs and repositories managed by the daemon share these pools. Parked approval gates occupy no slots. Completion releases a slot and wakes waiting work immediately; there is no round timer. Normal review continuation also uses completion events, with the 30-second lost-event fallback heartbeat retained as recovery. Lowering a limit lets current work finish and admits more only below the new limit. Changes apply when a run is started or recovered.
+
+The defaults bound admission; they do not promise a fleet throughput target. The suite default allows one independently running suite because suite commands may already use internal parallelism. Measure review occupancy and CPU pressure before tuning either value. Separate `NS_HOME` daemons have separate pools; use one host service to enforce a shared host budget. External queue admission must allow enough runs to use the review pool. These limits do not reserve OS cores or constrain tools an agent launches outside Test/Lint.
 
 ### agent
 

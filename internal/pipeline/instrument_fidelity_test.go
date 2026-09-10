@@ -4,12 +4,68 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/Blakeolson21/no-slop/internal/agent"
 	"github.com/Blakeolson21/no-slop/internal/db"
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
+
+type turnKindCaptureAgent struct {
+	env []string
+}
+
+func (a *turnKindCaptureAgent) Name() string { return "capture" }
+func (a *turnKindCaptureAgent) Close() error { return nil }
+func (a *turnKindCaptureAgent) Run(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
+	a.env = append([]string(nil), opts.Env...)
+	return &agent.Result{Output: json.RawMessage(`{}`)}, nil
+}
+
+func TestPerfRecordingAgent_AuthenticatesTurnKindFromPipelineDuty(t *testing.T) {
+	tests := []struct {
+		name     string
+		step     types.StepName
+		purpose  string
+		wantKind string
+	}{
+		{name: "review", step: types.StepReview, purpose: "review", wantKind: "review"},
+		{name: "review fixer", step: types.StepReview, purpose: "review-fix", wantKind: "fix"},
+		{name: "test evidence", step: types.StepTest, purpose: "test-evidence", wantKind: "test"},
+		{name: "test fixer", step: types.StepTest, purpose: "test-fix", wantKind: "fix"},
+		{name: "document", step: types.StepDocument, purpose: "document", wantKind: "document"},
+		{name: "document reversal", step: types.StepDocument, purpose: "document-reversal-check", wantKind: "document"},
+		{name: "lint", step: types.StepLint, purpose: "lint", wantKind: "lint"},
+		{name: "rebase defaults from step", step: types.StepRebase, wantKind: "rebase"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			capture := &turnKindCaptureAgent{}
+			wrapped := &perfRecordingAgent{
+				inner: capture, stepName: tt.step, round: func() int { return 1 },
+			}
+			_, err := wrapped.Run(context.Background(), agent.RunOpts{
+				Purpose: tt.purpose,
+				Env: []string{
+					"PRESERVED=value", "MO_GATE_STEP_KIND=forged",
+					"MO_GATE_TURN_KIND=forged",
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Contains(capture.env, "PRESERVED=value") {
+				t.Fatalf("unrelated invocation environment was lost: %v", capture.env)
+			}
+			wantStep := "MO_GATE_STEP_KIND=" + string(tt.step)
+			wantTurn := "MO_GATE_TURN_KIND=" + tt.wantKind
+			if !slices.Contains(capture.env, wantStep) || capture.env[len(capture.env)-1] != wantTurn {
+				t.Fatalf("environment must carry authenticated step %q and turn %q; full env %v", wantStep, wantTurn, capture.env)
+			}
+		})
+	}
+}
 
 // cumulativeSessionAgent models codex: a stable durable session whose reported
 // token usage is cumulative across resumed rounds, with bounded activity

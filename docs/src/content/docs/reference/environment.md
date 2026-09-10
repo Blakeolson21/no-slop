@@ -42,6 +42,17 @@ Takes precedence over `daemon_connect_timeout` in `config.yaml`. An empty, unpar
 `NM_DAEMON_CONNECT_TIMEOUT` is a compatibility alias. Conflicting values,
 including empty versus non-empty, are returned as alias-conflict errors.
 
+## `MO_GATE_TURN_KIND`
+
+Invocation-scoped gate duty written by no-slop for an agent subprocess. The
+pipeline derives it from its own step and purpose (`review`, `fix`, `test`,
+`document`, `lint`, `rebase`, or `intent`) so an external gate-runner wrapper
+does not need to classify untrusted prompt or repository text. Any inherited
+value is removed and replaced at the pipeline boundary. `MO_GATE_STEP_KIND` is
+the companion pipeline-owned step name, allowing a wrapper to refuse a carrier
+that disagrees with the step. Both are pipeline outputs, not user configuration
+inputs; non-gate invocations do not receive them.
+
 ## `NS_QUARTERMASTER_BIN`
 
 Lease authority executable used when [`quartermaster.enabled`](/no-slop/reference/global-config/#quartermaster) is true and `quartermaster.bin` is left blank.
@@ -319,3 +330,5 @@ When set to a disabling value, telemetry stays off even if a runtime or embedded
 When the daemon runs through a managed service (launchd, systemd user service, Task Scheduler), the macOS and Linux service definitions include a default `PATH` with common user and system binary directories. They also bake in any proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY`) that were set when you installed or refreshed the service, so the daemon and the agents it spawns can reach the network through your proxy even when the login-shell probe is unavailable. Once baked in, the values are preserved across later service refreshes and restarts even when the proxy variables are not exported in that shell, so a routine `daemon restart` or a binary upgrade will not strip them; export the variables again only when you need to change or remove them. Both the upper- and lower-case spellings are forwarded exactly as you set them, because tooling is inconsistent about which it reads (curl, for example, honors only the lower-case `http_proxy` for plain-HTTP requests). Because a proxy URL can embed credentials (for example `http://user:pass@host`), the generated service file is restricted to owner-only `0600` permissions whenever proxy values are forwarded into it. When no proxy variables are set, the generated definition is unchanged and keeps the conventional `0644` mode. Windows Task Scheduler inherits your logon environment and needs no forwarding. At daemon startup, the daemon resolves environment from your login shell on macOS and Linux, preserves your shell `PATH` order, and appends any missing well-known directories such as `~/.local/bin`, `~/go/bin`, `~/.cargo/bin`, `~/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, and `/bin`. If login-shell resolution fails or returns no entries, the daemon logs a warning and uses an augmented process-environment fallback that may omit version-manager directories such as nvm, fnm, or volta. On Windows it reuses the current process environment.
 
 If your env vars aren't set in your login shell's rc files (`.zprofile`, `.zshrc`, `.profile`, `.bash_profile`, `.bashrc`, PowerShell profile), the daemon won't see them. Put them somewhere a login shell will load, then restart the daemon to pick them up.
+
+`no-slop axi status --run <id>` also prints `review_timing` from the persisted review step and agent invocation records. It reports the first review start, persisted review-step `status`, `total_ms` wall time (including capacity and approval waits), whether that interval is complete, distinct recorded review rounds, and accumulated `review_ms` / `fix_ms`. Each `turns` row retains its round, purpose, invocation `latency_ms`, start/end timestamps, and exit status, so retries and failures remain visible. `model_ms` subtracts instrumented tool subprocess time when available and is null otherwise; invocation latency is not claimed to be pure model time. Only returned invocations contribute latency, so a running turn remains absent until it returns. An unstarted review reports unknown; legacy records without invocation instrumentation have no turn rows. These fields are local-only and do not affect gate approval or head certification.

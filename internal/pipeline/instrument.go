@@ -43,6 +43,7 @@ func (a *perfRecordingAgent) SupportsSessionProvider(provider string) bool {
 }
 
 func (a *perfRecordingAgent) Run(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
+	opts.Env = gateTurnEnvironment(opts.Env, a.stepName, opts.Purpose)
 	attempts := 0
 	previous := opts.OnAttempt
 	opts.OnAttempt = func(attempt agent.Attempt) {
@@ -61,6 +62,49 @@ func (a *perfRecordingAgent) Run(ctx context.Context, opts agent.RunOpts) (*agen
 		a.record(ctx, opts, a.inner.Name(), agent.ResolveInvocationIdentity(a.inner), result, err, start, time.Now())
 	}
 	return result, err
+}
+
+// gateTurnEnvironment authenticates the gate duty at the pipeline boundary.
+// Prompts contain user intent, repository text, and prior findings, so an agent
+// wrapper must never infer a tool-capable route from their contents. Purpose is
+// written by the concrete step invocation; stepName supplies the pipeline-owned
+// fallback for calls whose purpose is intentionally empty.
+func gateTurnEnvironment(env []string, stepName types.StepName, purpose string) []string {
+	const turnKey = "MO_GATE_TURN_KIND="
+	const stepKey = "MO_GATE_STEP_KIND="
+	clean := make([]string, 0, len(env)+2)
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, turnKey) && !strings.HasPrefix(entry, stepKey) {
+			clean = append(clean, entry)
+		}
+	}
+
+	kind := ""
+	if strings.HasSuffix(purpose, "-fix") {
+		kind = "fix"
+	} else {
+		switch purpose {
+		case "intent", "rebase", "review":
+			kind = purpose
+		case "test-evidence":
+			kind = "test"
+		case "document", "housekeeping", "document-reversal-check":
+			kind = "document"
+		case "lint":
+			kind = "lint"
+		}
+	}
+	if kind == "" && purpose == "" {
+		switch stepName {
+		case types.StepIntent, types.StepRebase, types.StepReview,
+			types.StepTest, types.StepDocument, types.StepLint:
+			kind = string(stepName)
+		}
+	}
+	if kind != "" {
+		clean = append(clean, stepKey+string(stepName), turnKey+kind)
+	}
+	return clean
 }
 
 func (a *perfRecordingAgent) record(ctx context.Context, opts agent.RunOpts, agentName string, identity agent.InvocationIdentity, result *agent.Result, runErr error, startedAt, completedAt time.Time) {

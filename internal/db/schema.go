@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS runs (
     push_generation         INTEGER,
     push_active             INTEGER NOT NULL DEFAULT 0,
     terminal_head_verified_at INTEGER,
+    terminal_at_ms          INTEGER,
     error                   TEXT,
     awaiting_agent_since INTEGER,
     parked_ms            INTEGER,
@@ -54,6 +55,9 @@ CREATE TABLE IF NOT EXISTS step_results (
     error            TEXT,
     started_at       INTEGER,
     completed_at     INTEGER,
+    started_at_ms    INTEGER,
+    completed_at_ms  INTEGER,
+    first_started_at_ms INTEGER,
     last_activity_at INTEGER,
     last_activity    TEXT,
     agent_pid        INTEGER,
@@ -218,6 +222,7 @@ var migrationStatements = []string{
 	`ALTER TABLE runs ADD COLUMN push_generation INTEGER`,
 	`ALTER TABLE runs ADD COLUMN push_active INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE runs ADD COLUMN terminal_head_verified_at INTEGER`,
+	`ALTER TABLE runs ADD COLUMN terminal_at_ms INTEGER`,
 	`ALTER TABLE runs ADD COLUMN pr_state TEXT`,
 	`ALTER TABLE runs ADD COLUMN pr_state_observed_at INTEGER`,
 	`ALTER TABLE runs ADD COLUMN ci_ready_at INTEGER`,
@@ -235,6 +240,9 @@ var migrationStatements = []string{
 	// non-review steps read back as "no report", never a fabricated one.
 	`ALTER TABLE step_results ADD COLUMN convergence_json TEXT`,
 	`ALTER TABLE step_results ADD COLUMN certified_head_sha TEXT`,
+	`ALTER TABLE step_results ADD COLUMN started_at_ms INTEGER`,
+	`ALTER TABLE step_results ADD COLUMN completed_at_ms INTEGER`,
+	`ALTER TABLE step_results ADD COLUMN first_started_at_ms INTEGER`,
 	// Observed launch-identity columns: nullable so a legacy row, and an
 	// invocation whose adapter could not observe its own launch, both stay
 	// unknown instead of being backfilled from the configured agent kind.

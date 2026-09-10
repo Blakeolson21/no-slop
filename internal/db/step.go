@@ -21,6 +21,9 @@ type StepResult struct {
 	Error            *string
 	StartedAt        *int64
 	CompletedAt      *int64
+	StartedAtMS      *int64
+	CompletedAtMS    *int64
+	FirstStartedAtMS *int64
 	LastActivityAt   *int64
 	LastActivity     *string
 	AgentPID         *int
@@ -44,10 +47,22 @@ func (d *DB) readableStepResultColumns() string {
 		columns += ", NULL AS certified_head_sha"
 	}
 	if d.hasColumn("step_results", "ci_fix_attempts") {
-		return columns + ", ci_fix_attempts"
+		columns += ", ci_fix_attempts"
+	} else {
+		// Read-only authorization may inspect the database before migrations run.
+		columns += ", 0 AS ci_fix_attempts"
 	}
-	// Read-only authorization may inspect the database before migrations run.
-	return columns + ", 0 AS ci_fix_attempts"
+	if d.hasColumn("step_results", "started_at_ms") {
+		columns += ", started_at_ms, completed_at_ms"
+	} else {
+		columns += ", NULL AS started_at_ms, NULL AS completed_at_ms"
+	}
+	if d.hasColumn("step_results", "first_started_at_ms") {
+		columns += ", first_started_at_ms"
+	} else {
+		columns += ", NULL AS first_started_at_ms"
+	}
+	return columns
 }
 
 func (d *DB) hasColumn(table, column string) bool {
@@ -83,7 +98,7 @@ func (d *DB) GetStepResult(id string) (*StepResult, error) {
 	s := &StepResult{}
 	err := d.sql.QueryRow(
 		`SELECT `+d.readableStepResultColumns()+` FROM step_results WHERE id = ?`, id,
-	).Scan(&s.ID, &s.RunID, &s.StepName, &s.StepOrder, &s.Status, &s.ExitCode, &s.DurationMS, &s.LogPath, &s.FindingsJSON, &s.Error, &s.StartedAt, &s.CompletedAt, &s.LastActivityAt, &s.LastActivity, &s.AgentPID, &s.AutoFixLimit, &s.ConvergenceJSON, &s.CertifiedHeadSHA, &s.CIFixAttempts)
+	).Scan(&s.ID, &s.RunID, &s.StepName, &s.StepOrder, &s.Status, &s.ExitCode, &s.DurationMS, &s.LogPath, &s.FindingsJSON, &s.Error, &s.StartedAt, &s.CompletedAt, &s.LastActivityAt, &s.LastActivity, &s.AgentPID, &s.AutoFixLimit, &s.ConvergenceJSON, &s.CertifiedHeadSHA, &s.CIFixAttempts, &s.StartedAtMS, &s.CompletedAtMS, &s.FirstStartedAtMS)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -105,7 +120,7 @@ func (d *DB) GetStepsByRun(runID string) ([]*StepResult, error) {
 	var steps []*StepResult
 	for rows.Next() {
 		s := &StepResult{}
-		if err := rows.Scan(&s.ID, &s.RunID, &s.StepName, &s.StepOrder, &s.Status, &s.ExitCode, &s.DurationMS, &s.LogPath, &s.FindingsJSON, &s.Error, &s.StartedAt, &s.CompletedAt, &s.LastActivityAt, &s.LastActivity, &s.AgentPID, &s.AutoFixLimit, &s.ConvergenceJSON, &s.CertifiedHeadSHA, &s.CIFixAttempts); err != nil {
+		if err := rows.Scan(&s.ID, &s.RunID, &s.StepName, &s.StepOrder, &s.Status, &s.ExitCode, &s.DurationMS, &s.LogPath, &s.FindingsJSON, &s.Error, &s.StartedAt, &s.CompletedAt, &s.LastActivityAt, &s.LastActivity, &s.AgentPID, &s.AutoFixLimit, &s.ConvergenceJSON, &s.CertifiedHeadSHA, &s.CIFixAttempts, &s.StartedAtMS, &s.CompletedAtMS, &s.FirstStartedAtMS); err != nil {
 			return nil, fmt.Errorf("scan step result: %w", err)
 		}
 		steps = append(steps, s)
@@ -119,8 +134,9 @@ func (d *DB) ResetStepsFrom(runID string, stepOrder int) error {
 	_, err := d.sql.Exec(`
 		UPDATE step_results
 		SET status = ?, exit_code = NULL, duration_ms = NULL, log_path = NULL,
-			findings_json = NULL, error = NULL, started_at = NULL,
-			completed_at = NULL, last_activity_at = NULL, last_activity = NULL,
+			findings_json = NULL, error = NULL, first_started_at_ms = COALESCE(first_started_at_ms, started_at_ms, started_at * 1000), started_at = NULL,
+			completed_at = NULL, started_at_ms = NULL, completed_at_ms = NULL,
+			last_activity_at = NULL, last_activity = NULL,
 			agent_pid = NULL, auto_fix_limit = NULL, convergence_json = NULL,
 			certified_head_sha = NULL
 		WHERE run_id = ? AND step_order >= ? AND status != ?`, types.StepStatusPending, runID, stepOrder, types.StepStatusSkipped)
@@ -198,8 +214,8 @@ func (d *DB) StartStep(id string) error {
 // StartStepWithAutoFixLimit marks a step as running and records the effective
 // auto-fix limit that status surfaces use while the step is active.
 func (d *DB) StartStepWithAutoFixLimit(id string, autoFixLimit int) error {
-	ts := now()
-	_, err := d.sql.Exec(`UPDATE step_results SET status = ?, started_at = ?, last_activity_at = ?, last_activity = ?, agent_pid = NULL, auto_fix_limit = ? WHERE id = ?`, types.StepStatusRunning, ts, ts, "step started", autoFixLimitDBValue(autoFixLimit), id)
+	ts, tsMS := nowWithMillis()
+	_, err := d.sql.Exec(`UPDATE step_results SET status = ?, started_at = ?, started_at_ms = ?, first_started_at_ms = COALESCE(first_started_at_ms, CASE WHEN step_name = ? THEN COALESCE(started_at_ms, started_at * 1000, ?) END), completed_at = NULL, completed_at_ms = NULL, last_activity_at = ?, last_activity = ?, agent_pid = NULL, auto_fix_limit = ? WHERE id = ?`, types.StepStatusRunning, ts, tsMS, types.StepReview, tsMS, ts, "step started", autoFixLimitDBValue(autoFixLimit), id)
 	if err != nil {
 		return fmt.Errorf("start step: %w", err)
 	}
@@ -244,9 +260,10 @@ func (d *DB) CompleteStepWithStatusAtHead(id string, status types.StepStatus, ce
 	if certifiedHeadSHA != "" {
 		certifiedHead = &certifiedHeadSHA
 	}
+	ts, tsMS := nowWithMillis()
 	_, err := d.sql.Exec(
-		`UPDATE step_results SET status = ?, exit_code = ?, duration_ms = ?, log_path = ?, certified_head_sha = ?, completed_at = ?, last_activity_at = ?, last_activity = ?, agent_pid = NULL WHERE id = ?`,
-		status, exitCode, durationMS, logPath, certifiedHead, now(), now(), fmt.Sprintf("status: %s", status), id,
+		`UPDATE step_results SET status = ?, exit_code = ?, duration_ms = ?, log_path = ?, certified_head_sha = ?, completed_at = ?, completed_at_ms = ?, last_activity_at = ?, last_activity = ?, agent_pid = NULL WHERE id = ?`,
+		status, exitCode, durationMS, logPath, certifiedHead, ts, tsMS, ts, fmt.Sprintf("status: %s", status), id,
 	)
 	if err != nil {
 		return fmt.Errorf("complete step: %w", err)
@@ -263,10 +280,10 @@ func (d *DB) CompleteReviewStep(id, runID, approvedHeadSHA string, exitCode int,
 	}
 	defer tx.Rollback()
 
-	ts := now()
+	ts, tsMS := nowWithMillis()
 	result, err := tx.Exec(
-		`UPDATE step_results SET status = ?, exit_code = ?, duration_ms = ?, log_path = ?, certified_head_sha = ?, completed_at = ?, last_activity_at = ?, last_activity = ?, agent_pid = NULL WHERE id = ?`,
-		types.StepStatusCompleted, exitCode, durationMS, logPath, approvedHeadSHA, ts, ts, fmt.Sprintf("status: %s", types.StepStatusCompleted), id,
+		`UPDATE step_results SET status = ?, exit_code = ?, duration_ms = ?, log_path = ?, certified_head_sha = ?, completed_at = ?, completed_at_ms = ?, last_activity_at = ?, last_activity = ?, agent_pid = NULL WHERE id = ?`,
+		types.StepStatusCompleted, exitCode, durationMS, logPath, approvedHeadSHA, ts, tsMS, ts, fmt.Sprintf("status: %s", types.StepStatusCompleted), id,
 	)
 	if err != nil {
 		return fmt.Errorf("complete review step: %w", err)
@@ -310,7 +327,7 @@ func (d *DB) ResetStepsFromOrder(runID string, stepOrder int) error {
 	}
 	defer tx.Rollback()
 	if _, err := tx.Exec(
-		`UPDATE step_results SET status = ?, exit_code = NULL, duration_ms = NULL, log_path = NULL, findings_json = CASE WHEN step_name = ? THEN findings_json ELSE NULL END, error = NULL, started_at = NULL, completed_at = NULL, last_activity_at = ?, last_activity = ?, agent_pid = NULL, auto_fix_limit = CASE WHEN step_name = ? THEN auto_fix_limit ELSE NULL END, convergence_json = CASE WHEN step_name = ? THEN convergence_json ELSE NULL END, certified_head_sha = NULL WHERE run_id = ? AND step_order >= ? AND status != ?`,
+		`UPDATE step_results SET status = ?, exit_code = NULL, duration_ms = NULL, log_path = NULL, findings_json = CASE WHEN step_name = ? THEN findings_json ELSE NULL END, error = NULL, first_started_at_ms = COALESCE(first_started_at_ms, started_at_ms, started_at * 1000), started_at = NULL, completed_at = NULL, started_at_ms = NULL, completed_at_ms = NULL, last_activity_at = ?, last_activity = ?, agent_pid = NULL, auto_fix_limit = CASE WHEN step_name = ? THEN auto_fix_limit ELSE NULL END, convergence_json = CASE WHEN step_name = ? THEN convergence_json ELSE NULL END, certified_head_sha = NULL WHERE run_id = ? AND step_order >= ? AND status != ?`,
 		types.StepStatusPending, types.StepReview, now(), "invalidated by head change", types.StepReview, types.StepReview, runID, stepOrder, types.StepStatusSkipped,
 	); err != nil {
 		return fmt.Errorf("reset steps from order %d: %w", stepOrder, err)
@@ -328,9 +345,10 @@ func (d *DB) ResetStepsFromOrder(runID string, stepOrder int) error {
 
 // FailStep marks a step as failed with an error message and duration.
 func (d *DB) FailStep(id string, errMsg string, durationMS int64) error {
+	ts, tsMS := nowWithMillis()
 	_, err := d.sql.Exec(
-		`UPDATE step_results SET status = ?, error = ?, duration_ms = ?, completed_at = ?, last_activity_at = ?, last_activity = ?, agent_pid = NULL WHERE id = ?`,
-		types.StepStatusFailed, errMsg, durationMS, now(), now(), "step failed: "+errMsg, id,
+		`UPDATE step_results SET status = ?, error = ?, duration_ms = ?, completed_at = ?, completed_at_ms = ?, last_activity_at = ?, last_activity = ?, agent_pid = NULL WHERE id = ?`,
+		types.StepStatusFailed, errMsg, durationMS, ts, tsMS, ts, "step failed: "+errMsg, id,
 	)
 	if err != nil {
 		return fmt.Errorf("fail step: %w", err)

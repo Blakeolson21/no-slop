@@ -88,3 +88,8 @@ func newID() string {
 func now() int64 {
 	return time.Now().Unix()
 }
+
+func nowWithMillis() (int64, int64) {
+	t := time.Now()
+	return t.Unix(), t.UnixMilli()
+}

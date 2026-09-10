@@ -40,6 +40,9 @@ type Run struct {
 	PushGeneration         *int64
 	PushActive             bool
 	TerminalHeadVerifiedAt *int64
+	// TerminalAtMS freezes at the first terminal transition; returning to a
+	// nonterminal state clears it. Later terminal diagnostics do not add wall time.
+	TerminalAtMS *int64
 	// CustodyReturnedAt is non-nil once a guarded branch-sync recovery
 	// explicitly ended this run's ownership of an unpublished pipeline head
 	// (terminal run whose head was never successfully pushed, or moved after
@@ -66,7 +69,17 @@ type Run struct {
 	UpdatedAt       int64
 }
 
-const runColumns = `id, repo_id, branch, head_sha, base_sha, submitted_head_sha, no_mistakes_version, no_mistakes_build_sha, review_approved_head_sha, status, pr_url, pr_state, pr_state_observed_at, ci_ready_at, COALESCE(ci_ready_no_ci, 0), last_pushed_sha, push_target_kind, push_target_fingerprint, push_ref, last_pushed_at, push_generation, COALESCE(push_active, 0), terminal_head_verified_at, custody_returned_at, error, awaiting_agent_since, COALESCE(parked_ms, 0), intent, intent_source, intent_session_id, intent_score, created_at, updated_at`
+const runColumns = `id, repo_id, branch, head_sha, base_sha, submitted_head_sha, no_mistakes_version, no_mistakes_build_sha, review_approved_head_sha, status, pr_url, pr_state, pr_state_observed_at, ci_ready_at, COALESCE(ci_ready_no_ci, 0), last_pushed_sha, push_target_kind, push_target_fingerprint, push_ref, last_pushed_at, push_generation, COALESCE(push_active, 0), terminal_head_verified_at`
+const runColumnsSuffix = `, custody_returned_at, error, awaiting_agent_since, COALESCE(parked_ms, 0), intent, intent_source, intent_session_id, intent_score, created_at, updated_at`
+
+func (d *DB) readableRunColumns() string {
+	columns := runColumns + ", terminal_at_ms"
+	if d.hasColumn("runs", "terminal_at_ms") {
+		return columns + runColumnsSuffix
+	} else {
+		return runColumns + ", NULL AS terminal_at_ms" + runColumnsSuffix
+	}
+}
 
 func scanRun(row interface {
 	Scan(...any) error
@@ -76,6 +89,7 @@ func scanRun(row interface {
 		&r.PRURL, &r.PRState, &r.PRStateObservedAt, &r.CIReadyAt, &r.CIReadyNoCI,
 		&r.LastPushedSHA, &r.PushTargetKind, &r.PushTargetFingerprint, &r.PushRef,
 		&r.LastPushedAt, &r.PushGeneration, &r.PushActive, &r.TerminalHeadVerifiedAt,
+		&r.TerminalAtMS,
 		&r.CustodyReturnedAt, &r.Error, &r.AwaitingAgentSince, &r.ParkedMS,
 		&r.Intent, &r.IntentSource, &r.IntentSessionID, &r.IntentScore,
 		&r.CreatedAt, &r.UpdatedAt,
@@ -123,7 +137,7 @@ func (d *DB) InsertRunWithIntent(repoID, branch, headSHA, baseSHA string, intent
 // GetRun returns a run by ID.
 func (d *DB) GetRun(id string) (*Run, error) {
 	r := &Run{}
-	err := scanRun(d.sql.QueryRow(`SELECT `+runColumns+` FROM runs WHERE id = ?`, id), r)
+	err := scanRun(d.sql.QueryRow(`SELECT `+d.readableRunColumns()+` FROM runs WHERE id = ?`, id), r)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -135,7 +149,7 @@ func (d *DB) GetRun(id string) (*Run, error) {
 
 // GetRunsByRepo returns all runs for a repo, newest first.
 func (d *DB) GetRunsByRepo(repoID string) ([]*Run, error) {
-	rows, err := d.sql.Query(`SELECT `+runColumns+` FROM runs WHERE repo_id = ? ORDER BY created_at DESC, id DESC`, repoID)
+	rows, err := d.sql.Query(`SELECT `+d.readableRunColumns()+` FROM runs WHERE repo_id = ? ORDER BY created_at DESC, id DESC`, repoID)
 	if err != nil {
 		return nil, fmt.Errorf("get runs by repo: %w", err)
 	}
@@ -157,7 +171,7 @@ func (d *DB) GetRunsByRepo(repoID string) ([]*Run, error) {
 // history, so the cost stays bounded to the handful of runs for one head.
 func (d *DB) GetRunsByRepoHead(repoID, branch, headSHA string) ([]*Run, error) {
 	rows, err := d.sql.Query(
-		`SELECT `+runColumns+` FROM runs WHERE repo_id = ? AND branch = ? AND head_sha = ? ORDER BY created_at DESC, id DESC`,
+		`SELECT `+d.readableRunColumns()+` FROM runs WHERE repo_id = ? AND branch = ? AND head_sha = ? ORDER BY created_at DESC, id DESC`,
 		repoID, branch, headSHA,
 	)
 	if err != nil {
@@ -185,11 +199,11 @@ func (d *DB) GetActiveRun(repoID, branch string) (*Run, error) {
 	var err error
 	if branch == "" {
 		err = scanRun(d.sql.QueryRow(
-			`SELECT `+runColumns+` FROM runs WHERE repo_id = ? AND status IN ('pending', 'running') ORDER BY created_at DESC, id DESC LIMIT 1`, repoID,
+			`SELECT `+d.readableRunColumns()+` FROM runs WHERE repo_id = ? AND status IN ('pending', 'running') ORDER BY created_at DESC, id DESC LIMIT 1`, repoID,
 		), r)
 	} else {
 		err = scanRun(d.sql.QueryRow(
-			`SELECT `+runColumns+` FROM runs WHERE repo_id = ? AND branch = ? AND status IN ('pending', 'running') ORDER BY created_at DESC, id DESC LIMIT 1`, repoID, branch,
+			`SELECT `+d.readableRunColumns()+` FROM runs WHERE repo_id = ? AND branch = ? AND status IN ('pending', 'running') ORDER BY created_at DESC, id DESC LIMIT 1`, repoID, branch,
 		), r)
 	}
 	if err == sql.ErrNoRows {
@@ -204,7 +218,7 @@ func (d *DB) GetActiveRun(repoID, branch string) (*Run, error) {
 // GetActiveRuns returns all pending or running runs across all repos, newest first.
 func (d *DB) GetActiveRuns() ([]*Run, error) {
 	rows, err := d.sql.Query(
-		`SELECT `+runColumns+` FROM runs WHERE status IN (?, ?) ORDER BY created_at DESC, id DESC`,
+		`SELECT `+d.readableRunColumns()+` FROM runs WHERE status IN (?, ?) ORDER BY created_at DESC, id DESC`,
 		types.RunPending, types.RunRunning,
 	)
 	if err != nil {
@@ -225,7 +239,12 @@ func (d *DB) GetActiveRuns() ([]*Run, error) {
 
 // UpdateRunStatus updates a run's status and updated_at timestamp.
 func (d *DB) UpdateRunStatus(id string, status types.RunStatus) error {
-	_, err := d.sql.Exec(`UPDATE runs SET status = ?, push_active = CASE WHEN ? IN ('completed', 'failed', 'cancelled') THEN 0 ELSE push_active END, terminal_head_verified_at = NULL, updated_at = ? WHERE id = ?`, status, status, now(), id)
+	ts, tsMS := nowWithMillis()
+	var terminalAt any
+	if terminalRunStatus(status) {
+		terminalAt = tsMS
+	}
+	_, err := d.sql.Exec(`UPDATE runs SET status = ?, push_active = CASE WHEN ? IN ('completed', 'failed', 'cancelled') THEN 0 ELSE push_active END, terminal_head_verified_at = NULL, terminal_at_ms = CASE WHEN ? IS NULL THEN NULL ELSE COALESCE(terminal_at_ms, ?) END, updated_at = ? WHERE id = ?`, status, status, terminalAt, terminalAt, ts, id)
 	if err != nil {
 		return fmt.Errorf("update run status: %w", err)
 	}
@@ -298,7 +317,7 @@ func (d *DB) SetRunPushActive(id string, active bool) error {
 // before the executor's ordinary follow-up completion write.
 func (d *DB) UpdateRunPRState(id, state string) error {
 	state = strings.ToLower(strings.TrimSpace(state))
-	ts := now()
+	ts, tsMS := nowWithMillis()
 	tx, err := d.sql.Begin()
 	if err != nil {
 		return fmt.Errorf("update run PR state: begin transaction: %w", err)
@@ -317,7 +336,7 @@ func (d *DB) UpdateRunPRState(id, state string) error {
 		return fmt.Errorf("update run PR state: %w", err)
 	}
 	if terminalPRState(state) {
-		if err := finalizeTerminalPRRun(tx, id, ts); err != nil {
+		if err := finalizeTerminalPRRun(tx, id, ts, tsMS); err != nil {
 			return fmt.Errorf("update run PR state: %w", err)
 		}
 	}
@@ -332,7 +351,7 @@ func (d *DB) UpdateRunPRState(id, state string) error {
 // separate run completion write. It is called during exclusive daemon startup
 // before parked-run planning and generic crash recovery.
 func (d *DB) ReconcileTerminalPRRuns() (int, error) {
-	ts := now()
+	ts, tsMS := nowWithMillis()
 	tx, err := d.sql.Begin()
 	if err != nil {
 		return 0, fmt.Errorf("reconcile terminal PR runs: begin transaction: %w", err)
@@ -360,7 +379,7 @@ func (d *DB) ReconcileTerminalPRRuns() (int, error) {
 	}
 
 	for _, id := range ids {
-		if err := finalizeTerminalPRRun(tx, id, ts); err != nil {
+		if err := finalizeTerminalPRRun(tx, id, ts, tsMS); err != nil {
 			return 0, fmt.Errorf("reconcile terminal PR runs: %w", err)
 		}
 	}
@@ -389,13 +408,13 @@ func terminalPRState(state string) bool {
 	return state == "merged" || state == "closed"
 }
 
-func finalizeTerminalPRRun(tx *sql.Tx, id string, ts int64) error {
+func finalizeTerminalPRRun(tx *sql.Tx, id string, ts, tsMS int64) error {
 	if _, err := tx.Exec(
-		`UPDATE step_results SET status = ?, exit_code = COALESCE(exit_code, 0), completed_at = COALESCE(completed_at, ?),
+		`UPDATE step_results SET status = ?, exit_code = COALESCE(exit_code, 0), completed_at = COALESCE(completed_at, ?), completed_at_ms = COALESCE(completed_at_ms, CASE WHEN completed_at IS NULL THEN ? ELSE completed_at * 1000 END),
 			last_activity_at = ?, last_activity = ?, agent_pid = NULL
-		 WHERE run_id = ? AND step_name = ? AND status IN (?, ?, ?, ?)
+			 WHERE run_id = ? AND step_name = ? AND status IN (?, ?, ?, ?)
 		   AND EXISTS (SELECT 1 FROM runs WHERE id = ? AND status IN (?, ?))`,
-		types.StepStatusCompleted, ts, ts, "status: completed", id, types.StepCI,
+		types.StepStatusCompleted, ts, tsMS, ts, "status: completed", id, types.StepCI,
 		types.StepStatusRunning, types.StepStatusAwaitingApproval, types.StepStatusFixing, types.StepStatusFixReview,
 		id, types.RunPending, types.RunRunning,
 	); err != nil {
@@ -408,9 +427,9 @@ func finalizeTerminalPRRun(tx *sql.Tx, id string, ts int64) error {
 			parked_ms = COALESCE(parked_ms, 0) + CASE
 				WHEN awaiting_agent_since IS NOT NULL AND ? > awaiting_agent_since
 				THEN (? - awaiting_agent_since) * 1000 ELSE 0 END,
-			awaiting_agent_since = NULL, updated_at = ?
-		 WHERE id = ?`,
-		types.RunPending, types.RunRunning, types.RunCompleted, ts, ts, ts, id,
+			awaiting_agent_since = NULL, terminal_at_ms = COALESCE(terminal_at_ms, ?), updated_at = ?
+			 WHERE id = ?`,
+		types.RunPending, types.RunRunning, types.RunCompleted, ts, ts, tsMS, ts, id,
 	); err != nil {
 		return fmt.Errorf("finalize terminal PR run: %w", err)
 	}
@@ -472,7 +491,12 @@ func (d *DB) UpdateRunError(id, errMsg string) error {
 
 // UpdateRunErrorStatus sets the error message and terminal status on a run.
 func (d *DB) UpdateRunErrorStatus(id, errMsg string, status types.RunStatus) error {
-	_, err := d.sql.Exec(`UPDATE runs SET error = ?, status = ?, push_active = 0, terminal_head_verified_at = NULL, updated_at = ? WHERE id = ?`, errMsg, status, now(), id)
+	ts, tsMS := nowWithMillis()
+	var terminalAt any
+	if terminalRunStatus(status) {
+		terminalAt = tsMS
+	}
+	_, err := d.sql.Exec(`UPDATE runs SET error = ?, status = ?, push_active = 0, terminal_head_verified_at = NULL, terminal_at_ms = CASE WHEN ? IS NULL THEN NULL ELSE COALESCE(terminal_at_ms, ?) END, updated_at = ? WHERE id = ?`, errMsg, status, terminalAt, terminalAt, ts, id)
 	if err != nil {
 		return fmt.Errorf("update run error: %w", err)
 	}
@@ -515,7 +539,7 @@ func (d *DB) promoteRunHead(id, headSHA string, terminal *terminalHeadPromotion)
 		}
 		return fmt.Errorf("read run head before promotion: %w", err)
 	}
-	ts := now()
+	ts, tsMS := nowWithMillis()
 	if currentHead != headSHA {
 		var reviewStepID string
 		var findings sql.NullString
@@ -574,16 +598,20 @@ func (d *DB) promoteRunHead(id, headSHA string, terminal *terminalHeadPromotion)
 		}
 	}
 	if terminal != nil {
+		var terminalAt any
+		if terminalRunStatus(terminal.status) {
+			terminalAt = tsMS
+		}
 		var result sql.Result
 		if terminal.errMsg != nil {
 			result, err = tx.Exec(
-				`UPDATE runs SET error = ?, status = ?, push_active = 0, terminal_head_verified_at = ?, updated_at = ? WHERE id = ?`,
-				*terminal.errMsg, terminal.status, ts, ts, id,
+				`UPDATE runs SET error = ?, status = ?, push_active = 0, terminal_head_verified_at = ?, terminal_at_ms = CASE WHEN ? IS NULL THEN NULL ELSE COALESCE(terminal_at_ms, ?) END, updated_at = ? WHERE id = ?`,
+				*terminal.errMsg, terminal.status, ts, terminalAt, terminalAt, ts, id,
 			)
 		} else {
 			result, err = tx.Exec(
-				`UPDATE runs SET status = ?, push_active = 0, terminal_head_verified_at = ?, updated_at = ? WHERE id = ?`,
-				terminal.status, ts, ts, id,
+				`UPDATE runs SET status = ?, push_active = 0, terminal_head_verified_at = ?, terminal_at_ms = CASE WHEN ? IS NULL THEN NULL ELSE COALESCE(terminal_at_ms, ?) END, updated_at = ? WHERE id = ?`,
+				terminal.status, ts, terminalAt, terminalAt, ts, id,
 			)
 		}
 		if err != nil {
@@ -597,6 +625,10 @@ func (d *DB) promoteRunHead(id, headSHA string, terminal *terminalHeadPromotion)
 		return fmt.Errorf("commit run head promotion: %w", err)
 	}
 	return nil
+}
+
+func terminalRunStatus(status types.RunStatus) bool {
+	return status == types.RunCompleted || status == types.RunFailed || status == types.RunCancelled
 }
 
 // RunIntentSourceAgent is the intent_source value stamped when the driving
@@ -704,7 +736,7 @@ func (d *DB) RecoverStaleRuns(errMsg string) (int, error) {
 // in preserved. Callers use preserved only after independently proving a run
 // can be reconstructed safely.
 func (d *DB) RecoverStaleRunsExcept(errMsg string, preserved map[string]struct{}) (int, error) {
-	ts := now()
+	ts, tsMS := nowWithMillis()
 
 	tx, err := d.sql.Begin()
 	if err != nil {
@@ -714,13 +746,13 @@ func (d *DB) RecoverStaleRunsExcept(errMsg string, preserved map[string]struct{}
 
 	placeholders, args := recoveryExclusionClause(preserved)
 	stepArgs := []any{
-		types.StepStatusFailed, errMsg, ts,
+		types.StepStatusFailed, errMsg, ts, tsMS,
 		types.StepStatusRunning, types.StepStatusAwaitingApproval, types.StepStatusFixing, types.StepStatusFixReview,
 		types.RunPending, types.RunRunning,
 	}
 	stepArgs = append(stepArgs, args...)
 	_, err = tx.Exec(
-		`UPDATE step_results SET status = ?, error = ?, completed_at = ?
+		`UPDATE step_results SET status = ?, error = ?, completed_at = ?, completed_at_ms = ?
 		 WHERE status IN (?, ?, ?, ?) AND run_id IN (
 			SELECT id FROM runs WHERE status IN (?, ?)`+placeholders+`
 		 )`,
@@ -734,14 +766,14 @@ func (d *DB) RecoverStaleRunsExcept(errMsg string, preserved map[string]struct{}
 	// failed) run is never reported as still parked awaiting the agent,
 	// accumulating the marker's elapsed time into the run's parked total so
 	// the parked evidence survives the crash.
-	runArgs := []any{types.RunFailed, errMsg, ts, ts, ts, types.RunPending, types.RunRunning}
+	runArgs := []any{types.RunFailed, errMsg, ts, ts, tsMS, ts, types.RunPending, types.RunRunning}
 	runArgs = append(runArgs, args...)
 	result, err := tx.Exec(
 		`UPDATE runs SET status = ?, error = ?, push_active = 0,
 			parked_ms = COALESCE(parked_ms, 0) + CASE
 				WHEN awaiting_agent_since IS NOT NULL AND ? > awaiting_agent_since
 				THEN (? - awaiting_agent_since) * 1000 ELSE 0 END,
-			awaiting_agent_since = NULL, updated_at = ? WHERE status IN (?, ?)`+placeholders,
+			awaiting_agent_since = NULL, terminal_at_ms = ?, updated_at = ? WHERE status IN (?, ?)`+placeholders,
 		runArgs...,
 	)
 	if err != nil {

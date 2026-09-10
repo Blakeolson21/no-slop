@@ -43,12 +43,13 @@ type approvalResponse struct {
 
 // Executor runs pipeline steps sequentially and coordinates approval interactions.
 type Executor struct {
-	db     *db.DB
-	paths  *paths.Paths
-	config *config.Config
-	agent  agent.Agent
-	steps  []Step
-	skips  map[types.StepName]bool
+	capacity *Capacity
+	db       *db.DB
+	paths    *paths.Paths
+	config   *config.Config
+	agent    agent.Agent
+	steps    []Step
+	skips    map[types.StepName]bool
 
 	onEvent EventFunc
 
@@ -999,7 +1000,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		reviewStartingHeadSHA := run.HeadSHA
 		sctx.ReviewStartingHeadSHA = reviewStartingHeadSHA
 		sctx.KnownReviewLineages = knownLineages
-		outcome, err := step.Execute(sctx)
+		outcome, err := e.executeWithCapacity(step, sctx)
 		// A cross-run recovered selection skips exactly one duplicate fixer
 		// invocation. Any later explicit or automatic fix in this execution
 		// must run normally.

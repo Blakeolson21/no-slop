@@ -2009,8 +2009,23 @@ func assertSupersededRunCancellation(t *testing.T, h *Harness) {
 
 func assertDifferentBranchDoesNotCancelActiveRun(t *testing.T, h *Harness) {
 	t.Helper()
+	// This scenario intentionally overlaps two suites; host defaults allow one.
+	configPath := filepath.Join(h.NMHome, "config.yaml")
+	originalConfig, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	concurrentConfig := string(originalConfig) + "\nconcurrency:\n  suites: 2\n"
+	if err := os.WriteFile(configPath, []byte(concurrentConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.WriteFile(configPath, originalConfig, 0o644); err != nil {
+			t.Error(err)
+		}
+	}()
 	slowCommand := filepath.Join(h.BinDir, "ns-different-branch-slow-e2e")
-	if err := os.WriteFile(slowCommand, []byte("#!/bin/sh\nsleep 10\n"), 0o755); err != nil {
+	if err := os.WriteFile(slowCommand, []byte("#!/bin/sh\nsleep 120\n"), 0o755); err != nil {
 		t.Fatalf("write different-branch slow test command: %v", err)
 	}
 	slowConfig := "ignore_patterns:\n  - '*.generated.go'\n  - 'vendor/**'\ncommands:\n  test: ns-different-branch-slow-e2e\n  lint: true\n"

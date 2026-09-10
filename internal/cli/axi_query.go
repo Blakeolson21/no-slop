@@ -80,7 +80,11 @@ func runAxiStatus(cmd *cobra.Command, runID string) (string, error) {
 	}
 	rv := runViewFromDB(run, steps)
 	annotateRunView(env, &rv)
-	fields := []toon.Field{statusRunObjectField(rv)}
+	timing, timingErr := env.d.GetReviewTimingAt(run.ID, time.Now())
+	if timingErr != nil {
+		return "", emitError(cmd, 1, fmt.Errorf("load review timing: %w", timingErr).Error())
+	}
+	fields := []toon.Field{statusRunObjectField(rv), reviewTimingField(timing)}
 	if syncField := cachedBranchSyncField(cmd, run.ID); syncField != nil {
 		fields = append(fields, *syncField)
 	}

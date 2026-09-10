@@ -92,6 +92,7 @@ const (
 
 // GlobalConfig represents ~/.no-mistakes/config.yaml.
 type GlobalConfig struct {
+	Concurrency          Concurrency         `yaml:"concurrency"`
 	SourceYAML           []byte              `yaml:"-"`
 	Agent                types.AgentName     `yaml:"agent"`
 	Agents               []types.AgentName   `yaml:"-"`
@@ -128,6 +129,7 @@ type GlobalConfig struct {
 
 // globalConfigRaw is the on-disk YAML representation with duration as string.
 type globalConfigRaw struct {
+	Concurrency          concurrencyRaw      `yaml:"concurrency"`
 	Agent                agentList           `yaml:"agent"`
 	ACPXPath             string              `yaml:"acpx_path"`
 	ACPRegistryOverrides map[string]string   `yaml:"acp_registry_overrides"`
@@ -476,6 +478,7 @@ type AutoFix struct {
 
 // Config is the merged result of global + per-repo configuration.
 type Config struct {
+	Concurrency           Concurrency
 	ReplayGlobalYAML      []byte
 	ReplayRepoYAML        []byte
 	TrustedConfigSHA      string
@@ -766,6 +769,11 @@ func resolvePathInstructions(entries []PathInstruction) []PathInstruction {
 
 // defaultConfigYAML is the template written when no global config file exists.
 const defaultConfigYAML = `# no-slop global configuration
+
+# Independent host-daemon execution limits (positive integers).
+concurrency:
+  reviews: 9
+  suites: 1
 
 # Agent to use for code generation. This may also be an ordered fallback list,
 # for example: agent: [codex, claude]
@@ -1358,6 +1366,7 @@ func EnsureDefaultGlobalConfig(path string) {
 // DefaultGlobalConfig returns the built-in global defaults.
 func DefaultGlobalConfig() *GlobalConfig {
 	return &GlobalConfig{
+		Concurrency:          DefaultConcurrency(),
 		Agent:                types.AgentAuto,
 		Agents:               []types.AgentName{types.AgentAuto},
 		CITimeout:            DefaultCITimeout,
@@ -1392,6 +1401,11 @@ func LoadGlobalFromBytes(data []byte) (*GlobalConfig, error) {
 	if err := dec.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("parse global config: %w", err)
 	}
+	concurrency, err := resolveConcurrency(raw.Concurrency)
+	if err != nil {
+		return nil, fmt.Errorf("parse global config: %w", err)
+	}
+	cfg.Concurrency = concurrency
 	if err := validateCommitRaw(raw.Commit); err != nil {
 		return nil, fmt.Errorf("parse global config: %w", err)
 	}
@@ -2246,6 +2260,7 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 	}
 
 	cfg := &Config{
+		Concurrency:          global.Concurrency,
 		Agent:                global.Agent,
 		Agents:               copyAgents(global.Agents),
 		ACPXPath:             global.ACPXPath,
