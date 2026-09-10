@@ -30,7 +30,7 @@ func (a *codexAgent) Name() string { return "codex" }
 
 // SupportsSessionResume reports codex's native durable-session capability:
 // `codex exec --json` emits thread.started with a thread_id, and
-// `codex exec resume <id> <prompt>` continues that thread.
+// `codex exec resume <id> -` continues that thread with the prompt on stdin.
 func (a *codexAgent) SupportsSessionResume() bool { return true }
 
 func (a *codexAgent) ReportsAgentAttempts() bool { return true }
@@ -165,10 +165,10 @@ func (a *codexAgent) Close() error { return nil }
 // inserted between "exec" and the prompt so user flags (e.g. -m, --sandbox)
 // take effect. If the user declared their own execution-mode flag, the
 // default --dangerously-bypass-approvals-and-sandbox is not added.
-// A non-empty resumeID routes through `codex exec resume <id> <prompt>`,
-// which exposes a narrower flag surface than `codex exec` (no --color, no
-// -s/--sandbox as of codex 0.144): unsupported user extraArgs make the
-// invocation fail fast and the caller's cold fallback preserves correctness.
+// A non-empty resumeID routes through `codex exec resume`, which exposes a
+// narrower flag surface than `codex exec` (no --color, no -s/--sandbox as of
+// codex 0.144): unsupported user extraArgs make the invocation fail fast and
+// the caller's cold fallback preserves correctness.
 func (a *codexAgent) buildArgs(prompt, schemaPath, resumeID string) []string {
 	args := make([]string, 0, len(a.extraArgs)+11)
 	args = append(args, "exec")

@@ -262,8 +262,9 @@ For review-fixer reuse, Claude starts a stream-json session and resumes it with 
 ## Codex
 
 Spawns a `codex` subprocess for each invocation with `exec --json`. When structured output is requested, no-slop also writes a normalized schema file and passes it with `--output-schema`. By default it also adds `--dangerously-bypass-approvals-and-sandbox`, unless you already set your own Codex approval or sandbox flag through `agent_args_override`. Reads JSONL events. Structured output is returned from the final `agent_message` text, with fallback parsing that accepts JSON fences, inline fence markers, or a final bare JSON object after prose, then validates the result against the normalized schema.
+The prompt is sent on stdin with `-` as the prompt positional for both cold and resumed invocations.
 Codex model and config overrides, such as `-m gpt-5.4`, `-c service_tier="priority"`, or `-c model_reasoning_effort="low"`, belong in global `agent_args_override.codex`.
-For review-fixer reuse, Codex resumes the reported thread with `codex exec resume <id> <prompt>`.
+For review-fixer reuse, Codex resumes the reported thread with `codex exec resume <id> -`.
 That resume command has a narrower flag surface than `codex exec`, so a resume that rejects an override falls back to a fresh fixer session rather than skipping the fix turn.
 
 ## Rovo Dev
