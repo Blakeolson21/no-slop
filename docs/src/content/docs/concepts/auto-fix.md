@@ -89,6 +89,9 @@ When the pipeline pauses for approval, you can manually trigger a fix from the T
 
 The agent receives the merged fix payload for that round: the selected agent findings, any per-finding user notes, any selected user-authored findings added from the TUI or AXI interface, and a sanitized history of previous rounds for that step.
 That history includes which finding IDs were selected for a prior fix attempt, which findings that round did not select - whether the round was decided by you or by auto-fix - and any one-line summaries from earlier fix commits.
+In agent prompts, the latest effective finding set remains complete, while historical context is limited to the three preceding rounds at 16 KiB each and every fix summary is limited to 1 KiB.
+Older rounds are replaced by their stored step and round range; oversized entries and summaries become stored-round references with their byte count and SHA-256 digest.
+Those omissions only bound the prompt transport: they do not resolve a finding or imply consent, and the full round history remains in the run log.
 An unselected finding is carried forward rather than dropped, so a finding raised in one round cannot disappear from the next round's context.
 Review adds continuity rules to this generic history. The [Review step reference](/no-slop/reference/pipeline-steps/#review) owns how unresolved findings survive rereviews and how a later selection supersedes an earlier non-selection.
 
@@ -115,7 +118,7 @@ Each execution of a step (initial run or follow-up auto-fix run) is recorded as 
 The [database model](/no-slop/concepts/gate-model/#database) owns the persisted round fields, including Review's effective carried gate and the merged payload sent to a fix agent.
 AXI status uses the same round history and the persisted auto-fix limit to show the active fix attempt, for example `auto-fix 1/3` or `fix 2`.
 The step log records a marker when each automatic or user-triggered fix round starts.
-The full round history remains available in the run log. The generated PR keeps earlier evidence step-scoped and shows only compact step status in its Pipeline section; the [pipeline steps reference](/no-slop/reference/pipeline-steps/#pr) owns the PR body and size-limit contract.
+The generated PR keeps earlier evidence step-scoped and shows only compact step status in its Pipeline section; the [pipeline steps reference](/no-slop/reference/pipeline-steps/#pr) owns the PR body and size-limit contract.
 
 Round trigger types:
 - `initial` - first execution
