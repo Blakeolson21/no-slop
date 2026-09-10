@@ -196,3 +196,14 @@ func TestExtractCodexPromptSkipsOutputSchemaValue(t *testing.T) {
 		t.Fatalf("prompt = %q, want %q", got, "review this diff")
 	}
 }
+
+func TestExtractCodexPromptRecognizesStdinSentinel(t *testing.T) {
+	for _, args := range [][]string{
+		{"exec", "--model", "model", "-", "--json"},
+		{"exec", "resume", "--model", "model", "thread-123", "-", "--json"},
+	} {
+		if got := extractCodexPrompt(args); got != "-" {
+			t.Fatalf("prompt positional for %v = %q, want stdin sentinel", args, got)
+		}
+	}
+}

@@ -4,12 +4,21 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 )
 
 func runCodex(args []string, scenario *Scenario) int {
 	prompt := extractCodexPrompt(args)
+	if prompt == "-" {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "fakeagent: codex stdin: %v\n", err)
+			return 1
+		}
+		prompt = string(data)
+	}
 	logInvocation("codex", prompt, args)
 
 	action := scenario.Match(prompt)
@@ -176,7 +185,7 @@ func filterStructuredToSchema(structured map[string]any, schemaPath string) (map
 // `codex exec [user-flags...] <prompt> --json [...]` for a fresh session and
 // `codex exec resume [user-flags...] <session-id> <prompt> --json [...]` for
 // a session-resume turn, so on resume the prompt is the positional after the
-// session id.
+// session id. A lone "-" is a positional selecting stdin, not an option.
 func extractCodexPrompt(args []string) string {
 	flagsWithValues := map[string]bool{
 		"-m": true, "--model": true,
@@ -200,7 +209,7 @@ func extractCodexPrompt(args []string) string {
 			i++
 			continue
 		}
-		if len(a) > 0 && a[0] == '-' {
+		if len(a) > 0 && a[0] == '-' && a != "-" {
 			continue
 		}
 		positionals = append(positionals, a)
