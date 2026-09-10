@@ -91,7 +91,7 @@ The agent receives the merged fix payload for that round: the selected agent fin
 That history includes which finding IDs were selected for a prior fix attempt, which findings that round did not select - whether the round was decided by you or by auto-fix - and any one-line summaries from earlier fix commits.
 In agent prompts, the latest effective finding set remains complete, while historical context is limited to the three preceding rounds at 16 KiB each and every fix summary is limited to 1 KiB.
 Older rounds are replaced by their stored step and round range; oversized entries and summaries become stored-round references with their byte count and SHA-256 digest.
-Those omissions only bound the prompt transport: they do not resolve a finding or imply consent, and the full round history remains in the run log.
+Those omissions only bound the prompt transport: they do not resolve a finding or imply consent, and the full round records remain in the run database.
 An unselected finding is carried forward rather than dropped, so a finding raised in one round cannot disappear from the next round's context.
 Review adds continuity rules to this generic history. The [Review step reference](/no-slop/reference/pipeline-steps/#review) owns how unresolved findings survive rereviews and how a later selection supersedes an earlier non-selection.
 
