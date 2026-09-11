@@ -24,6 +24,9 @@ func guardGateControl(cmd *cobra.Command) error {
 	}
 	result, err := classifyGateControlCaller(cmd.Context())
 	if err != nil {
+		if cmd.CommandPath() == "no-slop axi respond" {
+			return fmt.Errorf("%w; this invocation did not send a ruling. For an earlier uncertain response, use `no-slop axi respond --receipt --run <id> --idempotency-key <key>`", err)
+		}
 		return err
 	}
 	if !result.Nested {
@@ -34,6 +37,12 @@ func guardGateControl(cmd *cobra.Command) error {
 
 func mutatesPipelineControl(cmd *cobra.Command) bool {
 	path := cmd.CommandPath()
+	if path == "no-slop axi respond" {
+		receipt, err := cmd.Flags().GetBool("receipt")
+		if err == nil && receipt {
+			return false
+		}
+	}
 	switch path {
 	case "no-slop", "no-slop init", "no-slop eject", "no-slop rerun",
 		"no-slop axi run", "no-slop axi respond", "no-slop axi abort",

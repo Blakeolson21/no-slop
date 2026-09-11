@@ -164,20 +164,30 @@ no-slop axi respond --action fix --add-finding '{"description":"...","action":"a
 no-slop axi respond --action skip
 ```
 
-| Flag             | Type     | Default       | Description                                                          |
-| ---------------- | -------- | ------------- | -------------------------------------------------------------------- |
-| `--action`       | `string` | (none)        | `approve`, `fix`, or `skip`; required                                |
-| `--step`         | `string` | awaiting step | Step to respond to                                                   |
-| `--findings`     | `string` | (none)        | Comma-separated finding IDs for `--action fix`                       |
-| `--instructions` | `string` | (none)        | Guidance applied to selected findings                                |
-| `--add-finding`  | `string` | (none)        | JSON finding object to add and fix                                   |
-| `-y`, `--yes`    | `bool`   | `false`       | Auto-fix up to 3 rounds per step; park unresolved findings           |
+| Flag                | Type     | Default            | Description                                                                |
+| ------------------- | -------- | ------------------ | -------------------------------------------------------------------------- |
+| `--action`          | `string` | (none)             | `approve`, `fix`, or `skip`; required except for receipt lookup             |
+| `--run`             | `string` | current active run | Explicit run, including completed runs for receipt lookup or replay         |
+| `--idempotency-key` | `string` | generated          | Stable ruling key; requires `--run` and, except with `--receipt`, `--step`   |
+| `--no-wait`         | `bool`   | `false`            | Return acceptance without waiting for the next gate                        |
+| `--receipt`         | `bool`   | `false`            | Local lookup; requires `--run` and `--idempotency-key`; forbids all other response flags |
+| `--step`            | `string` | awaiting step      | Step to respond to                                                         |
+| `--findings`        | `string` | (none)             | Comma-separated finding IDs for `--action fix`                             |
+| `--instructions`    | `string` | (none)             | Guidance applied to selected findings                                      |
+| `--add-finding`     | `string` | (none)             | JSON finding object to add and fix                                         |
+| `-y`, `--yes`       | `bool`   | `false`            | Auto-fix up to 3 rounds per step; park unresolved findings                 |
 
 After the explicit response, `--yes` uses the same auto-resolution behavior as `axi run --yes`: fund up to 3 fix rounds per step for `auto-fix` and `ask-user` findings, approve clean gates and gates that only contain non-actionable `no-op` findings, and stop at `outcome: checks-passed` when the CI monitor reports readiness but the PR still needs a human merge. If actionable findings survive the budget, it leaves the run parked for explicit adjudication.
-Each `axi respond` blocks until the next gate, CI-ready decision point, or final outcome.
+By default, `axi respond` blocks until the next gate, CI-ready decision point, or final outcome. `--no-wait` returns the acceptance receipt immediately and cannot be combined with `--yes`.
+
+For retryable rulings, supply `--run <id> --step <name> --idempotency-key <key>`. Keys are scoped to the run, are at most 128 bytes, and contain only ASCII letters, digits, dots, underscores, and hyphens. Repeating the identical ruling with the same key reuses its original receipt without funding another round, including after the run advances, ends, or the daemon restarts. By default the retry resumes synchronous observation from authoritative run state; `--no-wait` is the only mode that returns the receipt immediately. Reusing the key for a different step or ruling payload fails. Use a new key only for a distinct ruling.
+
+Every submitted response prints its supplied or generated key before sending and reports the run, step, and answered round upon acceptance. After an uncertain transport error, use `no-slop axi respond --receipt --run <id> --idempotency-key <key>` from any directory to read the existing database without creating application directories or a database, migrating schema, parsing configuration, starting the daemon, or sending a ruling. SQLite may create its normal WAL/SHM coordination sidecars while opening the existing database read-only. If no receipt exists yet, the original request may still be in flight; retry only the identical ruling with its original key. Old IPC callers without a key do not receive retry protection, and old daemons must be upgraded to support receipts. The [environment reference](/no-slop/reference/environment/#what-stays-local-and-what-leaves-the-machine) owns what telemetry this lookup emits.
+
+Acceptance confirms queue admission, not successful execution: cancellation or daemon failure can still interrupt the work. Use `no-slop axi status --run <id>` to inspect execution; gate visibility and delayed fix-round counters are not acceptance evidence. Receipts are retained with the run.
 If it returns another `gate:`, answer that gate; do not idle-wait for the run to move forward by itself.
 When the daemon is already running, `axi respond` can continue an active run even if the global config file has become invalid, because it is not starting a fresh run.
-The same successful-output reporting instructions apply to `axi respond` results.
+The same successful-output reporting instructions apply when synchronous `axi respond` reaches an outcome.
 
 ## no-slop axi status
 

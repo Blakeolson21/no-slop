@@ -853,6 +853,24 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 		return &ipc.PushReceivedResult{RunID: runID}, nil
 	})
 
+	srv.Handle(ipc.MethodGetResponseReceipt, func(ctx context.Context, params json.RawMessage) (interface{}, error) {
+		var p ipc.ResponseReceiptParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		if p.RunID == "" || p.IdempotencyKey == "" {
+			return nil, fmt.Errorf("run_id and idempotency_key are required")
+		}
+		receipt, err := d.GetResponseReceipt(p.RunID, p.IdempotencyKey)
+		if err != nil {
+			return nil, err
+		}
+		if receipt == nil {
+			return &ipc.RespondResult{RunID: p.RunID, IdempotencyKey: p.IdempotencyKey}, nil
+		}
+		return &ipc.RespondResult{OK: true, RunID: receipt.RunID, Step: receipt.Step, Round: receipt.Round, IdempotencyKey: receipt.IdempotencyKey}, nil
+	})
+
 	srv.Handle(ipc.MethodRespond, func(ctx context.Context, params json.RawMessage) (interface{}, error) {
 		if err := refuseNested(ctx, false); err != nil {
 			return nil, err
@@ -861,10 +879,7 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		if err := mgr.HandleRespondWithOverrides(p.RunID, p.Step, p.Action, p.FindingIDs, p.Instructions, p.AddedFindings); err != nil {
-			return nil, err
-		}
-		return &ipc.RespondResult{OK: true}, nil
+		return mgr.AcceptResponse(p)
 	})
 
 	srv.Handle(ipc.MethodCancelRun, func(ctx context.Context, params json.RawMessage) (interface{}, error) {
