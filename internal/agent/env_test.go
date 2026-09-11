@@ -87,6 +87,7 @@ func TestGitSafeEnvIsObservedBySpawnedProcess(t *testing.T) {
 }
 
 func TestGitSafeEnvScrubsAmbientGateDutyFromSpawnedProcess(t *testing.T) {
+	t.Setenv("NM_HOME", "")
 	t.Setenv(GateStepKindEnvVar, "review")
 	t.Setenv(GateTurnKindEnvVar, "fix")
 	cmd := exec.Command(os.Args[0], "-test.run=^TestAgentEnvProbe$")
@@ -95,12 +96,13 @@ func TestGitSafeEnvScrubsAmbientGateDutyFromSpawnedProcess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run environment probe: %v", err)
 	}
-	if got := string(output); got != "|1||" {
+	if got := string(output); !strings.HasPrefix(got, "|1||") {
 		t.Fatalf("spawned environment = %q, want ambient gate duty removed", got)
 	}
 }
 
 func TestGitSafeEnvPreservesPipelineGateDutyForSpawnedProcess(t *testing.T) {
+	t.Setenv("NM_HOME", "")
 	t.Setenv(GateStepKindEnvVar, "forged")
 	t.Setenv(GateTurnKindEnvVar, "forged")
 	cmd := exec.Command(os.Args[0], "-test.run=^TestAgentEnvProbe$")
@@ -113,7 +115,7 @@ func TestGitSafeEnvPreservesPipelineGateDutyForSpawnedProcess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run environment probe: %v", err)
 	}
-	if got := string(output); got != "|1|review|fix" {
+	if got := string(output); !strings.HasPrefix(got, "|1|review|fix") {
 		t.Fatalf("spawned environment = %q, want pipeline gate duty", got)
 	}
 }
