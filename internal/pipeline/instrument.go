@@ -74,7 +74,7 @@ func gateTurnEnvironment(env []string, stepName types.StepName, purpose string) 
 	const stepKey = agent.GateStepKindEnvVar + "="
 	clean := make([]string, 0, len(env)+2)
 	for _, entry := range env {
-		if !strings.HasPrefix(entry, turnKey) && !strings.HasPrefix(entry, stepKey) {
+		if !agent.IsGateDutyEnv(entry) {
 			clean = append(clean, entry)
 		}
 	}

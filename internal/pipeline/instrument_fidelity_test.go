@@ -49,8 +49,8 @@ func TestPerfRecordingAgent_AuthenticatesTurnKindFromPipelineDuty(t *testing.T) 
 			_, err := wrapped.Run(context.Background(), agent.RunOpts{
 				Purpose: tt.purpose,
 				Env: []string{
-					"PRESERVED=value", "MO_GATE_STEP_KIND=forged",
-					"MO_GATE_TURN_KIND=forged",
+					"PRESERVED=value", "mo_gate_step_kind=forged",
+					"Mo_GaTe_TuRn_KiNd=forged",
 				},
 			})
 			if err != nil {
@@ -61,7 +61,7 @@ func TestPerfRecordingAgent_AuthenticatesTurnKindFromPipelineDuty(t *testing.T) 
 			}
 			wantStep := "MO_GATE_STEP_KIND=" + string(tt.step)
 			wantTurn := "MO_GATE_TURN_KIND=" + tt.wantKind
-			if !slices.Contains(capture.env, wantStep) || capture.env[len(capture.env)-1] != wantTurn {
+			if len(capture.env) != 3 || !slices.Contains(capture.env, wantStep) || capture.env[len(capture.env)-1] != wantTurn {
 				t.Fatalf("environment must carry authenticated step %q and turn %q; full env %v", wantStep, wantTurn, capture.env)
 			}
 		})

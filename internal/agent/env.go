@@ -48,9 +48,14 @@ func gitSafeEnv(dir string, extra ...[]string) []string {
 func removeGateDutyEnv(env []string) []string {
 	clean := make([]string, 0, len(env))
 	for _, entry := range env {
-		if !strings.HasPrefix(entry, GateStepKindEnvVar+"=") && !strings.HasPrefix(entry, GateTurnKindEnvVar+"=") {
+		if !IsGateDutyEnv(entry) {
 			clean = append(clean, entry)
 		}
 	}
 	return clean
+}
+
+func IsGateDutyEnv(entry string) bool {
+	key, _, ok := strings.Cut(entry, "=")
+	return ok && (strings.EqualFold(key, GateStepKindEnvVar) || strings.EqualFold(key, GateTurnKindEnvVar))
 }

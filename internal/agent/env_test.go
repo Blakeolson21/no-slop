@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -114,6 +115,19 @@ func TestGitSafeEnvPreservesPipelineGateDutyForSpawnedProcess(t *testing.T) {
 	}
 	if got := string(output); got != "|1|review|fix" {
 		t.Fatalf("spawned environment = %q, want pipeline gate duty", got)
+	}
+}
+
+func TestRemoveGateDutyEnvMatchesKeysCaseInsensitively(t *testing.T) {
+	got := removeGateDutyEnv([]string{
+		"mo_gate_step_kind=review",
+		"Mo_GaTe_TuRn_KiNd=fix",
+		"MO_GATE_TURN_KIND_SUFFIX=preserved",
+		"PRESERVED=value",
+	})
+	want := []string{"MO_GATE_TURN_KIND_SUFFIX=preserved", "PRESERVED=value"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("scrubbed environment = %v, want %v", got, want)
 	}
 }
 
