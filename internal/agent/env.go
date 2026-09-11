@@ -1,6 +1,10 @@
 package agent
 
-import "github.com/Blakeolson21/no-slop/internal/git"
+import (
+	"strings"
+
+	"github.com/Blakeolson21/no-slop/internal/git"
+)
 
 // GateRoleEnvVar is exported into every spawned gate agent's environment as an
 // coarse diagnostic marker that the process is a no-slop gate agent (a
@@ -17,6 +21,8 @@ import "github.com/Blakeolson21/no-slop/internal/git"
 const (
 	GateRoleEnvVar       = "NS_GATE"
 	LegacyGateRoleEnvVar = "NO_MISTAKES_GATE"
+	GateStepKindEnvVar   = "MO_GATE_STEP_KIND"
+	GateTurnKindEnvVar   = "MO_GATE_TURN_KIND"
 )
 
 // gitSafeEnv returns the environment for a spawned agent subprocess with git
@@ -32,9 +38,19 @@ const (
 // dir must be the value assigned to cmd.Dir so PWD stays coupled to the working
 // directory; see git.NonInteractiveEnv for why this matters.
 func gitSafeEnv(dir string, extra ...[]string) []string {
-	env := git.NonInteractiveEnv(dir)
+	env := removeGateDutyEnv(git.NonInteractiveEnv(dir))
 	if len(extra) > 0 {
 		env = append(env, extra[0]...)
 	}
 	return append(env, GateRoleEnvVar+"=1", LegacyGateRoleEnvVar+"=1")
+}
+
+func removeGateDutyEnv(env []string) []string {
+	clean := make([]string, 0, len(env))
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, GateStepKindEnvVar+"=") && !strings.HasPrefix(entry, GateTurnKindEnvVar+"=") {
+			clean = append(clean, entry)
+		}
+	}
+	return clean
 }

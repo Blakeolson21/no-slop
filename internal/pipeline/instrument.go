@@ -70,8 +70,8 @@ func (a *perfRecordingAgent) Run(ctx context.Context, opts agent.RunOpts) (*agen
 // written by the concrete step invocation; stepName supplies the pipeline-owned
 // fallback for calls whose purpose is intentionally empty.
 func gateTurnEnvironment(env []string, stepName types.StepName, purpose string) []string {
-	const turnKey = "MO_GATE_TURN_KIND="
-	const stepKey = "MO_GATE_STEP_KIND="
+	const turnKey = agent.GateTurnKindEnvVar + "="
+	const stepKey = agent.GateStepKindEnvVar + "="
 	clean := make([]string, 0, len(env)+2)
 	for _, entry := range env {
 		if !strings.HasPrefix(entry, turnKey) && !strings.HasPrefix(entry, stepKey) {

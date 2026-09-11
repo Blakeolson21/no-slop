@@ -223,6 +223,7 @@ var migrationStatements = []string{
 	`ALTER TABLE runs ADD COLUMN push_active INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE runs ADD COLUMN terminal_head_verified_at INTEGER`,
 	`ALTER TABLE runs ADD COLUMN terminal_at_ms INTEGER`,
+	`UPDATE runs SET terminal_at_ms = updated_at * 1000 WHERE terminal_at_ms IS NULL AND status IN ('completed', 'failed', 'cancelled')`,
 	`ALTER TABLE runs ADD COLUMN pr_state TEXT`,
 	`ALTER TABLE runs ADD COLUMN pr_state_observed_at INTEGER`,
 	`ALTER TABLE runs ADD COLUMN ci_ready_at INTEGER`,

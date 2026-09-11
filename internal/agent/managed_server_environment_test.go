@@ -63,8 +63,8 @@ exec "$NS_TEST_MANAGED_SERVER_BINARY" -test.run=^TestManagedServerDutyHelperProc
 				"NS_TEST_MANAGED_SERVER_BINARY=" + testBinary,
 				"NS_TEST_MANAGED_SERVER_RECORD=" + record,
 			}
-			reviewEnv := append(append([]string{}, baseEnv...), "MO_GATE_STEP_KIND=review", "MO_GATE_TURN_KIND=review")
-			fixEnv := append(append([]string{}, baseEnv...), "MO_GATE_STEP_KIND=review", "MO_GATE_TURN_KIND=fix")
+			reviewEnv := append(append([]string{}, baseEnv...), GateStepKindEnvVar+"=review", GateTurnKindEnvVar+"=review")
+			fixEnv := append(append([]string{}, baseEnv...), GateStepKindEnvVar+"=review", GateTurnKindEnvVar+"=fix")
 
 			if _, err := ensure(context.Background(), dir, reviewEnv); err != nil {
 				t.Fatalf("start review server: %v", err)
@@ -97,7 +97,7 @@ func TestManagedServerDutyHelperProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fmt.Fprintf(record, "%s/%s\n", os.Getenv("MO_GATE_STEP_KIND"), os.Getenv("MO_GATE_TURN_KIND")); err != nil {
+	if _, err := fmt.Fprintf(record, "%s/%s\n", os.Getenv(GateStepKindEnvVar), os.Getenv(GateTurnKindEnvVar)); err != nil {
 		_ = record.Close()
 		t.Fatal(err)
 	}

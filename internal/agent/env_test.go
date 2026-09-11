@@ -85,11 +85,43 @@ func TestGitSafeEnvIsObservedBySpawnedProcess(t *testing.T) {
 	}
 }
 
+func TestGitSafeEnvScrubsAmbientGateDutyFromSpawnedProcess(t *testing.T) {
+	t.Setenv(GateStepKindEnvVar, "review")
+	t.Setenv(GateTurnKindEnvVar, "fix")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestAgentEnvProbe$")
+	cmd.Env = gitSafeEnv(t.TempDir(), []string{"NM_TEST_ENV_PROBE=1"})
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("run environment probe: %v", err)
+	}
+	if got := string(output); got != "|1||" {
+		t.Fatalf("spawned environment = %q, want ambient gate duty removed", got)
+	}
+}
+
+func TestGitSafeEnvPreservesPipelineGateDutyForSpawnedProcess(t *testing.T) {
+	t.Setenv(GateStepKindEnvVar, "forged")
+	t.Setenv(GateTurnKindEnvVar, "forged")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestAgentEnvProbe$")
+	cmd.Env = gitSafeEnv(t.TempDir(), []string{
+		"NM_TEST_ENV_PROBE=1",
+		GateStepKindEnvVar + "=review",
+		GateTurnKindEnvVar + "=fix",
+	})
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("run environment probe: %v", err)
+	}
+	if got := string(output); got != "|1|review|fix" {
+		t.Fatalf("spawned environment = %q, want pipeline gate duty", got)
+	}
+}
+
 func TestAgentEnvProbe(t *testing.T) {
 	if os.Getenv("NM_TEST_ENV_PROBE") != "1" {
 		return
 	}
-	fmt.Printf("%s|%s", os.Getenv("NM_HOME"), os.Getenv(GateRoleEnvVar))
+	fmt.Printf("%s|%s|%s|%s", os.Getenv("NM_HOME"), os.Getenv(GateRoleEnvVar), os.Getenv(GateStepKindEnvVar), os.Getenv(GateTurnKindEnvVar))
 }
 
 func TestGitSafeEnv_GateMarkerWinsOverAmbient(t *testing.T) {

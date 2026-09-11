@@ -1,6 +1,7 @@
 package db
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -85,6 +86,46 @@ func TestTerminalWritersPreserveLegacyTerminalBoundary(t *testing.T) {
 				t.Fatalf("terminal boundary = %v, want 123000", stored.TerminalAtMS)
 			}
 		})
+	}
+}
+
+func TestTerminalMigrationBackfillsBeforeCustodyUpdate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.sqlite")
+	d, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := d.InsertRepo("/tmp/terminal-migration", "https://example.com/repo.git", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := d.InsertRun(repo.ID, "feature", "head", "base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.sql.Exec(`UPDATE runs SET status = ?, updated_at = 123 WHERE id = ?`, types.RunFailed, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.sql.Exec(`ALTER TABLE runs DROP COLUMN terminal_at_ms`); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if err := d.SetRunCustodyReturned(run.ID); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := d.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.TerminalAtMS == nil || *stored.TerminalAtMS != 123000 {
+		t.Fatalf("terminal boundary = %v, want 123000", stored.TerminalAtMS)
 	}
 }
 
