@@ -87,7 +87,7 @@ Independent execution limits for the host's no-slop daemon. Both values must be 
 | Key | Default | Occupied while |
 | --- | --- | --- |
 | `reviews` | `9` | A review or its fix-and-rereview turn executes |
-| `suites` | `1` | A Test or Lint step executes, including repairs |
+| `suites` | `1` | A Test or Lint duty executes, including repairs and the [combined Document/Lint pass](/no-slop/reference/repo-config/#commandslint) |
 
 All runs and repositories managed by the daemon share these pools. Parked approval gates occupy no slots. Completion releases a slot and wakes waiting work immediately; there is no round timer. Normal review continuation also uses completion events, with the 30-second lost-event fallback heartbeat retained as recovery. Lowering a limit lets current work finish and admits more only below the new limit. Changes apply when a run is started or recovered.
 
