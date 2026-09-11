@@ -35,6 +35,7 @@ func TestAxiStatusPrintsReviewTimingFromStore(t *testing.T) {
 	if _, err := runAxiStatus(cmd, run.ID); err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("AXI status output:\n%s", out.String())
 	for _, want := range []string{"review_timing:", "review_ms: 2000", "fix_ms: 0", "round_count: 1", "latency_ms", "review,2000"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %q in %s", want, out.String())

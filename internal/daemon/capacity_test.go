@@ -65,6 +65,7 @@ func TestPushReceivedAppliesSeparateHostCapacity(t *testing.T) {
 	waitForStartedBranch(t, started, "suite")
 	push("review-one")
 	waitForStartedBranch(t, started, "review-one")
+	t.Log("suite and review-one execute concurrently in independent capacity pools")
 	push("review-two")
 	select {
 	case got := <-started:
@@ -73,4 +74,5 @@ func TestPushReceivedAppliesSeparateHostCapacity(t *testing.T) {
 	}
 	close(releaseReview)
 	waitForStartedBranch(t, started, "review-two")
+	t.Log("review-two remained queued at the review limit and started immediately after release")
 }

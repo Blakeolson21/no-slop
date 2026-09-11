@@ -82,6 +82,8 @@ exec "$NS_TEST_MANAGED_SERVER_BINARY" -test.run=^TestManagedServerDutyHelperProc
 			}
 			if got, want := strings.Fields(string(data)), []string{"review/review", "review/fix"}; !slices.Equal(got, want) {
 				t.Fatalf("managed server duties = %v, want %v", got, want)
+			} else {
+				t.Logf("%s managed-server launch duties: %v", tc.name, got)
 			}
 		})
 	}
