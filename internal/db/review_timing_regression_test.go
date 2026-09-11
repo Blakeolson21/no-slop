@@ -47,6 +47,47 @@ func TestReviewTimingVerifiedHeadPromotionFreezesTerminalBoundary(t *testing.T) 
 	}
 }
 
+func TestTerminalWritersPreserveLegacyTerminalBoundary(t *testing.T) {
+	writers := []struct {
+		name  string
+		write func(*DB, string) error
+	}{
+		{name: "status", write: func(d *DB, id string) error {
+			return d.UpdateRunStatus(id, types.RunCompleted)
+		}},
+		{name: "error status", write: func(d *DB, id string) error {
+			return d.UpdateRunErrorStatus(id, "later diagnostic", types.RunFailed)
+		}},
+		{name: "verified status", write: func(d *DB, id string) error {
+			return d.UpdateRunStatusWithVerifiedHead(id, types.RunCompleted, "promoted")
+		}},
+		{name: "verified error status", write: func(d *DB, id string) error {
+			return d.UpdateRunErrorStatusWithVerifiedHead(id, "later diagnostic", types.RunFailed, "promoted")
+		}},
+		{name: "terminal PR", write: func(d *DB, id string) error {
+			return d.UpdateRunPRState(id, "closed")
+		}},
+	}
+	for _, tt := range writers {
+		t.Run(tt.name, func(t *testing.T) {
+			d, _, run := openSessionTestDB(t)
+			if _, err := d.sql.Exec(`UPDATE runs SET status = ?, updated_at = 123, terminal_at_ms = NULL WHERE id = ?`, types.RunFailed, run.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := tt.write(d, run.ID); err != nil {
+				t.Fatal(err)
+			}
+			stored, err := d.GetRun(run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored.TerminalAtMS == nil || *stored.TerminalAtMS != 123000 {
+				t.Fatalf("terminal boundary = %v, want 123000", stored.TerminalAtMS)
+			}
+		})
+	}
+}
+
 func TestReviewTimingResetUsesFirstAttemptBoundary(t *testing.T) {
 	d, _, run := openSessionTestDB(t)
 	step, err := d.InsertStepResult(run.ID, types.StepReview)

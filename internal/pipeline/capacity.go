@@ -90,7 +90,11 @@ func (c *Capacity) Acquire(ctx context.Context, step types.StepName) (func(), er
 func (e *Executor) SetCapacity(c *Capacity) { e.capacity = c }
 
 func (e *Executor) executeWithCapacity(step Step, sctx *StepContext) (*StepOutcome, error) {
-	release, err := e.capacity.Acquire(sctx.Ctx, step.Name())
+	duty := step.Name()
+	if duty == types.StepDocument && sctx.Config != nil && sctx.Config.Commands.Lint == "" {
+		duty = types.StepLint
+	}
+	release, err := e.capacity.Acquire(sctx.Ctx, duty)
 	if err != nil {
 		return nil, err
 	}

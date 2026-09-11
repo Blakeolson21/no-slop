@@ -115,6 +115,74 @@ func TestCapacitySeparatesReviewsFromSuitesAndWakesOnRelease(t *testing.T) {
 	r1() // release is idempotent
 }
 
+type capacityProbeStep struct {
+	name    types.StepName
+	started chan struct{}
+}
+
+func (s capacityProbeStep) Name() types.StepName { return s.name }
+func (s capacityProbeStep) Execute(*StepContext) (*StepOutcome, error) {
+	close(s.started)
+	return &StepOutcome{}, nil
+}
+
+func TestCombinedDocumentDutySharesSuiteCapacity(t *testing.T) {
+	c := NewCapacity(config.Concurrency{Reviews: 1, Suites: 1})
+	executor := &Executor{capacity: c}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	held, err := c.Acquire(ctx, types.StepTest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		_, err := executor.executeWithCapacity(capacityProbeStep{name: types.StepDocument, started: started}, &StepContext{
+			Ctx: ctx, Config: &config.Config{Commands: config.Commands{}},
+		})
+		done <- err
+	}()
+	select {
+	case <-started:
+		t.Fatal("combined document and lint duty bypassed suite capacity")
+	case <-time.After(30 * time.Millisecond):
+	}
+	held()
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatal("combined document and lint duty did not start after suite release")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDocumentOnlyDutyDoesNotConsumeSuiteCapacity(t *testing.T) {
+	c := NewCapacity(config.Concurrency{Reviews: 1, Suites: 1})
+	executor := &Executor{capacity: c}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	held, err := c.Acquire(ctx, types.StepTest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held()
+	started := make(chan struct{})
+	_, err = executor.executeWithCapacity(capacityProbeStep{name: types.StepDocument, started: started}, &StepContext{
+		Ctx: ctx, Config: &config.Config{Commands: config.Commands{Lint: "make lint"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	default:
+		t.Fatal("document-only duty did not execute")
+	}
+}
+
 func TestExecutorReleasesReviewCapacityWhileParked(t *testing.T) {
 	database, p, run, repo := setupTest(t)
 	c := NewCapacity(config.Concurrency{Reviews: 1, Suites: 1})

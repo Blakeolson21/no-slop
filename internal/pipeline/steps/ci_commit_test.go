@@ -51,7 +51,13 @@ func (h *recordingPRUpdateHost) FetchFailedCheckLogs(context.Context, *scm.PR, s
 
 func TestCIStep_AutoFixWithoutPushDoesNotUpdatePR(t *testing.T) {
 	dir, baseSHA, headSHA := setupGitRepo(t)
-	sctx := newTestContextWithDBRecords(t, &mockAgent{name: "test"}, dir, baseSHA, headSHA, config.Commands{})
+	ag := &mockAgent{name: "test", runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
+		if opts.Purpose != "ci-fix" {
+			t.Fatalf("CI repair purpose = %q, want ci-fix", opts.Purpose)
+		}
+		return &agent.Result{}, nil
+	}}
+	sctx := newTestContextWithDBRecords(t, ag, dir, baseSHA, headSHA, config.Commands{})
 	host := &recordingPRUpdateHost{}
 
 	result, err := (&CIStep{}).autoFixCI(sctx, host, &scm.PR{Number: "42"}, []string{"build"}, false)

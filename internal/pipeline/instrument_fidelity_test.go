@@ -37,6 +37,7 @@ func TestPerfRecordingAgent_AuthenticatesTurnKindFromPipelineDuty(t *testing.T) 
 		{name: "document", step: types.StepDocument, purpose: "document", wantKind: "document"},
 		{name: "document reversal", step: types.StepDocument, purpose: "document-reversal-check", wantKind: "document"},
 		{name: "lint", step: types.StepLint, purpose: "lint", wantKind: "lint"},
+		{name: "CI fixer", step: types.StepCI, purpose: "ci-fix", wantKind: "fix"},
 		{name: "rebase defaults from step", step: types.StepRebase, wantKind: "rebase"},
 	}
 	for _, tt := range tests {
