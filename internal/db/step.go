@@ -53,9 +53,14 @@ func (d *DB) readableStepResultColumns() string {
 		columns += ", 0 AS ci_fix_attempts"
 	}
 	if d.hasColumn("step_results", "started_at_ms") {
-		columns += ", started_at_ms, completed_at_ms"
+		columns += ", started_at_ms"
 	} else {
-		columns += ", NULL AS started_at_ms, NULL AS completed_at_ms"
+		columns += ", NULL AS started_at_ms"
+	}
+	if d.hasColumn("step_results", "completed_at_ms") {
+		columns += ", completed_at_ms"
+	} else {
+		columns += ", NULL AS completed_at_ms"
 	}
 	if d.hasColumn("step_results", "first_started_at_ms") {
 		columns += ", first_started_at_ms"

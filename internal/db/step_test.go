@@ -65,6 +65,69 @@ func TestStepReadsTreatMissingCIFixAttemptsAsZero(t *testing.T) {
 	}
 }
 
+func TestStepReadsDuringPartialTimingMigration(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "partial-timing-migration.sqlite")
+	d, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := d.InsertRepo("/tmp/partial-timing-migration", "https://example.com/repo.git", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := d.InsertRun(repo.ID, "feature", "head", "base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	step, err := d.InsertStepResult(run.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.sql.Exec(`UPDATE step_results SET started_at_ms = 123456 WHERE id = ?`, step.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	partial, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := partial.Exec(`ALTER TABLE step_results DROP COLUMN first_started_at_ms`); err != nil {
+		partial.Close()
+		t.Fatal(err)
+	}
+	if _, err := partial.Exec(`ALTER TABLE step_results DROP COLUMN completed_at_ms`); err != nil {
+		partial.Close()
+		t.Fatal(err)
+	}
+	if err := partial.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	d, err = OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+
+	got, err := d.GetStepResult(step.ID)
+	if err != nil {
+		t.Fatalf("get step during partial migration: %v", err)
+	}
+	if got == nil || got.StartedAtMS == nil || *got.StartedAtMS != 123456 || got.CompletedAtMS != nil {
+		t.Fatalf("step timing = %#v, want started milliseconds and no completion", got)
+	}
+	steps, err := d.GetStepsByRun(run.ID)
+	if err != nil {
+		t.Fatalf("get steps during partial migration: %v", err)
+	}
+	if len(steps) != 1 || steps[0].StartedAtMS == nil || *steps[0].StartedAtMS != 123456 || steps[0].CompletedAtMS != nil {
+		t.Fatalf("step timings = %#v, want one started step without completion", steps)
+	}
+}
+
 func TestGetStepResult_LegacyBabysitStepName(t *testing.T) {
 	d := openTestDB(t)
 	repo, err := d.InsertRepo("/tmp/repo", "git@github.com:test/repo.git", "main")
