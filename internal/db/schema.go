@@ -244,6 +244,21 @@ var migrationStatements = []string{
 	`ALTER TABLE step_results ADD COLUMN started_at_ms INTEGER`,
 	`ALTER TABLE step_results ADD COLUMN completed_at_ms INTEGER`,
 	`ALTER TABLE step_results ADD COLUMN first_started_at_ms INTEGER`,
+	`UPDATE step_results
+	 SET first_started_at_ms = (
+		 SELECT MIN(boundary_ms)
+		 FROM (
+			 SELECT step_results.started_at_ms AS boundary_ms
+			 UNION ALL
+			 SELECT step_results.started_at * 1000
+			 UNION ALL
+			 SELECT agent_invocations.started_at * 1000
+			 FROM agent_invocations
+			 WHERE agent_invocations.run_id = step_results.run_id
+			   AND agent_invocations.step_name = 'review'
+		 )
+	 )
+	 WHERE step_name = 'review' AND first_started_at_ms IS NULL`,
 	// Observed launch-identity columns: nullable so a legacy row, and an
 	// invocation whose adapter could not observe its own launch, both stay
 	// unknown instead of being backfilled from the configured agent kind.

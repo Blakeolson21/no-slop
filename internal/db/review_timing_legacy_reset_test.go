@@ -1,9 +1,11 @@
 package db
 
 import (
-	"github.com/Blakeolson21/no-slop/internal/types"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestReviewTimingLegacyResetPreservesFirstStart(t *testing.T) {
@@ -49,5 +51,57 @@ func TestReviewTimingLegacyResetPreservesFirstStart(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestReviewTimingMigrationBackfillsEarlierInvocation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "review-timing-migration.sqlite")
+	d, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := d.InsertRepo("/tmp/review-timing-migration", "https://example.com/repo.git", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := d.InsertRun(repo.ID, "feature", "head", "base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	step, err := d.InsertStepResult(run.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.InsertAgentInvocation(AgentInvocation{
+		RunID: run.ID, StepName: string(types.StepReview), Purpose: "review", Round: 1,
+		Agent: "mock", StartedAt: 100, CompletedAt: 101, DurationMS: 1000, ExitStatus: "ok",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.sql.Exec(`UPDATE step_results SET status = ?, started_at = 200, started_at_ms = 200500, first_started_at_ms = NULL WHERE id = ?`, types.StepStatusAwaitingApproval, step.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	d, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	if err := d.StartStep(step.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.sql.Exec(`UPDATE step_results SET status = ?, completed_at = 220, completed_at_ms = 220250 WHERE id = ?`, types.StepStatusCompleted, step.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	timing, err := d.GetReviewTimingAt(run.ID, time.UnixMilli(220250))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if timing == nil || timing.StartedAtMS == nil || *timing.StartedAtMS != 100000 || timing.TotalMS != 120250 {
+		t.Fatalf("migrated timing = %+v, want historical invocation boundary", timing)
 	}
 }
