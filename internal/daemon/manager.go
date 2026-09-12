@@ -973,9 +973,6 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 		repo = refreshed
 	}
 
-	// Cancel any active run for this repo+branch.
-	m.cancelActiveRuns(repo.ID, branch)
-
 	storedIntent := intent
 	if source != db.RunIntentSourceRerun {
 		storedIntent = strings.TrimSpace(storedIntent)
@@ -988,11 +985,21 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 		runIntent = &db.RunIntent{Summary: storedIntent, Source: source, Score: 1}
 	}
 
-	run, err := m.db.InsertRunWithIntent(repo.ID, branch, headSHA, baseSHA, runIntent)
+	// Admission is one transaction that reserves the cancel budget, consumes any
+	// signed adjudication, creates the run and identifies the runs it supersedes.
+	// It must precede every cancellation side effect: a dispatch the budget
+	// refuses returns here with the lane's active run untouched, instead of
+	// cancelling an adjudicated run and only then discovering it was never
+	// entitled to replace it.
+	admission, err := m.db.AdmitRun(repo.ID, branch, headSHA, baseSHA, runIntent)
 	if err != nil {
 		trackStartFailure("create_run")
 		return "", fmt.Errorf("create run: %w", err)
 	}
+	run := admission.Run
+
+	// Cancel exactly the runs the admitted transaction named.
+	m.cancelRuns(repo.ID, branch, admission.Superseded)
 
 	// Even an immediate setup failure has an exact durable run. Preserve it in
 	// the receipt instead of making the client rediscover a neighboring row.
@@ -1470,37 +1477,28 @@ func (m *RunManager) HandleCancelWithReason(runID, reason string) error {
 	return nil
 }
 
-// cancelActiveRuns cancels any in-progress runs for the given repo+branch
-// and waits for their goroutines to finish before returning, preventing
-// concurrent pushes to upstream.
-// The cancellation cause is propagated to the executor via context.Cause,
-// which uses it as the run's error message in the DB.
-func (m *RunManager) cancelActiveRuns(repoID, branch string) {
-	runs, err := m.db.GetRunsByRepo(repoID)
-	if err != nil {
-		slog.Error("failed to query active runs for cancellation", "repo", repoID, "branch", branch, "error", err)
-		return
-	}
-
+// cancelRuns cancels exactly the runs an admitted dispatch superseded and waits
+// for their goroutines to finish before returning, preventing concurrent pushes
+// to upstream. The cancellation cause is propagated to the executor via
+// context.Cause, which uses it as the run's error message in the DB.
+//
+// The run IDs come from the admission transaction rather than from a fresh
+// query here. That is deliberate: the caller has already been admitted, so this
+// cancels only what that decision covered, and nothing is cancelled on behalf of
+// a dispatch the cancel budget refused.
+func (m *RunManager) cancelRuns(repoID, branch string, runIDs []string) {
 	var toWait []chan struct{}
-	for _, run := range runs {
-		if run.Branch != branch {
-			continue
-		}
-		if run.Status != types.RunPending && run.Status != types.RunRunning {
-			continue
-		}
-
+	for _, runID := range runIDs {
 		m.mu.Lock()
-		cancel, ok := m.cancels[run.ID]
-		done := m.dones[run.ID]
+		cancel, ok := m.cancels[runID]
+		done := m.dones[runID]
 		m.mu.Unlock()
 		if !ok {
 			continue
 		}
 
 		cancel(fmt.Errorf(types.RunCancelReasonSuperseded))
-		slog.Info("cancelled active run", "run_id", run.ID, "repo_id", repoID, "branch", branch)
+		slog.Info("cancelled active run", "run_id", runID, "repo_id", repoID, "branch", branch)
 		if done != nil {
 			toWait = append(toWait, done)
 		}

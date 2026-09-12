@@ -55,6 +55,13 @@ type RunOpts struct {
 	// fallback-provider attempts, after it completes. It is instrumentation
 	// only and must not change invocation behavior.
 	OnAttempt func(Attempt)
+	// OnAttemptStart receives each concrete adapter attempt immediately before
+	// the provider is invoked, so instrumentation can make the attempt durable
+	// before it can be lost. OnAttempt alone cannot do this: it fires after an
+	// attempt completes, so a process that dies mid-attempt leaves no record of
+	// the attempt that was in flight. It is instrumentation only and must not
+	// change invocation behavior.
+	OnAttemptStart func(AttemptStart)
 	// invocationIdentity is populated by the concrete adapter immediately
 	// before its retry loop. It is deliberately internal instrumentation rather
 	// than caller input: recorded launch identity must be observed, not claimed.
@@ -71,6 +78,17 @@ type Attempt struct {
 	Err             error
 	StartedAt       time.Time
 	CompletedAt     time.Time
+	Session         *SessionRef
+	SessionFallback bool
+}
+
+// AttemptStart describes one concrete adapter attempt that is about to run. It
+// carries the identity known before the provider answers; everything the
+// provider reports arrives later on the matching Attempt.
+type AttemptStart struct {
+	Agent           string
+	Identity        InvocationIdentity
+	StartedAt       time.Time
 	Session         *SessionRef
 	SessionFallback bool
 }

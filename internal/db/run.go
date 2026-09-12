@@ -104,6 +104,27 @@ func (d *DB) InsertRun(repoID, branch, headSHA, baseSHA string) (*Run, error) {
 }
 
 func (d *DB) InsertRunWithIntent(repoID, branch, headSHA, baseSHA string, intent *RunIntent) (*Run, error) {
+	r := newRunRecord(repoID, branch, headSHA, baseSHA, intent)
+	if _, err := d.sql.Exec(insertRunSQL, insertRunArgs(r)...); err != nil {
+		return nil, fmt.Errorf("insert run: %w", err)
+	}
+	return r, nil
+}
+
+// insertRunSQL and insertRunArgs are shared with the atomic gate admission in
+// AdmitRun so both paths create an identical row and pass through the same
+// admission triggers. They must not drift apart: a second INSERT shape would be
+// a second, unguarded way into the runs table.
+const insertRunSQL = `INSERT INTO runs (id, repo_id, branch, head_sha, base_sha, submitted_head_sha, no_mistakes_version, no_mistakes_build_sha, status, pr_state, intent, intent_source, intent_session_id, intent_score, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'none', ?, ?, ?, ?, ?, ?)`
+
+func insertRunArgs(r *Run) []any {
+	return []any{
+		r.ID, r.RepoID, r.Branch, r.HeadSHA, r.BaseSHA, r.HeadSHA, r.NoMistakesVersion, r.NoMistakesBuildSHA, r.Status,
+		r.Intent, r.IntentSource, r.IntentSessionID, r.IntentScore, r.CreatedAt, r.UpdatedAt,
+	}
+}
+
+func newRunRecord(repoID, branch, headSHA, baseSHA string, intent *RunIntent) *Run {
 	ts := now()
 	version := buildinfo.CurrentVersion()
 	buildSHA := buildinfo.Commit
@@ -126,14 +147,7 @@ func (d *DB) InsertRunWithIntent(repoID, branch, headSHA, baseSHA string, intent
 		r.IntentSessionID = &intent.SessionID
 		r.IntentScore = &intent.Score
 	}
-	_, err := d.sql.Exec(
-		`INSERT INTO runs (id, repo_id, branch, head_sha, base_sha, submitted_head_sha, no_mistakes_version, no_mistakes_build_sha, status, pr_state, intent, intent_source, intent_session_id, intent_score, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'none', ?, ?, ?, ?, ?, ?)`,
-		r.ID, r.RepoID, r.Branch, r.HeadSHA, r.BaseSHA, headSHA, r.NoMistakesVersion, r.NoMistakesBuildSHA, r.Status, r.Intent, r.IntentSource, r.IntentSessionID, r.IntentScore, r.CreatedAt, r.UpdatedAt,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("insert run: %w", err)
-	}
-	return r, nil
+	return r
 }
 
 // GetRun returns a run by ID.

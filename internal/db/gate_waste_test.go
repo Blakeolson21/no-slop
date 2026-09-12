@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -70,12 +71,26 @@ func dropGateWasteTriggersForLegacyFixture(t *testing.T, d *DB) {
 	}
 }
 
-func TestGateWastePriceTableAndLateMeasuredUpdate(t *testing.T) {
+// authoritativeLedger writes a model ledger the Quartermaster owner accepts:
+// version 1, generated_at, and rows carrying only the closed MODEL_ROW_KEYS
+// field set. Fixtures must use a document both owners agree is valid, or the
+// test proves pricing against a file production would refuse.
+func authoritativeLedger(t *testing.T, rows string) {
+	t.Helper()
 	ledger := filepath.Join(t.TempDir(), "model-ledger.json")
-	if err := os.WriteFile(ledger, []byte(`{"models":[{"key":"model","model_id":"provider/model","provider":"provider","cost_class":"standard","input_per_mtok":2,"output_per_mtok":8,"cache_read_per_mtok":0.2,"cache_write_per_mtok":2.5}]}`), 0600); err != nil {
+	doc := `{"version":1,"generated_at":1757000000,"models":[` + rows + `]}`
+	if err := os.WriteFile(ledger, []byte(doc), 0600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("MO_MODEL_LEDGER", ledger)
+	t.Setenv("QM_MODEL_LEDGER", ledger)
+}
+
+const standardLedgerRow = `{"key":"model","display_name":"Model","model_id":"provider/model","provider":"provider",` +
+	`"context_window":200000,"max_output_tokens":32000,"cost_class":"standard","input_per_mtok":2,"output_per_mtok":8,` +
+	`"strengths":["review"],"verified_at":"2026-09-01","evidence_url":"https://example.com/pricing"}`
+
+func TestGateWastePriceTableAndLateMeasuredUpdate(t *testing.T) {
+	authoritativeLedger(t, standardLedgerRow)
 	d := openTestDB(t)
 	repo, _ := d.InsertRepo("/test", "https://example.com/test", "main")
 	r, _ := d.InsertRun(repo.ID, "lane", "head", "base")
@@ -89,13 +104,29 @@ func TestGateWastePriceTableAndLateMeasuredUpdate(t *testing.T) {
 	provider, model := "provider", "provider/model"
 	input, output, cache, write := 1000, 100, 200, 20
 	inv := AgentInvocation{RunID: r.ID, StepName: "review", Purpose: "review", SessionMode: "cold", ModelProvider: &provider, Model: &model, DeltaInputTokens: &input, DeltaOutputTokens: &output, DeltaCacheReadTokens: &cache, CacheCreationTokens: &write, ExitStatus: "cancelled"}
+	// The authoritative ledger carries no cache rates, so measured cache usage
+	// leaves the estimate unknown while the priced subtotal stays exact.
 	measured, err := d.CompleteAgentInvocation(inv, pending.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := float64(800*2+100*8+200*.2+20*2.5) / 1e6
-	if measured.EstimatedCostUSD == nil || math.Abs(*measured.EstimatedCostUSD-want) > 1e-12 {
-		t.Fatalf("price=%v want=%v", measured.EstimatedCostUSD, want)
+	wantKnown := float64(800*2+100*8) / 1e6
+	if measured.EstimatedCostUSD != nil {
+		t.Fatalf("uncharged cache usage reported as a complete estimate: %v", *measured.EstimatedCostUSD)
+	}
+	if measured.KnownCostUSD == nil || math.Abs(*measured.KnownCostUSD-wantKnown) > 1e-12 {
+		t.Fatalf("known=%v want=%v", measured.KnownCostUSD, wantKnown)
+	}
+	noCache, noWrite := 0, 0
+	complete := inv
+	complete.DeltaCacheReadTokens, complete.CacheCreationTokens = &noCache, &noWrite
+	priced, err := d.CompleteAgentInvocation(complete, pending.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := float64(1000*2+100*8) / 1e6
+	if priced.EstimatedCostUSD == nil || math.Abs(*priced.EstimatedCostUSD-want) > 1e-12 {
+		t.Fatalf("price=%v want=%v", priced.EstimatedCostUSD, want)
 	}
 	var raw string
 	if err = d.sql.QueryRow("SELECT waste_usage_json FROM runs WHERE id=?", r.ID).Scan(&raw); err != nil {
@@ -144,5 +175,52 @@ func TestGateWastePriceTableAndLateMeasuredUpdate(t *testing.T) {
 	}
 	if unknown.EstimatedCostUSD != nil || unknown.KnownCostUSD != nil {
 		t.Fatal("unknown provider priced")
+	}
+}
+
+// A table shape the Quartermaster owner refuses must not produce a confident
+// price here. The cache-rate fields below are outside its closed MODEL_ROW_KEYS,
+// so the whole document is non-authoritative.
+func TestGatePricingRefusesTablesQuartermasterRejects(t *testing.T) {
+	provider, model := "provider", "provider/model"
+	input, output := 1000, 100
+	for name, rows := range map[string]string{
+		"cache rate fields": `{"key":"model","display_name":"Model","model_id":"provider/model","provider":"provider",` +
+			`"context_window":200000,"max_output_tokens":32000,"cost_class":"standard","input_per_mtok":2,"output_per_mtok":8,` +
+			`"cache_read_per_mtok":0.2,"cache_write_per_mtok":2.5,` +
+			`"strengths":["review"],"verified_at":"2026-09-01","evidence_url":"https://example.com/pricing"}`,
+		"missing metadata":   `{"key":"model","model_id":"provider/model","provider":"provider","cost_class":"standard","input_per_mtok":2,"output_per_mtok":8}`,
+		"free row priced":    `{"key":"model","display_name":"Model","model_id":"provider/model","provider":"provider","context_window":200000,"max_output_tokens":32000,"cost_class":"free","input_per_mtok":2,"output_per_mtok":8,"strengths":["review"],"verified_at":"2026-09-01","evidence_url":"https://example.com/pricing"}`,
+		"unknown cost class": `{"key":"model","display_name":"Model","model_id":"provider/model","provider":"provider","context_window":200000,"max_output_tokens":32000,"cost_class":"cheap","input_per_mtok":2,"output_per_mtok":8,"strengths":["review"],"verified_at":"2026-09-01","evidence_url":"https://example.com/pricing"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			authoritativeLedger(t, rows)
+			inv := AgentInvocation{ModelProvider: &provider, Model: &model, DeltaInputTokens: &input, DeltaOutputTokens: &output, SessionMode: "cold"}
+			priceGateInvocation(&inv)
+			if inv.EstimatedCostUSD != nil || inv.KnownCostUSD != nil || inv.CostBasis != nil {
+				t.Fatalf("non-authoritative ledger priced: %v %v", inv.EstimatedCostUSD, inv.CostBasis)
+			}
+			if inv.PriceSourceJSON == nil || !strings.Contains(*inv.PriceSourceJSON, `"status":"invalid"`) {
+				t.Fatalf("refusal not recorded: %v", inv.PriceSourceJSON)
+			}
+		})
+	}
+}
+
+// A validated free/local row bills nothing for any token class, so its exact
+// cost is zero even when cache usage is measured - not unknown.
+func TestGatePricingFreeClassIsAnExactZero(t *testing.T) {
+	authoritativeLedger(t, `{"key":"local-model","display_name":"Local","model_id":"local/model","provider":"local",`+
+		`"context_window":128000,"max_output_tokens":8192,"cost_class":"free","input_per_mtok":0,"output_per_mtok":0,`+
+		`"strengths":["local"],"verified_at":"2026-09-01","evidence_url":"https://example.com/local"}`)
+	provider, model := "local", "local/model"
+	input, cache := 100, 20
+	inv := AgentInvocation{ModelProvider: &provider, Model: &model, DeltaInputTokens: &input, DeltaCacheReadTokens: &cache, SessionMode: InvocationModeResumed}
+	priceGateInvocation(&inv)
+	if inv.CostBasis == nil || *inv.CostBasis != "free" {
+		t.Fatalf("basis=%v", inv.CostBasis)
+	}
+	if inv.EstimatedCostUSD == nil || *inv.EstimatedCostUSD != 0 || inv.KnownCostUSD == nil || *inv.KnownCostUSD != 0 {
+		t.Fatalf("free usage not an exact zero: estimated=%v known=%v", inv.EstimatedCostUSD, inv.KnownCostUSD)
 	}
 }

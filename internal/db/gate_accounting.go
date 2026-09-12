@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -63,6 +64,11 @@ func (d *DB) installGateAccounting() error {
 	return nil
 }
 
+// overBudgetSQL is the single source of the abort threshold: the triggers and
+// the AdmitRun fail-closed check read the same constant, so the two can never
+// disagree about when a dispatch needs a signed adjudication.
+var overBudgetSQL = `(SELECT count(*) FROM gate_aborts WHERE repo_id=NEW.repo_id AND branch=NEW.branch)>=` + strconv.Itoa(gateCancelBudget)
+
 const abortIDsSQL = `(SELECT json_group_array(run_id) FROM (SELECT run_id FROM gate_aborts WHERE repo_id=NEW.repo_id AND branch=NEW.branch ORDER BY run_id))`
 const matchingGrantSQL = `SELECT id FROM cancel_adjudications WHERE repo_id=NEW.repo_id AND branch=NEW.branch AND head_sha=NEW.head_sha AND used_run_id IS NULL AND aborted_run_ids_json=` + abortIDsSQL + ` ORDER BY id LIMIT 1`
 const wasteTurnsSQL = `(SELECT json_group_array(json_object(
@@ -81,8 +87,8 @@ var gateAccountingSchema = []string{
 	`CREATE TABLE IF NOT EXISTS cancel_adjudications(id TEXT PRIMARY KEY,repo_id TEXT NOT NULL,branch TEXT NOT NULL,head_sha TEXT NOT NULL,aborted_run_ids_json TEXT NOT NULL,reason TEXT NOT NULL,issuer TEXT NOT NULL,signed_record TEXT NOT NULL,used_run_id TEXT UNIQUE)`,
 	`INSERT OR IGNORE INTO gate_aborts SELECT id,repo_id,branch,COALESCE(cancel_reason,error),updated_at FROM runs WHERE status='cancelled'`,
 	`CREATE TRIGGER IF NOT EXISTS gate_abort_record AFTER UPDATE OF status ON runs WHEN NEW.status='cancelled' AND NOT EXISTS (SELECT 1 FROM gate_aborts WHERE run_id=NEW.id) BEGIN INSERT INTO gate_aborts VALUES(NEW.id,NEW.repo_id,NEW.branch,COALESCE(NEW.cancel_reason,NEW.error),NEW.updated_at); END`,
-	`CREATE TRIGGER IF NOT EXISTS gate_cancel_budget BEFORE INSERT ON runs WHEN (SELECT count(*) FROM gate_aborts WHERE repo_id=NEW.repo_id AND branch=NEW.branch)>=2 AND NOT EXISTS (` + matchingGrantSQL + `) BEGIN SELECT RAISE(ABORT,'cancel budget exhausted: signed adjudication and dispatch reason required'); END`,
-	`CREATE TRIGGER IF NOT EXISTS gate_cancel_grant AFTER INSERT ON runs WHEN (SELECT count(*) FROM gate_aborts WHERE repo_id=NEW.repo_id AND branch=NEW.branch)>=2 BEGIN
+	`CREATE TRIGGER IF NOT EXISTS gate_cancel_budget BEFORE INSERT ON runs WHEN ` + overBudgetSQL + ` AND NOT EXISTS (` + matchingGrantSQL + `) BEGIN SELECT RAISE(ABORT,'cancel budget exhausted: signed adjudication and dispatch reason required'); END`,
+	`CREATE TRIGGER IF NOT EXISTS gate_cancel_grant AFTER INSERT ON runs WHEN ` + overBudgetSQL + ` BEGIN
  UPDATE runs SET cancel_adjudication_id=(` + matchingGrantSQL + `),dispatch_reason=(SELECT reason FROM cancel_adjudications WHERE id=(` + matchingGrantSQL + `)) WHERE id=NEW.id;
  UPDATE cancel_adjudications SET used_run_id=NEW.id WHERE id=(SELECT cancel_adjudication_id FROM runs WHERE id=NEW.id); END`,
 	`CREATE TRIGGER IF NOT EXISTS gate_waste_terminal AFTER UPDATE OF status,terminal_at_ms ON runs WHEN NEW.status IN ('failed','cancelled') BEGIN UPDATE runs SET waste_usage_json=` + wastePayloadSQL + ` WHERE id=NEW.id; END`,

@@ -73,6 +73,7 @@ func runWithRetry(
 			}
 		}
 		startedAt := time.Now()
+		emitAgentAttemptStart(opts, name, startedAt)
 		result, err := runOnce()
 		emitAgentAttempt(opts, name, result, err, startedAt, time.Now())
 		if err == nil {
@@ -89,6 +90,22 @@ func runWithRetry(
 		lastLabel = label
 	}
 	return nil, lastErr
+}
+
+// emitAgentAttemptStart announces an attempt before the provider call, so a
+// retry or fallback attempt is durable even if this process never returns from
+// it. It is deliberately not routed through any deferring relay.
+func emitAgentAttemptStart(opts RunOpts, name string, startedAt time.Time) {
+	if opts.OnAttemptStart == nil {
+		return
+	}
+	opts.OnAttemptStart(AttemptStart{
+		Agent:           name,
+		Identity:        invocationIdentityFromOpts(opts),
+		StartedAt:       startedAt,
+		Session:         cloneSessionRef(opts.Session),
+		SessionFallback: opts.SessionFallback,
+	})
 }
 
 func emitAgentAttempt(opts RunOpts, name string, result *Result, err error, startedAt, completedAt time.Time) {

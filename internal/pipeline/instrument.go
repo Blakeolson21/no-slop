@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Blakeolson21/no-slop/internal/agent"
@@ -44,18 +45,22 @@ func (a *perfRecordingAgent) SupportsSessionProvider(provider string) bool {
 
 func (a *perfRecordingAgent) Run(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 	opts.Env = gateTurnEnvironment(opts.Env, a.stepName, opts.Purpose)
-	pendingID := ""
-	if a.db != nil {
-		purpose := opts.Purpose
-		if purpose == "" {
-			purpose = string(a.stepName)
+	// One durable row per concrete attempt, written before the attempt runs.
+	// The row for the whole invocation covers adapters that report no attempts;
+	// the first reported attempt claims it, and every retry or fallback attempt
+	// after it gets its own row from OnAttemptStart. Without this a process that
+	// dies during attempt two leaves that attempt with no row and no usage.
+	pending := &pendingInvocations{agent: a}
+	pending.open(opts, a.inner.Name(), agent.ResolveInvocationIdentity(a.inner), time.Now())
+	previousStart := opts.OnAttemptStart
+	opts.OnAttemptStart = func(start agent.AttemptStart) {
+		if previousStart != nil {
+			previousStart(start)
 		}
-		pending, dbErr := a.db.InsertAgentInvocation(db.AgentInvocation{RunID: a.runID, StepName: string(a.stepName), Round: a.round(), Purpose: purpose, Agent: a.inner.Name(), StartedAt: time.Now().Unix(), ExitStatus: "running", SessionMode: invocationSessionMode(opts)})
-		if dbErr != nil {
-			slog.Warn("failed to record pending agent invocation", "error", dbErr)
-		} else {
-			pendingID = pending.ID
-		}
+		attemptOpts := opts
+		attemptOpts.Session = start.Session
+		attemptOpts.SessionFallback = start.SessionFallback
+		pending.open(attemptOpts, start.Agent, start.Identity, start.StartedAt)
 	}
 	attempts := 0
 	previous := opts.OnAttempt
@@ -67,15 +72,70 @@ func (a *perfRecordingAgent) Run(ctx context.Context, opts agent.RunOpts) (*agen
 		attemptOpts := opts
 		attemptOpts.Session = attempt.Session
 		attemptOpts.SessionFallback = attempt.SessionFallback
-		a.record(ctx, attemptOpts, attempt.Agent, attempt.Identity, attempt.Result, attempt.Err, attempt.StartedAt, attempt.CompletedAt, pendingID)
-		pendingID = ""
+		a.record(ctx, attemptOpts, attempt.Agent, attempt.Identity, attempt.Result, attempt.Err, attempt.StartedAt, attempt.CompletedAt, pending.claim())
 	}
 	start := time.Now()
 	result, err := a.inner.Run(ctx, opts)
 	if attempts == 0 {
-		a.record(ctx, opts, a.inner.Name(), agent.ResolveInvocationIdentity(a.inner), result, err, start, time.Now(), pendingID)
+		a.record(ctx, opts, a.inner.Name(), agent.ResolveInvocationIdentity(a.inner), result, err, start, time.Now(), pending.claim())
 	}
 	return result, err
+}
+
+// pendingInvocations owns the at-most-one unclaimed pending row for an
+// invocation. An attempt that starts while a row is still unclaimed reuses it
+// rather than creating a duplicate, so the pre-invocation row and the first
+// attempt are one record. A row left unclaimed when the process dies stays in
+// the store with exit_status "running": that is the evidence the attempt
+// happened, and it is exactly what a completion-only callback cannot produce.
+type pendingInvocations struct {
+	agent *perfRecordingAgent
+	mu    sync.Mutex
+	id    string
+}
+
+func (p *pendingInvocations) open(opts agent.RunOpts, agentName string, identity agent.InvocationIdentity, startedAt time.Time) {
+	a := p.agent
+	if a.db == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.id != "" {
+		return
+	}
+	purpose := opts.Purpose
+	if purpose == "" {
+		purpose = string(a.stepName)
+	}
+	name := identity.ConfiguredAgent
+	if name == "" {
+		name = agentName
+	}
+	if name == "" {
+		name = a.inner.Name()
+	}
+	inserted, dbErr := a.db.InsertAgentInvocation(db.AgentInvocation{
+		RunID: a.runID, StepName: string(a.stepName), Round: a.round(), Purpose: purpose,
+		Agent: name, ResolvedExecutable: identity.Executable, ModelArgs: cloneStrings(identity.ModelArgs),
+		StartedAt: startedAt.Unix(), ExitStatus: "running",
+		SessionMode: invocationSessionMode(opts),
+	})
+	if dbErr != nil {
+		slog.Warn("failed to record pending agent invocation", "error", dbErr)
+		return
+	}
+	p.id = inserted.ID
+}
+
+// claim hands the unclaimed pending row to the completing attempt and leaves
+// the slot empty for the next attempt's own row.
+func (p *pendingInvocations) claim() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	id := p.id
+	p.id = ""
+	return id
 }
 
 // gateTurnEnvironment authenticates the gate duty at the pipeline boundary.

@@ -1,11 +1,8 @@
 package cli
 
 import (
-	"crypto/ed25519"
-	"encoding/base64"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -25,11 +22,9 @@ func newAxiCancelAdjudicationCmd() *cobra.Command {
 				return err
 			}
 			defer d.Close()
-			keyText, err := os.ReadFile(filepath.Join(p.Root(), "cancel-budget-public-key"))
-			if err != nil {
-				return fmt.Errorf("read independent adjudicator key: %w", err)
-			}
-			key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(keyText)))
+			// The key's identity, not merely its location, has to be operator
+			// authority: the store root is caller-selected and lane-writable.
+			authority, err := resolveCancelBudgetKey(p.Root())
 			if err != nil {
 				return err
 			}
@@ -37,11 +32,12 @@ func newAxiCancelAdjudicationCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			id, err := d.RegisterCancelAdjudication(raw, reason, ed25519.PublicKey(key))
+			id, err := d.RegisterCancelAdjudication(raw, reason, authority.Key)
 			if err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "cancel_adjudication: %s\n", id)
+			fmt.Fprintf(cmd.OutOrStdout(), "adjudicator_key_authority: %s\n", authority.Bound)
 			return nil
 		}}
 	cmd.Flags().StringVar(&record, "record", "", "signed record file")
