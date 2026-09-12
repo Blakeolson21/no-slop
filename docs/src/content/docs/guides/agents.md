@@ -170,7 +170,6 @@ no-slop axi sync
 no-slop axi sync --recover
 no-slop axi respond --action approve
 no-slop axi logs --step review --full
-no-slop axi abort
 no-slop axi abort --run <id>
 ```
 

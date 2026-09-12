@@ -153,7 +153,8 @@ type RespondParams struct {
 
 // CancelRunParams cancels an active pipeline run.
 type CancelRunParams struct {
-	RunID string `json:"run_id"`
+	RunID  string `json:"run_id"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // GateContextParams asks the daemon to classify the authenticated caller.
@@ -179,7 +180,8 @@ type ShutdownParams struct{}
 
 // PushReceivedResult confirms the push was accepted.
 type PushReceivedResult struct {
-	RunID string `json:"run_id"`
+	RunID      string `json:"run_id"`
+	StartError string `json:"start_error,omitempty"`
 }
 
 // GetRunResult wraps a single run.
@@ -199,7 +201,8 @@ type GetActiveRunResult struct {
 
 // RerunResult confirms a rerun was created.
 type RerunResult struct {
-	RunID string `json:"run_id"`
+	RunID      string `json:"run_id"`
+	StartError string `json:"start_error,omitempty"`
 }
 
 // RespondResult confirms the action was accepted.

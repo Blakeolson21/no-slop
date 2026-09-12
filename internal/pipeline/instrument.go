@@ -44,6 +44,19 @@ func (a *perfRecordingAgent) SupportsSessionProvider(provider string) bool {
 
 func (a *perfRecordingAgent) Run(ctx context.Context, opts agent.RunOpts) (*agent.Result, error) {
 	opts.Env = gateTurnEnvironment(opts.Env, a.stepName, opts.Purpose)
+	pendingID := ""
+	if a.db != nil {
+		purpose := opts.Purpose
+		if purpose == "" {
+			purpose = string(a.stepName)
+		}
+		pending, dbErr := a.db.InsertAgentInvocation(db.AgentInvocation{RunID: a.runID, StepName: string(a.stepName), Round: a.round(), Purpose: purpose, Agent: a.inner.Name(), StartedAt: time.Now().Unix(), ExitStatus: "running", SessionMode: invocationSessionMode(opts)})
+		if dbErr != nil {
+			slog.Warn("failed to record pending agent invocation", "error", dbErr)
+		} else {
+			pendingID = pending.ID
+		}
+	}
 	attempts := 0
 	previous := opts.OnAttempt
 	opts.OnAttempt = func(attempt agent.Attempt) {
@@ -54,12 +67,13 @@ func (a *perfRecordingAgent) Run(ctx context.Context, opts agent.RunOpts) (*agen
 		attemptOpts := opts
 		attemptOpts.Session = attempt.Session
 		attemptOpts.SessionFallback = attempt.SessionFallback
-		a.record(ctx, attemptOpts, attempt.Agent, attempt.Identity, attempt.Result, attempt.Err, attempt.StartedAt, attempt.CompletedAt)
+		a.record(ctx, attemptOpts, attempt.Agent, attempt.Identity, attempt.Result, attempt.Err, attempt.StartedAt, attempt.CompletedAt, pendingID)
+		pendingID = ""
 	}
 	start := time.Now()
 	result, err := a.inner.Run(ctx, opts)
 	if attempts == 0 {
-		a.record(ctx, opts, a.inner.Name(), agent.ResolveInvocationIdentity(a.inner), result, err, start, time.Now())
+		a.record(ctx, opts, a.inner.Name(), agent.ResolveInvocationIdentity(a.inner), result, err, start, time.Now(), pendingID)
 	}
 	return result, err
 }
@@ -107,7 +121,7 @@ func gateTurnEnvironment(env []string, stepName types.StepName, purpose string) 
 	return clean
 }
 
-func (a *perfRecordingAgent) record(ctx context.Context, opts agent.RunOpts, agentName string, identity agent.InvocationIdentity, result *agent.Result, runErr error, startedAt, completedAt time.Time) {
+func (a *perfRecordingAgent) record(ctx context.Context, opts agent.RunOpts, agentName string, identity agent.InvocationIdentity, result *agent.Result, runErr error, startedAt, completedAt time.Time, pendingIDs ...string) {
 	if a.db == nil {
 		return
 	}
@@ -157,7 +171,11 @@ func (a *perfRecordingAgent) record(ctx context.Context, opts agent.RunOpts, age
 		}
 	}
 
-	if _, dbErr := a.db.InsertAgentInvocation(inv); dbErr != nil {
+	pendingID := ""
+	if len(pendingIDs) > 0 {
+		pendingID = pendingIDs[0]
+	}
+	if _, dbErr := a.db.CompleteAgentInvocation(inv, pendingID); dbErr != nil {
 		slog.Warn("failed to record agent invocation", "step", a.stepName, "error", dbErr)
 	}
 }

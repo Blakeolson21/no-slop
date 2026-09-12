@@ -106,6 +106,7 @@ func TestTerminalMigrationBackfillsBeforeCustodyUpdate(t *testing.T) {
 	if _, err := d.sql.Exec(`UPDATE runs SET status = ?, updated_at = 123 WHERE id = ?`, types.RunFailed, run.ID); err != nil {
 		t.Fatal(err)
 	}
+	dropGateWasteTriggersForLegacyFixture(t, d)
 	if _, err := d.sql.Exec(`ALTER TABLE runs DROP COLUMN terminal_at_ms`); err != nil {
 		t.Fatal(err)
 	}

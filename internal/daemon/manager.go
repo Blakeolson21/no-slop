@@ -938,7 +938,7 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 // startRunWithIntentSource is the common run-creation path. source is empty
 // when no intent is supplied, RunIntentSourceAgent for a new explicit
 // override, and RunIntentSourceRerun for inherited explicit intent.
-func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo, branch, headSHA, baseSHA, trigger string, skipSteps []types.StepName, intent, source string) (string, error) {
+func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo, branch, headSHA, baseSHA, trigger string, skipSteps []types.StepName, intent, source string) (runID string, startErr error) {
 	branchRole := telemetryBranchRole(branch, repo.DefaultBranch)
 	trackStartFailure := func(stage string) {
 		telemetry.Track("run", telemetry.Fields{
@@ -993,6 +993,14 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 		trackStartFailure("create_run")
 		return "", fmt.Errorf("create run: %w", err)
 	}
+
+	// Even an immediate setup failure has an exact durable run. Preserve it in
+	// the receipt instead of making the client rediscover a neighboring row.
+	defer func() {
+		if startErr != nil {
+			runID = run.ID
+		}
+	}()
 
 	// Create worktree from the gate bare repo.
 	gateDir := m.paths.RepoDir(repo.ID)
@@ -1440,6 +1448,10 @@ func (m *RunManager) Shutdown() {
 
 // HandleCancel stops an active run and propagates cancellation to the executor.
 func (m *RunManager) HandleCancel(runID string) error {
+	return m.HandleCancelWithReason(runID, "explicit cancellation")
+}
+
+func (m *RunManager) HandleCancelWithReason(runID, reason string) error {
 	m.mu.Lock()
 	cancel, ok := m.cancels[runID]
 	m.mu.Unlock()
@@ -1448,6 +1460,12 @@ func (m *RunManager) HandleCancel(runID string) error {
 		return fmt.Errorf("no active run %s", runID)
 	}
 
+	if strings.TrimSpace(reason) == "" {
+		reason = "explicit cancellation"
+	}
+	if err := m.db.RecordCancelReason(runID, reason); err != nil {
+		return err
+	}
 	cancel(fmt.Errorf(types.RunCancelReasonAbortedByUser))
 	return nil
 }

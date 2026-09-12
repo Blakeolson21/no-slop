@@ -133,7 +133,7 @@ Before starting, run ` + "`no-slop axi`" + ` (home view).
 If it shows an active run on your current branch, inspect it with ` + "`no-slop axi status`" + `.
 If it is parked at a gate, drive it with ` + "`no-slop axi respond`" + `.
 Reattach an in-flight run by re-running ` + "`no-slop axi run`" + ` when it still matches your current ` + "`HEAD`" + ` - either as the submitted head or as the current pipeline head.
-Only ` + "`no-slop axi abort`" + ` it when you mean to discard that run before starting over; aborting is a between-runs action, never a way to take over or bypass a gate while a run is still going (see [Validate and decide](#validate-and-decide)).
+Only ` + "`no-slop axi abort --run <id>`" + ` it when you mean to discard that run before starting over; aborting is a between-runs action, never a way to take over or bypass a gate while a run is still going (see [Validate and decide](#validate-and-decide)).
 If it shows an active run on another branch, leave that run alone and start validation for your current branch with ` + "`no-slop axi run --intent \"...\"`" + `.
 
 ## Intent is required
@@ -341,7 +341,6 @@ no-slop axi sync --check  # freshly verify an offered synchronization plan
 no-slop axi sync          # apply only an offered guarded synchronization
 no-slop axi sync --recover  # return custody after a terminal run left unpublished pipeline commits
 no-slop axi logs --step <name> --full   # full log output of one step
-no-slop axi abort         # cancel the current-branch active run
 no-slop axi abort --run <id>   # cancel a specific run by id (works outside its worktree)
 ` + "```" + `
 

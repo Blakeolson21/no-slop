@@ -40,7 +40,12 @@ func Open(path string) (*DB, error) {
 			return nil, fmt.Errorf("migrate db: %w", err)
 		}
 	}
-	return &DB{sql: sqlDB}, nil
+	d := &DB{sql: sqlDB}
+	if err := d.installGateAccounting(); err != nil {
+		sqlDB.Close()
+		return nil, err
+	}
+	return d, nil
 }
 
 // OpenReadOnly opens an existing database without creating or migrating it.

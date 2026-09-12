@@ -124,14 +124,25 @@ func newDaemonNotifyPushCmd() *cobra.Command {
 			defer client.Close()
 
 			var result ipc.PushReceivedResult
-			return client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
+			if err := client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
 				Gate:      gatePath,
 				Ref:       ref,
 				Old:       oldSHA,
 				New:       newSHA,
 				SkipSteps: skipSteps,
 				Intent:    intent,
-			}, &result)
+			}, &result); err != nil {
+				return err
+			}
+			if err := writeLaunchReceipt(os.Getenv("NS_PUSH_RUN_RECEIPT"), launchReceipt{
+				RunID: result.RunID, Branch: strings.TrimPrefix(ref, "refs/heads/"), SubmittedHead: newSHA, StoreRoot: p.Root(),
+			}); err != nil {
+				return err
+			}
+			if result.StartError != "" {
+				return fmt.Errorf("%s", result.StartError)
+			}
+			return nil
 		},
 	}
 

@@ -389,7 +389,7 @@ func TestAxiCustodyRecoveryJourney(t *testing.T) {
 	}
 
 	// Cancel while the pipeline fix commit exists only in the gate branch.
-	abortOut, abortErr := h.RunInDir(operator, "axi", "abort")
+	abortOut, abortErr := h.RunInDir(operator, "axi", "abort", "--run", axiTestActiveRunID(t, h, "feature/recover-journey"))
 	if abortErr != nil {
 		t.Fatalf("axi abort: %v\n%s", abortErr, abortOut)
 	}
@@ -600,7 +600,7 @@ func TestAxiCustodyRecoveryAfterRebaseJourney(t *testing.T) {
 	if err != nil {
 		t.Fatalf("review fix: %v\n%s", err, fixOut)
 	}
-	abortOut, abortErr := h.RunInDir(operator, "axi", "abort")
+	abortOut, abortErr := h.RunInDir(operator, "axi", "abort", "--run", axiTestActiveRunID(t, h, "feature/rebase-recover"))
 	if abortErr != nil {
 		t.Fatalf("axi abort: %v\n%s", abortErr, abortOut)
 	}
@@ -702,7 +702,7 @@ func TestAxiPrePushAbortUnmovedHeadCustodyJourney(t *testing.T) {
 
 	// Delivery switches to a direct PR: abort at the gate, before any pipeline
 	// edit, through the supported public command.
-	abortOut, abortErr := h.RunInDir(operator, "axi", "abort")
+	abortOut, abortErr := h.RunInDir(operator, "axi", "abort", "--run", axiTestActiveRunID(t, h, "feature/unmoved-abort"))
 	if abortErr != nil {
 		t.Fatalf("axi abort: %v\n%s", abortErr, abortOut)
 	}
@@ -796,11 +796,11 @@ func TestAxiPrePushAbortUnmovedHeadCustodyJourney(t *testing.T) {
 	}
 
 	// Repeated abort is an idempotent no-op returning the same final truth.
-	reabortOut, err := h.RunInDir(operator, "axi", "abort")
+	reabortOut, err := h.RunInDir(operator, "axi", "abort", "--run", run.ID)
 	if err != nil {
 		t.Fatalf("repeated abort: %v\n%s", err, reabortOut)
 	}
-	for _, want := range []string{"aborted: false", "no active run (no-op)", "state: user_owned"} {
+	for _, want := range []string{"aborted: false", "idempotent no-op", "state: user_owned"} {
 		if !strings.Contains(reabortOut, want) {
 			t.Errorf("repeated abort missing %q:\n%s", want, reabortOut)
 		}
@@ -866,7 +866,7 @@ func TestAxiPrePushAbortUnmovedHeadCustodyJourney(t *testing.T) {
 	} else {
 		axiGateFindingID(t, out)
 	}
-	if out, err := h.RunInDir(rerunOperator, "axi", "abort"); err != nil {
+	if out, err := h.RunInDir(rerunOperator, "axi", "abort", "--run", axiTestActiveRunID(t, h, "feature/unmoved-rerun")); err != nil {
 		t.Fatalf("second lane abort: %v\n%s", err, out)
 	}
 	if second := h.WaitForRun("feature/unmoved-rerun", 30*time.Second); second.Status != types.RunCancelled {
@@ -880,7 +880,7 @@ func TestAxiPrePushAbortUnmovedHeadCustodyJourney(t *testing.T) {
 		t.Fatalf("fresh validation after unmoved abort was blocked: %v\n%s", err, freshOut)
 	}
 	axiGateFindingID(t, freshOut)
-	if out, err := h.RunInDir(rerunOperator, "axi", "abort"); err != nil {
+	if out, err := h.RunInDir(rerunOperator, "axi", "abort", "--run", axiTestActiveRunID(t, h, "feature/unmoved-rerun")); err != nil {
 		t.Fatalf("cleanup abort: %v\n%s", err, out)
 	}
 }
@@ -1270,7 +1270,7 @@ func TestAxiAttachCommandsIgnoreInvalidConfigWhenDaemonRunning(t *testing.T) {
 		t.Fatalf("axi respond with invalid config did not complete:\n%s", doneOut)
 	}
 
-	abortOut, err := h.RunInDir(abortWorktree, "axi", "abort")
+	abortOut, err := h.RunInDir(abortWorktree, "axi", "abort", "--run", axiTestActiveRunID(t, h, "feature/abort-invalid-config"))
 	if err != nil {
 		t.Fatalf("axi abort with invalid config: %v\n%s", err, abortOut)
 	}
@@ -1390,4 +1390,22 @@ func assertSkillInstalled(t *testing.T, h *Harness) {
 			t.Errorf("init must not write %s into the repo (stat err = %v)", rel, err)
 		}
 	}
+}
+
+// The test captures a unique owned active row before issuing the exact-ID CLI.
+func axiTestActiveRunID(t *testing.T, h *Harness, branch string) string {
+	t.Helper()
+	id := ""
+	for _, run := range h.Runs() {
+		if run.Branch == branch && (run.Status == types.RunPending || run.Status == types.RunRunning) {
+			if id != "" {
+				t.Fatal("multiple active fixture runs")
+			}
+			id = run.ID
+		}
+	}
+	if id == "" {
+		t.Fatal("missing owned fixture run")
+	}
+	return id
 }

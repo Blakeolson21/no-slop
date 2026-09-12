@@ -25,6 +25,7 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/logstore"
 	"github.com/Blakeolson21/no-slop/internal/paths"
 	"github.com/Blakeolson21/no-slop/internal/procreap"
+	"github.com/Blakeolson21/no-slop/internal/safeurl"
 	"github.com/Blakeolson21/no-slop/internal/shellenv"
 	"github.com/Blakeolson21/no-slop/internal/telemetry"
 	"github.com/Blakeolson21/no-slop/internal/types"
@@ -830,6 +831,9 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 		}
 		runID, err := mgr.HandleRerun(ctx, p.RepoID, p.Branch, p.PreviousRunID, p.SkipSteps, p.Intent)
 		if err != nil {
+			if runID != "" {
+				return &ipc.RerunResult{RunID: runID, StartError: safeurl.RedactText(err.Error())}, nil
+			}
 			return nil, err
 		}
 		return &ipc.RerunResult{RunID: runID}, nil
@@ -848,6 +852,9 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 		slog.Info("push received", "ref", p.Ref, "old", p.Old, "new", p.New, "gate", p.Gate)
 		runID, err := mgr.HandlePushReceived(ctx, &p)
 		if err != nil {
+			if runID != "" {
+				return &ipc.PushReceivedResult{RunID: runID, StartError: safeurl.RedactText(err.Error())}, nil
+			}
 			return nil, err
 		}
 		return &ipc.PushReceivedResult{RunID: runID}, nil
@@ -875,7 +882,7 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		if err := mgr.HandleCancel(p.RunID); err != nil {
+		if err := mgr.HandleCancelWithReason(p.RunID, p.Reason); err != nil {
 			return nil, err
 		}
 		return &ipc.CancelRunResult{OK: true}, nil

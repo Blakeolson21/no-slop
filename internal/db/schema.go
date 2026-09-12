@@ -285,4 +285,12 @@ var migrationStatements = []string{
 	`ALTER TABLE agent_invocations ADD COLUMN workload_files INTEGER`,
 	`ALTER TABLE agent_invocations ADD COLUMN workload_lines INTEGER`,
 	`ALTER TABLE agent_invocations ADD COLUMN finding_count INTEGER`,
+	`ALTER TABLE runs ADD COLUMN cancel_reason TEXT`,
+	`ALTER TABLE runs ADD COLUMN dispatch_reason TEXT`,
+	`ALTER TABLE runs ADD COLUMN cancel_adjudication_id TEXT`,
+	`ALTER TABLE runs ADD COLUMN waste_usage_json TEXT`,
+	`ALTER TABLE agent_invocations ADD COLUMN estimated_cost_usd REAL`,
+	`ALTER TABLE agent_invocations ADD COLUMN known_cost_usd REAL`,
+	`ALTER TABLE agent_invocations ADD COLUMN cost_basis TEXT`,
+	`ALTER TABLE agent_invocations ADD COLUMN price_source_json TEXT`,
 }

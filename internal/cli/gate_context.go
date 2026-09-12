@@ -36,7 +36,7 @@ func mutatesPipelineControl(cmd *cobra.Command) bool {
 	path := cmd.CommandPath()
 	switch path {
 	case "no-slop", "no-slop init", "no-slop eject", "no-slop rerun",
-		"no-slop axi run", "no-slop axi respond", "no-slop axi abort",
+		"no-slop axi cancel-adjudication", "no-slop axi run", "no-slop axi respond", "no-slop axi abort",
 		"no-slop daemon start", "no-slop daemon stop", "no-slop daemon restart",
 		"no-slop update":
 		return true

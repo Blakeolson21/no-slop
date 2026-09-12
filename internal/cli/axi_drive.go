@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -156,6 +158,12 @@ func runAxiRun(cmd *cobra.Command, autoYes bool, skipSteps []types.StepName, int
 		}
 	}
 
+	if err := writeLaunchReceipt(os.Getenv("MO_GATE_LAUNCH_FILE"), launchReceipt{
+		RunID: runID, Branch: branch, SubmittedHead: headSHA, StoreRoot: env.p.Root(), Repository: env.repo.UpstreamURL,
+	}); err != nil {
+		return emitError(cmd, 1, fmt.Sprintf("run %s admitted but launch receipt failed: %v", runID, err))
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "NO_SLOP_LAUNCH run_id=%s store=%s\n", runID, env.p.Root())
 	run, ciReady, err := driveRun(ctx, cmd.ErrOrStderr(), env.client, env.p.Socket(), runID, autoYes)
 	if err != nil {
 		return emitError(cmd, 1, fmt.Sprintf("drive run: %v", err))
@@ -298,16 +306,26 @@ func triggerRun(ctx context.Context, env *axiEnv, branch, headSHA string, skipSt
 	if opt := formatIntentPushOption(intent); opt != "" {
 		pushOptions = append(pushOptions, opt)
 	}
-	priorRunIDs, err := runIDsForHead(env.client, env.repo.ID, branch, headSHA)
-	if err != nil {
-		// An active run can still be found below. Without a baseline, however,
-		// a matching terminal run may predate this push, so do not attach to it.
-		priorRunIDs = nil
-	}
 	if state := freshRunBranchOwnershipState(ctx, env); state != nil {
 		return "", &branchOwnershipError{state: *state}
 	}
-	pushErr := git.PushWithOptions(ctx, ".", gate.RemoteName, "refs/heads/"+branch, "", false, pushOptions)
+	captureDir, err := os.MkdirTemp("", "no-slop-launch-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(captureDir)
+	capturePath := filepath.Join(captureDir, "run.json")
+	pushArgs := []string{"push", "--porcelain"}
+	for _, option := range pushOptions {
+		pushArgs = append(pushArgs, "-o", option)
+	}
+	pushArgs = append(pushArgs, gate.RemoteName, "HEAD:refs/heads/"+branch)
+	pushOutput, pushErr := git.RunWithEnv(ctx, ".", []string{"NS_PUSH_RUN_RECEIPT=" + capturePath}, pushArgs...)
+	if id, captured, captureErr := capturedPushRun(capturePath, branch, headSHA); captured {
+		// A captured ID is authoritative even if its row is not visible yet. Never
+		// fall through to a time-window lookup or mint a duplicate on that path.
+		return id, captureErr
+	}
 	if pushErr != nil {
 		// Close the inspection-to-push race: if the pipeline advanced ownership
 		// after the pre-push check, preserve the structured branch-sync refusal
@@ -317,9 +335,10 @@ func triggerRun(ctx context.Context, env *axiEnv, branch, headSHA string, skipSt
 		}
 	}
 
-	if run, _ := waitForTriggeredRunForHead(ctx, env.client, env.repo.ID, branch, headSHA, priorRunIDs, triggerWaitTimeout); run != nil {
-		return run.ID, nil
+	if pushErr == nil && !strings.Contains(pushOutput, "[up to date]") {
+		return "", fmt.Errorf("push returned without its exact run receipt; inspect admission, do not dispatch again")
 	}
+
 	if !shouldRerunAfterNoActiveRun(pushErr) {
 		return "", fmt.Errorf("push %q to gate: %v", branch, pushErr)
 	}
@@ -901,11 +920,9 @@ func newAxiAbortCmd() *cobra.Command {
 	var runID string
 	cmd := &cobra.Command{
 		Use:   "abort",
-		Short: "Cancel the active pipeline run",
-		Long: "Cancel a pipeline run. With no flags, cancels the active run on the\n" +
-			"current branch. Pass --run <id> to cancel a specific run by its id from\n" +
-			"anywhere - including outside its worktree - so an orphaned CI monitor\n" +
-			"(e.g. after a worktree was torn down) can be reaped deterministically.\n\n" +
+		Short: "Cancel the exact pipeline run named by --run",
+		Long: "Cancel a pipeline run with an explicit --run <id>. Launcher death\n" +
+			"never authorizes cancellation. --reason records why this exact run is aborted.\n\n" +
 			"While a run is active, do NOT abort (or rerun) to go fix a finding\n" +
 			"yourself - that discards the pipeline's in-flight work and forces a full\n" +
 			"re-validation. abort and rerun are for between runs (after a failed or\n" +
@@ -916,90 +933,58 @@ func newAxiAbortCmd() *cobra.Command {
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return trackAxiSurface("axi-abort", "/axi/abort", nil, func() error {
+				if strings.TrimSpace(runID) == "" {
+					return emitError(cmd, 2, "axi abort requires an exact nonempty --run ID")
+				}
 				return runAxiAbort(cmd, strings.TrimSpace(runID))
 			})
 		},
 	}
 	cmd.Flags().StringVar(&runID, "run", "", "cancel this run id directly, without resolving the current branch or worktree")
+	cmd.Flags().String("reason", "explicit axi abort", "why this exact run is being cancelled")
+	_ = cmd.MarkFlagRequired("run")
 	return cmd
 }
 
 func runAxiAbort(cmd *cobra.Command, runID string) error {
-	if runID != "" {
-		return runAxiAbortByRunID(cmd, runID)
+	if strings.TrimSpace(runID) == "" {
+		return emitError(cmd, 2, "axi abort requires exact --run ID")
 	}
+	return runAxiAbortByRunID(cmd, runID)
+}
 
-	ctx := cmd.Context()
-	env, err := openAxiDaemonEnv()
-	if err != nil {
-		return emitError(cmd, 1, err.Error(), repoInitHelp(err)...)
+func emitExactAbortedRun(cmd *cobra.Command, runID, branch, status string, aborted bool) error {
+	fields := []toon.Field{{Key: "aborted", Value: aborted}, {Key: "run", Value: runID}, {Key: "branch", Value: branch}, {Key: "run_status", Value: status}}
+	if !aborted {
+		fields = append(fields, toon.Field{Key: "detail", Value: "run is already terminal (idempotent no-op)"})
 	}
-	defer env.close()
-	branch, err := git.CurrentBranch(ctx, ".")
-	if err != nil {
-		return emitError(cmd, 1, fmt.Sprintf("get current branch: %v", err))
-	}
-
-	var active ipc.GetActiveRunResult
-	if err := env.client.Call(ipc.MethodGetActiveRun, activeRunLookupParams(env.repo.ID, branch), &active); err != nil {
-		return emitError(cmd, 1, fmt.Sprintf("get active run: %v", err))
-	}
-
-	if active.Run == nil {
-		// Idempotent: nothing to abort is a successful no-op that still
-		// reports the branch's current structured ownership state, so a
-		// repeated abort returns the same final truth as the aborting call.
-		fields := []toon.Field{
-			{Key: "aborted", Value: false},
-			{Key: "detail", Value: "no active run (no-op)"},
-		}
-		if state := inspectAxiBranchSync(ctx, env); relevantCachedSyncState(state) {
+	if env, err := openAxiEnv(false); err == nil {
+		defer env.close()
+		state := inspectAxiBranchSync(cmd.Context(), env)
+		if state.Pipeline.RunID == runID && relevantCachedSyncState(state) {
 			fields = append(fields, branchSyncField(state))
 		}
-		emitDoc(cmd, fields...)
-		return nil
-	}
-
-	var result ipc.CancelRunResult
-	if err := env.client.Call(ipc.MethodCancelRun, &ipc.CancelRunParams{RunID: active.Run.ID}, &result); err != nil {
-		return emitError(cmd, 1, fmt.Sprintf("abort run: %v", err))
-	}
-	// Success and the final ownership state may only be reported after the
-	// exact run positively confirmed terminal quiescence; anything else exits
-	// nonzero with the unconfirmed contract.
-	final, confirmed, reason := waitForTerminalRun(ctx, env.client, active.Run.ID, abortStateWaitTimeout)
-	if !confirmed {
-		return emitUnconfirmedAbort(cmd, active.Run.ID, active.Run.Branch, reason, runViewPtrFromIPC(final), true)
-	}
-	fields := []toon.Field{
-		toon.Field{Key: "aborted", Value: true},
-		toon.Field{Key: "run", Value: active.Run.ID},
-		toon.Field{Key: "branch", Value: active.Run.Branch},
-		toon.Field{Key: "run_status", Value: string(final.Status)},
-	}
-	state := inspectAxiBranchSync(ctx, env)
-	if state.Pipeline.RunID == active.Run.ID && relevantCachedSyncState(state) {
-		fields = append(fields, branchSyncField(state))
-	}
-	help := []string{
-		"Run `no-slop axi sync --check` before any local follow-up commit - a cancelled run can leave the branch in pipeline custody, and the check offers the guarded custody recovery",
-	}
-	if state.Pipeline.RunID == active.Run.ID {
-		switch {
-		case state.NextAction != nil:
-			help = []string{
-				"Run `" + state.NextAction.Command + "`",
-				branchSyncAgentGuidance,
-			}
-		case state.State == branchsync.StateUserOwned:
-			help = []string{
-				"Cancellation released this branch: the exact branch and head are yours and immediately usable - no sync action is needed",
+		help := []string{
+			"Run `no-slop axi sync --check` before any local follow-up commit - a cancelled run can leave the branch in pipeline custody, and the check offers the guarded custody recovery",
+		}
+		if state.Pipeline.RunID == runID {
+			switch {
+			case state.NextAction != nil:
+				help = []string{
+					"Run `" + state.NextAction.Command + "`",
+					branchSyncAgentGuidance,
+				}
+			case state.State == branchsync.StateUserOwned:
+				help = []string{
+					"Cancellation released this branch: the exact branch and head are yours and immediately usable - no sync action is needed",
+				}
 			}
 		}
+		fields = append(fields,
+			toon.Field{Key: "help", Value: help},
+		)
+
 	}
-	fields = append(fields,
-		toon.Field{Key: "help", Value: help},
-	)
 	emitDoc(cmd, fields...)
 	return nil
 }
@@ -1123,7 +1108,7 @@ func runAxiAbortByRunID(cmd *cobra.Command, runID string) error {
 	defer client.Close()
 
 	var result ipc.CancelRunResult
-	if err := client.Call(ipc.MethodCancelRun, &ipc.CancelRunParams{RunID: runID}, &result); err != nil {
+	if err := client.Call(ipc.MethodCancelRun, &ipc.CancelRunParams{RunID: runID, Reason: abortReason(cmd)}, &result); err != nil {
 		// The daemon reports an unknown/inactive run id as "no active run
 		// <id>". That result alone is not terminal truth: resolve the exact
 		// run's durable state before deciding between the idempotent
@@ -1141,12 +1126,7 @@ func runAxiAbortByRunID(cmd *cobra.Command, runID string) error {
 	if !confirmed {
 		return emitUnconfirmedAbort(cmd, runID, "", reason, runViewPtrFromIPC(final), true)
 	}
-	emitDoc(cmd,
-		toon.Field{Key: "aborted", Value: true},
-		toon.Field{Key: "run", Value: runID},
-		toon.Field{Key: "run_status", Value: string(final.Status)},
-	)
-	return nil
+	return emitExactAbortedRun(cmd, runID, final.Branch, string(final.Status), true)
 }
 
 // runViewPtrFromIPC adapts an optional IPC run snapshot for the unconfirmed
@@ -1192,13 +1172,7 @@ func resolveInactiveAbortTruth(cmd *cobra.Command, client *ipc.Client, runID str
 		return emitUnconfirmedAbort(cmd, runID, "", fmt.Sprintf("the daemon returned durable state for run %s instead of the requested run %s", run.ID, runID), nil, true)
 	}
 	if terminalStatus(string(run.Status)) {
-		emitDoc(cmd,
-			toon.Field{Key: "aborted", Value: false},
-			toon.Field{Key: "run", Value: runID},
-			toon.Field{Key: "run_status", Value: string(run.Status)},
-			toon.Field{Key: "detail", Value: "run is already terminal (idempotent no-op)"},
-		)
-		return nil
+		return emitExactAbortedRun(cmd, runID, run.Branch, string(run.Status), false)
 	}
 	return emitUnconfirmedAbort(cmd, runID, run.Branch, fmt.Sprintf("the daemon reported no active run, but the exact run's durable state is still %s", run.Status), runViewPtrFromIPC(run), true)
 }
@@ -1260,4 +1234,12 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+func abortReason(cmd *cobra.Command) string {
+	reason, _ := cmd.Flags().GetString("reason")
+	if strings.TrimSpace(reason) == "" {
+		return "explicit axi abort"
+	}
+	return reason
 }

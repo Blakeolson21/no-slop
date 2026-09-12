@@ -284,31 +284,26 @@ When an explicit approval completes a gate that still has actionable findings, t
 
 ## no-slop axi abort
 
-Cancel the active run for the current branch.
-Active runs on other branches are left alone.
+Cancel exactly the run named by the required `--run` flag:
 
 ```sh
-no-slop axi abort
+no-slop axi abort --run <id> --reason "why this run must stop"
 ```
 
-If there is no active run, this succeeds as a no-op.
+Missing and empty IDs are refused. No current-branch lookup can choose a run
+for you. A known terminal ID returns its terminal state as an idempotent no-op;
+a positively unknown ID returns `aborted: false` with no fabricated state.
+An unreadable or still nonterminal run returns the terminal-unconfirmed error.
+The CLI waits for exact terminal quiescence before reporting completed abort.
+It never starts a stopped daemon to cancel a run.
 
-Pass `--run <id>` to cancel a specific run by its id instead of resolving the current branch:
+A cancellation can leave unpublished commits in pipeline custody; follow the
+returned guarded synchronization guidance. Use `axi respond --action fix` to
+repair active findings rather than aborting to edit them yourself.
 
-```sh
-no-slop axi abort --run <id>
-```
-
-`--run` does not need a repo, branch, or worktree, so it works from anywhere.
-Use it to reap an orphaned CI monitor whose worktree was torn down before the PR merged - the run id is shown in `axi run` output and in the `axi` home view.
-A `--run` id that is not currently active is resolved against the exact run's durable record rather than trusted blindly: a known already-terminal run returns an idempotent success carrying its terminal `run_status` with no fabricated new cancellation, a positively proven unknown id keeps the documented successful no-op with no fabricated state, and a run that is recorded as still nonterminal or cannot be read returns the nonzero terminal-unconfirmed contract.
-When the daemon is not running, nothing can be cancelled and abort never starts one: the durable record alone decides the same three outcomes, and a recorded nonterminal run reports that cancellation could not be requested.
-When the daemon is already running, `axi abort` can cancel an active run even if the global config file has become invalid, because it is not starting a fresh run.
-Both abort surfaces report a completed cancellation only after the exact run positively confirms a terminal state within the bounded wait; success then includes the terminal `run_status`, and branch-scoped abort renders the refreshed `branch_sync` object and its exact next action, if any.
-When terminal quiescence cannot be confirmed - the bounded wait expires, the wait is cancelled, or a status read fails - abort exits nonzero, states explicitly that cancellation was requested but terminal quiescence is unconfirmed, includes the last structured run state when one is available, and never claims `aborted: true` or presents user-owned or recoverable ownership guidance as authoritative; re-run the abort or watch `axi status --run <id>` until a terminal status is confirmed.
-A cancellation that leaves the branch in pipeline custody points directly to `no-slop axi sync --recover`, which anchors whatever survives of the pipeline-created commits; when the submitted head never moved, cancellation instead reports `state: user_owned` with no sync action.
-While a run is active, do not use `axi abort` or `no-slop rerun` to go fix a finding yourself.
-That cancels the pipeline's in-flight work and forces a full re-validation; use `axi respond --action fix` at the gate so the pipeline applies and re-checks the fix.
+See [gate cancellation and terminal usage](./gate-cancel-accounting/) for the
+persistent two-abort budget, independent signed adjudication, and waste-row
+contract. Launcher death is not explicit cancellation.
 
 ## no-slop eject
 

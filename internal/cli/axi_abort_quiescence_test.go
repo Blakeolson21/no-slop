@@ -149,7 +149,7 @@ func assertUnconfirmedAbortOutput(t *testing.T, surface, out string) {
 func TestAxiAbortRefusesSuccessWhileTerminalQuiescenceUnconfirmed(t *testing.T) {
 	t.Run("terminalization delayed past bounded wait", func(t *testing.T) {
 		newAbortQuiescenceFixture(t, runningRunForever)
-		out, err := executeCmd("axi", "abort")
+		out, err := executeCmd("axi", "abort", "--run=run-quiesce")
 		t.Logf("branch-scoped delayed-terminalization CLI output:\n%s", out)
 		if err == nil {
 			t.Fatalf("abort with delayed terminalization must exit nonzero:\n%s", out)
@@ -163,7 +163,7 @@ func TestAxiAbortRefusesSuccessWhileTerminalQuiescenceUnconfirmed(t *testing.T) 
 		newAbortQuiescenceFixture(t, func(context.Context, int) (*ipc.RunInfo, error) {
 			return nil, errors.New("scripted status read failure")
 		})
-		out, err := executeCmd("axi", "abort")
+		out, err := executeCmd("axi", "abort", "--run=run-quiesce")
 		t.Logf("branch-scoped status-read-failure CLI output:\n%s", out)
 		if err == nil {
 			t.Fatalf("abort with failing status reads must exit nonzero:\n%s", out)
@@ -222,7 +222,7 @@ func TestAxiAbortStatusReadStallRespectsBoundedWait(t *testing.T) {
 		name string
 		args []string
 	}{
-		{name: "branch scoped", args: []string{"axi", "abort"}},
+		{name: "equals run flag", args: []string{"axi", "abort", "--run=run-quiesce"}},
 		{name: "explicit run", args: []string{"axi", "abort", "--run", "run-quiesce"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -252,7 +252,7 @@ func TestAxiAbortCancelledWaitRefusesSuccess(t *testing.T) {
 		name string
 		args []string
 	}{
-		{name: "branch scoped", args: []string{"axi", "abort"}},
+		{name: "equals run flag", args: []string{"axi", "abort", "--run=run-quiesce"}},
 		{name: "explicit run", args: []string{"axi", "abort", "--run", "run-quiesce"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // Agent invocation session modes recorded for local performance telemetry.
@@ -40,10 +41,14 @@ const (
 // zero. Pre-existing rows created before these columns existed read back as
 // nil, so they too report unknown honestly.
 type AgentInvocation struct {
-	ID       string
-	RunID    string
-	StepName string
-	Round    int
+	EstimatedCostUSD *float64
+	KnownCostUSD     *float64
+	CostBasis        *string
+	PriceSourceJSON  *string
+	ID               string
+	RunID            string
+	StepName         string
+	Round            int
 	// Purpose is the pipeline duty served: review, review-fix,
 	// test-evidence, housekeeping, document, lint, pr, intent, or a
 	// step-derived default.
@@ -136,7 +141,7 @@ const agentInvocationColumns = `id, run_id, step_name, round, purpose, agent, re
 	delta_input_tokens, delta_output_tokens, delta_cache_read_tokens,
 	model_roundtrips, tool_calls,
 	tool_wait_calls, tool_test_lint_calls, tool_edit_calls, tool_read_calls, tool_git_calls, tool_other_calls,
-	workload_files, workload_lines, finding_count`
+	workload_files, workload_lines, finding_count, estimated_cost_usd, known_cost_usd, cost_basis, price_source_json`
 
 // agentInvocationInsertPlaceholders has one '?' per agentInvocationColumns entry.
 const agentInvocationInsertPlaceholders = `?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -147,19 +152,39 @@ const agentInvocationInsertPlaceholders = `?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 	?, ?, ?,
 	?, ?,
 	?, ?, ?, ?, ?, ?,
-	?, ?, ?`
+	?, ?, ?, ?, ?, ?, ?`
 
 // InsertAgentInvocation records one completed agent invocation. Nil pointer
 // fields are stored as SQL NULL (database/sql dereferences non-nil pointers).
 func (d *DB) InsertAgentInvocation(inv AgentInvocation) (*AgentInvocation, error) {
-	inv.ID = newID()
+	return d.recordAgentInvocation(inv, "")
+}
+
+// CompleteAgentInvocation replaces the durable pending attempt by its exact ID.
+func (d *DB) CompleteAgentInvocation(inv AgentInvocation, id string) (*AgentInvocation, error) {
+	return d.recordAgentInvocation(inv, id)
+}
+
+func (d *DB) recordAgentInvocation(inv AgentInvocation, id string) (*AgentInvocation, error) {
+	if id == "" {
+		id = newID()
+	}
+	inv.ID = id
+	priceGateInvocation(&inv)
+	updates := []string{}
+	for _, column := range strings.Split(agentInvocationColumns, ",") {
+		column = strings.TrimSpace(column)
+		if column != "id" {
+			updates = append(updates, column+"=excluded."+column)
+		}
+	}
 	modelArgsJSON, err := marshalModelArgs(inv.ModelArgs)
 	if err != nil {
 		return nil, fmt.Errorf("insert agent invocation: encode model args: %w", err)
 	}
 	_, err = d.sql.Exec(
 		`INSERT INTO agent_invocations (`+agentInvocationColumns+`)
-		 VALUES (`+agentInvocationInsertPlaceholders+`)`,
+		 VALUES (`+agentInvocationInsertPlaceholders+`) ON CONFLICT(id) DO UPDATE SET `+strings.Join(updates, ","),
 		inv.ID, inv.RunID, inv.StepName, inv.Round, inv.Purpose, inv.Agent,
 		inv.ResolvedExecutable, inv.Model, modelArgsJSON, inv.ModelProvider,
 		inv.SessionMode, inv.SessionKey, inv.FallbackReason,
@@ -169,7 +194,7 @@ func (d *DB) InsertAgentInvocation(inv AgentInvocation) (*AgentInvocation, error
 		inv.DeltaInputTokens, inv.DeltaOutputTokens, inv.DeltaCacheReadTokens,
 		inv.ModelRoundtrips, inv.ToolCalls,
 		inv.ToolWaitCalls, inv.ToolTestLintCalls, inv.ToolEditCalls, inv.ToolReadCalls, inv.ToolGitCalls, inv.ToolOtherCalls,
-		inv.WorkloadFiles, inv.WorkloadLines, inv.FindingCount,
+		inv.WorkloadFiles, inv.WorkloadLines, inv.FindingCount, inv.EstimatedCostUSD, inv.KnownCostUSD, inv.CostBasis, inv.PriceSourceJSON,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("insert agent invocation: %w", err)
@@ -216,7 +241,7 @@ func scanAgentInvocation(row scanner) (AgentInvocation, error) {
 		&inv.DeltaInputTokens, &inv.DeltaOutputTokens, &inv.DeltaCacheReadTokens,
 		&inv.ModelRoundtrips, &inv.ToolCalls,
 		&inv.ToolWaitCalls, &inv.ToolTestLintCalls, &inv.ToolEditCalls, &inv.ToolReadCalls, &inv.ToolGitCalls, &inv.ToolOtherCalls,
-		&inv.WorkloadFiles, &inv.WorkloadLines, &inv.FindingCount,
+		&inv.WorkloadFiles, &inv.WorkloadLines, &inv.FindingCount, &inv.EstimatedCostUSD, &inv.KnownCostUSD, &inv.CostBasis, &inv.PriceSourceJSON,
 	); err != nil {
 		return AgentInvocation{}, fmt.Errorf("scan agent invocation: %w", err)
 	}

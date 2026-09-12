@@ -353,6 +353,7 @@ func TestOpenMigratesAgentInvocationsAndParkedMS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
+	dropGateWasteTriggersForLegacyFixture(t, d)
 	if _, err := d.sql.Exec(`DROP TABLE agent_invocations`); err != nil {
 		t.Fatalf("drop table: %v", err)
 	}
@@ -406,6 +407,7 @@ func TestOpenMigratesSessionFidelityColumns(t *testing.T) {
 	}
 	// Simulate a pre-fidelity table by dropping the new columns, then insert a
 	// legacy row that has no fidelity data.
+	dropGateWasteTriggersForLegacyFixture(t, d)
 	for _, col := range []string{"model_provider", "fallback_reason", "subprocess_wait_ms",
 		"fresh_input_tokens", "reasoning_tokens", "model_roundtrips", "tool_calls", "finding_count"} {
 		if _, err := d.sql.Exec(`ALTER TABLE agent_invocations DROP COLUMN ` + col); err != nil {
