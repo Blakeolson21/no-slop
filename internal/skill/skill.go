@@ -318,9 +318,10 @@ through bounded fix rounds instead of stopping before the first attempt.
 If you have clear consent to drive the run automatically, pass ` + "`--yes`" + ` to ` + "`axi run`" + `
 or ` + "`axi respond`" + `. It treats every actionable finding - ` + "`auto-fix`" + ` and
 ` + "`ask-user`" + ` alike - as consent to fix it, selects every current finding, and
-funds up to 3 fix rounds per step. It approves clean gates and gates with only
-` + "`no-op`" + ` findings. If actionable findings survive that budget, it leaves the run parked
-for explicit adjudication instead of approving them. Only use it when the user
+funds up to 3 fix rounds per step, subject to the persisted configured ceiling. It approves clean gates and gates with only
+` + "`no-op`" + ` findings. If actionable findings survive the configured fix budget, the daemon
+fails the run with "fix budget exhausted" and releases execution ownership.
+Restarting or re-dispatching uncertified review work preserves spent attempts. Only use it when the user
 has asked you to drive the whole run without checking back unless fixing stalls.
 
 A review ` + "`gate:`" + ` may carry a ` + "`convergence`" + ` block: findings per round

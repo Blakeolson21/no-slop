@@ -500,7 +500,7 @@ func TestRebaseStep_RemapsUncertifiedRangeWhenHeadRewritten(t *testing.T) {
 	}
 }
 
-func TestUpdateHeadSHARefusesAdoptionWhenUncertifiedRangeCannotMap(t *testing.T) {
+func TestUpdateHeadSHARequiresFreshReviewWhenUncertifiedRangeCannotMap(t *testing.T) {
 	dir, baseSHA, oldHead := setupGitRepo(t)
 	gitCmd(t, dir, "checkout", "--detach", baseSHA)
 	if err := os.WriteFile(filepath.Join(dir, "rewritten.txt"), []byte("rewritten\n"), 0o644); err != nil {
@@ -513,20 +513,26 @@ func TestUpdateHeadSHARefusesAdoptionWhenUncertifiedRangeCannotMap(t *testing.T)
 	if err := sctx.DB.UpsertUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch, "missing-range-start", oldHead, sctx.Run.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := updateHeadSHA(context.Background(), sctx); err == nil || !strings.Contains(err.Error(), "remap uncertified review range") {
-		t.Fatalf("updateHeadSHA() error = %v, want mandatory remap failure", err)
+	newHead := gitCmd(t, dir, "rev-parse", "HEAD")
+	if _, err := updateHeadSHA(context.Background(), sctx); err != nil {
+		t.Fatal(err)
 	}
-	if got := gitCmd(t, dir, "rev-parse", "refs/heads/feature"); got != oldHead {
-		t.Fatalf("feature ref = %s, want unchanged %s", got, oldHead)
-	}
-	if sctx.Run.HeadSHA != oldHead {
-		t.Fatalf("in-memory run head = %s, want unchanged %s", sctx.Run.HeadSHA, oldHead)
+	if got := gitCmd(t, dir, "rev-parse", "refs/heads/feature"); got != newHead {
+		t.Fatalf("feature ref = %s, want %s", got, newHead)
 	}
 	stored, err := sctx.DB.GetRun(sctx.Run.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.HeadSHA != oldHead {
-		t.Fatalf("persisted run head = %s, want unchanged %s", stored.HeadSHA, oldHead)
+	if stored.HeadSHA != newHead || stored.ReviewApprovedHeadSHA != nil {
+		t.Fatalf("adopted stale authority: %+v", stored)
 	}
+	rng, err := sctx.DB.GetUncertifiedPipelineRange(sctx.Repo.ID, sctx.Run.Branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rng == nil || rng.ToSHA != newHead || string(rng.RecoveryState) != "fresh_review_required" {
+		t.Fatalf("fresh review marker = %+v", rng)
+	}
+
 }

@@ -119,7 +119,7 @@ Reattaching to an in-flight run can proceed while the daemon is already running 
 Starting a fresh run also requires a runnable effective pipeline agent.
 If the configured native agent or ACP runner is unavailable, the run fails before any pipeline step starts instead of reporting command-only validation as a passed gate.
 With `--yes`, `axi run` treats both `action: auto-fix` and `action: ask-user` findings as standing consent to fix them. The pipeline selects every current finding when all actionable findings have IDs and funds up to 3 fix rounds per step. The budget uses the persisted round count, so reattaching cannot reset it.
-Gates with no findings or only `action: no-op` findings are approved as-is. If an actionable finding has no ID and cannot be selected, or actionable findings survive the budget, `--yes` leaves the run parked for explicit adjudication instead of silently approving them.
+Gates with no findings or only `action: no-op` findings are approved as-is. An actionable finding without a selectable ID still parks for adjudication. Unresolved blocking findings at the persisted configured ceiling fail the run with `fix budget exhausted`.
 Without `--yes`, an agent driving `axi run` should stop when a gate contains `action: ask-user` findings and relay each finding's ID, file, and full description to the user before responding.
 Review gates include a `note` field reminding agents that `auto_fix.review` defaults to `0`, so blocking and ask-user review findings park for a decision unless configuration explicitly opts back into review auto-fix.
 Long-running `axi run` calls are working, not stalled; if one returns a `gate:`, read that output and answer it with `axi respond`.
@@ -173,7 +173,7 @@ no-slop axi respond --action skip
 | `--add-finding`  | `string` | (none)        | JSON finding object to add and fix                                   |
 | `-y`, `--yes`    | `bool`   | `false`       | Auto-fix up to 3 rounds per step; park unresolved findings           |
 
-After the explicit response, `--yes` uses the same auto-resolution behavior as `axi run --yes`: fund up to 3 fix rounds per step for `auto-fix` and `ask-user` findings, approve clean gates and gates that only contain non-actionable `no-op` findings, and stop at `outcome: checks-passed` when the CI monitor reports readiness but the PR still needs a human merge. If actionable findings survive the budget, it leaves the run parked for explicit adjudication.
+After the explicit response, `--yes` uses the same auto-resolution behavior as `axi run --yes`: fund up to 3 fix rounds per step for `auto-fix` and `ask-user` findings, approve clean gates and gates that only contain non-actionable `no-op` findings, and stop at `outcome: checks-passed` when the CI monitor reports readiness but the PR still needs a human merge. If actionable findings survive the budget, it fails with `fix budget exhausted` when the configured ceiling is spent.
 Each `axi respond` blocks until the next gate, CI-ready decision point, or final outcome.
 If it returns another `gate:`, answer that gate; do not idle-wait for the run to move forward by itself.
 When the daemon is already running, `axi respond` can continue an active run even if the global config file has become invalid, because it is not starting a fresh run.
@@ -543,3 +543,27 @@ no-slop daemon status
 ```
 
 Shows the PID if the daemon is running.
+
+## no-slop store repair-phantoms
+
+Inspect running rows idle strictly more than six hours:
+
+```bash
+no-slop store repair-phantoms --dry-run
+no-slop store repair-phantoms --apply
+```
+
+Dry-run is the default. Apply takes a SQLite snapshot, rechecks durable activity,
+agent PIDs, daemon ownership handles, and Linux worker processes inside the write
+transaction, then fails only unowned stale rows with `phantom: no agent`. Parked
+executors, recent rows, and uncertain worker ownership are protected. Repeating
+apply is idempotent. `--backup /absolute/new/path.sqlite` selects a new snapshot
+path; existing files are refused. The default snapshots and JSON receipts live
+under the app root's `repairs/` directory. Receipts include selected and protected
+IDs, before/after counts, cutoff, and snapshot SHA-256.
+
+This command never starts or stops the daemon. An online repair runs through its
+ownership registry; an older daemon without this operation must be upgraded by
+its operator. Offline repair requires the daemon singleton lock and never
+migrates the store. Worker inspection currently requires Linux. Keep the receipt
+and snapshot together when transferring evidence to another host.

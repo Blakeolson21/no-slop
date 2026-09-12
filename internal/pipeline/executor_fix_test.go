@@ -1277,9 +1277,8 @@ func TestExecutor_UnselectedAutoFixRoundFindingSurvivesSilentRereview(t *testing
 
 // The round-limit path stops spending auto-fix rounds. It must not also stop
 // carrying what those rounds never resolved: with the budget exhausted the
-// gate has to park on the unselected finding rather than fall through to a
-// clean completion.
-func TestExecutor_ExhaustedAutoFixBudgetStillParksOnCarriedFinding(t *testing.T) {
+// gate must fail with the unselected finding retained when its budget ends.
+func TestExecutor_ExhaustedAutoFixBudgetFailsWithCarriedFinding(t *testing.T) {
 	database, p, run, repo := setupTest(t)
 	workDir := t.TempDir()
 
@@ -1300,17 +1299,19 @@ func TestExecutor_ExhaustedAutoFixBudgetStillParksOnCarriedFinding(t *testing.T)
 	}}
 
 	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
-	done, _ := startExecutor(t, exec, run, repo, workDir)
-
-	waitForOutstandingReviewGate(t, database, done, run.ID, "needs a human", "another cheap fix")
-
+	err := exec.Execute(context.Background(), run, repo, workDir)
+	if err == nil || err.Error() != "fix budget exhausted" {
+		t.Fatalf("exhaustion = %v", err)
+	}
 	if calls != 2 {
-		t.Errorf("step called %d times, want 2 (initial + the single budgeted auto-fix round)", calls)
+		t.Fatalf("calls = %d, want initial plus one fix", calls)
 	}
-	if err := exec.Respond(types.StepReview, types.ActionApprove, nil); err != nil {
-		t.Fatal(err)
+	results, err := database.GetStepsByRun(run.ID)
+	if err != nil || len(results) != 1 || results[0].Status != types.StepStatusFailed {
+		t.Fatalf("steps=%+v err=%v", results, err)
 	}
-	if err := <-done; err != nil {
-		t.Fatal(err)
+	if results[0].FindingsJSON == nil || !strings.Contains(*results[0].FindingsJSON, "needs a human") {
+		t.Fatal("terminal failure discarded unresolved carried findings")
 	}
+
 }

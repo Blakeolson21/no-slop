@@ -9,6 +9,7 @@ import (
 type ReviewRecoveryState string
 
 const (
+	ReviewRecoveryFreshReviewRequired         ReviewRecoveryState = "fresh_review_required"
 	ReviewRecoverySelectionRecoveredNoDelta   ReviewRecoveryState = "selection_recovered_no_delta"
 	ReviewRecoverySelectionRecoveredWithDelta ReviewRecoveryState = "selection_recovered_with_delta"
 	ReviewRecoverySelectionApplied            ReviewRecoveryState = "selection_applied"
@@ -16,7 +17,7 @@ const (
 
 func (s ReviewRecoveryState) Valid() bool {
 	switch s {
-	case ReviewRecoverySelectionRecoveredNoDelta, ReviewRecoverySelectionRecoveredWithDelta, ReviewRecoverySelectionApplied:
+	case ReviewRecoverySelectionRecoveredNoDelta, ReviewRecoverySelectionRecoveredWithDelta, ReviewRecoverySelectionApplied, ReviewRecoveryFreshReviewRequired:
 		return true
 	default:
 		return false
@@ -67,7 +68,7 @@ func (d *DB) UpsertUncertifiedPipelineRangeRecovery(repoID, branch, fromSHA, toS
 	if !recoveryState.Valid() {
 		return fmt.Errorf("uncertified pipeline range has invalid recovery state %q", recoveryState)
 	}
-	selectionApplied := recoveryState != ReviewRecoverySelectionRecoveredNoDelta
+	selectionApplied := recoveryState != ReviewRecoverySelectionRecoveredNoDelta && recoveryState != ReviewRecoveryFreshReviewRequired
 	findingsJSON, selectedFindingIDs, err := d.reviewRecoverySnapshot(sourceRunID)
 	if err != nil {
 		return err

@@ -456,6 +456,19 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	}
 	e.initializeRunScopes(run.ID)
 
+	limit := 0
+	if gate.stepResult.AutoFixLimit != nil {
+		limit = *gate.stepResult.AutoFixLimit
+	}
+	if actionableFindingsCountJSON(gate.findings) > 0 {
+		if exhausted, err := e.fixBudgetExhausted(gate.stepResult.ID, limit); err != nil {
+			return e.failRun(run, repo, err, ctx)
+		} else if exhausted {
+			err := e.failFixBudget(gate.stepResult.ID, run, repo, gate.step.Name(), recoveredStepDuration(gate.stepResult))
+			return e.failRun(run, repo, err, ctx)
+		}
+	}
+
 	parkStart := time.Unix(*run.AwaitingAgentSince, 0)
 	duration := recoveredStepDuration(gate.stepResult)
 	completeRecoveredGate := func() error {
@@ -814,6 +827,14 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		autoFixLimit = e.config.AutoFixLimit(stepName)
 	}
 
+	if err := e.db.InitStepFixBudget(sr.ID, repo.ID, run.Branch, run.ID, stepName); err != nil {
+		return false, "", err
+	}
+	// Recovered execution must keep the originally configured ceiling.
+	if sr.AutoFixLimit != nil && *sr.AutoFixLimit > 0 && (autoFixLimit == 0 || *sr.AutoFixLimit < autoFixLimit) {
+		autoFixLimit = *sr.AutoFixLimit
+	}
+
 	// Mark step as running
 	if err := e.db.StartStepWithAutoFixLimit(sr.ID, autoFixLimit); err != nil {
 		return false, "", fmt.Errorf("start step %s: %w", stepName, err)
@@ -1148,7 +1169,11 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		// Only auto-fix findings whose action is "auto-fix".
 		// This runs before the NeedsApproval check so that all severity
 		// levels (including "info") get a chance at automatic fixing.
-		if outcome.AutoFixable && autoFixLimit > 0 && autoFixAttempts < autoFixLimit && !convergenceTripped {
+		budgetUsed, budgetErr := e.db.FixAttempts(sr.ID)
+		if budgetErr != nil {
+			return false, "", budgetErr
+		}
+		if outcome.AutoFixable && autoFixLimit > 0 && budgetUsed < autoFixLimit && !convergenceTripped {
 			selectionTruth := effectiveFindings
 			if carryFindings {
 				selectionTruth, err = prepareReviewSelectionTruth(effectiveFindings)
@@ -1206,6 +1231,12 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			skipRemaining = outcome.SkipRemaining
 			stepSkipped = outcome.Skipped
 			break
+		}
+
+		if exhausted, err := e.fixBudgetExhausted(sr.ID, autoFixLimit); err != nil {
+			return false, "", err
+		} else if exhausted {
+			return false, "", e.failFixBudget(sr.ID, run, repo, stepName, executionMS+time.Since(phaseStart).Milliseconds())
 		}
 
 		// Freeze execution timer before entering approval wait.

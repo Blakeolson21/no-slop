@@ -22,6 +22,7 @@ const (
 	MethodGateContext    = "gate_context"
 	MethodAdmitPush      = "admit_push"
 	MethodHealth         = "health"
+	MethodRepairPhantoms = "repair_phantoms"
 	MethodShutdown       = "shutdown"
 )
 
@@ -386,4 +387,10 @@ func NewErrorResponse(id int64, code int, message string) *Response {
 		Error:   &RPCError{Code: code, Message: message},
 		ID:      id,
 	}
+}
+
+// RepairPhantomsParams selects dry-run by default. There is no caller-controlled clock or liveness override.
+type RepairPhantomsParams struct {
+	Apply      bool   `json:"apply"`
+	BackupPath string `json:"backup_path,omitempty"`
 }

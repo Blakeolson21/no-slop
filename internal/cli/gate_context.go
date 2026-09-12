@@ -38,7 +38,7 @@ func mutatesPipelineControl(cmd *cobra.Command) bool {
 	case "no-slop", "no-slop init", "no-slop eject", "no-slop rerun",
 		"no-slop axi run", "no-slop axi respond", "no-slop axi abort",
 		"no-slop daemon start", "no-slop daemon stop", "no-slop daemon restart",
-		"no-slop update":
+		"no-slop update", "no-slop store repair-phantoms":
 		return true
 	case "no-slop sync", "no-slop axi sync":
 		check, err := cmd.Flags().GetBool("check")

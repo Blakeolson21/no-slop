@@ -52,10 +52,33 @@ func BindUncertifiedPipelineRange(sctx *StepContext) error {
 	if err != nil {
 		return err
 	}
-	if plan.reviewOnly {
-		if selectedFindings == "" {
-			return fmt.Errorf("load uncertified review: recovered selection has no selected findings")
+	if rng.RecoveryState == db.ReviewRecoveryFreshReviewRequired {
+		// All previous findings remain claims for a fresh full review. No old
+		// selection is treated as an applied fix on an unproved mapping.
+		selectedFindings = ""
+	}
+	if plan.reviewOnly && selectedFindings == "" {
+		// Older stores recorded a no-delta marker but not the selected IDs.
+		// That cannot authorize a review-only selection round. Preserve all
+		// findings as claims and require a fresh full review of this head.
+		fresh := *rng
+		fresh.FromSHA, fresh.ToSHA = head, head
+		fresh.RecoveryState = db.ReviewRecoveryFreshReviewRequired
+		fresh.SelectionApplied = false
+		changed, err := sctx.DB.RestoreUncertifiedPipelineRangeIfCurrent(*rng, &fresh)
+		if err != nil {
+			return fmt.Errorf("invalidate incomplete recovered selection: %w", err)
 		}
+		if !changed {
+			return fmt.Errorf("recovered selection changed before fresh review")
+		}
+		rng = &fresh
+		plan.reviewOnly = false
+		if sctx.Log != nil {
+			sctx.Log("recovered selection is incomplete; fresh full review required on " + head)
+		}
+	}
+	if plan.reviewOnly {
 		priorFindings = excludeFindingsJSON(priorFindings, findingIDList(selectedFindings))
 		sctx.Fixing = true
 		sctx.SkipFixExecution = true
@@ -100,7 +123,7 @@ func reconcileReviewFixSelection(rng *db.UncertifiedPipelineRange, headPromoted 
 	}
 	return reviewFixRecoveryPlan{
 		state:            state,
-		selectionApplied: state != db.ReviewRecoverySelectionRecoveredNoDelta,
+		selectionApplied: state != db.ReviewRecoverySelectionRecoveredNoDelta && state != db.ReviewRecoveryFreshReviewRequired,
 		reviewOnly:       state == db.ReviewRecoverySelectionRecoveredNoDelta || state == db.ReviewRecoverySelectionRecoveredWithDelta,
 	}, nil
 }
@@ -229,26 +252,27 @@ func RemapUncertifiedPipelineRangeAfterRebase(sctx *StepContext, oldHead, newHea
 	if rangeInNew {
 		return nil, nil
 	}
-	fromBehind, err := commitBehindCount(sctx.Ctx, sctx.WorkDir, rng.FromSHA, oldHead)
+	newFrom, newTo, mapped := remapRangeEndpoints(sctx, rng, oldHead, newHead)
+	current := *rng
+	current.FromSHA, current.ToSHA = newFrom, newTo
+	if !mapped {
+		// Keep historical findings and the source-run budget, but invalidate
+		// the selection's relationship to the rewritten tree. Equal endpoints
+		// here mark a fresh full review of newHead, never a certificate.
+		current.FromSHA, current.ToSHA = newHead, newHead
+		current.RecoveryState = db.ReviewRecoveryFreshReviewRequired
+		current.SelectionApplied = false
+		if sctx.Log != nil {
+			sctx.Log("uncertified review range cannot be proved after rebase; fresh review required on " + newHead)
+		}
+	}
+	changed, err := sctx.DB.RestoreUncertifiedPipelineRangeIfCurrent(*rng, &current)
 	if err != nil {
-		return nil, fmt.Errorf("map uncertified range start %s after rebase: %w", rng.FromSHA, err)
-	}
-	toBehind, err := commitBehindCount(sctx.Ctx, sctx.WorkDir, rng.ToSHA, oldHead)
-	if err != nil {
-		return nil, fmt.Errorf("map uncertified range end %s after rebase: %w", rng.ToSHA, err)
-	}
-	newFrom, err := commitNthAncestor(sctx.Ctx, sctx.WorkDir, newHead, fromBehind)
-	if err != nil {
-		return nil, fmt.Errorf("resolve remapped uncertified range start after rebase: %w", err)
-	}
-	newTo, err := commitNthAncestor(sctx.Ctx, sctx.WorkDir, newHead, toBehind)
-	if err != nil || newFrom == "" || newTo == "" || newFrom == newTo {
-		return nil, fmt.Errorf("resolve remapped uncertified range end after rebase")
-	}
-	if err := sctx.DB.UpsertUncertifiedPipelineRangeRecovery(sctx.Repo.ID, sctx.Run.Branch, newFrom, newTo, rng.SourceRunID, rng.RecoveryState); err != nil {
 		return nil, fmt.Errorf("persist remapped uncertified pipeline range: %w", err)
 	}
-	current := db.UncertifiedPipelineRange{RepoID: rng.RepoID, Branch: rng.Branch, FromSHA: newFrom, ToSHA: newTo, SourceRunID: rng.SourceRunID, RecoveryState: rng.RecoveryState, SelectionApplied: rng.SelectionApplied}
+	if !changed {
+		return nil, fmt.Errorf("uncertified pipeline range changed during rebase remap")
+	}
 	rollback := func() error {
 		restored, err := sctx.DB.RestoreUncertifiedPipelineRangeIfCurrent(current, rng)
 		if err != nil {
@@ -260,6 +284,39 @@ func RemapUncertifiedPipelineRangeAfterRebase(sctx *StepContext, oldHead, newHea
 		return nil
 	}
 	return rollback, nil
+}
+
+// Distance proposes endpoints; it is not proof. Rebase may drop commits already
+// upstream or resolve conflicts differently. Exact deltas for the range AND
+// its suffix must survive. Conservative rejection costs a fresh review only.
+func remapRangeEndpoints(sctx *StepContext, rng *db.UncertifiedPipelineRange, oldHead, newHead string) (string, string, bool) {
+	fromBehind, err := commitBehindCount(sctx.Ctx, sctx.WorkDir, rng.FromSHA, oldHead)
+	if err != nil {
+		return "", "", false
+	}
+	toBehind, err := commitBehindCount(sctx.Ctx, sctx.WorkDir, rng.ToSHA, oldHead)
+	if err != nil {
+		return "", "", false
+	}
+	from, err := commitNthAncestor(sctx.Ctx, sctx.WorkDir, newHead, fromBehind)
+	if err != nil {
+		return "", "", false
+	}
+	to, err := commitNthAncestor(sctx.Ctx, sctx.WorkDir, newHead, toBehind)
+	if err != nil {
+		return "", "", false
+	}
+	for _, pair := range [][4]string{{rng.FromSHA, rng.ToSHA, from, to}, {rng.ToSHA, oldHead, to, newHead}} {
+		before, err := git.Run(sctx.Ctx, sctx.WorkDir, "diff", "--no-ext-diff", "--no-textconv", "--binary", pair[0], pair[1], "--")
+		if err != nil {
+			return "", "", false
+		}
+		after, err := git.Run(sctx.Ctx, sctx.WorkDir, "diff", "--no-ext-diff", "--no-textconv", "--binary", pair[2], pair[3], "--")
+		if err != nil || before != after {
+			return "", "", false
+		}
+	}
+	return from, to, true
 }
 
 func uncertifiedRangeStillInLineage(sctx *StepContext, existingTo, newFrom, newTo string) (bool, error) {

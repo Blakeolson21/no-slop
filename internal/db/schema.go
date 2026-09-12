@@ -67,6 +67,11 @@ CREATE TABLE IF NOT EXISTS step_results (
     certified_head_sha TEXT
 );
 
+CREATE TABLE IF NOT EXISTS step_fix_budgets (
+    step_result_id TEXT PRIMARY KEY REFERENCES step_results(id) ON DELETE CASCADE,
+    inherited_attempts INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS step_rounds (
     id                   TEXT PRIMARY KEY,
     step_result_id       TEXT NOT NULL REFERENCES step_results(id) ON DELETE CASCADE,

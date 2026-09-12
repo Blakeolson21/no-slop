@@ -16,7 +16,7 @@ flowchart TD
   rerun --> clean{"Blocking findings remain?"}
   clean -- "no" --> done
   clean -- "yes, attempts left" --> eligible
-  clean -- "yes, limit hit" --> pause
+  clean -- "yes, limit hit" --> failed["Failed: fix budget exhausted"]
 ```
 
 ## How it works
@@ -27,7 +27,7 @@ flowchart TD
 4. The step re-runs to verify the fixes
 5. If issues remain and attempts are left, the loop continues
 6. Once the limit is reached or all issues are resolved:
-   - If issues remain, the step pauses for user approval
+   - If blocking issues remain, the step and run fail with `fix budget exhausted`, release execution ownership, and emit a terminal event.
    - If everything passes, the step completes and the pipeline moves on
 
 The document step applies fixes during its initial pass instead of relying on a follow-up automatic fix loop.
@@ -96,7 +96,7 @@ An unselected finding is carried forward rather than dropped, so a finding raise
 Review adds continuity rules to this generic history. The [Review step reference](/no-slop/reference/pipeline-steps/#review) owns how unresolved findings survive rereviews and how a later selection supersedes an earlier non-selection.
 
 After a user-triggered fix, the step re-runs and pauses again to show you the results (`fix_review` status). You can then approve, fix again, skip, or abort.
-TUI yolo mode approves the fix review automatically after its one fix round. AXI `--yes` funds up to 3 fix rounds per step and approves a fix review only when it is clean or contains only `no-op` findings. If an actionable finding cannot be selected or survives that budget, it leaves the run parked for explicit adjudication instead of silently approving it. An explicit approval can accept remaining actionable findings; the [step log](/no-slop/reference/cli/#no-slop-axi-logs) records that adjudication.
+TUI yolo mode approves the fix review automatically after its one fix round. AXI `--yes` funds up to 3 fix rounds per step and approves a fix review only when it is clean or contains only `no-op` findings. The daemon enforces the persisted configured ceiling (three explicit fixes when auto-fix is disabled). Exhaustion with unresolved blocking findings fails the run with `fix budget exhausted`; it does not park indefinitely. Spent attempts survive daemon restart and replacement runs that inherit uncertified review work. An unselectable finding or a convergence warning reached before exhaustion can still park for adjudication. An explicit approval can accept remaining actionable findings; the [step log](/no-slop/reference/cli/#no-slop-axi-logs) records that adjudication.
 
 ## Fix commits
 
@@ -126,3 +126,12 @@ Round trigger types:
 - `auto_fix` - also used when you press `f` in the TUI or use `no-slop axi respond --action fix` to run a follow-up fix
 
 Legacy `user_fix` rounds are still rendered as `auto-fix` in PR summaries for backward compatibility.
+
+## Rebase and recovered review state
+
+An uncertified range records provenance, not approval. A no-delta selection can
+have equal endpoints; rebase preserves that state when its mapping is proved.
+The mapping must preserve both the range delta and the subsequent delta. If Git
+drops a commit or changes those deltas, no-slop marks the rebased head for a fresh
+full review and retains historical findings and spent fix attempts. Old review
+approval and certificates never authorize a different head.

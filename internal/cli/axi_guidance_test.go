@@ -38,7 +38,7 @@ var canonicalPreserveGateFixPhrases = []string{
 
 var canonicalYesFixBudgetPhrases = []string{
 	fmt.Sprintf("up to %d fix rounds per step", maxYesFixRoundsPerStep),
-	"leaves the run parked",
+	"fix budget exhausted",
 }
 
 var canonicalBranchSyncPhrases = []string{

@@ -153,20 +153,18 @@ func TestExecutor_AutoFixRespectsMaxAttempts(t *testing.T) {
 	}
 
 	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
-	done, _ := startExecutor(t, exec, run, repo, workDir)
-
-	// After 2 auto-fix attempts fail, should fall back to manual approval
-	// 1 initial + 2 auto-fix = 3 calls, then waits for approval
-	// Status is fix_review since auto-fix cycles ran (sctx.Fixing was true)
-	waitForStepStatus(t, database, run.ID, types.StepLint, types.StepStatusFixReview)
-
+	err := exec.Execute(context.Background(), run, repo, workDir)
+	if err == nil || err.Error() != "fix budget exhausted" {
+		t.Fatalf("exhaustion = %v", err)
+	}
 	if callCount != 3 {
-		t.Errorf("expected 3 calls (1 initial + 2 auto-fix), got %d", callCount)
+		t.Fatalf("calls = %d, want initial plus two fixes", callCount)
+	}
+	got, err := database.GetRun(run.ID)
+	if err != nil || got.Status != types.RunFailed || got.AwaitingAgentSince != nil {
+		t.Fatalf("terminal run = %+v %v", got, err)
 	}
 
-	// Now approve manually to finish
-	exec.Respond(types.StepLint, types.ActionApprove, nil)
-	waitExecutorDone(t, done)
 }
 
 func TestExecutor_AutoFixDisabledWithZero(t *testing.T) {
