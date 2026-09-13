@@ -821,15 +821,6 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 	finalExitCode := 0
 	autoFixLimit := e.autoFixLimitForStep(stepName, sr.AutoFixLimit)
 
-	if err := e.db.InitStepFixBudget(sr.ID, repo.ID, run.Branch, run.ID, stepName); err != nil {
-		return false, "", err
-	}
-	// Mark step as running
-	if err := e.db.StartStepWithAutoFixLimit(sr.ID, autoFixLimit); err != nil {
-		return false, "", fmt.Errorf("start step %s: %w", stepName, err)
-	}
-	e.emitStepEvent(ipc.EventStepStarted, run, repo, stepName, string(types.StepStatusRunning))
-
 	// Track execution-only time, excluding approval wait periods.
 	phaseStart := time.Now()
 	executionMS := state.executionMS
@@ -994,6 +985,18 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			knownLineages = carriedFindings
 		}
 	}
+	inheritedSourceRunID := ""
+	if stepName == types.StepReview {
+		inheritedSourceRunID = sctx.UncertifiedSourceRunID
+	}
+	if err := e.db.InitStepFixBudgetForSource(sr.ID, run.ID, stepName, inheritedSourceRunID); err != nil {
+		return false, "", err
+	}
+	// Mark step as running
+	if err := e.db.StartStepWithAutoFixLimit(sr.ID, autoFixLimit); err != nil {
+		return false, "", fmt.Errorf("start step %s: %w", stepName, err)
+	}
+	e.emitStepEvent(ipc.EventStepStarted, run, repo, stepName, string(types.StepStatusRunning))
 
 	nextTrigger := "initial"
 	if sctx.Fixing {

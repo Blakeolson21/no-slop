@@ -81,25 +81,37 @@ func (d *DB) durableInternalFixAttempts(stepID string) (int, error) {
 // expenditure once, so a reattach, rebase, or replacement run cannot buy a new
 // budget for the same still-uncertified review work.
 func (d *DB) InitStepFixBudget(stepID, repoID, branch, runID string, step types.StepName) error {
-	inherited := 0
+	sourceRunID := ""
 	if step == types.StepReview {
 		rng, err := d.GetUncertifiedPipelineRange(repoID, branch)
 		if err != nil {
 			return err
 		}
-		if rng != nil && rng.SourceRunID != runID {
-			steps, err := d.GetStepsByRun(rng.SourceRunID)
-			if err != nil {
-				return err
-			}
-			for _, s := range steps {
-				if s.StepName == step {
-					inherited, err = d.FixAttempts(s.ID)
-					if err != nil {
-						return err
-					}
-					break
+		if rng != nil {
+			sourceRunID = rng.SourceRunID
+		}
+	}
+	return d.initStepFixBudget(stepID, runID, step, sourceRunID)
+}
+
+func (d *DB) InitStepFixBudgetForSource(stepID, runID string, step types.StepName, sourceRunID string) error {
+	return d.initStepFixBudget(stepID, runID, step, sourceRunID)
+}
+
+func (d *DB) initStepFixBudget(stepID, runID string, step types.StepName, sourceRunID string) error {
+	inherited := 0
+	if step == types.StepReview && sourceRunID != "" && sourceRunID != runID {
+		steps, err := d.GetStepsByRun(sourceRunID)
+		if err != nil {
+			return err
+		}
+		for _, s := range steps {
+			if s.StepName == step {
+				inherited, err = d.FixAttempts(s.ID)
+				if err != nil {
+					return err
 				}
+				break
 			}
 		}
 	}

@@ -41,14 +41,14 @@ func (m *RunManager) RepairPhantoms(ctx context.Context, apply bool, backup stri
 		}
 		return owners, nil
 	}, releaseOwnership)
-	if err != nil {
-		return out, err
-	}
-	if apply {
+	if apply && out != nil && out.Affected > 0 {
 		for _, r := range out.Selected {
 			status := string(types.RunFailed)
 			m.broadcast(ipc.Event{Type: ipc.EventRunCompleted, RunID: r.ID, RepoID: r.RepoID, Status: &status})
 		}
+	}
+	if err != nil {
+		return out, err
 	}
 	return out, nil
 }
