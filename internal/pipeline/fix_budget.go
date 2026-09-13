@@ -10,13 +10,32 @@ import (
 
 var ErrFixBudgetExhausted = errors.New("fix budget exhausted")
 
-func (e *Executor) fixBudgetExhausted(stepID string, limit int) (bool, error) {
-	// The explicit/--yes fix ceiling when auto-fix is disabled.
-	if limit <= 0 {
-		limit = 3
+const explicitFixBudget = 3
+
+func (e *Executor) autoFixLimitForStep(step types.StepName, recorded *int) int {
+	limit := 0
+	if e.config != nil {
+		limit = e.config.AutoFixLimit(step)
+	}
+	if recorded == nil {
+		return limit
+	}
+	if *recorded <= 0 {
+		return 0
+	}
+	if limit == 0 || *recorded < limit {
+		return *recorded
+	}
+	return limit
+}
+
+func (e *Executor) fixBudgetExhausted(stepID string, autoFixLimit int) (bool, error) {
+	budget := autoFixLimit
+	if budget <= 0 {
+		budget = explicitFixBudget
 	}
 	used, err := e.db.FixAttempts(stepID)
-	return used >= limit, err
+	return used >= budget, err
 }
 func (e *Executor) failFixBudget(stepID string, run *db.Run, repo *db.Repo, step types.StepName, duration int64) error {
 	if err := e.db.FailStep(stepID, ErrFixBudgetExhausted.Error(), duration); err != nil {

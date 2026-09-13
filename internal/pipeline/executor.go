@@ -456,10 +456,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	}
 	e.initializeRunScopes(run.ID)
 
-	limit := 0
-	if gate.stepResult.AutoFixLimit != nil {
-		limit = *gate.stepResult.AutoFixLimit
-	}
+	limit := e.autoFixLimitForStep(gate.step.Name(), gate.stepResult.AutoFixLimit)
 	if actionableFindingsCountJSON(gate.findings) > 0 {
 		if exhausted, err := e.fixBudgetExhausted(gate.stepResult.ID, limit); err != nil {
 			return e.failRun(run, repo, err, ctx)
@@ -822,28 +819,11 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 	stepName := step.Name()
 	logPath := filepath.Join(logDir, string(stepName)+".log")
 	finalExitCode := 0
-	autoFixLimit := 0
-	if e.config != nil {
-		autoFixLimit = e.config.AutoFixLimit(stepName)
-	}
+	autoFixLimit := e.autoFixLimitForStep(stepName, sr.AutoFixLimit)
 
 	if err := e.db.InitStepFixBudget(sr.ID, repo.ID, run.Branch, run.ID, stepName); err != nil {
 		return false, "", err
 	}
-	// Recovered execution must keep the originally recorded ceiling, and a
-	// recorded zero is a ceiling: it says this step's funding was deliberately
-	// disabled. Only a NULL row means nothing was ever recorded, and a legacy
-	// row that predates the distinction is exactly that - so it keeps deferring
-	// to configuration rather than being reinterpreted as disabled funding.
-	if sr.AutoFixLimit != nil {
-		switch recorded := *sr.AutoFixLimit; {
-		case recorded <= 0:
-			autoFixLimit = 0
-		case autoFixLimit == 0 || recorded < autoFixLimit:
-			autoFixLimit = recorded
-		}
-	}
-
 	// Mark step as running
 	if err := e.db.StartStepWithAutoFixLimit(sr.ID, autoFixLimit); err != nil {
 		return false, "", fmt.Errorf("start step %s: %w", stepName, err)

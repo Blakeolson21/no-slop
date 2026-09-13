@@ -19,20 +19,28 @@ import (
 // handle through the transaction. A running row with no manager owner can then
 // be repaired only if process inspection also finds no worker in its worktree.
 func (m *RunManager) RepairPhantoms(ctx context.Context, apply bool, backup string) (*db.PhantomRepairReceipt, error) {
-	m.mu.Lock()
+	ownershipHeld := false
+	releaseOwnership := func() {
+		if ownershipHeld {
+			m.mu.Unlock()
+			ownershipHeld = false
+		}
+	}
+	defer releaseOwnership()
 	out, err := repairPhantoms(ctx, m.db, m.paths, apply, backup, func(rows []db.PhantomRun) (map[string]string, error) {
 		owners, err := phantomWorkerOwners(m.paths, rows)
 		if err != nil {
 			return nil, err
 		}
+		m.mu.Lock()
+		ownershipHeld = true
 		for _, r := range rows {
 			if m.executors[r.ID] != nil || m.cancels[r.ID] != nil || m.dones[r.ID] != nil {
 				owners[r.ID] = "live executor/ownership handle"
 			}
 		}
 		return owners, nil
-	})
-	m.mu.Unlock()
+	}, releaseOwnership)
 	if err != nil {
 		return out, err
 	}
@@ -59,9 +67,9 @@ func RepairPhantomsOffline(ctx context.Context, p *paths.Paths, apply bool, back
 		return nil, err
 	}
 	defer d.Close()
-	return repairPhantoms(ctx, d, p, apply, backup, func(rows []db.PhantomRun) (map[string]string, error) { return phantomWorkerOwners(p, rows) })
+	return repairPhantoms(ctx, d, p, apply, backup, func(rows []db.PhantomRun) (map[string]string, error) { return phantomWorkerOwners(p, rows) }, nil)
 }
-func repairPhantoms(ctx context.Context, d *db.DB, p *paths.Paths, apply bool, backup string, owners func([]db.PhantomRun) (map[string]string, error)) (*db.PhantomRepairReceipt, error) {
+func repairPhantoms(ctx context.Context, d *db.DB, p *paths.Paths, apply bool, backup string, owners func([]db.PhantomRun) (map[string]string, error), afterRepair func()) (*db.PhantomRepairReceipt, error) {
 	dir := filepath.Join(p.Root(), "repairs")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
@@ -74,6 +82,9 @@ func repairPhantoms(ctx context.Context, d *db.DB, p *paths.Paths, apply bool, b
 		return nil, fmt.Errorf("backup path must be absolute")
 	}
 	out, err := d.RepairPhantoms(ctx, db.PhantomRepairOptions{Apply: apply, BackupPath: backup}, owners)
+	if afterRepair != nil {
+		afterRepair()
+	}
 	if err != nil {
 		return out, err
 	}
