@@ -139,10 +139,9 @@ func TestExecutor_HeadMutationsInvalidateRequiredGateCertifications(t *testing.T
 
 func TestExecutor_DocumentHeadMutationRerunsRequiredGatesWithCarriedReviewState(t *testing.T) {
 	database, p, run, repo := setupTest(t)
-	const (
-		oldHead = "1111111111111111111111111111111111111111"
-		newHead = "2222222222222222222222222222222222222222"
-	)
+	workDir, oldHead := setupRunGitRepo(t, database, run)
+	newHead := run.HeadSHA
+	execGit(t, workDir, "checkout", "--detach", oldHead)
 	run.HeadSHA = oldHead
 	if err := database.UpdateRunHeadSHA(run.ID, oldHead); err != nil {
 		t.Fatal(err)
@@ -180,6 +179,7 @@ func TestExecutor_DocumentHeadMutationRerunsRequiredGatesWithCarriedReviewState(
 			if err := sctx.DB.UpdateRunHeadSHA(sctx.Run.ID, newHead); err != nil {
 				return nil, err
 			}
+			execGit(t, workDir, "checkout", "--detach", newHead)
 			sctx.Run.HeadSHA = newHead
 		}
 		return &StepOutcome{}, nil
@@ -204,7 +204,6 @@ func TestExecutor_DocumentHeadMutationRerunsRequiredGatesWithCarriedReviewState(
 	}}
 
 	exec := NewExecutor(database, p, nil, nil, []Step{review, testStep, document, ci}, nil)
-	workDir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
@@ -286,10 +285,9 @@ func TestExecutor_DocumentHeadMutationRerunsRequiredGatesWithCarriedReviewState(
 
 func TestExecutor_RecoveredRemainderRerunsRequiredGatesAfterHeadMutation(t *testing.T) {
 	database, p, run, repo := setupTest(t)
-	const (
-		oldHead = "1111111111111111111111111111111111111111"
-		newHead = "2222222222222222222222222222222222222222"
-	)
+	workDir, oldHead := setupRunGitRepo(t, database, run)
+	newHead := run.HeadSHA
+	execGit(t, workDir, "checkout", "--detach", oldHead)
 	run.HeadSHA = oldHead
 	if err := database.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
 		t.Fatal(err)
@@ -307,6 +305,7 @@ func TestExecutor_RecoveredRemainderRerunsRequiredGatesAfterHeadMutation(t *test
 			if err := sctx.DB.UpdateRunHeadSHA(sctx.Run.ID, newHead); err != nil {
 				return nil, err
 			}
+			execGit(t, workDir, "checkout", "--detach", newHead)
 			sctx.Run.HeadSHA = newHead
 		}
 		return &StepOutcome{}, nil
@@ -327,7 +326,7 @@ func TestExecutor_RecoveredRemainderRerunsRequiredGatesAfterHeadMutation(t *test
 
 	exec := NewExecutor(database, p, nil, nil, steps, nil)
 	exec.initializeRunScopes(run.ID)
-	if err := exec.executeRecoveredRemainder(context.Background(), run, repo, t.TempDir(), t.TempDir(), 2); err != nil {
+	if err := exec.executeRecoveredRemainder(context.Background(), run, repo, workDir, t.TempDir(), 2); err != nil {
 		t.Fatal(err)
 	}
 	if review.callCount() != 1 || testStep.callCount() != 1 || documentCalls != 2 || ci.callCount() != 1 {

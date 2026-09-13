@@ -85,6 +85,23 @@ func setupTest(t *testing.T) (*db.DB, *paths.Paths, *db.Run, *db.Repo) {
 	return database, p, run, repo
 }
 
+// setupRunGitRepo gives provenance tests real endpoints and an execution
+// context that Git can independently verify.
+func setupRunGitRepo(t *testing.T, database *db.DB, run *db.Run) (dir, base string) {
+	t.Helper()
+	dir = t.TempDir()
+	initGitRepo(t, dir)
+	base = currentSHA(t, dir)
+	writeTestFile(t, dir, "change.txt", "reviewed change\n")
+	execGit(t, dir, "add", ".")
+	execGit(t, dir, "commit", "-m", "reviewed change")
+	run.HeadSHA = currentSHA(t, dir)
+	if err := database.UpdateRunHeadSHA(run.ID, run.HeadSHA); err != nil {
+		t.Fatal(err)
+	}
+	return dir, base
+}
+
 // eventCollector is a thread-safe event accumulator for tests.
 type eventCollector struct {
 	mu     sync.Mutex

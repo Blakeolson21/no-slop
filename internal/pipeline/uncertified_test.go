@@ -16,6 +16,7 @@ import (
 
 func TestExecutor_BindsUncertifiedRangeOntoInitialReview(t *testing.T) {
 	database, p, run, repo := setupTest(t)
+	workDir, fromSHA := setupRunGitRepo(t, database, run)
 	source, err := database.InsertRun(repo.ID, run.Branch, "older", "base")
 	if err != nil {
 		t.Fatal(err)
@@ -23,7 +24,7 @@ func TestExecutor_BindsUncertifiedRangeOntoInitialReview(t *testing.T) {
 	if _, err := database.InsertStepResult(source.ID, types.StepReview); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, "from-sha", run.HeadSHA, source.ID); err != nil {
+	if err := database.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, fromSHA, run.HeadSHA, source.ID); err != nil {
 		t.Fatal(err)
 	}
 	var gotFrom, gotTo, gotSource string
@@ -34,13 +35,13 @@ func TestExecutor_BindsUncertifiedRangeOntoInitialReview(t *testing.T) {
 		return &StepOutcome{ReviewApprovedHeadSHA: run.HeadSHA}, nil
 	}}
 	exec := NewExecutor(database, p, &config.Config{}, nil, []Step{step}, nil)
-	if err := exec.Execute(context.Background(), run, repo, t.TempDir()); err != nil {
+	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
 		t.Fatal(err)
 	}
 	if fixing {
 		t.Fatal("initial review ran in fix mode")
 	}
-	if gotFrom != "from-sha" || gotTo != run.HeadSHA || gotSource != source.ID {
+	if gotFrom != fromSHA || gotTo != run.HeadSHA || gotSource != source.ID {
 		t.Fatalf("initial review bound from=%q to=%q source=%q", gotFrom, gotTo, gotSource)
 	}
 }
@@ -262,7 +263,8 @@ func TestBindUncertifiedPipelineRangeUsesReviewOnlyRoundForRecoveredNoDeltaSelec
 
 func TestBindUncertifiedPipelineRange_CopiesOntoStepContext(t *testing.T) {
 	database, _, run, repo := setupTest(t)
-	if err := database.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, "from-sha", run.HeadSHA, "source-run"); err != nil {
+	workDir, fromSHA := setupRunGitRepo(t, database, run)
+	if err := database.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, fromSHA, run.HeadSHA, "source-run"); err != nil {
 		t.Fatal(err)
 	}
 	source, err := database.InsertRun(repo.ID, run.Branch, "older", "base")
@@ -277,7 +279,7 @@ func TestBindUncertifiedPipelineRange_CopiesOntoStepContext(t *testing.T) {
 	if _, err := database.InsertStepRound(step.ID, 1, "initial", &findings, nil, 10); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, "from-sha", run.HeadSHA, source.ID); err != nil {
+	if err := database.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, fromSHA, run.HeadSHA, source.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -286,10 +288,12 @@ func TestBindUncertifiedPipelineRange_CopiesOntoStepContext(t *testing.T) {
 		DB:      database,
 		Repo:    repo,
 		Run:     run,
-		WorkDir: t.TempDir(),
+		WorkDir: workDir,
 	}
-	BindUncertifiedPipelineRange(sctx)
-	if sctx.UncertifiedFromSHA != "from-sha" || sctx.UncertifiedToSHA != run.HeadSHA || sctx.UncertifiedSourceRunID != source.ID {
+	if err := BindUncertifiedPipelineRange(sctx); err != nil {
+		t.Fatal(err)
+	}
+	if sctx.UncertifiedFromSHA != fromSHA || sctx.UncertifiedToSHA != run.HeadSHA || sctx.UncertifiedSourceRunID != source.ID {
 		t.Fatalf("bound range = from=%q to=%q source=%q", sctx.UncertifiedFromSHA, sctx.UncertifiedToSHA, sctx.UncertifiedSourceRunID)
 	}
 	if len(sctx.UncertifiedPriorRounds) != 1 {
@@ -299,6 +303,7 @@ func TestBindUncertifiedPipelineRange_CopiesOntoStepContext(t *testing.T) {
 
 func TestExecutor_RestoresUncertifiedPriorRunEffectiveFindings(t *testing.T) {
 	database, p, run, repo := setupTest(t)
+	workDir, fromSHA := setupRunGitRepo(t, database, run)
 	source, err := database.InsertRun(repo.ID, run.Branch, "older", "base")
 	if err != nil {
 		t.Fatal(err)
@@ -316,7 +321,7 @@ func TestExecutor_RestoresUncertifiedPriorRunEffectiveFindings(t *testing.T) {
 	if err := database.SetStepRoundSelection(round.ID, &selected, db.RoundSelectionSourceAutoFix); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, "from-sha", run.HeadSHA, source.ID); err != nil {
+	if err := database.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, fromSHA, run.HeadSHA, source.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -325,7 +330,7 @@ func TestExecutor_RestoresUncertifiedPriorRunEffectiveFindings(t *testing.T) {
 	}}}
 	exec := NewExecutor(database, p, &config.Config{}, nil, []Step{step}, nil)
 	done := make(chan error, 1)
-	go func() { done <- exec.Execute(context.Background(), run, repo, t.TempDir()) }()
+	go func() { done <- exec.Execute(context.Background(), run, repo, workDir) }()
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
 	if err := exec.Respond(types.StepReview, types.ActionApprove, nil); err != nil {
 		t.Fatal(err)
@@ -404,12 +409,13 @@ func TestBindUncertifiedPipelineRange_DoesNotBindWhileFixing(t *testing.T) {
 
 func TestApprovedReview_ClearsUncertifiedRange(t *testing.T) {
 	database, p, run, repo := setupTest(t)
-	if err := database.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, "from-sha", run.HeadSHA, run.ID); err != nil {
+	workDir, fromSHA := setupRunGitRepo(t, database, run)
+	if err := database.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, fromSHA, run.HeadSHA, run.ID); err != nil {
 		t.Fatal(err)
 	}
 	step := &mockStep{name: types.StepReview, outcome: &StepOutcome{ReviewApprovedHeadSHA: run.HeadSHA}}
 	exec := NewExecutor(database, p, &config.Config{}, nil, []Step{step}, nil)
-	if err := exec.Execute(context.Background(), run, repo, t.TempDir()); err != nil {
+	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
 		t.Fatal(err)
 	}
 	got, err := database.GetUncertifiedPipelineRange(repo.ID, run.Branch)
@@ -423,7 +429,8 @@ func TestApprovedReview_ClearsUncertifiedRange(t *testing.T) {
 
 func TestParkedReview_DoesNotClearUncertifiedRange(t *testing.T) {
 	database, p, run, repo := setupTest(t)
-	if err := database.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, "from-sha", run.HeadSHA, run.ID); err != nil {
+	workDir, fromSHA := setupRunGitRepo(t, database, run)
+	if err := database.UpsertUncertifiedPipelineRange(repo.ID, run.Branch, fromSHA, run.HeadSHA, run.ID); err != nil {
 		t.Fatal(err)
 	}
 	step := &mockStep{
@@ -436,7 +443,7 @@ func TestParkedReview_DoesNotClearUncertifiedRange(t *testing.T) {
 	}
 	exec := NewExecutor(database, p, &config.Config{}, nil, []Step{step}, nil)
 	done := make(chan error, 1)
-	go func() { done <- exec.Execute(context.Background(), run, repo, t.TempDir()) }()
+	go func() { done <- exec.Execute(context.Background(), run, repo, workDir) }()
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
 	got, err := database.GetUncertifiedPipelineRange(repo.ID, run.Branch)
 	if err != nil {

@@ -15,13 +15,13 @@ import (
 
 func TestExecutor_CIRepairMustPassReviewBeforeAnotherPush(t *testing.T) {
 	database, p, run, repo := setupTest(t)
-	workDir := t.TempDir()
-
-	const (
-		originalHead = "1111111111111111111111111111111111111111"
-		repairedHead = "2222222222222222222222222222222222222222"
-	)
+	workDir, originalHead := setupRunGitRepo(t, database, run)
+	repairedHead := run.HeadSHA
+	execGit(t, workDir, "checkout", "--detach", originalHead)
 	run.HeadSHA = originalHead
+	if err := database.UpdateRunHeadSHA(run.ID, originalHead); err != nil {
+		t.Fatal(err)
+	}
 
 	var mu sync.Mutex
 	var order []types.StepName
@@ -62,6 +62,7 @@ func TestExecutor_CIRepairMustPassReviewBeforeAnotherPush(t *testing.T) {
 		if err := sctx.DB.UpdateRunHeadSHAForRevalidation(sctx.Run.ID, repairedHead); err != nil {
 			return nil, err
 		}
+		execGit(t, workDir, "checkout", "--detach", repairedHead)
 		sctx.Run.HeadSHA = repairedHead
 		sctx.Run.ReviewApprovedHeadSHA = nil
 		return &StepOutcome{RestartFrom: types.StepReview}, nil
