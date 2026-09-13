@@ -2,10 +2,13 @@ package db
 
 import (
 	"context"
-	"github.com/Blakeolson21/no-slop/internal/types"
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 func TestPhantomRepairRechecksAndIsIdempotent(t *testing.T) {
@@ -150,5 +153,29 @@ func TestPhantomRepairTransactionRollbackAndActivityProtection(t *testing.T) {
 	r, err := d.GetRun(ids[0])
 	if err != nil || r.Status != types.RunRunning || r.Error != nil {
 		t.Fatalf("partial transaction leaked: %+v %v", r, err)
+	}
+}
+
+func TestPhantomRepairPreservesExistingBackup(t *testing.T) {
+	d := openTestDB(t)
+	for _, content := range []string{"", "existing backup must survive"} {
+		t.Run(fmt.Sprintf("bytes_%d", len(content)), func(t *testing.T) {
+			backup := filepath.Join(t.TempDir(), "existing.sqlite")
+			if err := os.WriteFile(backup, []byte(content), 0600); err != nil {
+				t.Fatal(err)
+			}
+			checked := false
+			_, err := d.RepairPhantoms(context.Background(), PhantomRepairOptions{Apply: true, BackupPath: backup}, func([]PhantomRun) (map[string]string, error) {
+				checked = true
+				return nil, nil
+			})
+			if err == nil || checked {
+				t.Fatalf("existing backup: err=%v ownership checked=%v, want refusal before repair", err, checked)
+			}
+			got, err := os.ReadFile(backup)
+			if err != nil || string(got) != content {
+				t.Fatalf("existing backup changed: content=%q err=%v", got, err)
+			}
+		})
 	}
 }

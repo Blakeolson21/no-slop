@@ -64,17 +64,19 @@ func (d *DB) RepairPhantoms(ctx context.Context, opts PhantomRepairOptions, owne
 		if opts.BackupPath == "" {
 			return nil, fmt.Errorf("apply requires a new backup path")
 		}
+		// SQLite owns the snapshot; copying a live DB file loses WAL transactions.
+		// VACUUM INTO accepts an existing empty file. Reserve it exclusively
+		// with private permissions and only clean up a reservation we own.
+		f, err := os.OpenFile(opts.BackupPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if err != nil {
+			return nil, fmt.Errorf("reserve backup: %w", err)
+		}
 		backupReady := false
 		defer func() {
 			if !backupReady {
 				_ = os.Remove(opts.BackupPath)
 			}
 		}()
-		// SQLite owns the snapshot; copying a live DB file loses WAL transactions.
-		f, err := os.OpenFile(opts.BackupPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-		if err != nil {
-			return nil, fmt.Errorf("reserve backup: %w", err)
-		}
 		if err = f.Close(); err != nil {
 			return nil, err
 		}

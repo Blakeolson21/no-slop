@@ -212,6 +212,13 @@ func TestRangeTipAncestry_SeparatesABrokenWorktreeFromAnAbsentTip(t *testing.T) 
 	head := currentSHA(t, dir)
 
 	sctx := &StepContext{Ctx: context.Background(), WorkDir: dir}
+	if inLineage, provable, err := rangeTipAncestry(sctx, head, head); err != nil || !inLineage || !provable {
+		t.Fatalf("resolved equal commits: lineage=%v provable=%v err=%v", inLineage, provable, err)
+	}
+	missing := strings.Repeat("e", 40)
+	if inLineage, provable, err := rangeTipAncestry(sctx, missing, missing); err == nil || inLineage || provable {
+		t.Errorf("equal absent commits: lineage=%v provable=%v err=%v, want refusal", inLineage, provable, err)
+	}
 	if _, provable, err := rangeTipAncestry(sctx, strings.Repeat("f", 40), head); err != nil || provable {
 		t.Fatalf("absent tip: provable=%v err=%v, want unprovable without error", provable, err)
 	}
@@ -220,8 +227,8 @@ func TestRangeTipAncestry_SeparatesABrokenWorktreeFromAnAbsentTip(t *testing.T) 
 	}
 
 	broken := &StepContext{Ctx: context.Background(), WorkDir: t.TempDir()}
-	if _, _, err := rangeTipAncestry(broken, head, head); err != nil {
-		t.Fatalf("identical commits short-circuit before git: %v", err)
+	if inLineage, provable, err := rangeTipAncestry(broken, head, head); err == nil || inLineage || provable {
+		t.Fatalf("equal commits in non-repository: lineage=%v provable=%v err=%v, want refusal", inLineage, provable, err)
 	}
 	if _, _, err := rangeTipAncestry(broken, strings.Repeat("f", 40), head); err == nil {
 		t.Fatal("non-repository worktree reported no error")

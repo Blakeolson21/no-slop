@@ -354,15 +354,18 @@ func rangeTipAncestry(sctx *StepContext, tip, head string) (inLineage bool, prov
 	if sctx == nil {
 		return false, false, fmt.Errorf("commit ancestry requires pipeline context")
 	}
-	inLineage, err = commitIsSelfOrAncestor(sctx.Ctx, sctx.WorkDir, tip, head)
+	// Prove the execution context before the ancestry helper can accept equal
+	// SHAs without consulting Git. Stored equality alone grants no authority.
+	resolvedHead, err := resolveCommitObject(sctx.Ctx, sctx.WorkDir, head)
+	if err != nil {
+		return false, false, err
+	}
+	inLineage, err = commitIsSelfOrAncestor(sctx.Ctx, sctx.WorkDir, tip, resolvedHead)
 	if err == nil {
 		return inLineage, true, nil
 	}
 	if fault := ancestryContextFault(sctx.Ctx, err); fault != nil {
 		return false, false, fault
-	}
-	if _, headErr := resolveCommitObject(sctx.Ctx, sctx.WorkDir, head); headErr != nil {
-		return false, false, err
 	}
 	return false, false, nil
 }
