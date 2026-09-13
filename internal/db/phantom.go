@@ -113,7 +113,7 @@ func (d *DB) RepairPhantoms(ctx context.Context, opts PhantomRepairOptions, owne
  MAX(r.created_at,r.updated_at,COALESCE(r.awaiting_agent_since,0),
  COALESCE((SELECT MAX(MAX(COALESCE(s.last_activity_at,0),COALESCE(s.started_at,0),COALESCE(s.completed_at,0))) FROM step_results s WHERE s.run_id=r.id),0),
  COALESCE((SELECT MAX(q.created_at) FROM step_rounds q JOIN step_results s ON s.id=q.step_result_id WHERE s.run_id=r.id),0),
- COALESCE((SELECT MAX(MAX(a.started_at,a.completed_at)) FROM agent_invocations a WHERE a.run_id=r.id),0)),
+ COALESCE((SELECT MAX(MAX(COALESCE(a.started_at,0),COALESCE(a.completed_at,0))) FROM agent_invocations a WHERE a.run_id=r.id),0)),
  (SELECT COUNT(*) FROM step_results s WHERE s.run_id=r.id AND s.agent_pid IS NOT NULL)
  FROM runs r WHERE r.status='running' ORDER BY r.id`)
 	if err != nil {
