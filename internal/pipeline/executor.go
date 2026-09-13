@@ -830,9 +830,18 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 	if err := e.db.InitStepFixBudget(sr.ID, repo.ID, run.Branch, run.ID, stepName); err != nil {
 		return false, "", err
 	}
-	// Recovered execution must keep the originally configured ceiling.
-	if sr.AutoFixLimit != nil && *sr.AutoFixLimit > 0 && (autoFixLimit == 0 || *sr.AutoFixLimit < autoFixLimit) {
-		autoFixLimit = *sr.AutoFixLimit
+	// Recovered execution must keep the originally recorded ceiling, and a
+	// recorded zero is a ceiling: it says this step's funding was deliberately
+	// disabled. Only a NULL row means nothing was ever recorded, and a legacy
+	// row that predates the distinction is exactly that - so it keeps deferring
+	// to configuration rather than being reinterpreted as disabled funding.
+	if sr.AutoFixLimit != nil {
+		switch recorded := *sr.AutoFixLimit; {
+		case recorded <= 0:
+			autoFixLimit = 0
+		case autoFixLimit == 0 || recorded < autoFixLimit:
+			autoFixLimit = recorded
+		}
 	}
 
 	// Mark step as running

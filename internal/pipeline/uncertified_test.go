@@ -755,7 +755,11 @@ func TestRemapUncertifiedPipelineRangeAfterRebase_RewrittenHeadStaysBindable(t *
 	}
 }
 
-func TestRemapUncertifiedPipelineRangeAfterRebase_MissingRangeCommitFailsClosed(t *testing.T) {
+// A persisted tip this worktree cannot read used to fail the rebase step. It is
+// unprovable provenance, not a fault: the range now transitions to a fresh full
+// review of the rebased head, keeping the source run so the replacement
+// reviewer is not cold. The rollback restores the exact unreadable row.
+func TestRemapUncertifiedPipelineRangeAfterRebase_MissingRangeCommitRequiresFreshReview(t *testing.T) {
 	database, _, run, repo := setupTest(t)
 	dir := t.TempDir()
 	initGitRepo(t, dir)
@@ -774,22 +778,43 @@ func TestRemapUncertifiedPipelineRangeAfterRebase_MissingRangeCommitFailsClosed(
 	execGit(t, dir, "commit", "-m", "rewrite")
 	newHead := currentSHA(t, dir)
 
-	if _, err := RemapUncertifiedPipelineRangeAfterRebase(&StepContext{
+	rollback, err := RemapUncertifiedPipelineRangeAfterRebase(&StepContext{
 		Ctx:     context.Background(),
 		DB:      database,
 		Repo:    repo,
 		Run:     run,
 		WorkDir: dir,
-	}, oldHead, newHead); err == nil || !strings.Contains(err.Error(), "verify uncertified range against pre-rebase head") {
-		t.Fatalf("RemapUncertifiedPipelineRangeAfterRebase() error = %v, want missing-object failure", err)
+	}, oldHead, newHead)
+	if err != nil {
+		t.Fatalf("RemapUncertifiedPipelineRangeAfterRebase() error = %v, want fresh-review transition", err)
+	}
+	if rollback == nil {
+		t.Fatal("fresh-review transition returned no rollback")
 	}
 
 	got, err := database.GetUncertifiedPipelineRange(repo.ID, run.Branch)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got == nil || got.FromSHA != "from-missing" || got.ToSHA != "to-missing" {
-		t.Fatalf("unrelated range was rewritten: %#v", got)
+	if got == nil || got.FromSHA != newHead || got.ToSHA != newHead {
+		t.Fatalf("unreadable range was not moved to the rebased head: %#v", got)
+	}
+	if got.RecoveryState != db.ReviewRecoveryFreshReviewRequired || got.SelectionApplied {
+		t.Fatalf("unreadable range kept selection authority: %#v", got)
+	}
+	if got.SourceRunID != run.ID {
+		t.Fatalf("fresh review lost source run: %#v", got)
+	}
+
+	if err := rollback(); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	restored, err := database.GetUncertifiedPipelineRange(repo.ID, run.Branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored == nil || restored.FromSHA != "from-missing" || restored.ToSHA != "to-missing" {
+		t.Fatalf("rollback did not restore the unreadable range: %#v", restored)
 	}
 }
 

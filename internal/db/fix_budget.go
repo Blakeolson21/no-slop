@@ -5,9 +5,29 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
-// FixAttempts includes a durable inherited budget plus this step's funded
-// rounds. Count selections too: a crash after funding but before round insert
-// must not refund the attempt. Trigger rows cover older stores without them.
+// FixAttempts includes a durable inherited budget plus this step's own spend.
+//
+// Own spend has two independent records and they overlap, so it is the MAXIMUM
+// of the two, never their sum. The round record counts funded selections and
+// executed fix rounds: counting selections too means a crash after funding but
+// before the round insert cannot refund the attempt, and the trigger rows cover
+// older stores that recorded no selection source. The durable record is
+// step_results.ci_fix_attempts, which the CI step increments itself before it
+// launches an internal repair (internal/pipeline/steps/ci.go).
+//
+// Those two views describe the same money. Every internal CI repair that
+// actually commits returns a validation restart, and the executor writes that
+// execution back as one "auto_fix" round on this same step result - so summing
+// would charge the common case twice. The maximum charges it once and can never
+// fall below what the durable counter already recorded, so internal CI spend is
+// never refunded by a reattach, rebase or restart. The residual is an internal
+// repair that produced no commit and therefore no round: it raises the durable
+// counter without raising the round count, and it stays charged as long as the
+// durable counter leads. Where it does not lead - a CI step that also ran gate
+// fix rounds - that one no-commit attempt is absorbed rather than double
+// charged, which is the deliberate direction: the CI step separately enforces
+// its own internal ceiling against ci_fix_attempts, so this total exists to
+// stop an OUTER gate budget being refunded, not to re-bound the inner loop.
 func (d *DB) FixAttempts(stepID string) (int, error) {
 	var inherited int
 	if err := d.sql.QueryRow(`SELECT COALESCE((SELECT inherited_attempts FROM step_fix_budgets WHERE step_result_id=?),0)`, stepID).Scan(&inherited); err != nil {
@@ -26,10 +46,35 @@ func (d *DB) FixAttempts(stepID string) (int, error) {
 			executed++
 		}
 	}
-	if executed > funded {
-		funded = executed
+	spent := funded
+	if executed > spent {
+		spent = executed
 	}
-	return inherited + funded, nil
+	durable, err := d.durableInternalFixAttempts(stepID)
+	if err != nil {
+		return 0, err
+	}
+	if durable > spent {
+		spent = durable
+	}
+	return inherited + spent, nil
+}
+
+// durableInternalFixAttempts reads the fix spend a step persisted for itself.
+// A store predating the column reports zero rather than failing, matching how
+// every other reader treats a missing ci_fix_attempts.
+func (d *DB) durableInternalFixAttempts(stepID string) (int, error) {
+	if !d.hasColumn("step_results", "ci_fix_attempts") {
+		return 0, nil
+	}
+	var attempts int
+	if err := d.sql.QueryRow(`SELECT COALESCE((SELECT ci_fix_attempts FROM step_results WHERE id=?),0)`, stepID).Scan(&attempts); err != nil {
+		return 0, err
+	}
+	if attempts < 0 {
+		return 0, nil
+	}
+	return attempts, nil
 }
 
 // InitStepFixBudget runs before binding review provenance. It records inherited

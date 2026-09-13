@@ -104,7 +104,7 @@ no-slop axi run --intent "the user's goal" --yes
 | Flag          | Type     | Default | Description                                                      |
 | ------------- | -------- | ------- | ---------------------------------------------------------------- |
 | `--intent`    | `string` | (none)  | What the user set out to accomplish; required to start a new run |
-| `-y`, `--yes` | `bool`   | `false` | Auto-fix up to 3 rounds per step; park unresolved findings       |
+| `-y`, `--yes` | `bool`   | `false` | Auto-fix up to 3 rounds per step within the persisted fix budget |
 | `--skip`      | `string` | (none)  | Comma-separated pipeline steps to skip                           |
 
 `--intent` is not a description of the diff.
@@ -171,7 +171,7 @@ no-slop axi respond --action skip
 | `--findings`     | `string` | (none)        | Comma-separated finding IDs for `--action fix`                       |
 | `--instructions` | `string` | (none)        | Guidance applied to selected findings                                |
 | `--add-finding`  | `string` | (none)        | JSON finding object to add and fix                                   |
-| `-y`, `--yes`    | `bool`   | `false`       | Auto-fix up to 3 rounds per step; park unresolved findings           |
+| `-y`, `--yes`    | `bool`   | `false`       | Auto-fix up to 3 rounds per step within the persisted fix budget     |
 
 After the explicit response, `--yes` uses the same auto-resolution behavior as `axi run --yes`: fund up to 3 fix rounds per step for `auto-fix` and `ask-user` findings, approve clean gates and gates that only contain non-actionable `no-op` findings, and stop at `outcome: checks-passed` when the CI monitor reports readiness but the PR still needs a human merge. If actionable findings survive the budget, it fails with `fix budget exhausted` when the configured ceiling is spent.
 Each `axi respond` blocks until the next gate, CI-ready decision point, or final outcome.

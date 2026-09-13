@@ -38,13 +38,36 @@ func BindUncertifiedPipelineRange(sctx *StepContext) error {
 	if head == "" {
 		head = strings.TrimSpace(sctx.ReviewStartingHeadSHA)
 	}
-	inLineage, err := commitIsSelfOrAncestor(sctx.Ctx, sctx.WorkDir, rng.ToSHA, head)
+	inLineage, provable, err := rangeTipAncestry(sctx, rng.ToSHA, head)
 	if err != nil {
 		return fmt.Errorf("verify uncertified pipeline range ancestry: %w", err)
 	}
-	if !inLineage {
+	if provable && !inLineage {
 		warnUncertifiedRangeSkipped(sctx, rng, "uncertified range %s..%s not in gate; not applying provenance")
 		return nil
+	}
+	if !provable {
+		// The persisted tip names an object this gate cannot read, so nothing
+		// the stored span asserts about this head is provable here. Failing the
+		// step was the old answer and it stranded every run whose reviewed head
+		// predated the current default branch. Keep the claims and the source
+		// run, drop every mapping-dependent conclusion, and owe this head a
+		// fresh full review instead.
+		fresh := freshReviewRange(rng, head)
+		changed, casErr := sctx.DB.RestoreUncertifiedPipelineRangeIfCurrent(*rng, &fresh)
+		if casErr != nil {
+			return fmt.Errorf("invalidate unprovable uncertified range: %w", casErr)
+		}
+		if !changed {
+			return fmt.Errorf("uncertified pipeline range changed before fresh review")
+		}
+		rng = &fresh
+		if plan, err = reconcileReviewFixSelection(rng, false); err != nil {
+			return fmt.Errorf("reconcile uncertified review: %w", err)
+		}
+		if sctx.Log != nil {
+			sctx.Log("uncertified review range cannot be proved in this gate; fresh review required on " + head)
+		}
 	}
 	priorRounds, priorFindings, priorLineages, selectedFindings, err := loadUncertifiedPriorReview(
 		sctx.DB, rng.SourceRunID, plan.selectionApplied, rng.FindingsJSON, rng.SelectedFindingIDs,
@@ -61,10 +84,7 @@ func BindUncertifiedPipelineRange(sctx *StepContext) error {
 		// Older stores recorded a no-delta marker but not the selected IDs.
 		// That cannot authorize a review-only selection round. Preserve all
 		// findings as claims and require a fresh full review of this head.
-		fresh := *rng
-		fresh.FromSHA, fresh.ToSHA = head, head
-		fresh.RecoveryState = db.ReviewRecoveryFreshReviewRequired
-		fresh.SelectionApplied = false
+		fresh := freshReviewRange(rng, head)
 		changed, err := sctx.DB.RestoreUncertifiedPipelineRangeIfCurrent(*rng, &fresh)
 		if err != nil {
 			return fmt.Errorf("invalidate incomplete recovered selection: %w", err)
@@ -231,6 +251,8 @@ func RemapUncertifiedPipelineRangeAfterRebase(sctx *StepContext, oldHead, newHea
 	if rng == nil {
 		return nil, nil
 	}
+	// oldHead and newHead are execution context the rebase step just observed,
+	// so a git failure about either of them is a real fault and stays an error.
 	oldInNew, err := commitIsSelfOrAncestor(sctx.Ctx, sctx.WorkDir, oldHead, newHead)
 	if err != nil {
 		return nil, fmt.Errorf("verify rebased head ancestry: %w", err)
@@ -238,30 +260,43 @@ func RemapUncertifiedPipelineRangeAfterRebase(sctx *StepContext, oldHead, newHea
 	if oldInNew {
 		return nil, nil
 	}
-	rangeInOld, err := commitIsSelfOrAncestor(sctx.Ctx, sctx.WorkDir, rng.ToSHA, oldHead)
-	if err != nil {
-		return nil, fmt.Errorf("verify uncertified range against pre-rebase head: %w", err)
-	}
-	if !rangeInOld {
-		return nil, nil
-	}
-	rangeInNew, err := commitIsSelfOrAncestor(sctx.Ctx, sctx.WorkDir, rng.ToSHA, newHead)
+	// The persisted tip is stored provenance, not execution context: it can name
+	// a commit this worktree no longer has. Ask the rebased head first, because
+	// a tip still reachable there needs no remap at all.
+	tipInNew, tipProvable, err := rangeTipAncestry(sctx, rng.ToSHA, newHead)
 	if err != nil {
 		return nil, fmt.Errorf("verify uncertified range against rebased head: %w", err)
 	}
-	if rangeInNew {
+	if tipProvable && tipInNew {
 		return nil, nil
 	}
-	newFrom, newTo, mapped := remapRangeEndpoints(sctx, rng, oldHead, newHead)
+	tipInOld := false
+	if tipProvable {
+		tipInOld, tipProvable, err = rangeTipAncestry(sctx, rng.ToSHA, oldHead)
+		if err != nil {
+			return nil, fmt.Errorf("verify uncertified range against pre-rebase head: %w", err)
+		}
+	}
+	newFrom, newTo, mapped := "", "", false
+	if tipProvable && tipInOld {
+		newFrom, newTo, mapped = remapRangeEndpoints(sctx, rng, oldHead, newHead)
+	}
 	current := *rng
-	current.FromSHA, current.ToSHA = newFrom, newTo
-	if !mapped {
-		// Keep historical findings and the source-run budget, but invalidate
-		// the selection's relationship to the rewritten tree. Equal endpoints
-		// here mark a fresh full review of newHead, never a certificate.
-		current.FromSHA, current.ToSHA = newHead, newHead
-		current.RecoveryState = db.ReviewRecoveryFreshReviewRequired
-		current.SelectionApplied = false
+	if mapped {
+		current.FromSHA, current.ToSHA = newFrom, newTo
+	} else {
+		// Three unprovable shapes land here and they get one answer. The
+		// endpoints may be unreadable in this worktree; they may be readable
+		// but reach neither head, which the old code let stand as a silent
+		// no-op that left a stale unrelated span persisted as if it still
+		// described this branch; or distance may propose endpoints whose deltas
+		// do not survive. Keep the historical findings and the source-run fix
+		// budget, invalidate the selection's relationship to the rewritten
+		// tree, and owe newHead a full review. Equal endpoints here mark that
+		// debt, never a certificate: BindUncertifiedPipelineRange reads
+		// ReviewRecoveryFreshReviewRequired as "no selection is applied", so a
+		// fresh-review marker can never grant head approval.
+		current = freshReviewRange(rng, newHead)
 		if sctx.Log != nil {
 			sctx.Log("uncertified review range cannot be proved after rebase; fresh review required on " + newHead)
 		}
@@ -284,6 +319,80 @@ func RemapUncertifiedPipelineRangeAfterRebase(sctx *StepContext, oldHead, newHea
 		return nil
 	}
 	return rollback, nil
+}
+
+// freshReviewRange is the single shape of the fresh-review transition: keep the
+// findings, the source run and its spent fix budget, drop every conclusion that
+// depended on a mapping we can no longer prove, and point both endpoints at the
+// head that now owes a full review.
+func freshReviewRange(rng *db.UncertifiedPipelineRange, head string) db.UncertifiedPipelineRange {
+	fresh := *rng
+	fresh.FromSHA, fresh.ToSHA = head, head
+	fresh.RecoveryState = db.ReviewRecoveryFreshReviewRequired
+	fresh.SelectionApplied = false
+	return fresh
+}
+
+// rangeTipAncestry answers an ancestry question whose subject is a PERSISTED
+// range tip rather than a head this run just observed. Git reports a commit it
+// does not have with exit 128, exactly as it reports a directory that is not a
+// repository, and the old code surfaced both as a step error - which stranded
+// every rebase whose reviewed head predated the current default branch.
+//
+// provable is false when the question cannot be answered about the tip; the
+// caller routes that to the fresh-review transition, which is strictly more
+// review and never less. An error is returned only for a genuine fault: a
+// cancelled or expired context, or an execution context that cannot answer the
+// question at all. The head is the discriminator - it is caller-supplied and
+// must resolve, so a head that does not resolve means the worktree is the
+// problem, not the stored provenance.
+func rangeTipAncestry(sctx *StepContext, tip, head string) (inLineage bool, provable bool, err error) {
+	if sctx == nil {
+		return false, false, fmt.Errorf("commit ancestry requires pipeline context")
+	}
+	inLineage, err = commitIsSelfOrAncestor(sctx.Ctx, sctx.WorkDir, tip, head)
+	if err == nil {
+		return inLineage, true, nil
+	}
+	if fault := ancestryContextFault(sctx.Ctx, err); fault != nil {
+		return false, false, fault
+	}
+	if _, headErr := resolveCommitObject(sctx.Ctx, sctx.WorkDir, head); headErr != nil {
+		return false, false, err
+	}
+	return false, false, nil
+}
+
+// ancestryContextFault reports the cancellation or deadline that ended a git
+// probe, so a cancelled run never mistakes its own shutdown for unprovable
+// provenance and silently rewrites a range on the way out.
+func ancestryContextFault(ctx context.Context, err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return nil
+}
+
+func resolveCommitObject(ctx context.Context, workDir, sha string) (string, error) {
+	sha = strings.TrimSpace(sha)
+	if sha == "" || workDir == "" {
+		return "", fmt.Errorf("invalid commit resolution request")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	out, err := git.Run(ctx, workDir, "rev-parse", "--verify", "--quiet", sha+"^{commit}")
+	if err != nil {
+		return "", err
+	}
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return "", fmt.Errorf("commit %s not present", sha)
+	}
+	return out, nil
 }
 
 // Distance proposes endpoints; it is not proof. Rebase may drop commits already

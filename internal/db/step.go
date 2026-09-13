@@ -213,7 +213,7 @@ func (d *DB) ParkStepForApproval(runID, stepID string, status types.StepStatus, 
 
 // StartStep marks a step as running with a started_at timestamp.
 func (d *DB) StartStep(id string) error {
-	return d.StartStepWithAutoFixLimit(id, 0)
+	return d.StartStepWithAutoFixLimit(id, AutoFixLimitUnset)
 }
 
 // StartStepWithAutoFixLimit marks a step as running and records the effective
@@ -243,8 +243,16 @@ func (d *DB) SetCIFixAttempts(id string, attempts int) error {
 	return nil
 }
 
+// AutoFixLimitUnset is the ceiling a caller passes when it has no ceiling to
+// record. It persists as NULL, which every reader treats as uninitialized.
+const AutoFixLimitUnset = -1
+
+// autoFixLimitDBValue keeps uninitialized and explicitly-disabled funding
+// distinguishable in the row. Collapsing zero into NULL lost that distinction,
+// and recovery then read the NULL as "nothing was recorded" and re-funded a
+// step whose ceiling had deliberately been set to zero.
 func autoFixLimitDBValue(autoFixLimit int) any {
-	if autoFixLimit <= 0 {
+	if autoFixLimit < 0 {
 		return nil
 	}
 	return autoFixLimit
