@@ -279,7 +279,11 @@ func RemapUncertifiedPipelineRangeAfterRebase(sctx *StepContext, oldHead, newHea
 	}
 	newFrom, newTo, mapped := "", "", false
 	if tipProvable && tipInOld {
-		newFrom, newTo, mapped = remapRangeEndpoints(sctx, rng, oldHead, newHead)
+		var remapErr error
+		newFrom, newTo, mapped, remapErr = remapRangeEndpoints(sctx, rng, oldHead, newHead)
+		if remapErr != nil {
+			return nil, fmt.Errorf("remap uncertified range endpoints after rebase: %w", remapErr)
+		}
 	}
 	current := *rng
 	if mapped {
@@ -398,34 +402,37 @@ func resolveCommitObject(ctx context.Context, workDir, sha string) (string, erro
 // Distance proposes endpoints; it is not proof. Rebase may drop commits already
 // upstream or resolve conflicts differently. Exact deltas for the range AND
 // its suffix must survive. Conservative rejection costs a fresh review only.
-func remapRangeEndpoints(sctx *StepContext, rng *db.UncertifiedPipelineRange, oldHead, newHead string) (string, string, bool) {
+func remapRangeEndpoints(sctx *StepContext, rng *db.UncertifiedPipelineRange, oldHead, newHead string) (string, string, bool, error) {
 	fromBehind, err := commitBehindCount(sctx.Ctx, sctx.WorkDir, rng.FromSHA, oldHead)
 	if err != nil {
-		return "", "", false
+		return "", "", false, ancestryContextFault(sctx.Ctx, err)
 	}
 	toBehind, err := commitBehindCount(sctx.Ctx, sctx.WorkDir, rng.ToSHA, oldHead)
 	if err != nil {
-		return "", "", false
+		return "", "", false, ancestryContextFault(sctx.Ctx, err)
 	}
 	from, err := commitNthAncestor(sctx.Ctx, sctx.WorkDir, newHead, fromBehind)
 	if err != nil {
-		return "", "", false
+		return "", "", false, ancestryContextFault(sctx.Ctx, err)
 	}
 	to, err := commitNthAncestor(sctx.Ctx, sctx.WorkDir, newHead, toBehind)
 	if err != nil {
-		return "", "", false
+		return "", "", false, ancestryContextFault(sctx.Ctx, err)
 	}
 	for _, pair := range [][4]string{{rng.FromSHA, rng.ToSHA, from, to}, {rng.ToSHA, oldHead, to, newHead}} {
 		before, err := git.Run(sctx.Ctx, sctx.WorkDir, "diff", "--no-ext-diff", "--no-textconv", "--binary", pair[0], pair[1], "--")
 		if err != nil {
-			return "", "", false
+			return "", "", false, ancestryContextFault(sctx.Ctx, err)
 		}
 		after, err := git.Run(sctx.Ctx, sctx.WorkDir, "diff", "--no-ext-diff", "--no-textconv", "--binary", pair[2], pair[3], "--")
-		if err != nil || before != after {
-			return "", "", false
+		if err != nil {
+			return "", "", false, ancestryContextFault(sctx.Ctx, err)
+		}
+		if before != after {
+			return "", "", false, nil
 		}
 	}
-	return from, to, true
+	return from, to, true, ancestryContextFault(sctx.Ctx, nil)
 }
 
 func uncertifiedRangeStillInLineage(sctx *StepContext, existingTo, newFrom, newTo string) (bool, error) {

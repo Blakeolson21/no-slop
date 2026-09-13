@@ -64,6 +64,12 @@ func (d *DB) RepairPhantoms(ctx context.Context, opts PhantomRepairOptions, owne
 		if opts.BackupPath == "" {
 			return nil, fmt.Errorf("apply requires a new backup path")
 		}
+		backupReady := false
+		defer func() {
+			if !backupReady {
+				_ = os.Remove(opts.BackupPath)
+			}
+		}()
 		// SQLite owns the snapshot; copying a live DB file loses WAL transactions.
 		f, err := os.OpenFile(opts.BackupPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if err != nil {
@@ -90,6 +96,7 @@ func (d *DB) RepairPhantoms(ctx context.Context, opts PhantomRepairOptions, owne
 		}
 		out.BackupPath = opts.BackupPath
 		out.BackupSHA256 = hex.EncodeToString(h.Sum(nil))
+		backupReady = true
 	}
 	terminalMS := d.hasColumn("runs", "terminal_at_ms")
 	tx, err := d.sql.BeginTx(ctx, nil)
