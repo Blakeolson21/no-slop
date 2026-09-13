@@ -14,13 +14,17 @@ const explicitFixBudget = 3
 
 func (e *Executor) autoFixLimitForStep(step types.StepName, recorded *int) int {
 	limit := 0
-	if e.config != nil {
+	configured := e.config != nil
+	if configured {
 		limit = e.config.AutoFixLimit(step)
 	}
 	if recorded == nil {
 		return limit
 	}
 	if *recorded <= 0 {
+		return 0
+	}
+	if configured && limit == 0 {
 		return 0
 	}
 	if limit == 0 || *recorded < limit {
