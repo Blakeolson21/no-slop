@@ -20,6 +20,14 @@ import (
 // anything. The daemon registry covers workers without a cwd in the worktree.
 func phantomWorkerOwners(p *paths.Paths, rows []db.PhantomRun) (map[string]string, error) {
 	owners := map[string]string{}
+	worktrees := make(map[string]string, len(rows))
+	for _, r := range rows {
+		work, err := canonicalProcessPath(p.WorktreeDir(r.RepoID, r.ID))
+		if err != nil {
+			return nil, fmt.Errorf("canonicalize worktree %s: %w", r.ID, err)
+		}
+		worktrees[r.ID] = work
+	}
 	processes, err := proctree.Snapshot()
 	if err != nil {
 		return nil, err
@@ -68,14 +76,50 @@ func phantomWorkerOwners(p *paths.Paths, rows []db.PhantomRun) (map[string]strin
 			continue
 		}
 		cwd = strings.TrimSuffix(cwd, " (deleted)")
+		cwd, err = canonicalProcessPath(cwd)
+		if err != nil {
+			return nil, fmt.Errorf("canonicalize worker cwd for pid %d: %w", pid, err)
+		}
 		for _, r := range rows {
-			work := p.WorktreeDir(r.RepoID, r.ID)
+			work := worktrees[r.ID]
 			if cwd == work || strings.HasPrefix(cwd, work+string(os.PathSeparator)) {
 				owners[r.ID] = fmt.Sprintf("live worker cwd (pid %d)", pid)
 			}
 		}
 	}
 	return owners, nil
+}
+
+func canonicalProcessPath(path string) (string, error) {
+	abs, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return "", err
+	}
+	for candidate := abs; ; candidate = filepath.Dir(candidate) {
+		resolved, resolveErr := filepath.EvalSymlinks(candidate)
+		if resolveErr == nil {
+			rel, relErr := filepath.Rel(candidate, abs)
+			if relErr != nil {
+				return "", relErr
+			}
+			if rel == "." {
+				return filepath.Clean(resolved), nil
+			}
+			return filepath.Clean(filepath.Join(resolved, rel)), nil
+		}
+		if !os.IsNotExist(resolveErr) {
+			return "", resolveErr
+		}
+		if _, statErr := os.Lstat(candidate); statErr == nil {
+			return "", resolveErr
+		} else if !os.IsNotExist(statErr) {
+			return "", statErr
+		}
+		parent := filepath.Dir(candidate)
+		if parent == candidate {
+			return "", resolveErr
+		}
+	}
 }
 
 func phantomStoreIdentity(info os.FileInfo) string {
