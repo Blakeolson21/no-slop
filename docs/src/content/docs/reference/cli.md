@@ -553,9 +553,9 @@ no-slop store repair-phantoms --dry-run
 no-slop store repair-phantoms --apply
 ```
 
-Dry-run is the default. Apply takes a SQLite snapshot, rechecks durable activity,
-agent PIDs, daemon ownership handles, and Linux worker processes inside the write
-transaction, then fails only unowned stale rows with `phantom: no agent`. Parked
+Dry-run is the default. Apply first takes a SQLite snapshot, then rechecks durable
+activity, agent PIDs, daemon ownership handles, and Linux worker processes inside
+the write transaction before failing only unowned stale rows with `phantom: no agent`. Parked
 executors, recent rows, and uncertain worker ownership are protected. Repeating
 apply is idempotent. `--backup /absolute/new/path.sqlite` selects a new snapshot
 path; existing files are refused. The default snapshots and JSON receipts live
