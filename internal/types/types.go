@@ -131,7 +131,7 @@ const (
 	StepStatusFixerRunning StepStatus = "fixer_running"
 	// StepStatusParkedAfterFix means the step is parked at the gate waiting
 	// for the responder after a fix round (renamed from the ambiguous
-	// "parked_for_responder_after_fix", which was misread as "the fixer is working").
+	// "fix_review", which was misread as "the fixer is working").
 	StepStatusParkedAfterFix StepStatus = "parked_for_responder_after_fix"
 	StepStatusCompleted      StepStatus = "completed"
 	StepStatusSkipped        StepStatus = "skipped"
