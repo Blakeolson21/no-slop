@@ -284,7 +284,7 @@ Override or enable the telemetry website ID.
 
 When set, telemetry uses this website ID at runtime. `NO_MISTAKES_UMAMI_WEBSITE_ID` is the compatibility alias; if both names are set, their values must match, including empty values. If it is unset in a dev build, `no-slop` also checks a repo-local `.env` file for either spelling. If no runtime value is found, it falls back to any website ID embedded at build time.
 
-When telemetry is enabled, `no-slop` sends command, run, approval, fix, and wizard events, completed step events with `awaiting_approval`, `fix_review`, or `failed` status, and pageviews for the human surfaces `/wizard` and `/tui` and the state-changing agent surfaces `/axi/run`, `/axi/respond`, and `/axi/abort` to Umami.
+When telemetry is enabled, `no-slop` sends command, run, approval, fix, and wizard events, completed step events with `parked_for_responder_approval`, `parked_for_responder_after_fix`, or `failed` status, and pageviews for the human surfaces `/wizard` and `/tui` and the state-changing agent surfaces `/axi/run`, `/axi/respond`, and `/axi/abort` to Umami.
 Mutation pageviews are sent alongside command events, so command status and duration remain available.
 They include only flag-derived context: `/axi/run` records whether `--yes`, `--intent`, or `--skip` was present, and `/axi/respond` records the sanitized action and whether `--yes` was present.
 

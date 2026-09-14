@@ -95,7 +95,7 @@ Those omissions only bound the prompt transport: they do not resolve a finding o
 An unselected finding is carried forward rather than dropped, so a finding raised in one round cannot disappear from the next round's context.
 Review adds continuity rules to this generic history. The [Review step reference](/no-slop/reference/pipeline-steps/#review) owns how unresolved findings survive rereviews and how a later selection supersedes an earlier non-selection.
 
-After a user-triggered fix, the step re-runs and pauses again to show you the results (`fix_review` status). You can then approve, fix again, skip, or abort.
+After a user-triggered fix, the step re-runs and pauses again to show you the results (`parked_for_responder_after_fix` status). You can then approve, fix again, skip, or abort.
 TUI yolo mode approves the fix review automatically after its one fix round. AXI `--yes` funds up to 3 fix rounds per step and approves a fix review only when it is clean or contains only `no-op` findings. If an actionable finding cannot be selected or survives that budget, it leaves the run parked for explicit adjudication instead of silently approving it. An explicit approval can accept remaining actionable findings; the [step log](/no-slop/reference/cli/#no-slop-axi-logs) records that adjudication.
 
 ## Fix commits

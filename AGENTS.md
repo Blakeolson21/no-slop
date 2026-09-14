@@ -164,7 +164,7 @@ Safest local verification sequence after non-trivial changes:
 
 **Parked / Awaiting-Agent Signal**
 
-- `runs.awaiting_agent_since` is non-nil **iff** a step is actually parked at an `awaiting_approval`/`fix_review` gate: the executor sets it on gate entry, clears it when `waitForApproval` returns, and `RecoverStaleRuns` clears it on crash recovery. It is observability only (rendered as `awaiting_agent: parked <duration>` in `axi status`) and never changes gate resolution, auto-resume, or the `--yes` default.
+- `runs.awaiting_agent_since` is non-nil **iff** a step is actually parked at a `parked_for_responder_approval`/`parked_for_responder_after_fix` gate: the executor sets it on gate entry, clears it when `waitForApproval` returns, and `RecoverStaleRuns` clears it on crash recovery. It is observability only (rendered as `awaiting_agent: parked <duration>` in `axi status`) and never changes gate resolution, auto-resume, or the `--yes` default.
 - Tests: `internal/db/run_test.go`, `internal/pipeline/executor_approval_test.go`, `internal/cli/axi_test.go`, e2e `TestAxiParkedAwaitingAgentSignal`.
 
 **Agent Lane Quota Cooldown (`internal/lanehealth`)**

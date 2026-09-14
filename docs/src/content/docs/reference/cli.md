@@ -81,7 +81,7 @@ With no subcommand, shows the executable path, description, repo, current branch
 When the current branch has an active run, that run appears as `active_run` with any approval gate and help for `axi respond` when it is parked or `axi status` when it is still running.
 If an active run object is parked at a decision gate, it includes `awaiting_agent: parked <duration>` immediately after `status`.
 That field is observability only; the `gate:` object still tells the agent which response to send.
-If a step is actively `running` or `fixing`, the run object can also include an `active_steps` table with `active_for`, `last_activity`, native `agent_pid` when one is currently running, and the current execution or fix round.
+If a step is actively `running` or `fixer_running`, the run object can also include an `active_steps` table with `active_for`, `last_activity`, native `agent_pid` when one is currently running, and the current execution or fix round.
 When only another branch has an active run, that run appears as `other_branch_active_run`; the help tells agents to leave it alone and start validation for the current branch.
 AXI help and outputs always repeat the preserve-prior-gate-progress contract: after a gate round has already produced fix commits, additional fixes belong on the same branch.
 When a relevant `branch_sync` object is present, they also include version-matched synchronization guidance to follow before a post-pipeline local commit or fresh run.
@@ -192,9 +192,9 @@ no-slop axi status --run <id>
 | ------- | -------- | ------------ | ------------------------- |
 | `--run` | `string` | resolved run | Inspect a specific run ID |
 
-When the resolved run is parked at an `awaiting_approval` or `fix_review` gate, its top-level `run:` object includes `awaiting_agent: parked <duration>` immediately after `status`.
+When the resolved run is parked at a `parked_for_responder_approval` or `parked_for_responder_after_fix` gate, its top-level `run:` object includes `awaiting_agent: parked <duration>` immediately after `status`.
 The field disappears after `axi respond`, on cancel, and on terminal outcomes; use it to distinguish a run waiting for the driving agent from one actively running, fixing, or watching CI.
-When the resolved run has a `running` or `fixing` step, the run object includes `active_steps`.
+When the resolved run has a `running` or `fixer_running` step, the run object includes `active_steps`.
 Each row reports how long the step has been active, the latest meaningful log or native-agent lifecycle activity, the native agent PID if one is currently running, and the current round such as `round 1`, `auto-fix 1/3`, or `fix 2`.
 If no activity arrives for longer than `step_quiet_warning`, `last_activity` is prefixed with `quiet`; this is only a liveness signal and does not cancel the step.
 For older active runs with no recorded activity timestamp, AXI falls back to the step log file modification time.
@@ -309,6 +309,26 @@ When terminal quiescence cannot be confirmed - the bounded wait expires, the wai
 A cancellation that leaves the branch in pipeline custody points directly to `no-slop axi sync --recover`, which anchors whatever survives of the pipeline-created commits; when the submitted head never moved, cancellation instead reports `state: user_owned` with no sync action.
 While a run is active, do not use `axi abort` or `no-slop rerun` to go fix a finding yourself.
 That cancels the pipeline's in-flight work and forces a full re-validation; use `axi respond --action fix` at the gate so the pipeline applies and re-checks the fix.
+
+## no-slop axi migrate-status-names
+
+Backfill the 2026-09 gate-state rename in the store: rewrites the legacy `fix_review`, `awaiting_approval`, and `fixing` step statuses and the legacy `pending` run status to their renamed tokens (`parked_for_responder_after_fix`, `parked_for_responder_approval`, `fixer_running`, `run_starting`).
+Idempotent, and safe to run while the daemon is up (single UPDATE statements in one transaction); prints the row counts it changed.
+The daemon refuses to start while legacy rows are still present only if they carry values outside the declared legal sets, so run this once after deploying a rename-carrying build.
+
+```sh
+no-slop axi migrate-status-names
+```
+
+## no-slop axi lint-store
+
+Check every stored `runs.status` and `step_results.status` value against the declared legal sets and exit nonzero naming any offending value.
+The daemon runs the same check at startup and refuses to start on failure.
+Use it after `axi migrate-status-names` to confirm the store is clean.
+
+```sh
+no-slop axi lint-store
+```
 
 ## no-slop eject
 

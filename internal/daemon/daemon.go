@@ -192,6 +192,14 @@ func RunWithOptions(p *paths.Paths, d *db.DB, stepFactory StepFactory) error {
 }
 
 func runWithOptionsLocked(p *paths.Paths, d *db.DB, stepFactory StepFactory, startupStarted time.Time) error {
+	// Refuse to run against a store carrying status values outside the
+	// declared legal sets (the enforcement behind the 2026-09 gate-state
+	// rename; there are no SQLite CHECK constraints). The named values tell
+	// the operator to run `axi migrate-status-names` or fix the rows. The
+	// same check is exposed as `axi lint-store`.
+	if err := d.ValidateStatusNames(); err != nil {
+		return fmt.Errorf("startup store validation failed: %w", err)
+	}
 	managedServerLog, err := logstore.Open(p.ManagedServerLog(), logstore.ManagedServerPolicy())
 	if err != nil {
 		return fmt.Errorf("open managed server log: %w", err)

@@ -302,15 +302,15 @@ Each step progresses through these statuses:
 |---|---|
 | `pending` | Not yet started |
 | `running` | Currently executing |
-| `fixing` | Agent is auto-fixing issues |
-| `awaiting_approval` | Paused, waiting for user action |
-| `fix_review` | Paused after a fix cycle, showing results for review |
+| `fixer_running` | Agent is auto-fixing issues |
+| `parked_for_responder_approval` | Paused, waiting for the responder's decision (was `awaiting_approval` before the 2026-09 rename) |
+| `parked_for_responder_after_fix` | Paused after a fix cycle, showing results for review (was `fix_review`) |
 | `completed` | Finished successfully |
 | `skipped` | Pre-skipped for the run, skipped by the user, or skipped automatically by the pipeline |
 | `failed` | Step failed; the step log includes the returned error message so command stderr and provider errors are visible in the per-step log, not only in the daemon log |
 
-When a non-terminal run has a step in `awaiting_approval` or `fix_review`, AXI run objects also expose `awaiting_agent: parked <duration>` as a run-level observability signal.
+When a non-terminal run has a step in `parked_for_responder_approval` or `parked_for_responder_after_fix`, AXI run objects also expose `awaiting_agent: parked <duration>` as a run-level observability signal.
 The signal clears as soon as the approval wait ends, including `axi respond` and cancellation, and does not change how gates resolve.
-When a step is `running` or `fixing`, AXI run objects expose an `active_steps` table with active duration, latest activity, native subprocess PID when present, and the current round such as `round 1`, `auto-fix 1/3`, or `fix 2`.
+When a step is `running` or `fixer_running`, AXI run objects expose an `active_steps` table with active duration, latest activity, native subprocess PID when present, and the current round such as `round 1`, `auto-fix 1/3`, or `fix 2`.
 If the latest activity is older than `step_quiet_warning`, AXI prefixes it with `quiet` to make possible wedges visible without changing the run state.
 Step logs also record native subprocess start, exit, and retry lifecycle lines plus explicit auto-fix and user-fix round markers.
