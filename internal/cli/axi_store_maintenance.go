@@ -6,7 +6,6 @@ import (
 
 	toon "github.com/toon-format/toon-go"
 
-	"github.com/Blakeolson21/no-slop/internal/telemetry"
 	"github.com/Blakeolson21/no-slop/internal/types"
 	"github.com/spf13/cobra"
 )

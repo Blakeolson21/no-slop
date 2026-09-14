@@ -133,8 +133,9 @@ func TestRunObjectRendersAwaitingAgent(t *testing.T) {
 	if !strings.Contains(out, "awaiting_agent: parked 2m30s\n") {
 		t.Errorf("run object missing parked signal in:\n%s", out)
 	}
-	// The signal sits right after status so one read distinguishes parked.
-	if !strings.Contains(out, "status: running\n  awaiting_agent: parked 2m30s\n") {
+	// The park is rendered inside the status cell and the awaiting_agent key
+	// follows it, so one read distinguishes parked (SPEC item 5).
+	if !strings.Contains(out, "status: running(parked 2m30s)\n  awaiting_agent: parked 2m30s\n") {
 		t.Errorf("awaiting_agent should follow status in:\n%s", out)
 	}
 
