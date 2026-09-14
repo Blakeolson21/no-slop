@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.55.0](https://github.com/Blakeolson21/no-slop/compare/v1.54.0...v1.55.0) (2026-09-14)
+
+
+### Features
+
+* **daemon,docs:** wire status validator into startup and sweep docs ([4e7da32](https://github.com/Blakeolson21/no-slop/commit/4e7da323304b03abeddd3d876e4526233065e368))
+* separate review capacity and verify completion-driven continuation ([bc8368a](https://github.com/Blakeolson21/no-slop/commit/bc8368a4042baeb4dc4e1a30f332f11da4d830c4))
+
+
+### Bug Fixes
+
+* **cli:** repair WIP build break and stale awaiting_agent assertion ([8cdbeeb](https://github.com/Blakeolson21/no-slop/commit/8cdbeebb7d54a932d5e24ccf679d7fe485e1d4fa))
+* **codex:** stream prompts through stdin and bound round history ([972cebe](https://github.com/Blakeolson21/no-slop/commit/972cebeb0e300f7b8e428d78720ddb5ad18d5947))
+* **review:** unify head promotion recovery ([eb3b48f](https://github.com/Blakeolson21/no-slop/commit/eb3b48f99114bbeb2dab51fad16792d50e13e0ed))
+* **types,db:** legacy alias constants must hold the old literals ([0be11a5](https://github.com/Blakeolson21/no-slop/commit/0be11a5d384d0d155b5ca4972da1c8041bb64cc5))
+
 ## [1.54.0](https://github.com/Blakeolson21/no-slop/compare/v1.53.0...v1.54.0) (2026-09-05)
 
 
