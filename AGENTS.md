@@ -164,8 +164,8 @@ Safest local verification sequence after non-trivial changes:
 
 **Parked / Awaiting-Agent Signal**
 
-- `runs.awaiting_agent_since` is non-nil **iff** a step is actually parked at an `awaiting_approval`/`fix_review` gate: the executor sets it on gate entry, clears it when `waitForApproval` returns, and `RecoverStaleRuns` clears it on crash recovery. It is observability only (rendered as `awaiting_agent: parked <duration>` in `axi status`) and never changes gate resolution, auto-resume, or the `--yes` default.
-- Tests: `internal/db/run_test.go`, `internal/pipeline/executor_approval_test.go`, `internal/cli/axi_test.go`, e2e `TestAxiParkedAwaitingAgentSignal`.
+- `runs.awaiting_agent_since` is non-nil **iff** a step is actually parked at an `awaiting_approval`/`fix_review` gate: the executor sets it on gate entry, clears it when `waitForApproval` returns, `RecoverStaleRuns` clears it on crash recovery, and every write that moves a run to a terminal status clears it in the same statement - `db.finishRun` is the single owner of that finalization fragment, so a new terminal path must route through it rather than hand-rolling an UPDATE. `db.StaleParkMarkers`/`db.RepairParkMarkers` back `axi lint-store` (read-only check, nonzero exit on violations) and `axi migrate-park-markers` (idempotent repair that prints the count) for rows written before the invariant held. It is observability only (rendered as `awaiting_agent: parked <duration>` in `axi status`) and never changes gate resolution, auto-resume, or the `--yes` default.
+- Tests: `internal/db/run_test.go` (`TestTerminalStatusWritesClearAwaitingAgentMarker`, `TestParkedRunningRunKeepsAwaitingAgentMarker`, `TestStaleParkMarkersAndRepair`), `internal/pipeline/executor_approval_test.go`, `internal/cli/axi_store_test.go`, e2e `TestAxiParkedAwaitingAgentSignal`.
 
 **Agent Lane Quota Cooldown (`internal/lanehealth`)**
 

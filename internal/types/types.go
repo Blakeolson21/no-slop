@@ -18,6 +18,19 @@ const (
 	RunCancelled RunStatus = "cancelled"
 )
 
+// Terminal reports whether a run status is a final state. A run with a
+// terminal status is finished and must never carry an awaiting-agent park
+// marker; every write that moves a run to a terminal status clears the marker
+// in the same statement (db.finishRun owns that fragment).
+func (s RunStatus) Terminal() bool {
+	switch s {
+	case RunCompleted, RunFailed, RunCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
 const (
 	RunCancelReasonAbortedByUser = "cancelled: aborted by user"
 	RunCancelReasonSuperseded    = "cancelled: superseded by new push"

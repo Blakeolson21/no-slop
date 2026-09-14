@@ -223,10 +223,11 @@ func (d *DB) GetActiveRuns() ([]*Run, error) {
 	return runs, rows.Err()
 }
 
-// UpdateRunStatus updates a run's status and updated_at timestamp.
+// UpdateRunStatus updates a run's status and updated_at timestamp. A terminal
+// status also clears the awaiting-agent park marker in the same statement via
+// finishRun.
 func (d *DB) UpdateRunStatus(id string, status types.RunStatus) error {
-	_, err := d.sql.Exec(`UPDATE runs SET status = ?, push_active = CASE WHEN ? IN ('completed', 'failed', 'cancelled') THEN 0 ELSE push_active END, terminal_head_verified_at = NULL, updated_at = ? WHERE id = ?`, status, status, now(), id)
-	if err != nil {
+	if err := d.finishRun(id, status, `status = ?, push_active = CASE WHEN ? IN ('completed', 'failed', 'cancelled') THEN 0 ELSE push_active END, terminal_head_verified_at = NULL`, status, status); err != nil {
 		return fmt.Errorf("update run status: %w", err)
 	}
 	return nil
@@ -477,8 +478,7 @@ func (d *DB) UpdateRunError(id, errMsg string) error {
 
 // UpdateRunErrorStatus sets the error message and terminal status on a run.
 func (d *DB) UpdateRunErrorStatus(id, errMsg string, status types.RunStatus) error {
-	_, err := d.sql.Exec(`UPDATE runs SET error = ?, status = ?, push_active = 0, terminal_head_verified_at = NULL, updated_at = ? WHERE id = ?`, errMsg, status, now(), id)
-	if err != nil {
+	if err := d.finishRun(id, status, `error = ?, status = ?, push_active = 0, terminal_head_verified_at = NULL`, errMsg, status); err != nil {
 		return fmt.Errorf("update run error: %w", err)
 	}
 	return nil
@@ -486,8 +486,7 @@ func (d *DB) UpdateRunErrorStatus(id, errMsg string, status types.RunStatus) err
 
 func (d *DB) UpdateRunErrorStatusWithVerifiedHead(id, errMsg string, status types.RunStatus, headSHA string) error {
 	ts := now()
-	_, err := d.sql.Exec(`UPDATE runs SET error = ?, status = ?, head_sha = ?, push_active = 0, terminal_head_verified_at = ?, updated_at = ? WHERE id = ?`, errMsg, status, headSHA, ts, ts, id)
-	if err != nil {
+	if err := d.finishRun(id, status, `error = ?, status = ?, head_sha = ?, push_active = 0, terminal_head_verified_at = ?`, errMsg, status, headSHA, ts); err != nil {
 		return fmt.Errorf("update run error with verified head: %w", err)
 	}
 	return nil
@@ -495,9 +494,35 @@ func (d *DB) UpdateRunErrorStatusWithVerifiedHead(id, errMsg string, status type
 
 func (d *DB) UpdateRunStatusWithVerifiedHead(id string, status types.RunStatus, headSHA string) error {
 	ts := now()
-	_, err := d.sql.Exec(`UPDATE runs SET status = ?, head_sha = ?, push_active = 0, terminal_head_verified_at = ?, updated_at = ? WHERE id = ?`, status, headSHA, ts, ts, id)
-	if err != nil {
+	if err := d.finishRun(id, status, `status = ?, head_sha = ?, push_active = 0, terminal_head_verified_at = ?`, status, headSHA, ts); err != nil {
 		return fmt.Errorf("update run status with verified head: %w", err)
+	}
+	return nil
+}
+
+// finishRun is the single owner of every run status write that can move a run
+// to a terminal status. Whenever the written status is terminal it appends one
+// shared finalization fragment to the statement: the parked time is folded
+// into parked_ms and awaiting_agent_since is nulled in the SAME statement, so
+// a finished run can never carry a stale park marker. Every terminal code
+// path (executor finish/abort, daemon failure recovery, branch-sync custody
+// writes) routes through one of the UpdateRun* wrappers above, which all
+// delegate here; a future terminal path that adds another wrapper must reuse
+// finishRun too. Non-terminal writes never reach the fragment and leave the
+// marker untouched.
+func (d *DB) finishRun(id string, status types.RunStatus, set string, args ...any) error {
+	ts := now()
+	if status.Terminal() {
+		set += `, parked_ms = COALESCE(parked_ms, 0) + CASE
+			WHEN awaiting_agent_since IS NOT NULL AND ? > awaiting_agent_since
+			THEN (? - awaiting_agent_since) * 1000 ELSE 0 END,
+			awaiting_agent_since = NULL`
+		args = append(args, ts, ts)
+	}
+	set += `, updated_at = ?`
+	args = append(args, ts, id)
+	if _, err := d.sql.Exec(`UPDATE runs SET `+set+` WHERE id = ?`, args...); err != nil {
+		return fmt.Errorf("update run: %w", err)
 	}
 	return nil
 }
@@ -679,6 +704,67 @@ func recoveryExclusionClause(preserved map[string]struct{}) (string, []any) {
 // the empty string when the run has never spent one. The payload is opaque
 // here: pipeline CI state owns its shape, and the database only guarantees
 // that what was written survives a restart.
+// StaleParkMarker is one run row that still carries an awaiting-agent park
+// marker despite a non-active status: a finished (or otherwise orphaned) run
+// a marker-joining reader would misread as parked.
+type StaleParkMarker struct {
+	ID                 string
+	Status             types.RunStatus
+	Branch             string
+	AwaitingAgentSince int64
+}
+
+// StaleParkMarkers returns every run whose status is no longer active
+// (pending/running) but which still carries an awaiting_agent_since marker.
+// The gate is stated as NOT IN (pending, running) rather than a terminal
+// allowlist so an unrecognized or legacy status value fails visible here and
+// in the axi lint-store check instead of escaping as "not stale".
+func (d *DB) StaleParkMarkers() ([]StaleParkMarker, error) {
+	rows, err := d.sql.Query(
+		`SELECT id, status, branch, awaiting_agent_since FROM runs
+		 WHERE awaiting_agent_since IS NOT NULL AND status NOT IN (?, ?)`,
+		types.RunPending, types.RunRunning,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list stale park markers: %w", err)
+	}
+	defer rows.Close()
+	var stale []StaleParkMarker
+	for rows.Next() {
+		var s StaleParkMarker
+		if err := rows.Scan(&s.ID, &s.Status, &s.Branch, &s.AwaitingAgentSince); err != nil {
+			return nil, fmt.Errorf("scan stale park marker: %w", err)
+		}
+		stale = append(stale, s)
+	}
+	return stale, rows.Err()
+}
+
+// RepairParkMarkers clears the awaiting-agent marker on every non-active run
+// in one statement, folding the marker's elapsed time into parked_ms so the
+// parked evidence survives the repair. Idempotent: a second call finds no
+// rows and reports 0. Returns the number of repaired rows.
+func (d *DB) RepairParkMarkers() (int, error) {
+	ts := now()
+	result, err := d.sql.Exec(
+		`UPDATE runs SET
+			parked_ms = COALESCE(parked_ms, 0) + CASE
+				WHEN awaiting_agent_since IS NOT NULL AND ? > awaiting_agent_since
+				THEN (? - awaiting_agent_since) * 1000 ELSE 0 END,
+			awaiting_agent_since = NULL, updated_at = ?
+		 WHERE awaiting_agent_since IS NOT NULL AND status NOT IN (?, ?)`,
+		ts, ts, ts, types.RunPending, types.RunRunning,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("repair park markers: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("repair park markers rows affected: %w", err)
+	}
+	return int(count), nil
+}
+
 func (d *DB) GetRunCIRerunState(id string) (string, error) {
 	var state sql.NullString
 	err := d.sql.QueryRow(`SELECT ci_rerun_state FROM runs WHERE id = ?`, id).Scan(&state)

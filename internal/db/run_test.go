@@ -165,6 +165,212 @@ func TestRunAwaitingAgentSetAndClear(t *testing.T) {
 	}
 }
 
+// TestTerminalStatusWritesClearAwaitingAgentMarker pins the parked-marker
+// invariant: every db write path that moves a run to a terminal status clears
+// awaiting_agent_since in the same statement and folds the parked time into
+// parked_ms. A future terminal path must route through db.finishRun, or this
+// test (and axi lint-store) catches the stale marker it would leave behind.
+func TestTerminalStatusWritesClearAwaitingAgentMarker(t *testing.T) {
+	const verifiedHead = "fedcba9876543210fedcba9876543210fedcba98"
+	writes := []struct {
+		name  string
+		write func(d *DB, id string, s types.RunStatus) error
+	}{
+		{"UpdateRunStatus", func(d *DB, id string, s types.RunStatus) error { return d.UpdateRunStatus(id, s) }},
+		{"UpdateRunStatusWithVerifiedHead", func(d *DB, id string, s types.RunStatus) error {
+			return d.UpdateRunStatusWithVerifiedHead(id, s, verifiedHead)
+		}},
+		{"UpdateRunErrorStatus", func(d *DB, id string, s types.RunStatus) error { return d.UpdateRunErrorStatus(id, "boom", s) }},
+		{"UpdateRunErrorStatusWithVerifiedHead", func(d *DB, id string, s types.RunStatus) error {
+			return d.UpdateRunErrorStatusWithVerifiedHead(id, "boom", s, verifiedHead)
+		}},
+	}
+	for _, status := range []types.RunStatus{types.RunCompleted, types.RunFailed, types.RunCancelled} {
+		for _, w := range writes {
+			t.Run(w.name+"/"+string(status), func(t *testing.T) {
+				d := openTestDB(t)
+				repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
+				run, err := d.InsertRun(repo.ID, "feature", "abc123", "def456")
+				if err != nil {
+					t.Fatalf("insert run: %v", err)
+				}
+				if err := d.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+					t.Fatalf("set running: %v", err)
+				}
+				if err := d.SetRunAwaitingAgent(run.ID); err != nil {
+					t.Fatalf("park run: %v", err)
+				}
+				// Backdate the marker so the parked duration is measurable.
+				parkedAt := now() - 10
+				if _, err := d.sql.Exec(`UPDATE runs SET awaiting_agent_since = ? WHERE id = ?`, parkedAt, run.ID); err != nil {
+					t.Fatalf("backdate marker: %v", err)
+				}
+
+				if err := w.write(d, run.ID, status); err != nil {
+					t.Fatalf("terminal write: %v", err)
+				}
+				got, err := d.GetRun(run.ID)
+				if err != nil {
+					t.Fatalf("get run: %v", err)
+				}
+				if got.Status != status {
+					t.Errorf("status = %q, want %q", got.Status, status)
+				}
+				if got.AwaitingAgentSince != nil {
+					t.Errorf("AwaitingAgentSince = %d after %s to %s, want nil", *got.AwaitingAgentSince, w.name, status)
+				}
+				if got.ParkedMS < 10000 {
+					t.Errorf("parked_ms = %d, want >= 10000 after folding the parked time", got.ParkedMS)
+				}
+			})
+		}
+	}
+}
+
+// TestParkedRunningRunKeepsAwaitingAgentMarker pins the inverse invariant: a
+// run that is genuinely parked (running plus marker) keeps its marker across
+// non-terminal writes, so clearing must happen only when a terminal status is
+// written.
+func TestParkedRunningRunKeepsAwaitingAgentMarker(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
+	run, err := d.InsertRun(repo.ID, "feature", "abc123", "def456")
+	if err != nil {
+		t.Fatalf("insert run: %v", err)
+	}
+	if err := d.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+		t.Fatalf("set running: %v", err)
+	}
+	if err := d.SetRunAwaitingAgent(run.ID); err != nil {
+		t.Fatalf("park run: %v", err)
+	}
+
+	// Non-terminal lifecycle writes must leave the park marker alone.
+	if err := d.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+		t.Fatalf("rewrite running: %v", err)
+	}
+	if err := d.UpdateRunHeadSHA(run.ID, "bcd234bcd234bcd234bcd234bcd234bcd234bcd2"); err != nil {
+		t.Fatalf("update head: %v", err)
+	}
+	if err := d.UpdateRunPRURL(run.ID, "https://example.com/pr/1"); err != nil {
+		t.Fatalf("update pr url: %v", err)
+	}
+
+	got, err := d.GetRun(run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if got.Status != types.RunRunning {
+		t.Errorf("status = %q, want running", got.Status)
+	}
+	if got.AwaitingAgentSince == nil {
+		t.Error("AwaitingAgentSince = nil on a parked running run, want the marker kept")
+	}
+	if got.ParkedMS != 0 {
+		t.Errorf("parked_ms = %d, want 0 while the run is still parked", got.ParkedMS)
+	}
+}
+
+func TestStaleParkMarkersAndRepair(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
+	newRun := func(branch string) *Run {
+		r, err := d.InsertRun(repo.ID, branch, "abc123", "def456")
+		if err != nil {
+			t.Fatalf("insert run: %v", err)
+		}
+		if err := d.UpdateRunStatus(r.ID, types.RunRunning); err != nil {
+			t.Fatalf("set running: %v", err)
+		}
+		if err := d.SetRunAwaitingAgent(r.ID); err != nil {
+			t.Fatalf("park run: %v", err)
+		}
+		return r
+	}
+	staleDone := newRun("feature/done")
+	staleCancelled := newRun("feature/cancelled")
+	liveParked := newRun("feature/live")
+	cleanDone := newRun("feature/clean")
+	if err := d.ClearRunAwaitingAgent(cleanDone.ID); err != nil {
+		t.Fatalf("clear marker: %v", err)
+	}
+	if err := d.UpdateRunStatus(staleDone.ID, types.RunCompleted); err != nil {
+		t.Fatalf("complete run: %v", err)
+	}
+	if err := d.UpdateRunErrorStatus(staleCancelled.ID, "cancelled: aborted by user", types.RunCancelled); err != nil {
+		t.Fatalf("cancel run: %v", err)
+	}
+	// Simulate the legacy rows the repair exists for: a terminal status that
+	// predates the shared clear-on-terminal fragment, still carrying the marker.
+	parkedAt := now() - 10
+	for _, id := range []string{staleDone.ID, staleCancelled.ID} {
+		if _, err := d.sql.Exec(`UPDATE runs SET awaiting_agent_since = ? WHERE id = ?`, parkedAt, id); err != nil {
+			t.Fatalf("seed stale marker: %v", err)
+		}
+	}
+
+	stale, err := d.StaleParkMarkers()
+	if err != nil {
+		t.Fatalf("list stale park markers: %v", err)
+	}
+	if len(stale) != 2 {
+		t.Fatalf("stale count = %d, want 2 (rows: %v)", len(stale), stale)
+	}
+	byID := map[string]StaleParkMarker{}
+	for _, s := range stale {
+		byID[s.ID] = s
+	}
+	if s := byID[staleDone.ID]; s.Status != types.RunCompleted {
+		t.Errorf("stale status = %q, want completed", s.Status)
+	}
+	if s := byID[staleCancelled.ID]; s.Status != types.RunCancelled {
+		t.Errorf("stale status = %q, want cancelled", s.Status)
+	}
+
+	// The parked running run must never be reported stale.
+	for _, s := range stale {
+		if s.ID == liveParked.ID {
+			t.Errorf("parked running run %s reported stale", s.ID)
+		}
+	}
+
+	repaired, err := d.RepairParkMarkers()
+	if err != nil {
+		t.Fatalf("repair park markers: %v", err)
+	}
+	if repaired != 2 {
+		t.Errorf("repaired = %d, want 2", repaired)
+	}
+	for _, id := range []string{staleDone.ID, staleCancelled.ID} {
+		got, err := d.GetRun(id)
+		if err != nil {
+			t.Fatalf("get run: %v", err)
+		}
+		if got.AwaitingAgentSince != nil {
+			t.Errorf("AwaitingAgentSince = %d after repair, want nil", *got.AwaitingAgentSince)
+		}
+		if got.ParkedMS < 10000 {
+			t.Errorf("parked_ms = %d after repair, want the parked time folded in (>= 10000)", got.ParkedMS)
+		}
+	}
+	// Idempotent: a second repair finds nothing.
+	repaired, err = d.RepairParkMarkers()
+	if err != nil {
+		t.Fatalf("second repair: %v", err)
+	}
+	if repaired != 0 {
+		t.Errorf("second repaired = %d, want 0", repaired)
+	}
+	// The live parked run keeps its marker.
+	live, err := d.GetRun(liveParked.ID)
+	if err != nil {
+		t.Fatalf("get live run: %v", err)
+	}
+	if live.AwaitingAgentSince == nil {
+		t.Error("AwaitingAgentSince = nil on live parked run, want kept")
+	}
+}
+
 func TestRecoverStaleRunsClearsAwaitingAgent(t *testing.T) {
 	d := openTestDB(t)
 	repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")
