@@ -535,7 +535,7 @@ const maxYesFixRoundsPerStep = 3
 // budget).
 //
 // A gate whose findings are absent, unparseable, or all non-actionable
-// ("no-op") is approved - including a fix_review whose fix cleared everything.
+// ("no-op") is approved - including a parked_for_responder_after_fix whose fix cleared everything.
 // A gate with actionable findings is fixed with every finding selected while
 // fix rounds remain. Once the budget is exhausted, or the actionable findings
 // carry no IDs (a fix would resolve to zero selections), the gate is NOT
@@ -577,7 +577,7 @@ func gateResolution(gate stepView, fixRoundsUsed int) (action types.ApprovalActi
 //
 // A status change alone is not a sufficient progress signal: a fix round
 // starts and finishes between two reconciliations when the fix agent is fast,
-// and the step re-parks with the same fix_review status it had before, so
+// and the step re-parks with the same parked_for_responder_after_fix status it had before, so
 // waiting on status inequality alone never returns. The persisted fix-round
 // count only ever grows and is written when a round completes, so a count
 // above the gate's snapshot (gateFixRounds) proves the answered gate was
@@ -883,7 +883,7 @@ func gateStatusFor(rv runView, step string) string {
 			return s.Status
 		}
 	}
-	return string(types.StepStatusAwaitingApproval)
+	return string(types.StepStatusParkedForApproval)
 }
 
 // gateFixRoundsFor returns the fix-round count of step in rv, the baseline the

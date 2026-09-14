@@ -282,8 +282,8 @@ func TestSubscribeBoundedFramesDeliverThroughTerminalEvent(t *testing.T) {
 		okResp.Result = okResult
 		enc.Encode(okResp)
 
-		gate := "fix_review"
-		enc.Encode(ipc.Event{Type: ipc.EventStepCompleted, RunID: "r1", Status: &gate, Findings: &findings, StateRev: 4})
+		gate := "parked_for_responder_after_fix"
+		enc.Encode(ipc.Event{Type: ipc.EventStepStatusChanged, RunID: "r1", Status: &gate, Findings: &findings, StateRev: 4})
 		enc.Encode(ipc.Event{Type: ipc.EventStreamGap, RunID: "r1", StateRev: 9})
 		terminal := "failed"
 		enc.Encode(ipc.Event{Type: ipc.EventRunCompleted, RunID: "r1", Status: &terminal, StateRev: 10})
@@ -301,7 +301,7 @@ func TestSubscribeBoundedFramesDeliverThroughTerminalEvent(t *testing.T) {
 		types_ = append(types_, event.Type)
 		lastRev = event.StateRev
 	}
-	want := []ipc.EventType{ipc.EventStepCompleted, ipc.EventStreamGap, ipc.EventRunCompleted}
+	want := []ipc.EventType{ipc.EventStepStatusChanged, ipc.EventStreamGap, ipc.EventRunCompleted}
 	if len(types_) != len(want) {
 		t.Fatalf("frames = %v, want %v", types_, want)
 	}

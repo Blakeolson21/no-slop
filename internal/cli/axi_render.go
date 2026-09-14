@@ -198,11 +198,23 @@ func runViewFromDB(r *db.Run, steps []*db.StepResult) runView {
 	return rv
 }
 
+// statusCell renders the run status cell. A running run parked at a gate
+// (awaiting_agent_since set) renders as `running(parked <duration>)` so the
+// park is visible in the same cell a supervisor already reads, without
+// changing the persisted runs.status value. The separate `awaiting_agent`
+// key stays as-is (frozen fleet grep target).
+func (rv runView) statusCell() string {
+	if rv.Status == string(types.RunRunning) && rv.AwaitingAgentSince != nil {
+		return rv.Status + "(" + formatParkedFor(*rv.AwaitingAgentSince) + ")"
+	}
+	return rv.Status
+}
+
 // awaitingStep returns the step currently blocking on a human decision, if any.
 // At most one step awaits at a time, so the first match is the active gate.
 func (rv runView) awaitingStep() (stepView, bool) {
 	for _, s := range rv.Steps {
-		if s.Status == string(types.StepStatusAwaitingApproval) || s.Status == string(types.StepStatusFixReview) {
+		if s.Status == string(types.StepStatusParkedForApproval) || s.Status == string(types.StepStatusParkedAfterFix) {
 			return s, true
 		}
 	}
@@ -310,7 +322,7 @@ func (rv runView) fixRows() []fixRow {
 func (rv runView) activeRows() []activeStepRow {
 	var rows []activeStepRow
 	for _, s := range rv.Steps {
-		if s.Status != string(types.StepStatusRunning) && s.Status != string(types.StepStatusFixing) {
+		if s.Status != string(types.StepStatusRunning) && s.Status != string(types.StepStatusFixerRunning) {
 			continue
 		}
 		rows = append(rows, activeStepRow{
@@ -358,7 +370,7 @@ func (s stepView) agentPIDString() string {
 }
 
 func (s stepView) roundSummary() string {
-	if s.Status == string(types.StepStatusFixing) {
+	if s.Status == string(types.StepStatusFixerRunning) {
 		attempt := s.FixRoundCount
 		if s.PendingFixSource != "" {
 			attempt++
@@ -445,7 +457,7 @@ func runObjectFieldWithOptions(key string, rv runView, includeConvergence bool) 
 	fields := []toon.Field{
 		{Key: "id", Value: rv.ID},
 		{Key: "branch", Value: rv.Branch},
-		{Key: "status", Value: rv.Status},
+		{Key: "status", Value: rv.statusCell()},
 	}
 	// Surface the parked-awaiting-agent signal right after status so one read
 	// distinguishes a run waiting for the agent to drive a gate from one that

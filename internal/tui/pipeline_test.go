@@ -17,8 +17,8 @@ func TestStepStatusIcon(t *testing.T) {
 	}{
 		{types.StepStatusPending, "○"},
 		{types.StepStatusRunning, spinnerFrames[0]},
-		{types.StepStatusAwaitingApproval, "⏸"},
-		{types.StepStatusFixing, spinnerFrames[0]},
+		{types.StepStatusParkedForApproval, "⏸"},
+		{types.StepStatusFixerRunning, spinnerFrames[0]},
 		{types.StepStatusCompleted, "✓"},
 		{types.StepStatusSkipped, "–"},
 		{types.StepStatusFailed, "✗"},
@@ -220,7 +220,7 @@ func TestRenderPipelineView_ShowsFixedFindingsAtRightEdge(t *testing.T) {
 
 func TestRenderPipelineView_ShowsZeroFixedFindingsWhileFixing(t *testing.T) {
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusFixing
+	run.Steps[0].Status = types.StepStatusFixerRunning
 	run.Steps[0].FixedFindings = 0
 	run.Steps[0].ReportedFindings = 3
 
@@ -238,7 +238,7 @@ func TestRenderPipelineView_ShowsZeroFixedFindingsWhileFixing(t *testing.T) {
 
 func TestRenderPipelineView_FixReviewRowFitsWithFixedCount(t *testing.T) {
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusFixReview
+	run.Steps[0].Status = types.StepStatusParkedAfterFix
 	run.Steps[0].DurationMS = ptr(int64(6604700))
 	run.Steps[0].FixedFindings = 65
 	run.Steps[0].ReportedFindings = 66
@@ -264,7 +264,7 @@ func TestRenderPipelineView_FixReviewRowFitsWithFixedCount(t *testing.T) {
 
 func TestRenderPipelineView_FixingStatusOmitsAgentFixingLabel(t *testing.T) {
 	run := testRun()
-	run.Steps[1].Status = types.StepStatusFixing
+	run.Steps[1].Status = types.StepStatusFixerRunning
 	run.Steps[1].DurationMS = ptr(int64(146000))
 
 	out := stripANSI(renderPipelineView(run, run.Steps, 80, 0, 40))
@@ -302,7 +302,7 @@ func TestRenderApprovalActions_NoSelectionActions(t *testing.T) {
 
 func TestRenderPipelineView_HidesFixActionWhenDisabled(t *testing.T) {
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 
 	// Action bar is now rendered outside the pipeline box per DESIGN.md.
 	out := stripANSI(renderActionBar(run.Steps, true, false, false, 0, 5, false, true, true, false))
@@ -316,7 +316,7 @@ func TestRenderPipelineView_HidesFixActionWhenDisabled(t *testing.T) {
 
 func TestRenderPipelineView_HidesSelectionControlsWithoutFindings(t *testing.T) {
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 
 	out := stripANSI(renderPipelineView(run, run.Steps, 80, 0, 40))
 	if strings.Contains(out, "f fix") {
@@ -336,7 +336,7 @@ func TestAwaitingStep(t *testing.T) {
 	}
 
 	// Set review to awaiting.
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	got := awaitingStep(run.Steps)
 	if got == nil {
 		t.Fatal("expected non-nil step")
@@ -347,10 +347,10 @@ func TestAwaitingStep(t *testing.T) {
 
 	// Fix review also counts.
 	run.Steps[0].Status = types.StepStatusCompleted
-	run.Steps[1].Status = types.StepStatusFixReview
+	run.Steps[1].Status = types.StepStatusParkedAfterFix
 	got = awaitingStep(run.Steps)
 	if got == nil || got.StepName != types.StepTest {
-		t.Error("expected test step in fix_review")
+		t.Error("expected test step in parked_for_responder_after_fix")
 	}
 }
 
@@ -374,7 +374,7 @@ func TestModel_ApplyEvent_StepCompleted(t *testing.T) {
 	m := NewModel("/tmp/sock", nil, run)
 
 	m.applyEvent(ipc.Event{
-		Type:     ipc.EventStepCompleted,
+		Type:     ipc.EventStepStatusChanged,
 		RunID:    run.ID,
 		StepName: ptr(types.StepReview),
 		Status:   ptr(string(types.StepStatusCompleted)),
@@ -390,10 +390,10 @@ func TestModel_ApplyEvent_StepCompleted_StoresFixedFindings(t *testing.T) {
 	m := NewModel("/tmp/sock", nil, run)
 
 	m.applyEvent(ipc.Event{
-		Type:             ipc.EventStepCompleted,
+		Type:             ipc.EventStepStatusChanged,
 		RunID:            run.ID,
 		StepName:         ptr(types.StepReview),
-		Status:           ptr(string(types.StepStatusFixReview)),
+		Status:           ptr(string(types.StepStatusParkedAfterFix)),
 		FixedFindings:    ptr(3),
 		ReportedFindings: ptr(5),
 	})
@@ -412,7 +412,7 @@ func TestModel_ApplyEvent_StepCompleted_FailedStoresError(t *testing.T) {
 	errMsg := "agent review: claude parse events: bufio.Scanner: token too long"
 
 	m.applyEvent(ipc.Event{
-		Type:     ipc.EventStepCompleted,
+		Type:     ipc.EventStepStatusChanged,
 		RunID:    run.ID,
 		StepName: ptr(types.StepReview),
 		Status:   ptr(string(types.StepStatusFailed)),

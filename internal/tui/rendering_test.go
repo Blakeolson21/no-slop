@@ -163,7 +163,7 @@ func TestModel_View_FindingsInBox(t *testing.T) {
 	// When findings are shown, they should be wrapped in a "Findings" box.
 	run := testRun()
 	m := NewModel("/tmp/sock", nil, run)
-	m.steps[0].Status = types.StepStatusAwaitingApproval
+	m.steps[0].Status = types.StepStatusParkedForApproval
 	m.stepFindings[types.StepReview] = `{"findings":[{"id":"f1","severity":"error","file":"app.go","line":5,"description":"buffer overflow"}],"summary":"1 issue"}`
 	m.resetFindingSelection(types.StepReview)
 	m.width = 80
@@ -290,7 +290,7 @@ func TestModel_View_OneBlankLineBetweenSections(t *testing.T) {
 		ID: "run-001", RepoID: "repo-001", Branch: "main", HeadSHA: "abc123", BaseSHA: "000000",
 		Status: types.RunRunning,
 		Steps: []ipc.StepResultInfo{
-			{ID: "s1", StepName: types.StepReview, StepOrder: 1, Status: types.StepStatusAwaitingApproval, FindingsJSON: &findings},
+			{ID: "s1", StepName: types.StepReview, StepOrder: 1, Status: types.StepStatusParkedForApproval, FindingsJSON: &findings},
 			{ID: "s2", StepName: types.StepTest, StepOrder: 2, Status: types.StepStatusPending},
 		},
 	}
@@ -514,7 +514,7 @@ func TestRenderPipelineView_StatusSuffixDim(t *testing.T) {
 	// references, counts, hints, footer." Status suffixes like "- awaiting approval"
 	// are meta-level hints and must be styled dim (bright black).
 	run := testRun()
-	run.Steps[1].Status = types.StepStatusAwaitingApproval
+	run.Steps[1].Status = types.StepStatusParkedForApproval
 
 	got := renderPipelineView(run, run.Steps, 80, 0, 40)
 
@@ -604,7 +604,7 @@ func TestNewModel_PopulatesStepFindingsFromInitialSteps_DisplaysOnView(t *testin
 		BaseSHA: "000000",
 		Status:  types.RunRunning,
 		Steps: []ipc.StepResultInfo{
-			{ID: "s1", StepName: types.StepReview, StepOrder: 1, Status: types.StepStatusAwaitingApproval, FindingsJSON: &findings},
+			{ID: "s1", StepName: types.StepReview, StepOrder: 1, Status: types.StepStatusParkedForApproval, FindingsJSON: &findings},
 			{ID: "s2", StepName: types.StepTest, StepOrder: 2, Status: types.StepStatusPending},
 		},
 	}
@@ -624,7 +624,7 @@ func TestFooter_ShowsDetachDuringApproval(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.Ascii)
 	run := testRun()
 	run.Steps[0].Status = types.StepStatusCompleted
-	run.Steps[1].Status = types.StepStatusAwaitingApproval
+	run.Steps[1].Status = types.StepStatusParkedForApproval
 
 	m := NewModel("/tmp/sock", nil, run)
 	m.width = 80
@@ -695,7 +695,7 @@ func TestFindingsBoxTitle_ShowsSeverityCounts(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.ANSI)
 	run := testRun()
 	run.Steps[0].Status = types.StepStatusCompleted
-	run.Steps[1].Status = types.StepStatusAwaitingApproval
+	run.Steps[1].Status = types.StepStatusParkedForApproval
 
 	findingsJSON := `{"summary":"test issues","items":[{"id":"f1","severity":"error","file":"foo.go","line":1,"description":"bad thing"}]}`
 	m := NewModel("/tmp/sock", nil, run)
@@ -714,7 +714,7 @@ func TestFindingsBoxTitle_ShowsSeverityCounts(t *testing.T) {
 func TestDiffBoxTitle_ReviewStep(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.ANSI)
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 
 	m := NewModel("/tmp/sock", nil, run)
 	m.width = 80

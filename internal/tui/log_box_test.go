@@ -56,7 +56,7 @@ func TestModel_View_LogBoxStaysSmallWhenFindingsPresent(t *testing.T) {
 		ID: "run-001", RepoID: "repo-001", Branch: "main", HeadSHA: "abc12345",
 		BaseSHA: "000000", Status: types.RunRunning,
 		Steps: []ipc.StepResultInfo{
-			{ID: "s1", StepName: types.StepReview, StepOrder: 1, Status: types.StepStatusAwaitingApproval, FindingsJSON: &findings},
+			{ID: "s1", StepName: types.StepReview, StepOrder: 1, Status: types.StepStatusParkedForApproval, FindingsJSON: &findings},
 			{ID: "s2", StepName: types.StepTest, StepOrder: 2, Status: types.StepStatusPending},
 		},
 	}

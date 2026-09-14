@@ -389,7 +389,7 @@ func TestExecutor_AccumulatesParkedDuration(t *testing.T) {
 		done <- exec.Execute(context.Background(), run, repo, workDir)
 	}()
 
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 	time.Sleep(50 * time.Millisecond)
 	if err := exec.Respond(types.StepReview, types.ActionApprove, nil); err != nil {
 		t.Fatalf("respond: %v", err)

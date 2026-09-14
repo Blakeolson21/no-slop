@@ -115,15 +115,15 @@ func TestMailbox_LifecycleSurvivesFullActivityBuffer(t *testing.T) {
 	defer sub.Close()
 
 	fillActivity(m, "run-1")
-	m.broadcast(stepEvent("run-1", ipc.EventStepCompleted, types.StepReview, string(types.StepStatusAwaitingApproval)))
+	m.broadcast(stepEvent("run-1", ipc.EventStepStatusChanged, types.StepReview, string(types.StepStatusParkedForApproval)))
 	rev := m.StateRev("run-1")
 
 	events := drainReady(t, sub)
-	if !coversStateUpTo(events, ipc.EventStepCompleted, rev) {
+	if !coversStateUpTo(events, ipc.EventStepStatusChanged, rev) {
 		t.Fatalf("step completion neither delivered nor gapped across %d frames", len(events))
 	}
 	for _, e := range events {
-		if e.Type == ipc.EventStepCompleted {
+		if e.Type == ipc.EventStepStatusChanged {
 			return // delivered outright by evicting one log line
 		}
 	}
@@ -171,7 +171,7 @@ func TestMailbox_TerminalCompletionCannotBeHidden(t *testing.T) {
 	defer sub.Close()
 
 	for i := 0; i < mailboxMaxEvents; i++ {
-		m.broadcast(stepEvent("run-1", ipc.EventStepCompleted, types.StepTest, "completed"))
+		m.broadcast(stepEvent("run-1", ipc.EventStepStatusChanged, types.StepTest, "completed"))
 	}
 	status := string(types.RunFailed)
 	m.broadcast(ipc.Event{Type: ipc.EventRunCompleted, RunID: "run-1", Status: &status})
@@ -206,12 +206,12 @@ func TestMailbox_FindingsAndApprovalCannotBeHidden(t *testing.T) {
 
 	fillActivity(m, "run-1")
 	findings := `{"findings":[{"id":"x","action":"ask-user"}]}`
-	e := stepEvent("run-1", ipc.EventStepCompleted, types.StepReview, string(types.StepStatusAwaitingApproval))
+	e := stepEvent("run-1", ipc.EventStepStatusChanged, types.StepReview, string(types.StepStatusParkedForApproval))
 	e.Findings = &findings
 	m.broadcast(e)
 	rev := m.StateRev("run-1")
 
-	if !coversStateUpTo(drainReady(t, sub), ipc.EventStepCompleted, rev) {
+	if !coversStateUpTo(drainReady(t, sub), ipc.EventStepStatusChanged, rev) {
 		t.Fatal("awaiting-approval findings neither delivered nor gapped")
 	}
 }
@@ -273,7 +273,7 @@ func TestMailbox_GapCoalescesAndNeverGrows(t *testing.T) {
 	defer sub.Close()
 
 	for i := 0; i < mailboxMaxEvents; i++ {
-		m.broadcast(stepEvent("run-1", ipc.EventStepCompleted, types.StepTest, "completed"))
+		m.broadcast(stepEvent("run-1", ipc.EventStepStatusChanged, types.StepTest, "completed"))
 	}
 	for i := 0; i < 50_000; i++ {
 		m.broadcast(ipc.Event{Type: ipc.EventRunUpdated, RunID: "run-1"})
@@ -328,7 +328,7 @@ func TestMailbox_PublisherNeverBlocksOnWedgedSubscribers(t *testing.T) {
 		defer close(done)
 		for i := 0; i < 100_000; i++ {
 			m.broadcast(logEvent("run-1"))
-			m.broadcast(stepEvent("run-1", ipc.EventStepCompleted, types.StepTest, "completed"))
+			m.broadcast(stepEvent("run-1", ipc.EventStepStatusChanged, types.StepTest, "completed"))
 		}
 	}()
 	select {
@@ -350,7 +350,7 @@ func TestMailbox_StaleDeltasCannotRegressAfterSnapshot(t *testing.T) {
 	for i := 0; i < mailboxMaxEvents; i++ {
 		m.broadcast(logEvent("run-1"))
 	}
-	m.broadcast(stepEvent("run-1", ipc.EventStepCompleted, types.StepCI, string(types.StepStatusCompleted)))
+	m.broadcast(stepEvent("run-1", ipc.EventStepStatusChanged, types.StepCI, string(types.StepStatusCompleted)))
 	for i := 0; i < mailboxMaxEvents; i++ {
 		m.broadcast(stepEvent("run-1", ipc.EventStepStarted, types.StepTest, "running"))
 	}
@@ -422,7 +422,7 @@ func TestMailbox_ReconnectConvergesAtCurrentRevision(t *testing.T) {
 	m.broadcast(stepEvent("run-1", ipc.EventStepStarted, types.StepCI, "running"))
 	first.Close() // stream dropped
 
-	m.broadcast(stepEvent("run-1", ipc.EventStepCompleted, types.StepCI, "completed"))
+	m.broadcast(stepEvent("run-1", ipc.EventStepStatusChanged, types.StepCI, "completed"))
 	second, err := m.Subscribe("run-1")
 	if err != nil {
 		t.Fatal(err)
@@ -513,7 +513,7 @@ func TestMailbox_ManySimultaneousTransitionsCollapseToOneGap(t *testing.T) {
 	defer sub.Close()
 
 	for i := 0; i < mailboxMaxEvents; i++ {
-		m.broadcast(stepEvent("run-1", ipc.EventStepCompleted, types.StepTest, "completed"))
+		m.broadcast(stepEvent("run-1", ipc.EventStepStatusChanged, types.StepTest, "completed"))
 	}
 	var wg sync.WaitGroup
 	for w := 0; w < 8; w++ {
@@ -569,7 +569,7 @@ func TestMailbox_StateRevisionsAdvanceInEnqueueOrder(t *testing.T) {
 	m.broadcast(logEvent("run-1"))
 	m.broadcast(stepEvent("run-1", ipc.EventStepStarted, types.StepTest, "running"))
 	m.broadcast(logEvent("run-1"))
-	m.broadcast(stepEvent("run-1", ipc.EventStepCompleted, types.StepTest, "completed"))
+	m.broadcast(stepEvent("run-1", ipc.EventStepStatusChanged, types.StepTest, "completed"))
 
 	var last int64
 	for _, e := range drainReady(t, sub) {

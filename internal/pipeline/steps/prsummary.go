@@ -891,11 +891,11 @@ func buildStepEntry(sr *db.StepResult, rounds []*db.StepRound) (statusLine, deta
 		return buildDetail(fmt.Sprintf("⏳ **%s** - pending", name))
 	case types.StepStatusRunning:
 		return buildDetail(fmt.Sprintf("⏳ **%s** - running", name))
-	case types.StepStatusAwaitingApproval:
+	case types.StepStatusParkedForApproval:
 		return buildDetail(fmt.Sprintf("⏸️ **%s** - awaiting approval", name))
-	case types.StepStatusFixing:
+	case types.StepStatusFixerRunning:
 		return buildDetail(fmt.Sprintf("🔄 **%s** - auto-fixing", name))
-	case types.StepStatusFixReview:
+	case types.StepStatusParkedAfterFix:
 		return buildDetail(fmt.Sprintf("⏸️ **%s** - review fix", name))
 	case types.StepStatusFailed:
 		return buildDetail(fmt.Sprintf("❌ **%s** - failed", name))
@@ -1237,11 +1237,11 @@ func writeStepStatusDetail(b *strings.Builder, sr *db.StepResult) {
 		b.WriteString("Step has not started yet.\n\n")
 	case types.StepStatusRunning:
 		b.WriteString("Step is currently running.\n\n")
-	case types.StepStatusAwaitingApproval:
+	case types.StepStatusParkedForApproval:
 		b.WriteString("Waiting for user approval.\n\n")
-	case types.StepStatusFixing:
+	case types.StepStatusFixerRunning:
 		b.WriteString("Agent is currently applying fixes.\n\n")
-	case types.StepStatusFixReview:
+	case types.StepStatusParkedAfterFix:
 		b.WriteString("Waiting to review the latest fix.\n\n")
 	case types.StepStatusSkipped:
 		b.WriteString("Step was skipped.\n\n")

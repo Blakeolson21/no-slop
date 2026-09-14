@@ -46,18 +46,18 @@ func TestSubscribeReceivesEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Wait for step to reach awaiting_approval.
+	// Wait for step to reach parked_for_responder_approval.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		steps, _ := d.GetStepsByRun(pushResult.RunID)
 		for _, s := range steps {
-			if s.Status == types.StepStatusAwaitingApproval {
+			if s.Status == types.StepStatusParkedForApproval {
 				goto subscribeNow
 			}
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatal("step never reached awaiting_approval")
+	t.Fatal("step never reached parked_for_responder_approval")
 
 subscribeNow:
 	// Subscribe to events for this run.
@@ -492,7 +492,7 @@ func TestRecoverOnStartup_ResumesParkedRun(t *testing.T) {
 	if _, err := d.InsertReviewStepRound(step.ID, 1, "initial", &findings, nil, headSHA, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.UpdateStepStatusWithDuration(step.ID, types.StepStatusAwaitingApproval, 1); err != nil {
+	if err := d.UpdateStepStatusWithDuration(step.ID, types.StepStatusParkedForApproval, 1); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.SetRunAwaitingAgent(run.ID); err != nil {
@@ -626,7 +626,7 @@ func TestRecoverOnStartup_ReconcilesHistoricalCIGateFromCurrentPRState(t *testin
 			if _, err := d.InsertStepRound(step.ID, 1, "initial", &findings, nil, 1); err != nil {
 				t.Fatal(err)
 			}
-			if err := d.UpdateStepStatusWithDuration(step.ID, types.StepStatusAwaitingApproval, 1); err != nil {
+			if err := d.UpdateStepStatusWithDuration(step.ID, types.StepStatusParkedForApproval, 1); err != nil {
 				t.Fatal(err)
 			}
 			if err := d.SetRunAwaitingAgent(run.ID); err != nil {

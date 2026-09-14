@@ -319,9 +319,9 @@ func TestEventTypes(t *testing.T) {
 			},
 		},
 		{
-			name: "step_completed",
+			name: "step_status_changed",
 			event: Event{
-				Type:     EventStepCompleted,
+				Type:     EventStepStatusChanged,
 				RunID:    "run001",
 				RepoID:   "repo001",
 				StepName: ptrStepName(types.StepLint),
@@ -382,7 +382,7 @@ func TestNullableFieldsOmitted(t *testing.T) {
 		Branch:    "main",
 		HeadSHA:   "abc",
 		BaseSHA:   "def",
-		Status:    types.RunPending,
+		Status:    types.RunStarting,
 		CreatedAt: 1700000000,
 		UpdatedAt: 1700000000,
 	}

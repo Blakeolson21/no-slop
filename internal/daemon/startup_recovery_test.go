@@ -44,7 +44,7 @@ func TestRecoverOnStartup_DoesNotDeleteActiveRunWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if activeRun.Status != types.RunPending {
+	if activeRun.Status != types.RunStarting {
 		t.Fatalf("expected new run to default to pending, got %s", activeRun.Status)
 	}
 
@@ -82,7 +82,7 @@ func TestRecoverOnStartup_DoesNotDeleteActiveRunWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != types.RunPending {
+	if got.Status != types.RunStarting {
 		t.Fatalf("expected active run to remain pending, got %s", got.Status)
 	}
 }
@@ -129,7 +129,7 @@ func TestRunWithOptions_RequiresSingletonLockBeforeRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != types.RunPending {
+	if got.Status != types.RunStarting {
 		t.Fatalf("recovery must not have run: expected run to remain pending, got %s", got.Status)
 	}
 }

@@ -69,13 +69,13 @@ func TestAXIControlByteFailureGateRemainsReadable(t *testing.T) {
 	config := "ignore_patterns:\n  - '*.generated.go'\n  - 'vendor/**'\ncommands:\n  test: ns-control-byte-test-e2e\n  lint: true\n"
 	h.CommitChange("control-byte-test-gate", ".no-slop.yaml", config, "configure control-byte test failure")
 	h.PushToGate("control-byte-test-gate")
-	run := waitForStepStatus(t, h, "control-byte-test-gate", types.StepTest, types.StepStatusAwaitingApproval, 60*time.Second)
+	run := waitForStepStatus(t, h, "control-byte-test-gate", types.StepTest, types.StepStatusParkedForApproval, 60*time.Second)
 
 	statusOut, err := h.Run("axi", "status", "--run", run.ID)
 	if err != nil {
 		t.Fatalf("axi status should render the Test gate: %v\n%s", err, statusOut)
 	}
-	for _, want := range []string{"gate:", "step: test", "status: awaiting_approval", `bad\\x1Fvalue`} {
+	for _, want := range []string{"gate:", "step: test", "status: parked_for_responder_approval", `bad\\x1Fvalue`} {
 		if !strings.Contains(statusOut, want) {
 			t.Fatalf("axi status missing %q in:\n%s", want, statusOut)
 		}
@@ -1238,7 +1238,7 @@ func assertRebaseConflictRun(t *testing.T, h *Harness) {
 		t.Fatalf("checkout rebase-conflict before gate push: %v\n%s", err, out)
 	}
 	h.PushToGate("rebase-conflict")
-	run := waitForStepStatus(t, h, "rebase-conflict", types.StepRebase, types.StepStatusAwaitingApproval, 60*time.Second)
+	run := waitForStepStatus(t, h, "rebase-conflict", types.StepRebase, types.StepStatusParkedForApproval, 60*time.Second)
 	rebaseStep, ok := findStep(run.Steps, types.StepRebase)
 	if !ok {
 		t.Fatal("expected rebase step in rebase-conflict run")
@@ -1430,7 +1430,7 @@ func assertDocumentMissingFindingsRun(t *testing.T, h *Harness) {
 	t.Helper()
 	h.CommitChange("document-missing-findings", "document-missing-findings.txt", "document missing findings\n", "add document missing findings")
 	h.PushToGate("document-missing-findings")
-	run := waitForStepStatus(t, h, "document-missing-findings", types.StepDocument, types.StepStatusAwaitingApproval, 60*time.Second)
+	run := waitForStepStatus(t, h, "document-missing-findings", types.StepDocument, types.StepStatusParkedForApproval, 60*time.Second)
 	documentStep, ok := findStep(run.Steps, types.StepDocument)
 	if !ok {
 		t.Fatal("expected document step in document-missing-findings run")
@@ -1466,7 +1466,7 @@ func assertDocumentMalformedFindingRun(t *testing.T, h *Harness) {
 	t.Helper()
 	h.CommitChange("document-malformed-finding", "document-malformed-finding.txt", "document malformed finding\n", "add document malformed finding")
 	h.PushToGate("document-malformed-finding")
-	run := waitForStepStatus(t, h, "document-malformed-finding", types.StepDocument, types.StepStatusAwaitingApproval, 60*time.Second)
+	run := waitForStepStatus(t, h, "document-malformed-finding", types.StepDocument, types.StepStatusParkedForApproval, 60*time.Second)
 	documentStep, ok := findStep(run.Steps, types.StepDocument)
 	if !ok {
 		t.Fatal("expected document step in document-malformed-finding run")
@@ -1502,7 +1502,7 @@ func assertDocumentLegacyFindingRun(t *testing.T, h *Harness) {
 	t.Helper()
 	h.CommitChange("document-legacy-finding", "document-legacy-finding.txt", "document legacy finding\n", "add document legacy finding")
 	h.PushToGate("document-legacy-finding")
-	run := waitForStepStatus(t, h, "document-legacy-finding", types.StepDocument, types.StepStatusAwaitingApproval, 60*time.Second)
+	run := waitForStepStatus(t, h, "document-legacy-finding", types.StepDocument, types.StepStatusParkedForApproval, 60*time.Second)
 	documentStep, ok := findStep(run.Steps, types.StepDocument)
 	if !ok {
 		t.Fatal("expected document step in document-legacy-finding run")
@@ -1534,7 +1534,7 @@ func assertDocumentMissingSummaryRun(t *testing.T, h *Harness) {
 	t.Helper()
 	h.CommitChange("document-missing-summary", "document-missing-summary.txt", "document missing summary\n", "add document missing summary")
 	h.PushToGate("document-missing-summary")
-	run := waitForStepStatus(t, h, "document-missing-summary", types.StepDocument, types.StepStatusAwaitingApproval, 60*time.Second)
+	run := waitForStepStatus(t, h, "document-missing-summary", types.StepDocument, types.StepStatusParkedForApproval, 60*time.Second)
 	documentStep, ok := findStep(run.Steps, types.StepDocument)
 	if !ok {
 		t.Fatal("expected document step in document-missing-summary run")
@@ -1726,7 +1726,7 @@ func assertDocumentWarningRun(t *testing.T, h *Harness) {
 	t.Helper()
 	h.CommitChange("document-warning", "document-warning.txt", "document warning\n", "add document warning")
 	h.PushToGate("document-warning")
-	run := waitForStepStatus(t, h, "document-warning", types.StepDocument, types.StepStatusAwaitingApproval, 60*time.Second)
+	run := waitForStepStatus(t, h, "document-warning", types.StepDocument, types.StepStatusParkedForApproval, 60*time.Second)
 	documentStep, ok := findStep(run.Steps, types.StepDocument)
 	if !ok {
 		t.Fatal("expected document step in document-warning run")
@@ -1765,7 +1765,7 @@ func assertDocumentInfoRun(t *testing.T, h *Harness) {
 	t.Helper()
 	h.CommitChange("document-info", "document-info.txt", "document info\n", "add document info")
 	h.PushToGate("document-info")
-	run := waitForStepStatus(t, h, "document-info", types.StepDocument, types.StepStatusAwaitingApproval, 60*time.Second)
+	run := waitForStepStatus(t, h, "document-info", types.StepDocument, types.StepStatusParkedForApproval, 60*time.Second)
 	documentStep, ok := findStep(run.Steps, types.StepDocument)
 	if !ok {
 		t.Fatal("expected document step in document-info run")
@@ -1852,7 +1852,7 @@ func assertReviewWarningRun(t *testing.T, h *Harness) {
 	t.Helper()
 	h.CommitChange("review-warning", "review-warning.txt", "review warning\n", "add review warning")
 	h.PushToGate("review-warning")
-	run := waitForStepStatus(t, h, "review-warning", types.StepReview, types.StepStatusAwaitingApproval, 60*time.Second)
+	run := waitForStepStatus(t, h, "review-warning", types.StepReview, types.StepStatusParkedForApproval, 60*time.Second)
 	reviewStep, ok := findStep(run.Steps, types.StepReview)
 	if !ok {
 		t.Fatal("expected review step in review-warning run")
@@ -2142,7 +2142,7 @@ func assertFailingTestCommandRun(t *testing.T, h *Harness) {
 	config := "ignore_patterns:\n  - '*.generated.go'\n  - 'vendor/**'\ncommands:\n  test: ns-test-fails-e2e\n  lint: true\n"
 	h.CommitChange("failing-test-command", ".no-slop.yaml", config, "configure failing test command")
 	h.PushToGate("failing-test-command")
-	run := waitForStepStatus(t, h, "failing-test-command", types.StepTest, types.StepStatusAwaitingApproval, 60*time.Second)
+	run := waitForStepStatus(t, h, "failing-test-command", types.StepTest, types.StepStatusParkedForApproval, 60*time.Second)
 	testStep, ok := findStep(run.Steps, types.StepTest)
 	if !ok {
 		t.Fatal("expected test step in failing test command run")
@@ -2209,7 +2209,7 @@ func assertFailingLintCommandRun(t *testing.T, h *Harness) {
 	config := "ignore_patterns:\n  - '*.generated.go'\n  - 'vendor/**'\ncommands:\n  test: true\n  lint: ns-lint-fails-e2e\n"
 	h.CommitChange("failing-lint-command", ".no-slop.yaml", config, "configure failing lint command")
 	h.PushToGate("failing-lint-command")
-	run := waitForStepStatus(t, h, "failing-lint-command", types.StepLint, types.StepStatusAwaitingApproval, 60*time.Second)
+	run := waitForStepStatus(t, h, "failing-lint-command", types.StepLint, types.StepStatusParkedForApproval, 60*time.Second)
 	lintStep, ok := findStep(run.Steps, types.StepLint)
 	if !ok {
 		t.Fatal("expected lint step in failing lint command run")

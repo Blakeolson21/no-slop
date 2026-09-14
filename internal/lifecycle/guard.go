@@ -149,9 +149,9 @@ func ClassifyActiveRuns(p *paths.Paths, daemonRunning func() bool) ([]ActiveRun,
 func classifyRun(run *db.Run, steps []*db.StepResult) ActiveRun {
 	for _, step := range steps {
 		switch step.Status {
-		case types.StepStatusRunning, types.StepStatusFixing:
+		case types.StepStatusRunning, types.StepStatusFixerRunning:
 			return ActiveRun{Run: run, Activity: ActivityExecuting, Step: step.StepName}
-		case types.StepStatusAwaitingApproval, types.StepStatusFixReview:
+		case types.StepStatusParkedForApproval, types.StepStatusParkedAfterFix:
 			return ActiveRun{Run: run, Activity: ActivityParked, Step: step.StepName}
 		}
 	}

@@ -166,7 +166,7 @@ func (i Inspector) activeAgentSteps() ([]activeAgentStep, error) {
 			return nil, fmt.Errorf("gate execution context: list steps for active run: %w", err)
 		}
 		for _, step := range steps {
-			if !activeStepStatus(step.Status) {
+			if !nonTerminalStepStatus(step.Status) {
 				continue
 			}
 			pid := 0
@@ -179,9 +179,9 @@ func (i Inspector) activeAgentSteps() ([]activeAgentStep, error) {
 	return out, nil
 }
 
-func activeStepStatus(status types.StepStatus) bool {
+func nonTerminalStepStatus(status types.StepStatus) bool {
 	switch status {
-	case types.StepStatusRunning, types.StepStatusFixing, types.StepStatusAwaitingApproval, types.StepStatusFixReview:
+	case types.StepStatusRunning, types.StepStatusFixerRunning, types.StepStatusParkedForApproval, types.StepStatusParkedAfterFix:
 		return true
 	default:
 		return false

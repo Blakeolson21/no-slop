@@ -222,7 +222,7 @@ func TestAttachTracksTUIPageview(t *testing.T) {
 	if got := event.fields["entrypoint"]; got != "attach" {
 		t.Fatalf("entrypoint = %v, want attach", got)
 	}
-	if got := fmt.Sprint(event.fields["run_status"]); got != "pending" {
-		t.Fatalf("run_status = %v, want pending", got)
+	if got := fmt.Sprint(event.fields["run_status"]); got != "run_starting" {
+		t.Fatalf("run_status = %v, want run_starting", got)
 	}
 }

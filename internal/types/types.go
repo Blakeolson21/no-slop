@@ -11,11 +11,22 @@ import (
 type RunStatus string
 
 const (
-	RunPending   RunStatus = "pending"
+	// RunStarting is the run-level status recorded at InsertRun: the window
+	// inside startRun where the daemon is building the worktree and the run
+	// is not yet executing a step. Renamed from the ambiguous "pending"
+	// (step_results.status keeps its own, unrelated "pending").
+	RunStarting  RunStatus = "run_starting"
 	RunRunning   RunStatus = "running"
 	RunCompleted RunStatus = "completed"
 	RunFailed    RunStatus = "failed"
 	RunCancelled RunStatus = "cancelled"
+)
+
+// Legacy run status names accepted on read during the rename alias window
+// (one release). Writers emit only the new names; the backfill rewrites old
+// rows. Do not add to this set.
+const (
+	LegacyRunPending RunStatus = "pending"
 )
 
 const (
@@ -109,15 +120,99 @@ func AllSteps() []StepName {
 type StepStatus string
 
 const (
-	StepStatusPending          StepStatus = "pending"
-	StepStatusRunning          StepStatus = "running"
-	StepStatusAwaitingApproval StepStatus = "awaiting_approval"
-	StepStatusFixing           StepStatus = "fixing"
-	StepStatusFixReview        StepStatus = "fix_review"
-	StepStatusCompleted        StepStatus = "completed"
-	StepStatusSkipped          StepStatus = "skipped"
-	StepStatusFailed           StepStatus = "failed"
+	StepStatusPending StepStatus = "pending"
+	StepStatusRunning StepStatus = "running"
+	// StepStatusParkedForApproval means the step is parked at a gate waiting
+	// for the responder's decision (renamed from the ambiguous
+	// "parked_for_responder_approval").
+	StepStatusParkedForApproval StepStatus = "parked_for_responder_approval"
+	// StepStatusFixerRunning means the fixer agent is actively working
+	// (renamed from "fixing", which read as a parked gate state).
+	StepStatusFixerRunning StepStatus = "fixer_running"
+	// StepStatusParkedAfterFix means the step is parked at the gate waiting
+	// for the responder after a fix round (renamed from the ambiguous
+	// "parked_for_responder_after_fix", which was misread as "the fixer is working").
+	StepStatusParkedAfterFix StepStatus = "parked_for_responder_after_fix"
+	StepStatusCompleted      StepStatus = "completed"
+	StepStatusSkipped        StepStatus = "skipped"
+	StepStatusFailed         StepStatus = "failed"
 )
+
+// Legacy step status names accepted on read during the rename alias window
+// (one release). Writers emit only the new names; the backfill rewrites old
+// rows. Do not add to this set.
+const (
+	LegacyStepStatusAwaitingApproval StepStatus = "parked_for_responder_approval"
+	LegacyStepStatusFixing           StepStatus = "fixing"
+	LegacyStepStatusFixReview        StepStatus = "parked_for_responder_after_fix"
+)
+
+// stepStatusLegacyAliases maps each legacy stored step status literal to the
+// renamed token that supersedes it. Read-side alias only: writers never emit
+// the legacy names.
+var stepStatusLegacyAliases = map[StepStatus]StepStatus{
+	LegacyStepStatusAwaitingApproval: StepStatusParkedForApproval,
+	LegacyStepStatusFixing:           StepStatusFixerRunning,
+	LegacyStepStatusFixReview:        StepStatusParkedAfterFix,
+}
+
+// NormalizeStepStatus maps a legacy step_results.status literal to its
+// renamed token; unknown values pass through unchanged so the lint can name
+// them. Apply at the db read boundary (and to any raw persisted status
+// string) so old rows classify identically to new rows.
+func NormalizeStepStatus(raw string) StepStatus {
+	if mapped, ok := stepStatusLegacyAliases[StepStatus(raw)]; ok {
+		return mapped
+	}
+	return StepStatus(raw)
+}
+
+// runStatusLegacyAliases maps each legacy runs.status literal to the renamed
+// token that supersedes it. Read-side alias only.
+var runStatusLegacyAliases = map[RunStatus]RunStatus{
+	LegacyRunPending: RunStarting,
+}
+
+// NormalizeRunStatus maps a legacy runs.status literal to its renamed token;
+// unknown values pass through unchanged so the lint can name them. Applies
+// to runs.status only, never step_results.status (whose "pending" is an
+// unrelated token and stays).
+func NormalizeRunStatus(raw string) RunStatus {
+	if mapped, ok := runStatusLegacyAliases[RunStatus(raw)]; ok {
+		return mapped
+	}
+	return RunStatus(raw)
+}
+
+// LegalRunStatusNames returns the runs.status values the store lint accepts
+// during the alias window: current names plus the one legacy name that may
+// still sit in pre-backfill rows. Anything outside this set must refuse at
+// daemon startup.
+func LegalRunStatusNames() []string {
+	return []string{
+		string(RunStarting), string(RunRunning), string(RunCompleted),
+		string(RunFailed), string(RunCancelled),
+		string(LegacyRunPending),
+	}
+}
+
+// LegalStepStatusNames returns the step_results.status values the store lint
+// accepts during the alias window: current names plus the legacy gate-state
+// names that may still sit in pre-backfill rows.
+func LegalStepStatusNames() []string {
+	return []string{
+		string(StepStatusPending), string(StepStatusRunning),
+		string(StepStatusParkedForApproval), string(StepStatusFixerRunning),
+		string(StepStatusParkedAfterFix), string(StepStatusCompleted),
+		string(StepStatusSkipped), string(StepStatusFailed),
+		// Terminal cancelled steps are written by fleet tooling, not by the
+		// Go pipeline, but they are a declared legal value.
+		"cancelled",
+		string(LegacyStepStatusAwaitingApproval),
+		string(LegacyStepStatusFixing),
+		string(LegacyStepStatusFixReview),
+	}
+}
 
 // ApprovalAction represents user responses at approval points.
 type ApprovalAction string

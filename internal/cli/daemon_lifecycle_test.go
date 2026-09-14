@@ -238,7 +238,7 @@ func TestDaemonStopForceRefusesRunExecutingAStep(t *testing.T) {
 func TestDaemonRestartForceRefusesRunExecutingAStep(t *testing.T) {
 	nmHome := t.TempDir()
 	t.Setenv("NS_HOME", nmHome)
-	seedLifecycleRunAtStep(t, paths.WithRoot(nmHome), "feature-executing", types.StepReview, types.StepStatusFixing)
+	seedLifecycleRunAtStep(t, paths.WithRoot(nmHome), "feature-executing", types.StepReview, types.StepStatusFixerRunning)
 	stubDaemonAlive(t)
 	stopCalled := stubDaemonStop(t)
 	startCalled := false
@@ -267,7 +267,7 @@ func TestDaemonRestartForceRefusesRunExecutingAStep(t *testing.T) {
 func TestDaemonStopForceAllowsRunParkedAtAGate(t *testing.T) {
 	nmHome := t.TempDir()
 	t.Setenv("NS_HOME", nmHome)
-	seedLifecycleRunAtStep(t, paths.WithRoot(nmHome), "feature-parked", types.StepReview, types.StepStatusAwaitingApproval)
+	seedLifecycleRunAtStep(t, paths.WithRoot(nmHome), "feature-parked", types.StepReview, types.StepStatusParkedForApproval)
 	stubDaemonAlive(t)
 	stopCalled := stubDaemonStop(t)
 
@@ -531,8 +531,8 @@ func seedPendingLifecycleRun(t *testing.T, p *paths.Paths, branch string) {
 	if err != nil {
 		t.Fatalf("insert run: %v", err)
 	}
-	if run.Status != types.RunPending {
-		t.Fatalf("seeded run status = %s, want %s", run.Status, types.RunPending)
+	if run.Status != types.RunStarting {
+		t.Fatalf("seeded run status = %s, want %s", run.Status, types.RunStarting)
 	}
 }
 
@@ -564,7 +564,7 @@ func seedLifecycleRunAtStep(t *testing.T, p *paths.Paths, branch string, step ty
 		t.Fatalf("insert step result: %v", err)
 	}
 	switch status {
-	case types.StepStatusAwaitingApproval, types.StepStatusFixReview:
+	case types.StepStatusParkedForApproval, types.StepStatusParkedAfterFix:
 		if err := database.ParkStepForApproval(run.ID, sr.ID, status, 0, nil); err != nil {
 			t.Fatalf("park step: %v", err)
 		}

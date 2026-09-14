@@ -305,7 +305,7 @@ func TestDiffLineStyle_Types(t *testing.T) {
 func TestModel_DiffToggle(t *testing.T) {
 	run := testRun()
 	m := NewModel("/tmp/sock", nil, run)
-	m.steps[0].Status = types.StepStatusFixReview
+	m.steps[0].Status = types.StepStatusParkedAfterFix
 	m.stepDiffs[types.StepReview] = "+new line\n"
 
 	// Toggle on.
@@ -381,10 +381,10 @@ func TestModel_ApplyEvent_FixReviewGateRequestsDiffOnDemand(t *testing.T) {
 	m.stepDiffs[types.StepReview] = "stale diff from a previous round\n"
 
 	m.applyEvent(ipc.Event{
-		Type:     ipc.EventStepCompleted,
+		Type:     ipc.EventStepStatusChanged,
 		RunID:    run.ID,
 		StepName: ptr(types.StepReview),
-		Status:   ptr(string(types.StepStatusFixReview)),
+		Status:   ptr(string(types.StepStatusParkedAfterFix)),
 	})
 
 	// Entering the gate invalidates the previous round's diff and queues one
@@ -410,7 +410,7 @@ func TestModel_ApplyEvent_FixReviewGateRequestsDiffOnDemand(t *testing.T) {
 func TestModel_View_ShowsDiff(t *testing.T) {
 	run := testRun()
 	m := NewModel("/tmp/sock", nil, run)
-	m.steps[0].Status = types.StepStatusFixReview
+	m.steps[0].Status = types.StepStatusParkedAfterFix
 	m.showDiff = true
 	m.stepDiffs[types.StepReview] = `diff --git a/main.go b/main.go
 --- a/main.go
@@ -433,7 +433,7 @@ func TestModel_View_ShowsDiff(t *testing.T) {
 func TestModel_View_ShowsFindingsNotDiff(t *testing.T) {
 	run := testRun()
 	m := NewModel("/tmp/sock", nil, run)
-	m.steps[0].Status = types.StepStatusAwaitingApproval
+	m.steps[0].Status = types.StepStatusParkedForApproval
 	m.showDiff = false
 	m.stepFindings[types.StepReview] = `{"findings":[{"severity":"warning","description":"check this"}],"summary":"1 issue"}`
 	m.stepDiffs[types.StepReview] = "+some diff\n"
@@ -447,7 +447,7 @@ func TestModel_View_ShowsFindingsNotDiff(t *testing.T) {
 
 func TestRenderPipelineView_DiffKey(t *testing.T) {
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	// Action bar is now rendered outside the pipeline box per DESIGN.md.
 	out := stripANSI(renderActionBar(run.Steps, true, true, false, 5, 5, false, true, true, false))
 	if !strings.Contains(out, "d diff") {

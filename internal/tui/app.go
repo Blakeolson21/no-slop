@@ -128,7 +128,7 @@ func NewModel(socketPath string, client *ipc.Client, run *ipc.RunInfo) Model {
 	for _, s := range steps {
 		if s.FindingsJSON != nil && *s.FindingsJSON != "" {
 			m.stepFindings[s.StepName] = *s.FindingsJSON
-			if s.Status == types.StepStatusAwaitingApproval || s.Status == types.StepStatusFixReview {
+			if s.Status == types.StepStatusParkedForApproval || s.Status == types.StepStatusParkedAfterFix {
 				m.resetFindingSelection(s.StepName)
 			}
 		}
@@ -186,7 +186,7 @@ func normalizePipelineSteps(runID string, runStatus types.RunStatus, steps []ipc
 
 func shouldBackfillPipelineSteps(runStatus types.RunStatus, steps []ipc.StepResultInfo, knownSteps []types.StepName) bool {
 	if len(steps) == 0 {
-		return runStatus == types.RunPending || runStatus == types.RunRunning
+		return runStatus == types.RunStarting || runStatus == types.RunRunning
 	}
 	if len(steps) >= len(knownSteps) {
 		return false
@@ -439,13 +439,13 @@ func (m Model) terminalTitle() string {
 	for _, s := range m.steps {
 		icon := stepStatusIndicator(s.Status, m.spinnerFrame)
 		switch s.Status {
-		case types.StepStatusRunning, types.StepStatusFixing:
+		case types.StepStatusRunning, types.StepStatusFixerRunning:
 			activity := cimonitor.FromAuthoritative(m.run != nil && m.run.CIReady, m.run != nil && m.run.CIReadyNoCI, m.logs)
 			if s.StepName == types.StepCI && activity.Ready {
 				return "✓ Checks passed" + suffix
 			}
 			return icon + " " + stepLabel(s.StepName) + suffix
-		case types.StepStatusAwaitingApproval, types.StepStatusFixReview:
+		case types.StepStatusParkedForApproval, types.StepStatusParkedAfterFix:
 			return icon + " " + stepLabel(s.StepName) + suffix
 		}
 	}

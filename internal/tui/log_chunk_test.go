@@ -110,7 +110,7 @@ func TestModel_ApplyEvent_LogChunk_FlushesPartialOnStepCompleted(t *testing.T) {
 	})
 
 	m.applyEvent(ipc.Event{
-		Type:     ipc.EventStepCompleted,
+		Type:     ipc.EventStepStatusChanged,
 		RunID:    run.ID,
 		StepName: ptr(types.StepName("review")),
 		Status:   ptr(string(types.StepStatusCompleted)),

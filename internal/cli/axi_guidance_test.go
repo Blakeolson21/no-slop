@@ -230,7 +230,7 @@ func TestNormalDriveOutputDoesNotFloodBranchSyncGuidance(t *testing.T) {
 func TestPreserveGateFixGuidance_InPointOfUseOutputs(t *testing.T) {
 	gate := stepView{
 		Name:   "review",
-		Status: "awaiting_approval",
+		Status: "parked_for_responder_approval",
 		FindingsJSON: findingsJSON(t, []types.Finding{
 			{ID: "review-1", Severity: "warning", File: "main.go", Action: types.ActionAskUser, Description: "calls os.Exit"},
 		}, "1 blocking issue"),

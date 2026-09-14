@@ -150,10 +150,10 @@ func waitForCIGate(t *testing.T, database *db.DB, runID string) {
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		steps, err := database.GetStepsByRun(runID)
-		if err == nil && len(steps) == 2 && steps[1].Status == types.StepStatusAwaitingApproval {
+		if err == nil && len(steps) == 2 && steps[1].Status == types.StepStatusParkedForApproval {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("CI step did not reach awaiting_approval")
+	t.Fatal("CI step did not reach parked_for_responder_approval")
 }

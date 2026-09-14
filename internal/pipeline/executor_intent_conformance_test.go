@@ -20,7 +20,7 @@ import (
 // change (executor.go gate). The step is modeled with a scripted step whose
 // rereview turn returns what the fixed ReviewStep returns on a contradiction.
 //
-// The park is observable as the step reaching fix_review with the run's
+// The park is observable as the step reaching parked_for_responder_after_fix with the run's
 // awaiting-agent marker set; the run row itself stays "running" while a gate is
 // open (there is no separate awaiting-approval run status), so the assertions
 // key off the step status and the marker, not the run status.
@@ -80,9 +80,9 @@ func TestExecutor_AutoFixContradictingIntentParksForApproval(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- exec.Execute(context.Background(), run, repo, workDir) }()
 
-	// The run must PARK at fix_review (an ask-user finding after a fix cycle),
+	// The run must PARK at parked_for_responder_after_fix (an ask-user finding after a fix cycle),
 	// not silently complete.
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusFixReview)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedAfterFix)
 
 	if call != 2 {
 		t.Errorf("expected 2 calls (initial + one auto-fix rereview), got %d", call)

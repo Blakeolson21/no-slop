@@ -39,7 +39,7 @@ func TestReviewTimingUsesStoredInvocationsAndKeepsUnknownDistinct(t *testing.T) 
 	if got.Turns[0].ModelMS != nil || got.Turns[3].ExitStatus != "error" {
 		t.Fatalf("unknown metrics or failed attempt hidden: %+v", got.Turns)
 	}
-	if _, err := d.sql.Exec("UPDATE step_results SET completed_at=NULL, status='fix_review' WHERE id=?", s.ID); err != nil {
+	if _, err := d.sql.Exec("UPDATE step_results SET completed_at=NULL, status='parked_for_responder_after_fix' WHERE id=?", s.ID); err != nil {
 		t.Fatal(err)
 	}
 	got, err = d.GetReviewTiming(run.ID, 200)

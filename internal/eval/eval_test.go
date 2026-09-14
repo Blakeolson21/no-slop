@@ -92,7 +92,7 @@ func TestCaptureRejectsReviewRoundBeforeGateDecision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sourceDB.UpdateStepStatus(steps[0].ID, types.StepStatusAwaitingApproval); err != nil {
+	if err := sourceDB.UpdateStepStatus(steps[0].ID, types.StepStatusParkedForApproval); err != nil {
 		t.Fatal(err)
 	}
 

@@ -20,7 +20,7 @@ func TestReviewCompletionEventContinuesBeforeFallback(t *testing.T) {
 	srv.Handle(ipc.MethodGetRun, func(context.Context, json.RawMessage) (interface{}, error) {
 		status := types.StepStatusRunning
 		if complete.Load() {
-			status = types.StepStatusAwaitingApproval
+			status = types.StepStatusParkedForApproval
 		}
 		select {
 		case read <- struct{}{}:
@@ -52,7 +52,7 @@ func TestReviewCompletionEventContinuesBeforeFallback(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		run, _, err := driveRunWithReconciler(ctx, io.Discard, client, r, "review", false)
-		if err == nil && run.Steps[0].Status != types.StepStatusAwaitingApproval {
+		if err == nil && run.Steps[0].Status != types.StepStatusParkedForApproval {
 			t.Error("completion did not return the review decision")
 		}
 		done <- err
@@ -63,7 +63,7 @@ func TestReviewCompletionEventContinuesBeforeFallback(t *testing.T) {
 		t.Fatal("initial reconciliation missing")
 	}
 	complete.Store(true)
-	events <- ipc.Event{Type: ipc.EventStepCompleted, RunID: "review"}
+	events <- ipc.Event{Type: ipc.EventStepStatusChanged, RunID: "review"}
 	select {
 	case err := <-done:
 		if err != nil {
@@ -90,7 +90,7 @@ func TestReviewFallbackAndDuplicateEventsCannotContinueGateTwice(t *testing.T) {
 		default:
 		}
 		return &ipc.RunInfo{ID: "review", Status: status,
-			Steps: []ipc.StepResultInfo{{StepName: types.StepReview, Status: types.StepStatusAwaitingApproval}}}
+			Steps: []ipc.StepResultInfo{{StepName: types.StepReview, Status: types.StepStatusParkedForApproval}}}
 	}}
 	srv := ipc.NewServer()
 	srv.Handle(ipc.MethodRespond, func(context.Context, json.RawMessage) (interface{}, error) {
@@ -114,7 +114,7 @@ func TestReviewFallbackAndDuplicateEventsCannotContinueGateTwice(t *testing.T) {
 		}
 	}
 	for range 3 {
-		events <- ipc.Event{Type: ipc.EventStepCompleted, RunID: "review"}
+		events <- ipc.Event{Type: ipc.EventStepStatusChanged, RunID: "review"}
 	}
 	select {
 	case <-reads:

@@ -130,7 +130,7 @@ func TestOutcomeBanner_CancelledInView(t *testing.T) {
 	}
 }
 
-// Test: When a step completes via EventStepCompleted and we had a start time
+// Test: When a step completes via EventStepStatusChanged and we had a start time
 // recorded for it, the completed step should show its final duration in the view.
 func TestModel_View_CompletedStepPreservesDuration(t *testing.T) {
 	configureTUIColors()
@@ -149,7 +149,7 @@ func TestModel_View_CompletedStepPreservesDuration(t *testing.T) {
 	completedStatus := string(types.StepStatusCompleted)
 	stepName := types.StepReview
 	m.applyEvent(ipc.Event{
-		Type:     ipc.EventStepCompleted,
+		Type:     ipc.EventStepStatusChanged,
 		StepName: &stepName,
 		Status:   &completedStatus,
 	})
@@ -170,7 +170,7 @@ func TestModel_View_CompletedStepPreservesDuration(t *testing.T) {
 	}
 }
 
-// Test: When EventStepCompleted arrives with a tracked start time, the DurationMS
+// Test: When EventStepStatusChanged arrives with a tracked start time, the DurationMS
 // on the step is populated from the elapsed time.
 func TestModel_ApplyEvent_StepCompletedSetsDuration(t *testing.T) {
 	configureTUIColors()
@@ -186,7 +186,7 @@ func TestModel_ApplyEvent_StepCompletedSetsDuration(t *testing.T) {
 	completedStatus := string(types.StepStatusCompleted)
 	stepName := types.StepReview
 	m.applyEvent(ipc.Event{
-		Type:     ipc.EventStepCompleted,
+		Type:     ipc.EventStepStatusChanged,
 		StepName: &stepName,
 		Status:   &completedStatus,
 	})
@@ -207,7 +207,7 @@ func TestModel_ApplyEvent_StepCompletedSetsDuration(t *testing.T) {
 	t.Fatal("Review step not found in model steps")
 }
 
-// Test: When EventStepCompleted arrives without a tracked start time, DurationMS
+// Test: When EventStepStatusChanged arrives without a tracked start time, DurationMS
 // remains nil (no crash, no bogus data).
 func TestModel_ApplyEvent_StepCompletedNoDurationWithoutStartTime(t *testing.T) {
 	configureTUIColors()
@@ -220,7 +220,7 @@ func TestModel_ApplyEvent_StepCompletedNoDurationWithoutStartTime(t *testing.T) 
 	completedStatus := string(types.StepStatusCompleted)
 	stepName := types.StepReview
 	m.applyEvent(ipc.Event{
-		Type:     ipc.EventStepCompleted,
+		Type:     ipc.EventStepStatusChanged,
 		StepName: &stepName,
 		Status:   &completedStatus,
 	})
@@ -242,7 +242,7 @@ func TestNewModel_SeedsStartTimesFromStartedAt(t *testing.T) {
 	configureTUIColors()
 	startedAt := time.Now().Add(-10 * time.Second).Unix()
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	run.Steps[0].StartedAt = &startedAt
 
 	m := NewModel("", nil, run)
@@ -262,7 +262,7 @@ func TestNewModel_SeedsStartTimesFromStartedAt(t *testing.T) {
 func TestModel_View_AwaitingApprovalShowsElapsedTime(t *testing.T) {
 	configureTUIColors()
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 
 	m := NewModel("", nil, run)
 	m.width = 80
@@ -280,7 +280,7 @@ func TestModel_View_AwaitingApprovalShowsElapsedTime(t *testing.T) {
 func TestModel_View_FixReviewShowsElapsedTime(t *testing.T) {
 	configureTUIColors()
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusFixReview
+	run.Steps[0].Status = types.StepStatusParkedAfterFix
 
 	m := NewModel("", nil, run)
 	m.width = 80
@@ -300,7 +300,7 @@ func TestModel_View_ReattachAwaitingApprovalShowsDuration(t *testing.T) {
 	configureTUIColors()
 	startedAt := time.Now().Add(-15 * time.Second).Unix()
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	run.Steps[0].StartedAt = &startedAt
 
 	m := NewModel("", nil, run)
@@ -316,7 +316,7 @@ func TestModel_View_ReattachAwaitingApprovalShowsDuration(t *testing.T) {
 	}
 }
 
-// Test: When EventStepCompleted carries DurationMS, it takes precedence over
+// Test: When EventStepStatusChanged carries DurationMS, it takes precedence over
 // the computed elapsed time from stepStartTimes.
 func TestModel_ApplyEvent_StepCompletedPrefersEventDuration(t *testing.T) {
 	configureTUIColors()
@@ -332,7 +332,7 @@ func TestModel_ApplyEvent_StepCompletedPrefersEventDuration(t *testing.T) {
 	stepName := types.StepReview
 	eventDuration := int64(2000)
 	m.applyEvent(ipc.Event{
-		Type:       ipc.EventStepCompleted,
+		Type:       ipc.EventStepStatusChanged,
 		StepName:   &stepName,
 		Status:     &completedStatus,
 		DurationMS: &eventDuration,
@@ -361,10 +361,10 @@ func TestModel_FixingEventDoesNotFreezeDuration(t *testing.T) {
 	m := NewModel("", nil, run)
 	m.stepStartTimes[types.StepReview] = time.Now().Add(-5 * time.Second)
 
-	fixingStatus := string(types.StepStatusFixing)
+	fixingStatus := string(types.StepStatusFixerRunning)
 	stepName := types.StepReview
 	m.applyEvent(ipc.Event{
-		Type:     ipc.EventStepCompleted,
+		Type:     ipc.EventStepStatusChanged,
 		StepName: &stepName,
 		Status:   &fixingStatus,
 	})
@@ -390,10 +390,10 @@ func TestModel_AutoFixPreservesAccumulatedElapsed(t *testing.T) {
 	m := NewModel("", nil, run)
 	m.stepStartTimes[types.StepReview] = time.Now().Add(-5 * time.Second)
 
-	fixingStatus := string(types.StepStatusFixing)
+	fixingStatus := string(types.StepStatusFixerRunning)
 	stepName := types.StepReview
 	m.applyEvent(ipc.Event{
-		Type:     ipc.EventStepCompleted,
+		Type:     ipc.EventStepStatusChanged,
 		StepName: &stepName,
 		Status:   &fixingStatus,
 	})
@@ -426,11 +426,11 @@ func TestModel_FixingEventClearsStaleDuration(t *testing.T) {
 	m.stepStartTimes[types.StepReview] = time.Now().Add(-10 * time.Second)
 
 	// Simulate step entering AwaitingApproval with 10s of persisted execution time.
-	awaitingStatus := string(types.StepStatusAwaitingApproval)
+	awaitingStatus := string(types.StepStatusParkedForApproval)
 	stepName := types.StepReview
 	dur := int64(10000)
 	m.applyEvent(ipc.Event{
-		Type:       ipc.EventStepCompleted,
+		Type:       ipc.EventStepStatusChanged,
 		StepName:   &stepName,
 		Status:     &awaitingStatus,
 		DurationMS: &dur,
@@ -444,9 +444,9 @@ func TestModel_FixingEventClearsStaleDuration(t *testing.T) {
 	}
 
 	// Now simulate user pressing fix - step transitions to Fixing.
-	fixingStatus := string(types.StepStatusFixing)
+	fixingStatus := string(types.StepStatusFixerRunning)
 	m.applyEvent(ipc.Event{
-		Type:     ipc.EventStepCompleted,
+		Type:     ipc.EventStepStatusChanged,
 		StepName: &stepName,
 		Status:   &fixingStatus,
 	})

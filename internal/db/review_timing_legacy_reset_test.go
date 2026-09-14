@@ -78,7 +78,7 @@ func TestReviewTimingMigrationBackfillsEarlierInvocation(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.sql.Exec(`UPDATE step_results SET status = ?, started_at = 200, started_at_ms = 200500, first_started_at_ms = NULL WHERE id = ?`, types.StepStatusAwaitingApproval, step.ID); err != nil {
+	if _, err := d.sql.Exec(`UPDATE step_results SET status = ?, started_at = 200, started_at_ms = 200500, first_started_at_ms = NULL WHERE id = ?`, types.StepStatusParkedForApproval, step.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.Close(); err != nil {

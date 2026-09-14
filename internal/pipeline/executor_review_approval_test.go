@@ -49,7 +49,7 @@ func TestExecutor_FullRereviewReplacesApprovalWithoutAuthorizingParkedRound(t *t
 
 	done := make(chan error, 1)
 	go func() { done <- exec.Execute(context.Background(), run, repo, workDir) }()
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 
 	parked, err := database.GetRun(run.ID)
 	if err != nil {
@@ -97,7 +97,7 @@ func TestExecutor_ParkedOrFailedReviewDoesNotAdvanceExistingApproval(t *testing.
 		workDir := t.TempDir()
 		done := make(chan error, 1)
 		go func() { done <- exec.Execute(context.Background(), run, repo, workDir) }()
-		waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+		waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 		got, _ := database.GetRun(run.ID)
 		if got.ReviewApprovedHeadSHA == nil || *got.ReviewApprovedHeadSHA != existingHead {
 			t.Fatalf("parked review advanced approval: %#v", got.ReviewApprovedHeadSHA)

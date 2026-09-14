@@ -326,7 +326,7 @@ func TestExecutor_RestoresUncertifiedPriorRunEffectiveFindings(t *testing.T) {
 	exec := NewExecutor(database, p, &config.Config{}, nil, []Step{step}, nil)
 	done := make(chan error, 1)
 	go func() { done <- exec.Execute(context.Background(), run, repo, t.TempDir()) }()
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 	if err := exec.Respond(types.StepReview, types.ActionApprove, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -437,7 +437,7 @@ func TestParkedReview_DoesNotClearUncertifiedRange(t *testing.T) {
 	exec := NewExecutor(database, p, &config.Config{}, nil, []Step{step}, nil)
 	done := make(chan error, 1)
 	go func() { done <- exec.Execute(context.Background(), run, repo, t.TempDir()) }()
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 	got, err := database.GetUncertifiedPipelineRange(repo.ID, run.Branch)
 	if err != nil {
 		t.Fatal(err)

@@ -445,7 +445,7 @@ func TestModel_View_CIViewWhenActive(t *testing.T) {
 func TestModel_View_NonCIStepUsesGenericFindings(t *testing.T) {
 	run := testRun() // no CI step
 	m := NewModel("/tmp/sock", nil, run)
-	m.steps[0].Status = types.StepStatusAwaitingApproval
+	m.steps[0].Status = types.StepStatusParkedForApproval
 	m.stepFindings[types.StepReview] = `{"findings":[{"severity":"error","description":"critical bug"}],"summary":"1 issue"}`
 
 	view := m.View()
@@ -476,7 +476,7 @@ func TestNewModel_PopulatesStepFindingsFromInitialSteps(t *testing.T) {
 		BaseSHA: "000000",
 		Status:  types.RunRunning,
 		Steps: []ipc.StepResultInfo{
-			{ID: "s1", StepName: types.StepReview, StepOrder: 1, Status: types.StepStatusAwaitingApproval, FindingsJSON: &findings},
+			{ID: "s1", StepName: types.StepReview, StepOrder: 1, Status: types.StepStatusParkedForApproval, FindingsJSON: &findings},
 			{ID: "s2", StepName: types.StepTest, StepOrder: 2, Status: types.StepStatusPending},
 		},
 	}

@@ -257,7 +257,7 @@ func TestAxiRunReattachesAfterManagedFix(t *testing.T) {
 	}
 
 	fixOut, err := h.RunInDir(operator, "axi", "respond", "--action", "fix", "--findings", findingID)
-	if err != nil || !strings.Contains(fixOut, "status: fix_review") {
+	if err != nil || !strings.Contains(fixOut, "status: parked_for_responder_after_fix") {
 		t.Fatalf("review fix: %v\n%s", err, fixOut)
 	}
 	managed := h.ActiveRun(branch)
@@ -287,7 +287,7 @@ func TestAxiRunReattachesAfterManagedFix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reattach after managed fix: %v\n%s", err, reattachOut)
 	}
-	for _, want := range []string{originalRun.ID, "status: fix_review"} {
+	for _, want := range []string{originalRun.ID, "status: parked_for_responder_after_fix"} {
 		if !strings.Contains(reattachOut, want) {
 			t.Errorf("reattach output missing %q:\n%s", want, reattachOut)
 		}
@@ -923,7 +923,7 @@ func TestAxiAgentJourney(t *testing.T) {
 	for _, want := range []string{
 		"gate:",
 		"step: review",
-		"status: awaiting_approval",
+		"status: parked_for_responder_approval",
 		"ask-user",
 		"potential nil deref",
 		"no-slop axi respond --action approve",
@@ -934,7 +934,7 @@ func TestAxiAgentJourney(t *testing.T) {
 	}
 
 	// The daemon should now hold the run at the review gate.
-	if gated := waitForStepStatus(t, h, "feature/axi", types.StepReview, types.StepStatusAwaitingApproval, 60*time.Second); gated == nil {
+	if gated := waitForStepStatus(t, h, "feature/axi", types.StepReview, types.StepStatusParkedForApproval, 60*time.Second); gated == nil {
 		t.Fatal("expected feature/axi run to be awaiting approval")
 	}
 
@@ -1033,7 +1033,7 @@ func TestAxiAgentJourney(t *testing.T) {
 // fix agent returns a summary without changing anything. Under --yes this must
 // exhaust the per-step fix budget and hand the gate back parked - never
 // blind-approve the finding into a passing run, and never wedge the drive loop
-// (a fast fix round re-parks as fix_review between two polls, so consecutive
+// (a fast fix round re-parks as parked_for_responder_after_fix between two polls, so consecutive
 // parks are indistinguishable by status alone).
 func yesBudgetScenario(t *testing.T) string {
 	t.Helper()
@@ -1093,7 +1093,7 @@ func TestAxiYesBudgetParksUnresolvedFindings(t *testing.T) {
 	for _, want := range []string{
 		"leaving the run parked for explicit adjudication",
 		"gate:",
-		"status: fix_review",
+		"status: parked_for_responder_after_fix",
 		"potential nil deref",
 	} {
 		if !strings.Contains(out, want) {
@@ -1104,10 +1104,10 @@ func TestAxiYesBudgetParksUnresolvedFindings(t *testing.T) {
 		t.Errorf("budget-exhausted --yes must not report a passing outcome:\n%s", out)
 	}
 
-	// The run stays parked at the fix_review gate for a real decision.
-	parked := waitForStepStatus(t, h, "feature/yes-budget", types.StepReview, types.StepStatusFixReview, 30*time.Second)
+	// The run stays parked at the parked_for_responder_after_fix gate for a real decision.
+	parked := waitForStepStatus(t, h, "feature/yes-budget", types.StepReview, types.StepStatusParkedAfterFix, 30*time.Second)
 	if parked == nil {
-		t.Fatal("expected feature/yes-budget to stay parked at the review fix_review gate")
+		t.Fatal("expected feature/yes-budget to stay parked at the review parked_for_responder_after_fix gate")
 	}
 	if parked.Status != types.RunRunning {
 		t.Errorf("run status = %s, want running (parked, not terminal)", parked.Status)
@@ -1185,7 +1185,7 @@ func TestAxiParkedAwaitingAgentSignal(t *testing.T) {
 	}
 
 	// The run parks at the review gate. The pollable signal is set on gate entry.
-	gated := waitForStepStatus(t, h, "feature/park", types.StepReview, types.StepStatusAwaitingApproval, 60*time.Second)
+	gated := waitForStepStatus(t, h, "feature/park", types.StepReview, types.StepStatusParkedForApproval, 60*time.Second)
 	if gated == nil {
 		t.Fatal("expected feature/park run to be awaiting approval")
 	}
@@ -1245,7 +1245,7 @@ func TestAxiAttachCommandsIgnoreInvalidConfigWhenDaemonRunning(t *testing.T) {
 	if out, err := h.RunInDir(respondWorktree, "axi", "run", "--intent", axiIntent); err != nil {
 		t.Fatalf("axi run respond branch: %v\n%s", err, out)
 	}
-	if gated := waitForStepStatus(t, h, "feature/respond-invalid-config", types.StepReview, types.StepStatusAwaitingApproval, 60*time.Second); gated == nil {
+	if gated := waitForStepStatus(t, h, "feature/respond-invalid-config", types.StepReview, types.StepStatusParkedForApproval, 60*time.Second); gated == nil {
 		t.Fatal("expected respond branch to be awaiting approval")
 	}
 
@@ -1254,7 +1254,7 @@ func TestAxiAttachCommandsIgnoreInvalidConfigWhenDaemonRunning(t *testing.T) {
 	if out, err := h.RunInDir(abortWorktree, "axi", "run", "--intent", axiIntent); err != nil {
 		t.Fatalf("axi run abort branch: %v\n%s", err, out)
 	}
-	if gated := waitForStepStatus(t, h, "feature/abort-invalid-config", types.StepReview, types.StepStatusAwaitingApproval, 60*time.Second); gated == nil {
+	if gated := waitForStepStatus(t, h, "feature/abort-invalid-config", types.StepReview, types.StepStatusParkedForApproval, 60*time.Second); gated == nil {
 		t.Fatal("expected abort branch to be awaiting approval")
 	}
 

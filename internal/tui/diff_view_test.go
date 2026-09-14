@@ -14,7 +14,7 @@ func TestDiffView_NextFindingKey_MovesCursorAndScrolls(t *testing.T) {
 	// Pressing 'n' in diff view should move finding cursor to next finding
 	// and auto-scroll the diff to the new finding's hunk location.
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	run.Steps[0].FindingsJSON = ptr(`{"summary":"test","items":[` +
 		`{"id":"f1","severity":"error","file":"foo.go","line":12,"description":"bug1"},` +
 		`{"id":"f2","severity":"warning","file":"bar.go","line":5,"description":"bug2"}]}`)
@@ -54,7 +54,7 @@ func TestDiffView_PrevFindingKey_MovesCursorAndScrolls(t *testing.T) {
 	// Pressing 'p' in diff view should move finding cursor to previous finding
 	// and auto-scroll the diff to that finding's hunk location.
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	run.Steps[0].FindingsJSON = ptr(`{"summary":"test","items":[` +
 		`{"id":"f1","severity":"error","file":"foo.go","line":12,"description":"bug1"},` +
 		`{"id":"f2","severity":"warning","file":"bar.go","line":5,"description":"bug2"}]}`)
@@ -93,7 +93,7 @@ func TestDiffView_PrevFindingKey_MovesCursorAndScrolls(t *testing.T) {
 func TestDiffView_NextFindingKey_NoOpWhenNotInDiffView(t *testing.T) {
 	// 'n' and 'p' should be no-ops when not in diff view (showDiff=false).
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	run.Steps[0].FindingsJSON = ptr(`{"summary":"test","items":[` +
 		`{"id":"f1","severity":"error","file":"foo.go","line":12,"description":"bug1"},` +
 		`{"id":"f2","severity":"warning","file":"bar.go","line":5,"description":"bug2"}]}`)
@@ -118,7 +118,7 @@ func TestDiffView_ShowsFindingContext(t *testing.T) {
 	// appear as a context line so users know which finding they're looking at.
 	lipgloss.SetColorProfile(termenv.ANSI)
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	run.Steps[0].FindingsJSON = ptr(`{"summary":"test","items":[` +
 		`{"id":"f1","severity":"error","file":"foo.go","line":12,"description":"Missing error check"},` +
 		`{"id":"f2","severity":"warning","file":"bar.go","line":5,"description":"Unused import"}]}`)
@@ -144,7 +144,7 @@ func TestDiffView_FindingContextUpdatesOnNavigation(t *testing.T) {
 	// When navigating with 'n' key, the finding context should update to show the next finding.
 	lipgloss.SetColorProfile(termenv.ANSI)
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	run.Steps[0].FindingsJSON = ptr(`{"summary":"test","items":[` +
 		`{"id":"f1","severity":"error","file":"foo.go","line":12,"description":"Missing error check"},` +
 		`{"id":"f2","severity":"warning","file":"bar.go","line":5,"description":"Unused import"}]}`)
@@ -174,7 +174,7 @@ func TestDiffView_NoFindingContextWithoutFindings(t *testing.T) {
 	// When diff view has no findings, there should be no finding context line.
 	lipgloss.SetColorProfile(termenv.ANSI)
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 
 	m := NewModel("/tmp/sock", nil, run)
 	m.width = 80
@@ -206,7 +206,7 @@ func TestModel_EscapeReturnsToDiffFromFindings(t *testing.T) {
 	// Pressing Escape while in diff view should return to findings view.
 	lipgloss.SetColorProfile(termenv.Ascii)
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.showDiff = true
 	m.stepDiffs[types.StepReview] = "diff --git a/foo.go b/foo.go\n"
@@ -223,7 +223,7 @@ func TestModel_EscapeResetsDiffOffset(t *testing.T) {
 	// Pressing Escape while in diff view should also reset diffOffset.
 	lipgloss.SetColorProfile(termenv.Ascii)
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.showDiff = true
 	m.diffOffset = 42
@@ -241,7 +241,7 @@ func TestModel_EscapeNoOpWhenNotInDiffOrHelp(t *testing.T) {
 	// Pressing Escape when not in diff view and help is closed should be a no-op.
 	lipgloss.SetColorProfile(termenv.Ascii)
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.showDiff = false
 	m.showHelp = false

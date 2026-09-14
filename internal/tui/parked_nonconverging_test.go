@@ -3,7 +3,7 @@ package tui
 // Compatibility test for the parked non-converging state as the TUI shows it.
 //
 // The convergence guard is advisory by design: when the review loop trips the
-// guard, the review step parks at its gate (fix_review) with the tripped
+// guard, the review step parks at its gate (parked_for_responder_after_fix) with the tripped
 // report persisted on it, and the run stays non-terminal awaiting the agent's
 // decision. No distinct terminal state exists, and the TUI must not invent
 // one: the parked review renders as a paused gate awaiting a decision, never
@@ -19,7 +19,7 @@ import (
 
 func parkedNonconvergingRun() *ipc.RunInfo {
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusFixReview
+	run.Steps[0].Status = types.StepStatusParkedAfterFix
 	tripped := `{"round_findings":[1,1,1,2,3,3,3],"review_ms":11520000,"warning":"review loop is not converging: findings per round have not decreased across the last 3 rounds (3,3,3)"}`
 	run.Steps[0].ConvergenceJSON = &tripped
 	return run

@@ -180,7 +180,7 @@ func TestExecutor_ApprovalPersistenceFailureDoesNotPublishOrWaitAtGate(t *testin
 		if event.StepName == nil || *event.StepName != types.StepReview || event.Status == nil {
 			continue
 		}
-		if *event.Status == string(types.StepStatusAwaitingApproval) || *event.Status == string(types.StepStatusFixReview) {
+		if *event.Status == string(types.StepStatusParkedForApproval) || *event.Status == string(types.StepStatusParkedAfterFix) {
 			t.Fatalf("unpersisted approval gate event was published: %#v", event)
 		}
 	}

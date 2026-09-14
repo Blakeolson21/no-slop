@@ -4,7 +4,7 @@ package cli
 //
 // The convergence guard is advisory by design: a tripped report never creates
 // a distinct terminal outcome. Instead the review step parks at its approval
-// gate (fix_review) with the tripped report persisted on it, the run stays
+// gate (parked_for_responder_after_fix) with the tripped report persisted on it, the run stays
 // non-terminal and parked awaiting-agent, and the driving agent is handed the
 // gate as an explicit decision point. These tests pin that the same parked
 // state is presented coherently across every surface:
@@ -53,7 +53,7 @@ func parkedNonconvergingRun() *ipc.RunInfo {
 			RunID:           "run-parked",
 			StepName:        types.StepReview,
 			StepOrder:       types.StepReview.Order(),
-			Status:          types.StepStatusFixReview,
+			Status:          types.StepStatusParkedAfterFix,
 			FindingsJSON:    &findings,
 			ConvergenceJSON: &tripped,
 		}},
@@ -78,7 +78,7 @@ func TestStatusRendersParkedNonconvergingAsAwaitingAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert review step: %v", err)
 	}
-	if err := database.UpdateStepStatus(step.ID, types.StepStatusFixReview); err != nil {
+	if err := database.UpdateStepStatus(step.ID, types.StepStatusParkedAfterFix); err != nil {
 		t.Fatalf("park review step: %v", err)
 	}
 	if err := database.SetStepFindings(step.ID, findingsJSON(t, []types.Finding{
@@ -149,7 +149,7 @@ func TestParkedNonconvergingSurvivesReopenAndReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert review step: %v", err)
 	}
-	if err := database.UpdateStepStatus(review.ID, types.StepStatusFixReview); err != nil {
+	if err := database.UpdateStepStatus(review.ID, types.StepStatusParkedAfterFix); err != nil {
 		t.Fatalf("park review step: %v", err)
 	}
 	if err := database.SetStepConvergence(review.ID, trippedConvergenceJSON()); err != nil {
@@ -189,8 +189,8 @@ func TestParkedNonconvergingSurvivesReopenAndReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get review step after reopen: %v", err)
 	}
-	if gotReview.Status != types.StepStatusFixReview {
-		t.Errorf("review status after reopen = %s, want fix_review", gotReview.Status)
+	if gotReview.Status != types.StepStatusParkedAfterFix {
+		t.Errorf("review status after reopen = %s, want parked_for_responder_after_fix", gotReview.Status)
 	}
 	if gotReview.ConvergenceJSON == nil || *gotReview.ConvergenceJSON != trippedConvergenceJSON() {
 		t.Errorf("tripped report must survive reopen, got %v", gotReview.ConvergenceJSON)

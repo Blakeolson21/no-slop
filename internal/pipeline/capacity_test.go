@@ -193,7 +193,7 @@ func TestExecutorReleasesReviewCapacityWhileParked(t *testing.T) {
 	done := make(chan error, 1)
 	workDir := t.TempDir()
 	go func() { done <- executor.Execute(ctx, run, repo, workDir) }()
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 	release, err := c.Acquire(ctx, types.StepReview)
 	if err != nil {
 		t.Fatal("parked review retained capacity:", err)

@@ -234,7 +234,7 @@ func (e *Executor) Execute(ctx context.Context, run *db.Run, repo *db.Repo, work
 			if err := e.db.CompleteStepWithStatus(sr.ID, types.StepStatusSkipped, 0, 0, ""); err != nil {
 				return e.failRun(run, repo, fmt.Errorf("skip step %s: %w", step.Name(), err), ctx)
 			}
-			e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, step.Name(), string(types.StepStatusSkipped), "", "", nil)
+			e.emitStepEventWithFindingsAndError(ipc.EventStepStatusChanged, run, repo, step.Name(), string(types.StepStatusSkipped), "", "", nil)
 			continue
 		}
 		state, sr, err := e.executionStateForStep(step, sr)
@@ -262,7 +262,7 @@ func (e *Executor) Execute(ctx context.Context, run *db.Run, repo *db.Repo, work
 				if dbErr := e.db.CompleteStepWithStatus(rsr.ID, types.StepStatusSkipped, 0, 0, ""); dbErr != nil {
 					slog.Warn("failed to finalize skipped step", "step", remaining.Name(), "error", dbErr)
 				}
-				e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, remaining.Name(), string(types.StepStatusSkipped), "", "", nil)
+				e.emitStepEventWithFindingsAndError(ipc.EventStepStatusChanged, run, repo, remaining.Name(), string(types.StepStatusSkipped), "", "", nil)
 			}
 			break
 		}
@@ -480,7 +480,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 		if err := completeRecoveredGate(); err != nil {
 			return e.failRun(run, repo, fmt.Errorf("complete reconciled step %s: %w", gate.step.Name(), err), ctx)
 		}
-		e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, gate.step.Name(), string(types.StepStatusCompleted), "", "", &duration)
+		e.emitStepEventWithFindingsAndError(ipc.EventStepStatusChanged, run, repo, gate.step.Name(), string(types.StepStatusCompleted), "", "", &duration)
 		return e.executeRecoveredRemainder(ctx, run, repo, workDir, logDir, gate.index+1)
 	}
 	reconcileCtx := &StepContext{
@@ -513,7 +513,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 			if dbErr := e.db.FailStep(gate.stepResult.ID, reconcileErr.Error(), duration); dbErr != nil {
 				slog.Warn("failed to mark recovered step as failed in db", "step", gate.step.Name(), "error", dbErr)
 			}
-			e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, gate.step.Name(), string(types.StepStatusFailed), "", reconcileErr.Error(), &duration)
+			e.emitStepEventWithFindingsAndError(ipc.EventStepStatusChanged, run, repo, gate.step.Name(), string(types.StepStatusFailed), "", reconcileErr.Error(), &duration)
 			return e.failRun(run, repo, fmt.Errorf("step %s: reconcile approval gate: %w", gate.step.Name(), reconcileErr), ctx)
 		}
 		slog.Warn("could not reconcile recovered approval gate; preserving it", "run_id", run.ID, "step", gate.step.Name(), "error", reconcileErr)
@@ -524,7 +524,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	e.waitingStep = gate.step.Name()
 	e.mu.Unlock()
 	e.emitStepEventWithFindingsAndError(
-		ipc.EventStepCompleted,
+		ipc.EventStepStatusChanged,
 		run,
 		repo,
 		gate.step.Name(),
@@ -542,7 +542,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 		if dbErr := e.db.FailStep(gate.stepResult.ID, err.Error(), duration); dbErr != nil {
 			slog.Warn("failed to mark recovered step as failed in db", "step", gate.step.Name(), "error", dbErr)
 		}
-		e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, gate.step.Name(), string(types.StepStatusFailed), "", err.Error(), &duration)
+		e.emitStepEventWithFindingsAndError(ipc.EventStepStatusChanged, run, repo, gate.step.Name(), string(types.StepStatusFailed), "", err.Error(), &duration)
 		return e.failRun(run, repo, fmt.Errorf("step %s: waiting for approval: %w", gate.step.Name(), err), ctx)
 	}
 	if reconciled {
@@ -552,7 +552,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	approvalFields := telemetry.Fields{
 		"step":       string(gate.step.Name()),
 		"action":     string(response.action),
-		"fix_review": gate.stepResult.Status == types.StepStatusFixReview,
+		"parked_for_responder_after_fix": gate.stepResult.Status == types.StepStatusParkedAfterFix,
 	}
 	if agentName := e.telemetryAgentName(); agentName != "" {
 		approvalFields["agent"] = agentName
@@ -566,19 +566,19 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 		if err := completeRecoveredGate(); err != nil {
 			return e.failRun(run, repo, fmt.Errorf("complete recovered step %s: %w", gate.step.Name(), err), ctx)
 		}
-		e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, gate.step.Name(), string(types.StepStatusCompleted), "", "", &duration)
+		e.emitStepEventWithFindingsAndError(ipc.EventStepStatusChanged, run, repo, gate.step.Name(), string(types.StepStatusCompleted), "", "", &duration)
 		return e.executeRecoveredRemainder(ctx, run, repo, workDir, logDir, gate.index+1)
 	case types.ActionSkip:
 		if err := e.db.CompleteStepWithStatus(gate.stepResult.ID, types.StepStatusSkipped, recoveredExitCode(gate.stepResult), duration, recoveredLogPath(gate.stepResult)); err != nil {
 			return e.failRun(run, repo, fmt.Errorf("skip recovered step %s: %w", gate.step.Name(), err), ctx)
 		}
-		e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, gate.step.Name(), string(types.StepStatusSkipped), "", "", &duration)
+		e.emitStepEventWithFindingsAndError(ipc.EventStepStatusChanged, run, repo, gate.step.Name(), string(types.StepStatusSkipped), "", "", &duration)
 		return e.executeRecoveredRemainder(ctx, run, repo, workDir, logDir, gate.index+1)
 	case types.ActionAbort:
 		if dbErr := e.db.FailStep(gate.stepResult.ID, "aborted by user", duration); dbErr != nil {
 			slog.Warn("failed to mark recovered step as aborted", "step", gate.step.Name(), "error", dbErr)
 		}
-		e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, gate.step.Name(), string(types.StepStatusFailed), "", "aborted by user", &duration)
+		e.emitStepEventWithFindingsAndError(ipc.EventStepStatusChanged, run, repo, gate.step.Name(), string(types.StepStatusFailed), "", "aborted by user", &duration)
 		return e.failRun(run, repo, fmt.Errorf("step %s: aborted by user", gate.step.Name()), ctx)
 	case types.ActionFix:
 		telemetry.Track("fix", e.fixTelemetryFields("user", gate.step.Name(), selectedFindingCount(gate.findings, response.findingIDs), 0))
@@ -605,10 +605,10 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 			}
 			slog.Warn("failed to record recovered user decision", "step", gate.step.Name(), "round", gate.round, "error", err)
 		}
-		if dbErr := e.db.UpdateStepStatus(gate.stepResult.ID, types.StepStatusFixing); dbErr != nil {
+		if dbErr := e.db.UpdateStepStatus(gate.stepResult.ID, types.StepStatusFixerRunning); dbErr != nil {
 			return e.failRun(run, repo, fmt.Errorf("mark recovered step %s fixing: %w", gate.step.Name(), dbErr), ctx)
 		}
-		e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, gate.step.Name(), string(types.StepStatusFixing), "", "", nil)
+		e.emitStepEventWithFindingsAndError(ipc.EventStepStatusChanged, run, repo, gate.step.Name(), string(types.StepStatusFixerRunning), "", "", nil)
 		carried := ""
 		if registerLineages {
 			carried = excludeFindingsJSON(selectionTruth, response.findingIDs)
@@ -657,7 +657,7 @@ func (e *Executor) recoveredGate(runID string) (*recoveredGate, error) {
 		if result.StepName != e.steps[index].Name() {
 			return nil, fmt.Errorf("recovered step %d is %q, want %q", index, result.StepName, e.steps[index].Name())
 		}
-		if result.Status == types.StepStatusAwaitingApproval || result.Status == types.StepStatusFixReview {
+		if result.Status == types.StepStatusParkedForApproval || result.Status == types.StepStatusParkedAfterFix {
 			if gate != nil || result.FindingsJSON == nil || result.StartedAt == nil || result.DurationMS == nil || result.AgentPID != nil {
 				return nil, fmt.Errorf("recovered approval gate is incomplete")
 			}
@@ -773,7 +773,7 @@ func (e *Executor) skipRecoveredRemainder(run *db.Run, repo *db.Repo, start int)
 		if err := e.db.CompleteStepWithStatus(results[index].ID, types.StepStatusSkipped, 0, 0, ""); err != nil {
 			return e.failRun(run, repo, fmt.Errorf("skip recovered step %s: %w", e.steps[index].Name(), err))
 		}
-		e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, e.steps[index].Name(), string(types.StepStatusSkipped), "", "", nil)
+		e.emitStepEventWithFindingsAndError(ipc.EventStepStatusChanged, run, repo, e.steps[index].Name(), string(types.StepStatusSkipped), "", "", nil)
 	}
 	if err := e.completeRun(run, repo); err != nil {
 		return e.failRun(run, repo, fmt.Errorf("complete recovered run: %w", err))
@@ -1023,7 +1023,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			if dbErr := e.db.FailStep(sr.ID, redactedErr, durationMS); dbErr != nil {
 				slog.Warn("failed to mark step as failed in db", "step", stepName, "error", dbErr)
 			}
-			e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusFailed), "", redactedErr, &durationMS)
+			e.emitStepEventWithFindingsAndError(ipc.EventStepStatusChanged, run, repo, stepName, string(types.StepStatusFailed), "", redactedErr, &durationMS)
 			return false, "", fmt.Errorf("step %s failed: %s", stepName, redactedErr)
 		}
 		restartFrom = outcome.RestartFrom
@@ -1178,10 +1178,10 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 				} else if err := e.persistAutoFixSelection(currentRoundID, fixableFindings); err != nil {
 					slog.Warn("failed to record selected finding ids", "step", stepName, "round", roundNum, "error", err)
 				}
-				if dbErr := e.db.UpdateStepStatus(sr.ID, types.StepStatusFixing); dbErr != nil {
+				if dbErr := e.db.UpdateStepStatus(sr.ID, types.StepStatusFixerRunning); dbErr != nil {
 					slog.Warn("failed to update step status in db", "step", stepName, "status", "fixing", "error", dbErr)
 				}
-				e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusFixing), "", "", nil)
+				e.emitStepEventWithFindingsAndError(ipc.EventStepStatusChanged, run, repo, stepName, string(types.StepStatusFixerRunning), "", "", nil)
 				phaseStart = time.Now()
 				sctx.Fixing = true
 				sctx.PreviousFindings = fixableFindings
@@ -1211,15 +1211,15 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		// Freeze execution timer before entering approval wait.
 		executionMS += time.Since(phaseStart).Milliseconds()
 
-		// Determine approval status: fix_review after a fix cycle, awaiting_approval otherwise.
+		// Determine approval status: parked_for_responder_after_fix after a fix cycle, parked_for_responder_approval otherwise.
 		// The working-tree diff that shows what the agent changed is NOT
 		// attached here: it is unbounded, and one frame over the transport
 		// limit kills the whole subscription and hides every event after it.
 		// Consumers fetch it on demand from the run's worktree instead
 		// (ipc.MethodGetStepDiff).
-		approvalStatus := types.StepStatusAwaitingApproval
+		approvalStatus := types.StepStatusParkedForApproval
 		if sctx.Fixing {
-			approvalStatus = types.StepStatusFixReview
+			approvalStatus = types.StepStatusParkedAfterFix
 		}
 
 		// Mark executor as ready to receive approval before updating DB or
@@ -1246,7 +1246,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			e.mu.Unlock()
 			return false, "", fmt.Errorf("persist %s approval gate: %w", stepName, dbErr)
 		}
-		e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(approvalStatus), effectiveFindings, "", &executionMS)
+		e.emitStepEventWithFindingsAndError(ipc.EventStepStatusChanged, run, repo, stepName, string(approvalStatus), effectiveFindings, "", &executionMS)
 
 		response, reconciled, err := e.waitForApprovalOrReconcile(ctx, step, sctx, true)
 		if dbErr := e.db.CompleteRunAwaitingAgent(run.ID, time.Since(parkStart).Milliseconds()); dbErr != nil {
@@ -1256,7 +1256,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			if dbErr := e.db.FailStep(sr.ID, err.Error(), executionMS); dbErr != nil {
 				slog.Warn("failed to mark step as failed in db", "step", stepName, "error", dbErr)
 			}
-			e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusFailed), "", err.Error(), &executionMS)
+			e.emitStepEventWithFindingsAndError(ipc.EventStepStatusChanged, run, repo, stepName, string(types.StepStatusFailed), "", err.Error(), &executionMS)
 			return false, "", fmt.Errorf("step %s: waiting for approval: %w", stepName, err)
 		}
 		if reconciled {
@@ -1267,7 +1267,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		approvalFields := telemetry.Fields{
 			"step":       string(stepName),
 			"action":     string(response.action),
-			"fix_review": sctx.Fixing,
+			"parked_for_responder_after_fix": sctx.Fixing,
 		}
 		if agentName := e.telemetryAgentName(); agentName != "" {
 			approvalFields["agent"] = agentName
@@ -1296,14 +1296,14 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			if err := e.db.CompleteStepWithStatus(sr.ID, types.StepStatusSkipped, finalExitCode, executionMS, logPath); err != nil {
 				return false, "", fmt.Errorf("complete step %s (skip): %w", stepName, err)
 			}
-			e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusSkipped), "", "", &executionMS)
+			e.emitStepEventWithFindingsAndError(ipc.EventStepStatusChanged, run, repo, stepName, string(types.StepStatusSkipped), "", "", &executionMS)
 			return false, "", nil
 
 		case types.ActionAbort:
 			if dbErr := e.db.FailStep(sr.ID, "aborted by user", executionMS); dbErr != nil {
 				slog.Warn("failed to mark step as failed in db", "step", stepName, "error", dbErr)
 			}
-			e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusFailed), "", "aborted by user", &executionMS)
+			e.emitStepEventWithFindingsAndError(ipc.EventStepStatusChanged, run, repo, stepName, string(types.StepStatusFailed), "", "aborted by user", &executionMS)
 			return false, "", fmt.Errorf("step %s: aborted by user", stepName)
 
 		case types.ActionFix:
@@ -1334,7 +1334,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 				}
 				slog.Warn("failed to record user decision", "step", stepName, "round", roundNum, "error", err)
 			}
-			if dbErr := e.db.UpdateStepStatus(sr.ID, types.StepStatusFixing); dbErr != nil {
+			if dbErr := e.db.UpdateStepStatus(sr.ID, types.StepStatusFixerRunning); dbErr != nil {
 				slog.Warn("failed to update step status in db", "step", stepName, "status", "fixing", "error", dbErr)
 			}
 			sctx.Fixing = true
@@ -1345,7 +1345,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 				carriedFindings = excludeFindingsJSON(selectionTruth, response.findingIDs)
 			}
 			nextTrigger = "auto_fix"
-			e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusFixing), "", "", nil)
+			e.emitStepEventWithFindingsAndError(ipc.EventStepStatusChanged, run, repo, stepName, string(types.StepStatusFixerRunning), "", "", nil)
 			slog.Info("step fix requested, re-executing", "step", stepName)
 			continue // loop back to step.Execute
 		}
@@ -1378,7 +1378,7 @@ done:
 	} else if err := e.db.CompleteStepWithStatusAtHead(sr.ID, status, run.HeadSHA, finalExitCode, durationMS, logPath); err != nil {
 		return false, "", fmt.Errorf("complete step %s: %w", stepName, err)
 	}
-	e.emitStepEventWithFindingsAndError(ipc.EventStepCompleted, run, repo, stepName, string(status), "", "", &durationMS)
+	e.emitStepEventWithFindingsAndError(ipc.EventStepStatusChanged, run, repo, stepName, string(status), "", "", &durationMS)
 	return skipRemaining, restartFrom, nil
 }
 
@@ -1881,11 +1881,11 @@ func (e *Executor) findingStatsForStep(runID string, stepName types.StepName) db
 }
 
 func shouldTrackStepTelemetry(eventType ipc.EventType, status string) bool {
-	if eventType != ipc.EventStepCompleted {
+	if eventType != ipc.EventStepStatusChanged {
 		return false
 	}
 	switch types.StepStatus(status) {
-	case types.StepStatusAwaitingApproval, types.StepStatusFixReview, types.StepStatusFailed:
+	case types.StepStatusParkedForApproval, types.StepStatusParkedAfterFix, types.StepStatusFailed:
 		return true
 	default:
 		return false

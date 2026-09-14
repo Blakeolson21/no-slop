@@ -163,7 +163,7 @@ func TestTerminalTitle_RunningStepSpinnerAdvances(t *testing.T) {
 
 func TestTerminalTitle_AwaitingApproval(t *testing.T) {
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("/tmp/sock", nil, run)
 	title := m.terminalTitle()
 	if title != "⏸ Review - feature/foo" {
@@ -217,7 +217,7 @@ func TestTerminalTitle_Cancelled(t *testing.T) {
 func TestTerminalTitle_FixingStep(t *testing.T) {
 	run := testRun()
 	run.Steps[0].Status = types.StepStatusCompleted
-	run.Steps[1].Status = types.StepStatusFixing
+	run.Steps[1].Status = types.StepStatusFixerRunning
 	m := NewModel("/tmp/sock", nil, run)
 	title := m.terminalTitle()
 	if title != "⠋ Test - feature/foo" {

@@ -526,13 +526,13 @@ func TestUpdateStepStatusWithDuration(t *testing.T) {
 	run, _ := d.InsertRun(repo.ID, "feature", "abc", "def")
 	step, _ := d.InsertStepResult(run.ID, types.StepTest)
 
-	if err := d.UpdateStepStatusWithDuration(step.ID, types.StepStatusAwaitingApproval, 1200); err != nil {
+	if err := d.UpdateStepStatusWithDuration(step.ID, types.StepStatusParkedForApproval, 1200); err != nil {
 		t.Fatalf("update step status with duration: %v", err)
 	}
 
 	got, _ := d.GetStepResult(step.ID)
-	if got.Status != types.StepStatusAwaitingApproval {
-		t.Errorf("status = %q, want %q", got.Status, types.StepStatusAwaitingApproval)
+	if got.Status != types.StepStatusParkedForApproval {
+		t.Errorf("status = %q, want %q", got.Status, types.StepStatusParkedForApproval)
 	}
 	if got.DurationMS == nil || *got.DurationMS != 1200 {
 		t.Fatalf("duration_ms = %v, want 1200", got.DurationMS)
@@ -555,7 +555,7 @@ func TestParkStepForApproval_FindingsFailureRollsBackGate(t *testing.T) {
 	}
 	findings := `{"items":[{"id":"review-1"}]}`
 
-	if err := d.ParkStepForApproval(run.ID, step.ID, types.StepStatusAwaitingApproval, 100, &findings); err == nil {
+	if err := d.ParkStepForApproval(run.ID, step.ID, types.StepStatusParkedForApproval, 100, &findings); err == nil {
 		t.Fatal("expected findings persistence failure")
 	}
 	gotStep, err := d.GetStepResult(step.ID)
@@ -698,11 +698,11 @@ func TestUpdateStepStatus(t *testing.T) {
 	run, _ := d.InsertRun(repo.ID, "feature", "abc", "def")
 	step, _ := d.InsertStepResult(run.ID, types.StepReview)
 
-	if err := d.UpdateStepStatus(step.ID, types.StepStatusAwaitingApproval); err != nil {
+	if err := d.UpdateStepStatus(step.ID, types.StepStatusParkedForApproval); err != nil {
 		t.Fatalf("update status: %v", err)
 	}
 	got, _ := d.GetStepResult(step.ID)
-	if got.Status != types.StepStatusAwaitingApproval {
-		t.Errorf("status = %q, want %q", got.Status, types.StepStatusAwaitingApproval)
+	if got.Status != types.StepStatusParkedForApproval {
+		t.Errorf("status = %q, want %q", got.Status, types.StepStatusParkedForApproval)
 	}
 }

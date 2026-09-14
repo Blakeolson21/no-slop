@@ -37,7 +37,7 @@ func TestRunViewFromDBAwaitingStep(t *testing.T) {
 	run := &db.Run{ID: "r1", Branch: "feature/x", HeadSHA: "abcdef1234567890", Status: types.RunRunning}
 	steps := []*db.StepResult{
 		{StepName: types.StepReview, Status: types.StepStatusCompleted},
-		{StepName: types.StepTest, Status: types.StepStatusAwaitingApproval, FindingsJSON: strptr(`{"findings":[],"summary":"x"}`)},
+		{StepName: types.StepTest, Status: types.StepStatusParkedForApproval, FindingsJSON: strptr(`{"findings":[],"summary":"x"}`)},
 	}
 	rv := runViewFromDB(run, steps)
 	gate, ok := rv.awaitingStep()
@@ -90,7 +90,7 @@ func TestWriteRunObjectShape(t *testing.T) {
 		HeadSHA: "abcdef1234567890",
 		Steps: []stepView{
 			{Name: "review", Status: "completed", DurationMS: 1200, FindingsJSON: findingsJSON(t, []types.Finding{{ID: "r1", Action: types.ActionNoOp, Description: "ok"}}, "s")},
-			{Name: "test", Status: "awaiting_approval"},
+			{Name: "test", Status: "parked_for_responder_approval"},
 		},
 	}
 	out := axiDoc(runObjectField(rv))
@@ -104,7 +104,7 @@ func TestWriteRunObjectShape(t *testing.T) {
 		"  findings: 1 info\n",
 		"  steps[2]{step,status,findings,duration_ms}:\n",
 		"    review,completed,1,1200\n",
-		"    test,awaiting_approval,0,0\n",
+		"    test,parked_for_responder_approval,0,0\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("run object missing %q in:\n%s", want, out)
@@ -126,7 +126,7 @@ func TestRunObjectRendersAwaitingAgent(t *testing.T) {
 		HeadSHA:            "abcdef1234567890",
 		AwaitingAgentSince: &parkedSince,
 		Steps: []stepView{
-			{Name: "review", Status: "awaiting_approval"},
+			{Name: "review", Status: "parked_for_responder_approval"},
 		},
 	}
 	out := axiDoc(runObjectField(rv))
@@ -168,7 +168,7 @@ func TestRunObjectRendersActiveStepDiagnostics(t *testing.T) {
 		Steps: []stepView{
 			{
 				Name:             "review",
-				Status:           string(types.StepStatusFixing),
+				Status:           string(types.StepStatusFixerRunning),
 				StartedAt:        &started,
 				LastActivityAt:   &last,
 				LastActivity:     "codex started pid=4242",
@@ -184,7 +184,7 @@ func TestRunObjectRendersActiveStepDiagnostics(t *testing.T) {
 
 	for _, want := range []string{
 		"active_steps[1]{step,status,active_for,last_activity,agent_pid,round}:\n",
-		"review,fixing,20m0s",
+		"review,fixer_running,20m0s",
 		"quiet 11m0s ago: codex started pid=4242",
 		`,"4242",auto-fix 1/3`,
 	} {
@@ -211,7 +211,7 @@ func TestStatusRendersCurrentAutoFixAttemptWithPersistedLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert step: %v", err)
 	}
-	if err := database.UpdateStepStatus(step.ID, types.StepStatusFixing); err != nil {
+	if err := database.UpdateStepStatus(step.ID, types.StepStatusFixerRunning); err != nil {
 		t.Fatalf("mark step fixing: %v", err)
 	}
 	if err := database.SetStepAutoFixLimit(step.ID, 2); err != nil {
@@ -241,7 +241,7 @@ func TestStatusRendersCurrentAutoFixAttemptWithPersistedLimit(t *testing.T) {
 		},
 	}, &rv)
 	out := axiDoc(runObjectField(rv))
-	if !strings.Contains(out, `review,fixing`) || !strings.Contains(out, `auto-fix 1/2`) {
+	if !strings.Contains(out, `review,fixer_running`) || !strings.Contains(out, `auto-fix 1/2`) {
 		t.Fatalf("status should render the in-flight first auto-fix attempt with persisted limit, got:\n%s", out)
 	}
 	if strings.Contains(out, `auto-fix 1/9`) {
@@ -277,7 +277,7 @@ func TestFormatParkedFor(t *testing.T) {
 func TestWriteGateShape(t *testing.T) {
 	gate := stepView{
 		Name:   "review",
-		Status: "awaiting_approval",
+		Status: "parked_for_responder_approval",
 		FindingsJSON: findingsJSON(t, []types.Finding{
 			{ID: "review-1", Severity: "warning", File: "main.go", Line: 4, Action: types.ActionAskUser, Description: "calls os.Exit, leaks fd"},
 		}, "1 blocking issue"),
@@ -287,7 +287,7 @@ func TestWriteGateShape(t *testing.T) {
 	for _, want := range []string{
 		"gate:\n",
 		"  step: review\n",
-		"  status: awaiting_approval\n",
+		"  status: parked_for_responder_approval\n",
 		"  summary: 1 blocking issue\n",
 		"  findings[1]{id,severity,file,action,description}:\n",
 		`    review-1,warning,main.go,ask-user,"calls os.Exit, leaks fd"`,
@@ -309,7 +309,7 @@ func TestGateSummaryUsesBoundedDisclosure(t *testing.T) {
 	summary := strings.Repeat("s", maxGateSummary+25)
 	gate := stepView{
 		Name:         "test",
-		Status:       "awaiting_approval",
+		Status:       "parked_for_responder_approval",
 		FindingsJSON: findingsJSON(t, nil, summary),
 	}
 	out := axiDoc(gateFields(gate)...)
@@ -351,7 +351,7 @@ func TestGateNote_ReviewOnly(t *testing.T) {
 	mk := func(step string) string {
 		gate := stepView{
 			Name:   step,
-			Status: "awaiting_approval",
+			Status: "parked_for_responder_approval",
 			FindingsJSON: findingsJSON(t, []types.Finding{
 				{ID: step + "-1", Severity: "warning", File: "main.go", Action: types.ActionAutoFix, Description: "x"},
 			}, "summary"),
@@ -579,7 +579,7 @@ func TestAxiHomeStartsCurrentBranchWhenOtherBranchIsActive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert other step: %v", err)
 	}
-	if err := database.UpdateStepStatus(step.ID, types.StepStatusAwaitingApproval); err != nil {
+	if err := database.UpdateStepStatus(step.ID, types.StepStatusParkedForApproval); err != nil {
 		t.Fatalf("mark other step awaiting: %v", err)
 	}
 	if err := database.SetStepFindings(step.ID, findingsJSON(t, nil, "other branch gate")); err != nil {
@@ -651,7 +651,7 @@ func TestAxiStatusEscapesControlBytesInAwaitingTestGate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert step: %v", err)
 	}
-	if err := database.UpdateStepStatus(step.ID, types.StepStatusAwaitingApproval); err != nil {
+	if err := database.UpdateStepStatus(step.ID, types.StepStatusParkedForApproval); err != nil {
 		t.Fatalf("mark step awaiting: %v", err)
 	}
 	findings := findingsJSON(t, []types.Finding{{
@@ -672,7 +672,7 @@ func TestAxiStatusEscapesControlBytesInAwaitingTestGate(t *testing.T) {
 		t.Fatalf("axi status: %v\n%s", err, out.String())
 	}
 	got := out.String()
-	for _, want := range []string{"gate:\n", "step: test", "status: awaiting_approval", `bad\\x1Fvalue`, `test-1\\x1Fcontrol`, `test\\x00.log`} {
+	for _, want := range []string{"gate:\n", "step: test", "status: parked_for_responder_approval", `bad\\x1Fvalue`, `test-1\\x1Fcontrol`, `test\\x00.log`} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("axi status missing %q in:\n%s", want, got)
 		}

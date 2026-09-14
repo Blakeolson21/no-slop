@@ -25,7 +25,7 @@ func TestRunSnapshot_SamplesRevisionBeforeReadingSoConcurrentChangesStillApply(t
 	var revDuringRead int64
 	info, err := runSnapshot(m, "run-1", func(runID string) (*ipc.RunInfo, error) {
 		// A transition lands between the sample and the read.
-		m.broadcast(stepEvent(runID, ipc.EventStepCompleted, types.StepCI, "completed"))
+		m.broadcast(stepEvent(runID, ipc.EventStepStatusChanged, types.StepCI, "completed"))
 		revDuringRead = m.StateRev(runID)
 		return &ipc.RunInfo{ID: runID}, nil
 	})

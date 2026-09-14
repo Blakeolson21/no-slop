@@ -538,7 +538,7 @@ func skipWorktreeCleanup(d *db.DB, runID string) (bool, string) {
 	if err != nil {
 		return true, fmt.Sprintf("failed to look up run %s: %v", runID, err)
 	}
-	if run != nil && (run.Status == types.RunPending || run.Status == types.RunRunning) {
+	if run != nil && (run.Status == types.RunStarting || run.Status == types.RunRunning) {
 		return true, fmt.Sprintf("run %s is %s", runID, run.Status)
 	}
 	return false, ""

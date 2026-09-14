@@ -49,7 +49,7 @@ func TestSweepOrphanRunProcessesReapsFinishedRunAndSparesActiveOne(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if activeRun.Status != types.RunPending {
+	if activeRun.Status != types.RunStarting {
 		t.Fatalf("expected new run to default to pending, got %s", activeRun.Status)
 	}
 	finishedRun, err := d.InsertRun(repo.ID, "old-branch", "headsha2", "basesha2")

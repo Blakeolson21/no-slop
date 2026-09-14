@@ -18,7 +18,7 @@ func TestModel_View_WideLayoutPlacesPipelineBesideFindings(t *testing.T) {
 		ID: "run-001", RepoID: "repo-001", Branch: "main", HeadSHA: "abc12345",
 		BaseSHA: "000000", Status: types.RunRunning,
 		Steps: []ipc.StepResultInfo{
-			{ID: "s1", StepName: types.StepReview, StepOrder: 1, Status: types.StepStatusAwaitingApproval, FindingsJSON: &findings},
+			{ID: "s1", StepName: types.StepReview, StepOrder: 1, Status: types.StepStatusParkedForApproval, FindingsJSON: &findings},
 			{ID: "s2", StepName: types.StepTest, StepOrder: 2, Status: types.StepStatusPending},
 		},
 	}
@@ -60,7 +60,7 @@ func TestModel_View_NarrowLayoutKeepsPipelineStackedAboveFindings(t *testing.T) 
 		ID: "run-001", RepoID: "repo-001", Branch: "main", HeadSHA: "abc12345",
 		BaseSHA: "000000", Status: types.RunRunning,
 		Steps: []ipc.StepResultInfo{
-			{ID: "s1", StepName: types.StepReview, StepOrder: 1, Status: types.StepStatusAwaitingApproval, FindingsJSON: &findings},
+			{ID: "s1", StepName: types.StepReview, StepOrder: 1, Status: types.StepStatusParkedForApproval, FindingsJSON: &findings},
 			{ID: "s2", StepName: types.StepTest, StepOrder: 2, Status: types.StepStatusPending},
 		},
 	}
@@ -81,7 +81,7 @@ func TestModel_View_Width100UsesResponsiveLayout(t *testing.T) {
 		ID: "run-001", RepoID: "repo-001", Branch: "main", HeadSHA: "abc12345",
 		BaseSHA: "000000", Status: types.RunRunning,
 		Steps: []ipc.StepResultInfo{
-			{ID: "s1", StepName: types.StepReview, StepOrder: 1, Status: types.StepStatusAwaitingApproval, FindingsJSON: &findings},
+			{ID: "s1", StepName: types.StepReview, StepOrder: 1, Status: types.StepStatusParkedForApproval, FindingsJSON: &findings},
 			{ID: "s2", StepName: types.StepTest, StepOrder: 2, Status: types.StepStatusPending},
 		},
 	}
@@ -195,7 +195,7 @@ func TestModel_View_OneBlankLineBetweenActionBarAndFindings(t *testing.T) {
 		ID: "run-001", RepoID: "repo-001", Branch: "main", HeadSHA: "abc12345",
 		BaseSHA: "000000", Status: types.RunRunning,
 		Steps: []ipc.StepResultInfo{
-			{ID: "s1", StepName: types.StepReview, StepOrder: 1, Status: types.StepStatusAwaitingApproval, FindingsJSON: &findings},
+			{ID: "s1", StepName: types.StepReview, StepOrder: 1, Status: types.StepStatusParkedForApproval, FindingsJSON: &findings},
 			{ID: "s2", StepName: types.StepTest, StepOrder: 2, Status: types.StepStatusPending},
 		},
 	}
@@ -329,7 +329,7 @@ func TestModel_View_ResponsiveLayoutReservesGapBeforeLogBox(t *testing.T) {
 		ID: "run-001", RepoID: "repo-001", Branch: "main", HeadSHA: "abc12345",
 		BaseSHA: "000000", Status: types.RunRunning,
 		Steps: []ipc.StepResultInfo{
-			{ID: "s1", StepName: types.StepReview, StepOrder: 1, Status: types.StepStatusAwaitingApproval},
+			{ID: "s1", StepName: types.StepReview, StepOrder: 1, Status: types.StepStatusParkedForApproval},
 		},
 	}
 	m := NewModel("/tmp/sock", nil, run)

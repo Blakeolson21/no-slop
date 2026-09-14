@@ -54,7 +54,7 @@ func TestEvalJourney(t *testing.T) {
 
 	h.CommitChange("eval-journey", "eval.go", "package e2e\n\nfunc EvalJourney() {}\n", "add eval journey change")
 	h.PushToGate("eval-journey")
-	gated := waitForStepStatus(t, h, "eval-journey", types.StepReview, types.StepStatusAwaitingApproval, 45*time.Second)
+	gated := waitForStepStatus(t, h, "eval-journey", types.StepReview, types.StepStatusParkedForApproval, 45*time.Second)
 	h.Respond(gated.ID, types.StepReview, types.ActionApprove)
 	run := h.WaitForRun("eval-journey", 45*time.Second)
 
@@ -145,7 +145,7 @@ func TestEvalAutoCaptureJourney(t *testing.T) {
 
 	h.CommitChange("auto-capture", "autocapture.go", "package e2e\n\nfunc AutoCapture() {}\n", "add auto-capture change")
 	h.PushToGate("auto-capture")
-	gated := waitForStepStatus(t, h, "auto-capture", types.StepReview, types.StepStatusAwaitingApproval, 45*time.Second)
+	gated := waitForStepStatus(t, h, "auto-capture", types.StepReview, types.StepStatusParkedForApproval, 45*time.Second)
 	h.Respond(gated.ID, types.StepReview, types.ActionApprove)
 	h.WaitForRun("auto-capture", 45*time.Second)
 

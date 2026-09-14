@@ -83,7 +83,7 @@ commit:
 `, "configure pipeline fix commits")
 	h.PushToGate(branch)
 
-	gated := waitForStepStatus(t, h, branch, types.StepReview, types.StepStatusFixReview, 60*time.Second)
+	gated := waitForStepStatus(t, h, branch, types.StepReview, types.StepStatusParkedAfterFix, 60*time.Second)
 	h.Respond(gated.ID, types.StepReview, types.ActionApprove)
 	run := h.WaitForRun(branch, 60*time.Second)
 	if run.Status != types.RunCompleted {

@@ -46,13 +46,13 @@ func TestExecutor_FixEmitsFixReviewStatusWithoutStreamingTheDiff(t *testing.T) {
 		done <- exec.Execute(context.Background(), run, repo, workDir)
 	}()
 
-	// First: step reaches awaiting_approval (not fix_review)
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	// First: step reaches parked_for_responder_approval (not parked_for_responder_after_fix)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 
-	// Verify initial event has awaiting_approval status
-	initialEvent := waitForStepEvent(t, events, ipc.EventStepCompleted, types.StepReview)
-	if initialEvent.Status == nil || *initialEvent.Status != string(types.StepStatusAwaitingApproval) {
-		t.Errorf("expected awaiting_approval status, got %v", initialEvent.Status)
+	// Verify initial event has parked_for_responder_approval status
+	initialEvent := waitForStepEvent(t, events, ipc.EventStepStatusChanged, types.StepReview)
+	if initialEvent.Status == nil || *initialEvent.Status != string(types.StepStatusParkedForApproval) {
+		t.Errorf("expected parked_for_responder_approval status, got %v", initialEvent.Status)
 	}
 
 	// Send fix action
@@ -62,14 +62,14 @@ func TestExecutor_FixEmitsFixReviewStatusWithoutStreamingTheDiff(t *testing.T) {
 	// derived state served on demand (ipc.MethodGetStepDiff); it is
 	// deliberately not attached here, because it is unbounded and a single
 	// oversized frame would break the whole subscription.
-	fixEvent := waitForEvent(t, events, ipc.EventStepCompleted, string(types.StepStatusFixReview))
+	fixEvent := waitForEvent(t, events, ipc.EventStepStatusChanged, string(types.StepStatusParkedAfterFix))
 	if fixEvent.StepName == nil || *fixEvent.StepName != types.StepReview {
-		t.Errorf("fix_review event step = %v, want review", fixEvent.StepName)
+		t.Errorf("parked_for_responder_after_fix event step = %v, want review", fixEvent.StepName)
 	}
 	if encoded, err := json.Marshal(fixEvent); err != nil {
 		t.Fatal(err)
 	} else if len(encoded) > 4096 {
-		t.Errorf("fix_review frame is %d bytes; the gate event must stay small enough that no worktree change can overflow it", len(encoded))
+		t.Errorf("parked_for_responder_after_fix frame is %d bytes; the gate event must stay small enough that no worktree change can overflow it", len(encoded))
 	}
 
 	// Approve to end
@@ -106,7 +106,7 @@ func TestExecutor_UnselectedReviewFindingSurvivesSilentRereview(t *testing.T) {
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
 	done, _ := startExecutor(t, exec, run, repo, workDir)
 
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 	unsafeID := findingIDByDescription(t, database, run.ID, types.StepReview, "unsafe loader")
 	if err := exec.Respond(types.StepReview, types.ActionFix, []string{unsafeID}); err != nil {
 		t.Fatal(err)
@@ -120,7 +120,7 @@ func TestExecutor_UnselectedReviewFindingSurvivesSilentRereview(t *testing.T) {
 		default:
 		}
 		steps, err := database.GetStepsByRun(run.ID)
-		if err == nil && len(steps) == 1 && steps[0].Status == types.StepStatusFixReview {
+		if err == nil && len(steps) == 1 && steps[0].Status == types.StepStatusParkedAfterFix {
 			if steps[0].FindingsJSON == nil {
 				t.Fatal("fix-review gate has no findings")
 			}
@@ -177,7 +177,7 @@ func TestExecutor_ReviewUserFixPersistsRecoveryTruthBeforeFixer(t *testing.T) {
 	}}
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
 	done, _ := startExecutor(t, exec, run, repo, workDir)
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 	id := findingIDByDescription(t, database, run.ID, types.StepReview, "unsafe loader")
 	if err := exec.Respond(types.StepReview, types.ActionFix, []string{id}); err != nil {
 		t.Fatal(err)
@@ -209,12 +209,12 @@ func TestExecutor_LaterSelectedCarriedFindingClearsAfterVerification(t *testing.
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
 	done, _ := startExecutor(t, exec, run, repo, workDir)
 
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 	firstID := findingIDByDescription(t, database, run.ID, types.StepReview, "unsafe loader")
 	if err := exec.Respond(types.StepReview, types.ActionFix, []string{firstID}); err != nil {
 		t.Fatal(err)
 	}
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusFixReview)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedAfterFix)
 	secondID := findingIDByDescription(t, database, run.ID, types.StepReview, "hardcoded timeout")
 	if err := exec.Respond(types.StepReview, types.ActionFix, []string{secondID}); err != nil {
 		t.Fatal(err)
@@ -263,7 +263,7 @@ func TestExecutor_CarriedFindingKeepsIdentityAndStricterAction(t *testing.T) {
 
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
 	done, _ := startExecutor(t, exec, run, repo, workDir)
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 	unsafeID = findingIDByDescription(t, database, run.ID, types.StepReview, "unsafe loader")
 	parkedSteps, err := database.GetStepsByRun(run.ID)
 	if err != nil || parkedSteps[0].FindingsJSON == nil {
@@ -285,7 +285,7 @@ func TestExecutor_CarriedFindingKeepsIdentityAndStricterAction(t *testing.T) {
 	if err := exec.Respond(types.StepReview, types.ActionFix, []string{selectedID}); err != nil {
 		t.Fatal(err)
 	}
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusFixReview)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedAfterFix)
 
 	steps, err := database.GetStepsByRun(run.ID)
 	if err != nil || steps[0].FindingsJSON == nil {
@@ -334,7 +334,7 @@ func TestExecutor_NonActionableCarryDoesNotGateFreshNonblockingFinding(t *testin
 
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
 	done, _ := startExecutor(t, exec, run, repo, t.TempDir())
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 	selectedID := findingIDByDescription(t, database, run.ID, types.StepReview, "selected defect")
 	if err := exec.Respond(types.StepReview, types.ActionFix, []string{selectedID}); err != nil {
 		t.Fatal(err)
@@ -362,7 +362,7 @@ func TestExecutor_DoesNotDispatchCarriedFixWhenSelectionPersistenceFails(t *test
 
 	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
 	done, _ := startExecutor(t, exec, run, repo, t.TempDir())
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 	selectedID := findingIDByDescription(t, database, run.ID, types.StepReview, "must persist")
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
@@ -411,21 +411,21 @@ func TestExecutor_FixEmitsFixingStatusImmediately(t *testing.T) {
 		done <- exec.Execute(context.Background(), run, repo, workDir)
 	}()
 
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 	if err := exec.Respond(types.StepReview, types.ActionFix, nil); err != nil {
 		t.Fatal(err)
 	}
 
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusFixing)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusFixerRunning)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if event := events.findLast(ipc.EventStepCompleted, string(types.StepStatusFixing)); event != nil {
+		if event := events.findLast(ipc.EventStepStatusChanged, string(types.StepStatusFixerRunning)); event != nil {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if event := events.findLast(ipc.EventStepCompleted, string(types.StepStatusFixing)); event == nil {
+	if event := events.findLast(ipc.EventStepStatusChanged, string(types.StepStatusFixerRunning)); event == nil {
 		close(releaseFix)
 		<-done
 		t.Fatal("expected step_completed event with fixing status after fix was accepted")
@@ -469,11 +469,11 @@ func TestExecutor_FixingEventIncludesFindingStats(t *testing.T) {
 		done <- exec.Execute(context.Background(), run, repo, workDir)
 	}()
 
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 	if err := exec.Respond(types.StepReview, types.ActionFix, []string{"r1"}); err != nil {
 		t.Fatal(err)
 	}
-	fixingEvent := waitForEvent(t, events, ipc.EventStepCompleted, string(types.StepStatusFixing))
+	fixingEvent := waitForEvent(t, events, ipc.EventStepStatusChanged, string(types.StepStatusFixerRunning))
 	if fixingEvent.FixedFindings == nil || *fixingEvent.FixedFindings != 0 {
 		close(releaseFix)
 		<-done
@@ -521,12 +521,12 @@ func TestExecutor_FixReviewNoChanges(t *testing.T) {
 		done <- exec.Execute(context.Background(), run, repo, workDir)
 	}()
 
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 	exec.Respond(types.StepReview, types.ActionFix, nil)
 
-	fixEvent := waitForEvent(t, events, ipc.EventStepCompleted, string(types.StepStatusFixReview))
-	if fixEvent.Status == nil || *fixEvent.Status != string(types.StepStatusFixReview) {
-		t.Errorf("expected fix_review status, got %v", fixEvent.Status)
+	fixEvent := waitForEvent(t, events, ipc.EventStepStatusChanged, string(types.StepStatusParkedAfterFix))
+	if fixEvent.Status == nil || *fixEvent.Status != string(types.StepStatusParkedAfterFix) {
+		t.Errorf("expected parked_for_responder_after_fix status, got %v", fixEvent.Status)
 	}
 
 	exec.Respond(types.StepReview, types.ActionApprove, nil)
@@ -569,7 +569,7 @@ func TestExecutor_FixSetsPreviousFindings(t *testing.T) {
 		done <- exec.Execute(context.Background(), run, repo, workDir)
 	}()
 
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 	exec.Respond(types.StepReview, types.ActionFix, nil)
 
 	select {
@@ -615,9 +615,9 @@ func TestExecutor_AssignsFindingIDsBeforePersistingAndEmitting(t *testing.T) {
 		done <- exec.Execute(context.Background(), run, repo, workDir)
 	}()
 
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 
-	paused := waitForStepEvent(t, events, ipc.EventStepCompleted, types.StepReview)
+	paused := waitForStepEvent(t, events, ipc.EventStepStatusChanged, types.StepReview)
 	if paused.Findings == nil {
 		t.Fatal("expected paused step event with findings")
 	}
@@ -688,7 +688,7 @@ func TestExecutor_FixAppliesUserInstructionsAndAddedFindings(t *testing.T) {
 		done <- exec.Execute(context.Background(), run, repo, workDir)
 	}()
 
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 	selectedID := findingIDByDescription(t, database, run.ID, types.StepReview, "first")
 	instructions := map[string]string{selectedID: "only touch parser.go, skip helpers"}
 	added := []types.Finding{{Severity: "warning", Description: "also audit logger init", Action: types.ActionAutoFix}}
@@ -806,7 +806,7 @@ func TestExecutor_FixUsesSelectedFindingIDsOnly(t *testing.T) {
 		done <- exec.Execute(context.Background(), run, repo, workDir)
 	}()
 
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 	selectedID := findingIDByDescription(t, database, run.ID, types.StepReview, "second")
 	if err := exec.Respond(types.StepReview, types.ActionFix, []string{selectedID}); err != nil {
 		t.Fatal(err)
@@ -856,7 +856,7 @@ func TestExecutor_FixClearsStoredFindingsAfterSuccessfulReRun(t *testing.T) {
 		done <- exec.Execute(context.Background(), run, repo, workDir)
 	}()
 
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 	if err := exec.Respond(types.StepReview, types.ActionFix, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -905,7 +905,7 @@ func TestExecutor_FixPersistsFollowUpRoundAsAutoFix(t *testing.T) {
 		done <- exec.Execute(context.Background(), run, repo, workDir)
 	}()
 
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 	if err := exec.Respond(types.StepReview, types.ActionFix, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -970,7 +970,7 @@ func TestExecutor_FixSelectedFindingsRewritesSummary(t *testing.T) {
 		done <- exec.Execute(context.Background(), run, repo, workDir)
 	}()
 
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 	selectedID := findingIDByDescription(t, database, run.ID, types.StepReview, "second")
 	if err := exec.Respond(types.StepReview, types.ActionFix, []string{selectedID}); err != nil {
 		t.Fatal(err)
@@ -1026,7 +1026,7 @@ func TestExecutor_UserFixRecordsSelectedFindingIDsAndFixSummary(t *testing.T) {
 		done <- exec.Execute(context.Background(), run, repo, workDir)
 	}()
 
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 	selectedID := findingIDByDescription(t, database, run.ID, types.StepReview, "second")
 	if err := exec.Respond(types.StepReview, types.ActionFix, []string{selectedID}); err != nil {
 		t.Fatal(err)
@@ -1206,7 +1206,7 @@ func waitForOutstandingReviewGate(t *testing.T, database *db.DB, done <-chan err
 		}
 		steps, err := database.GetStepsByRun(runID)
 		if err == nil && len(steps) == 1 &&
-			(steps[0].Status == types.StepStatusFixReview || steps[0].Status == types.StepStatusAwaitingApproval) &&
+			(steps[0].Status == types.StepStatusParkedAfterFix || steps[0].Status == types.StepStatusParkedForApproval) &&
 			steps[0].FindingsJSON != nil {
 			parsed, parseErr := types.ParseFindingsJSON(*steps[0].FindingsJSON)
 			if parseErr != nil {

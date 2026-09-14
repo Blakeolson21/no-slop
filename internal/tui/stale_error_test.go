@@ -16,7 +16,7 @@ func TestStaleShowDiff_ResetWhenNewFindingsArrive(t *testing.T) {
 	// Bug: if user was viewing diff for step A, then step B arrives with
 	// findings but no diff data, showDiff stays true from step A.
 	// This causes View() to show neither diff nor findings - a blank state.
-	// Fix: reset showDiff when new findings arrive via EventStepCompleted.
+	// Fix: reset showDiff when new findings arrive via EventStepStatusChanged.
 	configureTUIColors()
 	run := testRun()
 	m := NewModel("/tmp/sock", nil, run)
@@ -24,19 +24,19 @@ func TestStaleShowDiff_ResetWhenNewFindingsArrive(t *testing.T) {
 	m.height = 50
 
 	// Simulate: Review step has findings + diff, user toggled showDiff on.
-	m.steps[0].Status = types.StepStatusAwaitingApproval
+	m.steps[0].Status = types.StepStatusParkedForApproval
 	m.stepFindings[types.StepReview] = `{"items":[{"id":"f1","severity":"error","file":"a.go","line":1,"description":"bad"}]}`
 	m.stepDiffs[types.StepReview] = "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n-old\n+new\n"
 	m.showDiff = true
 
 	// Now: user approves Review, Test step completes with findings but NO diff.
 	m.steps[0].Status = types.StepStatusCompleted
-	m.steps[1].Status = types.StepStatusAwaitingApproval
+	m.steps[1].Status = types.StepStatusParkedForApproval
 	findingsJSON := `{"items":[{"id":"f2","severity":"warning","file":"b.go","line":5,"description":"unused var"}]}`
-	status := string(types.StepStatusAwaitingApproval)
+	status := string(types.StepStatusParkedForApproval)
 	stepName := types.StepTest
 	m.applyEvent(ipc.Event{
-		Type:     ipc.EventStepCompleted,
+		Type:     ipc.EventStepStatusChanged,
 		StepName: &stepName,
 		Status:   &status,
 		Findings: &findingsJSON,
@@ -65,17 +65,17 @@ func TestStaleShowDiff_FindingsVisibleAfterStepTransition(t *testing.T) {
 
 	// Setup: user was viewing diff for Review.
 	m.steps[0].Status = types.StepStatusCompleted
-	m.steps[1].Status = types.StepStatusAwaitingApproval
+	m.steps[1].Status = types.StepStatusParkedForApproval
 	m.stepFindings[types.StepTest] = `{"summary":"Test issues","items":[{"id":"t1","severity":"error","file":"test.go","line":10,"description":"missing assertion"}]}`
 	m.resetFindingSelection(types.StepTest)
 	m.showDiff = true // stale from previous step
 
 	// Apply the event that should reset showDiff.
 	findingsJSON := m.stepFindings[types.StepTest]
-	status := string(types.StepStatusAwaitingApproval)
+	status := string(types.StepStatusParkedForApproval)
 	stepName := types.StepTest
 	m.applyEvent(ipc.Event{
-		Type:     ipc.EventStepCompleted,
+		Type:     ipc.EventStepStatusChanged,
 		StepName: &stepName,
 		Status:   &status,
 		Findings: &findingsJSON,
@@ -97,10 +97,10 @@ func TestStaleShowDiff_DiffResetAlsoResetsOffset(t *testing.T) {
 	m.diffOffset = 42 // stale offset from previous diff
 
 	findingsJSON := `{"items":[{"id":"f1","severity":"info","file":"c.go","line":1,"description":"note"}]}`
-	status := string(types.StepStatusAwaitingApproval)
+	status := string(types.StepStatusParkedForApproval)
 	stepName := types.StepTest
 	m.applyEvent(ipc.Event{
-		Type:     ipc.EventStepCompleted,
+		Type:     ipc.EventStepStatusChanged,
 		StepName: &stepName,
 		Status:   &status,
 		Findings: &findingsJSON,
@@ -120,9 +120,9 @@ func TestApplyEvent_NewApprovalPayloadClearsPreviousOverrides(t *testing.T) {
 	m.findingSelections[types.StepReview] = map[string]bool{"review-1": true, "user-1": true}
 
 	findingsJSON := `{"findings":[{"id":"review-2","severity":"warning","description":"new","action":"auto-fix"}],"summary":"1"}`
-	status := string(types.StepStatusAwaitingApproval)
+	status := string(types.StepStatusParkedForApproval)
 	stepName := types.StepReview
-	m.applyEvent(ipc.Event{Type: ipc.EventStepCompleted, StepName: &stepName, Status: &status, Findings: &findingsJSON})
+	m.applyEvent(ipc.Event{Type: ipc.EventStepStatusChanged, StepName: &stepName, Status: &status, Findings: &findingsJSON})
 
 	if _, ok := m.findingInstructions[types.StepReview]; ok {
 		t.Fatal("expected stale finding instructions to be cleared")
@@ -140,7 +140,7 @@ func TestActionBar_ShowsDiffWhenDiffDataExists(t *testing.T) {
 	// The action bar SHOULD show 'd diff' when diff data exists for the current step.
 	configureTUIColors()
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.width = 80
 	m.height = 50
@@ -157,7 +157,7 @@ func TestActionBar_ShowsDiffWhenDiffDataExists(t *testing.T) {
 func TestModel_HelpAutoDismiss_NavigationKey(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.Ascii)
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.width = 80
 	m.height = 40
@@ -180,7 +180,7 @@ func TestModel_HelpAutoDismiss_NavigationKey(t *testing.T) {
 func TestModel_HelpAutoDismiss_ActionKey(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.Ascii)
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.width = 80
 	m.height = 40
@@ -200,7 +200,7 @@ func TestModel_HelpAutoDismiss_ActionKey(t *testing.T) {
 func TestModel_HelpAutoDismiss_SelectionKey(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.Ascii)
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.width = 80
 	m.height = 40
@@ -286,10 +286,10 @@ func TestModel_ApplyEvent_ClearsTransientErrorOnNextStateEvent(t *testing.T) {
 	m := NewModel("/tmp/sock", nil, run)
 	m.err = &ipc.RPCError{Code: -1, Message: "no step awaiting approval"}
 
-	status := string(types.StepStatusFixReview)
+	status := string(types.StepStatusParkedAfterFix)
 	stepName := types.StepReview
 	m.applyEvent(ipc.Event{
-		Type:     ipc.EventStepCompleted,
+		Type:     ipc.EventStepStatusChanged,
 		StepName: &stepName,
 		Status:   &status,
 	})

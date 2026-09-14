@@ -157,8 +157,8 @@ func TestExecutor_AutoFixRespectsMaxAttempts(t *testing.T) {
 
 	// After 2 auto-fix attempts fail, should fall back to manual approval
 	// 1 initial + 2 auto-fix = 3 calls, then waits for approval
-	// Status is fix_review since auto-fix cycles ran (sctx.Fixing was true)
-	waitForStepStatus(t, database, run.ID, types.StepLint, types.StepStatusFixReview)
+	// Status is parked_for_responder_after_fix since auto-fix cycles ran (sctx.Fixing was true)
+	waitForStepStatus(t, database, run.ID, types.StepLint, types.StepStatusParkedAfterFix)
 
 	if callCount != 3 {
 		t.Errorf("expected 3 calls (1 initial + 2 auto-fix), got %d", callCount)
@@ -192,7 +192,7 @@ func TestExecutor_AutoFixDisabledWithZero(t *testing.T) {
 	done, _ := startExecutor(t, exec, run, repo, workDir)
 
 	// Should immediately wait for approval (no auto-fix)
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 
 	if callCount != 1 {
 		t.Errorf("expected 1 call (no auto-fix), got %d", callCount)
@@ -223,7 +223,7 @@ func TestExecutor_AutoFixNilConfigUsesDefaults(t *testing.T) {
 	done, _ := startExecutor(t, exec, run, repo, workDir)
 
 	// With nil config, should wait for approval
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 
 	if callCount != 1 {
 		t.Errorf("expected 1 call (nil config, no auto-fix), got %d", callCount)
@@ -264,7 +264,7 @@ func TestExecutor_AutoFixEmitsEvents(t *testing.T) {
 	}
 
 	// Should have a fixing status event from auto-fix
-	fixingEvent := events.findLast(ipc.EventStepCompleted, string(types.StepStatusFixing))
+	fixingEvent := events.findLast(ipc.EventStepStatusChanged, string(types.StepStatusFixerRunning))
 	if fixingEvent == nil {
 		t.Error("expected step_completed event with fixing status during auto-fix")
 	}
@@ -291,7 +291,7 @@ func TestExecutor_DoesNotAutoFixManualApprovalOutcome(t *testing.T) {
 	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
 	done, _ := startExecutor(t, exec, run, repo, workDir)
 
-	waitForStepStatus(t, database, run.ID, types.StepTest, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepTest, types.StepStatusParkedForApproval)
 
 	if callCount != 1 {
 		t.Fatalf("expected 1 call for manual approval outcome, got %d", callCount)
@@ -366,7 +366,7 @@ func TestExecutor_AutoFixSkipsHumanReviewFindings(t *testing.T) {
 	done, _ := startExecutor(t, exec, run, repo, workDir)
 
 	// Should go straight to user approval without auto-fix
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 
 	if callCount != 1 {
 		t.Fatalf("expected 1 call (no auto-fix for ask-user findings), got %d", callCount)
@@ -394,7 +394,7 @@ func TestExecutor_HumanReviewFindingsRequireApprovalWithoutNeedsApprovalFlag(t *
 	exec := NewExecutor(database, p, &config.Config{AutoFix: config.AutoFix{Review: 3}}, nil, []Step{step}, nil)
 	done, _ := startExecutor(t, exec, run, repo, workDir)
 
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 
 	exec.Respond(types.StepReview, types.ActionApprove, nil)
 	waitExecutorDone(t, done)
@@ -448,7 +448,7 @@ func TestExecutor_AutoFixMixedFindings(t *testing.T) {
 
 	// After auto-fixing the bug, only ask-user finding remains.
 	// No more fixable findings, so falls through to user approval.
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusFixReview)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedAfterFix)
 
 	if callCount != 2 {
 		t.Errorf("expected 2 calls (initial + 1 auto-fix), got %d", callCount)
@@ -475,7 +475,7 @@ func TestExecutor_ParkedStepReleasesLogFileAfterCancel(t *testing.T) {
 	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
 	done, cancel := startExecutor(t, exec, run, repo, workDir)
 
-	waitForStepStatus(t, database, run.ID, types.StepLint, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepLint, types.StepStatusParkedForApproval)
 	logPath := filepath.Join(p.RunLogDir(run.ID), "lint.log")
 	if _, err := os.Stat(logPath); err != nil {
 		t.Fatalf("expected lint.log while parked: %v", err)

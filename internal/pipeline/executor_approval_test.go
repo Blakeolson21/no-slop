@@ -39,8 +39,8 @@ func TestExecutor_ApprovalFix(t *testing.T) {
 		done <- exec.Execute(context.Background(), run, repo, workDir)
 	}()
 
-	// Wait for awaiting_approval
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	// Wait for parked_for_responder_approval
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 
 	// Send fix action
 	exec.Respond(types.StepReview, types.ActionFix, nil)
@@ -92,7 +92,7 @@ func TestExecutor_AwaitingAgentMarkerSetOnGateClearedOnRespond(t *testing.T) {
 	}()
 
 	// Entering the gate flips the pollable parked marker on.
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 	parked, err := database.GetRun(run.ID)
 	if err != nil {
 		t.Fatalf("get run while parked: %v", err)
@@ -143,7 +143,7 @@ func TestExecutor_ResumeRestoresParkedGateAndReviewSessions(t *testing.T) {
 	if _, err := database.InsertReviewStepRound(stepResult.ID, 1, "initial", &findings, nil, run.HeadSHA, 25); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.UpdateStepStatusWithDuration(stepResult.ID, types.StepStatusAwaitingApproval, 25); err != nil {
+	if err := database.UpdateStepStatusWithDuration(stepResult.ID, types.StepStatusParkedForApproval, 25); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.SetRunAwaitingAgent(run.ID); err != nil {
@@ -246,7 +246,7 @@ func TestExecutor_ResumeCarriesUnselectedReviewFinding(t *testing.T) {
 	if _, err := database.InsertReviewStepRound(stepResult.ID, 1, "initial", &findings, nil, run.HeadSHA, 10); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.UpdateStepStatusWithDuration(stepResult.ID, types.StepStatusAwaitingApproval, 10); err != nil {
+	if err := database.UpdateStepStatusWithDuration(stepResult.ID, types.StepStatusParkedForApproval, 10); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.SetRunAwaitingAgent(run.ID); err != nil {
@@ -279,7 +279,7 @@ func TestExecutor_ResumeCarriesUnselectedReviewFinding(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusFixReview)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedAfterFix)
 	steps, err := database.GetStepsByRun(run.ID)
 	if err != nil || steps[0].FindingsJSON == nil || !strings.Contains(*steps[0].FindingsJSON, "review-2") {
 		t.Fatalf("recovered fix-review did not retain review-2: %v %#v", err, steps[0].FindingsJSON)
@@ -315,7 +315,7 @@ func TestExecutor_ResumePromotesDurableReviewedCandidateOnApproval(t *testing.T)
 	if _, err := database.InsertReviewStepRound(stepResult.ID, 1, "initial", &findings, nil, reviewedHead, 10); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.UpdateStepStatusWithDuration(stepResult.ID, types.StepStatusAwaitingApproval, 10); err != nil {
+	if err := database.UpdateStepStatusWithDuration(stepResult.ID, types.StepStatusParkedForApproval, 10); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.SetRunAwaitingAgent(run.ID); err != nil {
@@ -379,7 +379,7 @@ func TestExecutor_TracksApprovalAndUserFixTelemetry(t *testing.T) {
 		done <- exec.Execute(context.Background(), run, repo, workDir)
 	}()
 
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 
 	if err := exec.Respond(types.StepReview, types.ActionFix, nil); err != nil {
 		t.Fatalf("respond error: %v", err)
@@ -413,7 +413,7 @@ func TestExecutor_TracksApprovalAndUserFixTelemetry(t *testing.T) {
 		t.Fatalf("fix selected_findings_count = %v, want 2", got)
 	}
 
-	stepEvent := recorder.find("step", "status", string(types.StepStatusAwaitingApproval))
+	stepEvent := recorder.find("step", "status", string(types.StepStatusParkedForApproval))
 	if stepEvent == nil {
 		t.Fatal("expected awaiting approval step telemetry event")
 	}

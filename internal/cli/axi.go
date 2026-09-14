@@ -50,6 +50,8 @@ func newAxiCmd() *cobra.Command {
 	cmd.AddCommand(newAxiSyncCmd())
 	cmd.AddCommand(newAxiLogsCmd())
 	cmd.AddCommand(newAxiAbortCmd())
+	cmd.AddCommand(newAxiMigrateStatusNamesCmd())
+	cmd.AddCommand(newAxiLintStoreCmd())
 	return cmd
 }
 

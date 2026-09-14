@@ -39,7 +39,7 @@ func TestExecutor_StepLifecycleEvents(t *testing.T) {
 		if e := events.find(ipc.EventStepStarted, name); e == nil {
 			t.Errorf("missing step_started event for %s", name)
 		}
-		if e := events.find(ipc.EventStepCompleted, name); e == nil {
+		if e := events.find(ipc.EventStepStatusChanged, name); e == nil {
 			t.Errorf("missing step_completed event for %s", name)
 		}
 	}
@@ -210,7 +210,7 @@ func TestExecutor_DocumentHeadMutationRerunsRequiredGatesWithCarriedReviewState(
 	done := make(chan error, 1)
 	go func() { done <- exec.Execute(ctx, run, repo, workDir) }()
 
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 	results, err := database.GetStepsByRun(run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -246,7 +246,7 @@ func TestExecutor_DocumentHeadMutationRerunsRequiredGatesWithCarriedReviewState(
 		}
 		var reviewResult *string
 		for _, step := range result {
-			if step.StepName == types.StepReview && step.Status == types.StepStatusAwaitingApproval && step.FindingsJSON != nil {
+			if step.StepName == types.StepReview && step.Status == types.StepStatusParkedForApproval && step.FindingsJSON != nil {
 				reviewResult = step.FindingsJSON
 			}
 		}
@@ -616,7 +616,7 @@ func TestExecutor_SkippedOutcome_EmitsSkippedEvent(t *testing.T) {
 		t.Fatalf("expected no error, got: %v", err)
 	}
 
-	event := events.find(ipc.EventStepCompleted, types.StepPR)
+	event := events.find(ipc.EventStepStatusChanged, types.StepPR)
 	if event == nil {
 		t.Fatal("expected step_completed event")
 	}
@@ -651,7 +651,7 @@ func TestExecutor_ConfiguredSkippedStepDoesNotExecuteAndContinues(t *testing.T) 
 	if event := events.find(ipc.EventStepStarted, types.StepReview); event != nil {
 		t.Fatal("configured skipped step should not emit step_started")
 	}
-	event := events.find(ipc.EventStepCompleted, types.StepReview)
+	event := events.find(ipc.EventStepStatusChanged, types.StepReview)
 	if event == nil || event.Status == nil || *event.Status != string(types.StepStatusSkipped) {
 		t.Fatalf("expected skipped completion event, got %+v", event)
 	}

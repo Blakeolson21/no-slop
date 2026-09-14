@@ -104,7 +104,7 @@ func TestExecutor_ReconcilesParkedGateThroughNormalCompletionPath(t *testing.T) 
 	workDir := t.TempDir()
 	done := make(chan error, 1)
 	go func() { done <- exec.Execute(context.Background(), run, repo, workDir) }()
-	waitForStepStatus(t, database, run.ID, types.StepCI, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepCI, types.StepStatusParkedForApproval)
 
 	step.resolved.Store(true)
 	select {
@@ -147,7 +147,7 @@ func TestExecutor_ReconcileErrorPreservesGateFailClosed(t *testing.T) {
 	workDir := t.TempDir()
 	done := make(chan error, 1)
 	go func() { done <- exec.Execute(context.Background(), run, repo, workDir) }()
-	waitForStepStatus(t, database, run.ID, types.StepCI, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepCI, types.StepStatusParkedForApproval)
 
 	select {
 	case <-step.callStart:
@@ -229,7 +229,7 @@ func TestExecutor_ResumeFatalReconcileErrorFailsRun(t *testing.T) {
 	if _, err := database.InsertStepRound(stepResult.ID, 1, "initial", &findings, nil, 10); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.UpdateStepStatusWithDuration(stepResult.ID, types.StepStatusAwaitingApproval, 10); err != nil {
+	if err := database.UpdateStepStatusWithDuration(stepResult.ID, types.StepStatusParkedForApproval, 10); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.SetRunAwaitingAgent(run.ID); err != nil {
@@ -329,7 +329,7 @@ func TestExecutor_GateRecheckStopsAfterApprovalCancelAndShutdown(t *testing.T) {
 			workDir := t.TempDir()
 			done := make(chan error, 1)
 			go func() { done <- exec.Execute(ctx, run, repo, workDir) }()
-			waitForStepStatus(t, database, run.ID, types.StepCI, types.StepStatusAwaitingApproval)
+			waitForStepStatus(t, database, run.ID, types.StepCI, types.StepStatusParkedForApproval)
 			deadline := time.Now().Add(time.Second)
 			for step.calls.Load() < 2 && time.Now().Before(deadline) {
 				time.Sleep(time.Millisecond)

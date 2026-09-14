@@ -15,7 +15,7 @@ func TestAbortConfirmation_FirstPressShowsConfirm(t *testing.T) {
 	// First 'x' press should NOT send abort - should set confirmAbort flag
 	// and show a confirmation prompt in the action bar.
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	run.Steps[0].FindingsJSON = ptr(`{"summary":"test","items":[{"id":"f1","severity":"error","file":"a.go","line":1,"description":"bug"}]}`)
 
 	m := NewModel("/tmp/sock", nil, run)
@@ -139,7 +139,7 @@ func TestDiffToggle_AutoScrollsToFinding(t *testing.T) {
 	// When pressing 'd' to switch from findings to diff, diffOffset
 	// should auto-scroll to the location of the current finding.
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	run.Steps[0].FindingsJSON = ptr(`{"summary":"test","items":[` +
 		`{"id":"f1","severity":"error","file":"foo.go","line":33,"description":"bug1"},` +
 		`{"id":"f2","severity":"warning","file":"bar.go","line":5,"description":"bug2"}]}`)
@@ -176,7 +176,7 @@ func TestDiffToggle_AutoScrollsToFinding(t *testing.T) {
 func TestAbortConfirmation_OtherKeyResetsConfirm(t *testing.T) {
 	// Pressing any other key after first 'x' should reset confirmAbort.
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	run.Steps[0].FindingsJSON = ptr(`{"summary":"test","items":[{"id":"f1","severity":"error","file":"a.go","line":1,"description":"bug"}]}`)
 
 	m := NewModel("/tmp/sock", nil, run)
@@ -398,7 +398,7 @@ func TestDiffToggle_NoOpWhenNoDiffData(t *testing.T) {
 	// but no diff actually renders.
 	run := testRun()
 	m := NewModel("/tmp/sock", nil, run)
-	m.steps[0].Status = types.StepStatusAwaitingApproval
+	m.steps[0].Status = types.StepStatusParkedForApproval
 	m.stepFindings[types.StepReview] = `{"items":[{"id":"f1","severity":"error","file":"a.go","line":1,"description":"bad"}]}`
 	// No diff data set for this step.
 
@@ -414,7 +414,7 @@ func TestActionBar_HidesDiffWhenNoDiffData(t *testing.T) {
 	// for the current awaiting step.
 	configureTUIColors()
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.width = 80
 	m.height = 50

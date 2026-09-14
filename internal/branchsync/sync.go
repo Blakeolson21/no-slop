@@ -1344,7 +1344,7 @@ func (s *Service) inspect(ctx context.Context) (State, *db.Run, bool) {
 		if candidate.Branch != branch {
 			continue
 		}
-		if candidate.Status == types.RunPending || candidate.Status == types.RunRunning || unpublishedPipelineHead(candidate) {
+		if candidate.Status == types.RunStarting || candidate.Status == types.RunRunning || unpublishedPipelineHead(candidate) {
 			// A terminal unpublished run can be superseded only by a newer
 			// exact binding whose pushed head is proven, in the local gate, to
 			// contain the preserved head. Active ownership remains absolute.
@@ -1416,7 +1416,7 @@ func (s *Service) inspect(ctx context.Context) (State, *db.Run, bool) {
 				s.classifyCustodyReturned(ctx, &state)
 				return state, run, true
 			}
-			if run.Status == types.RunPending || run.Status == types.RunRunning {
+			if run.Status == types.RunStarting || run.Status == types.RunRunning {
 				s.classifyPipelineOwned(ctx, &state, run, "a validation run is active on this branch; do not make local follow-up commits until it finishes")
 				return state, run, false
 			}
@@ -1809,7 +1809,7 @@ func pushStepRunning(database *db.DB, runID string) bool {
 		return true
 	}
 	for _, step := range steps {
-		if step.StepName == types.StepPush && (step.Status == types.StepStatusRunning || step.Status == types.StepStatusFixing) {
+		if step.StepName == types.StepPush && (step.Status == types.StepStatusRunning || step.Status == types.StepStatusFixerRunning) {
 			return true
 		}
 	}

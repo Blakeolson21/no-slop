@@ -50,7 +50,7 @@ exit 1
 			config = strings.Replace(config, "  "+tc.commandKey+": true", "  "+tc.commandKey+": "+commandName, 1)
 			h.CommitChange(tc.branch, ".no-slop.yaml", config, "configure large "+tc.name+" failure")
 			h.PushToGate(tc.branch)
-			run := waitForStepStatus(t, h, tc.branch, tc.step, types.StepStatusAwaitingApproval, 60*time.Second)
+			run := waitForStepStatus(t, h, tc.branch, tc.step, types.StepStatusParkedForApproval, 60*time.Second)
 
 			step, ok := findStep(run.Steps, tc.step)
 			if !ok || step.FindingsJSON == nil {
@@ -93,7 +93,7 @@ exit 1
 			if strings.Contains(response, "argument list too long") || strings.Contains(response, "bufio.Scanner: token too long") {
 				t.Fatalf("large %s fix hit an old size limit:\n%s", tc.step, response)
 			}
-			fixed := waitForStepStatus(t, h, tc.branch, tc.step, types.StepStatusFixReview, 60*time.Second)
+			fixed := waitForStepStatus(t, h, tc.branch, tc.step, types.StepStatusParkedAfterFix, 60*time.Second)
 			if fixed.Status != types.RunRunning {
 				t.Fatalf("run status after %s fix = %s", tc.step, fixed.Status)
 			}

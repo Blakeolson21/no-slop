@@ -257,7 +257,7 @@ func TestReviewExternalPRLifecycleStillParks(t *testing.T) {
 			t.Errorf("axi run gate output missing %q in:\n%s", want, out)
 		}
 	}
-	if gated := waitForStepStatus(t, h, "feature/external-pr", types.StepReview, types.StepStatusAwaitingApproval, 60*time.Second); gated == nil {
+	if gated := waitForStepStatus(t, h, "feature/external-pr", types.StepReview, types.StepStatusParkedForApproval, 60*time.Second); gated == nil {
 		t.Fatal("expected run to park at review for external PR lifecycle finding")
 	}
 }

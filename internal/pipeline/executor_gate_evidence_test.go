@@ -38,7 +38,7 @@ func TestExecutor_ReviewRoundsPinReviewedTreesInTheGateMirror(t *testing.T) {
 	exec.SetGateDir(f.gate)
 
 	done, _ := startExecutor(t, exec, run, repo, f.workDir)
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 
 	// The first round is pinned as soon as it is persisted, before the gate
 	// parks for a decision: a run that is never resumed still keeps evidence.

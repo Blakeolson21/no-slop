@@ -17,7 +17,7 @@ func TestActionBar_BetweenPipelineAndFindings(t *testing.T) {
 	// bottom border (╰) and the findings box top border (╭).
 	configureTUIColors()
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.width = 80
 	m.height = 50
@@ -65,7 +65,7 @@ func TestActionBar_IncludesAwaitingLabel(t *testing.T) {
 	// The action bar section outside the pipeline box should include the "X awaiting action:" label.
 	configureTUIColors()
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.width = 80
 	m.height = 50
@@ -102,7 +102,7 @@ func TestActionBar_FixReviewPromptInView(t *testing.T) {
 	// Integration test: full model view shows "Review - review fix:" prompt (not "awaiting action").
 	configureTUIColors()
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusFixReview
+	run.Steps[0].Status = types.StepStatusParkedAfterFix
 	m := NewModel("", nil, run)
 	m.width = 80
 	m.height = 50
@@ -169,7 +169,7 @@ func TestActionBar_DiffModeShowsFindings(t *testing.T) {
 	// since pressing d will toggle back to findings view.
 	configureTUIColors()
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.width = 80
 	m.height = 50
@@ -191,7 +191,7 @@ func TestActionBar_FindingsModeShowsDiff(t *testing.T) {
 	// When viewing findings (default), the 'd' key should say "diff".
 	configureTUIColors()
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.width = 80
 	m.height = 50
@@ -211,7 +211,7 @@ func TestActionBar_HidesSelectionInDiffMode(t *testing.T) {
 	// since those keys don't work in diff mode.
 	configureTUIColors()
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.width = 80
 	m.height = 50
@@ -237,7 +237,7 @@ func TestActionBar_ShowsNavHintsInDiffMode(t *testing.T) {
 	// so users can discover finding-to-finding navigation without opening help.
 	configureTUIColors()
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.width = 80
 	m.height = 50
@@ -263,7 +263,7 @@ func TestActionBar_HidesNavHintsInFindingsMode(t *testing.T) {
 	// since j/k is the primary navigation in findings view.
 	configureTUIColors()
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.width = 80
 	m.height = 50
@@ -286,7 +286,7 @@ func TestActionBar_FixShowsSelectionCount(t *testing.T) {
 	// the selection count like "f fix (3/5)" so users know what they're sending.
 	configureTUIColors()
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.width = 80
 	m.height = 50
@@ -313,7 +313,7 @@ func TestActionBar_FixAllSelectedNoCount(t *testing.T) {
 	// the count adds no information (it's the default state).
 	configureTUIColors()
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.width = 80
 	m.height = 50
@@ -338,7 +338,7 @@ func TestActionBar_FixCountUpdatesOnDeselect(t *testing.T) {
 	// Toggling a finding off should update the count in the action bar.
 	configureTUIColors()
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.width = 80
 	m.height = 50
@@ -376,7 +376,7 @@ func TestOutcomeBanner_InViewWhenDone(t *testing.T) {
 
 func TestModel_HandleKey_JumpToTopDiff(t *testing.T) {
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("/tmp/sock", nil, run)
 	m.showDiff = true
 	m.diffOffset = 15
@@ -390,7 +390,7 @@ func TestModel_HandleKey_JumpToTopDiff(t *testing.T) {
 
 func TestModel_HandleKey_JumpToBottomDiff(t *testing.T) {
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("/tmp/sock", nil, run)
 	m.showDiff = true
 	m.diffOffset = 0
@@ -405,7 +405,7 @@ func TestModel_HandleKey_JumpToBottomDiff(t *testing.T) {
 
 func TestModel_HandleKey_JumpToTopFindings(t *testing.T) {
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("/tmp/sock", nil, run)
 	m.stepFindings[types.StepReview] = `{"findings":[{"id":"f1","severity":"error","description":"a"},{"id":"f2","severity":"warning","description":"b"},{"id":"f3","severity":"info","description":"c"},{"id":"f4","severity":"error","description":"d"},{"id":"f5","severity":"warning","description":"e"}]}`
 	m.findingCursor[types.StepReview] = 4
@@ -419,7 +419,7 @@ func TestModel_HandleKey_JumpToTopFindings(t *testing.T) {
 
 func TestModel_HandleKey_JumpToBottomFindings(t *testing.T) {
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("/tmp/sock", nil, run)
 	m.stepFindings[types.StepReview] = `{"findings":[{"id":"f1","severity":"error","description":"a"},{"id":"f2","severity":"warning","description":"b"},{"id":"f3","severity":"info","description":"c"},{"id":"f4","severity":"error","description":"d"},{"id":"f5","severity":"warning","description":"e"}]}`
 	m.findingCursor[types.StepReview] = 0
@@ -433,7 +433,7 @@ func TestModel_HandleKey_JumpToBottomFindings(t *testing.T) {
 
 func TestModel_HandleKey_HalfPageDownDiff(t *testing.T) {
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("/tmp/sock", nil, run)
 	m.showDiff = true
 	m.diffOffset = 0
@@ -448,7 +448,7 @@ func TestModel_HandleKey_HalfPageDownDiff(t *testing.T) {
 
 func TestModel_HandleKey_HalfPageUpDiff(t *testing.T) {
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("/tmp/sock", nil, run)
 	m.showDiff = true
 	m.diffOffset = 20
@@ -463,7 +463,7 @@ func TestModel_HandleKey_HalfPageUpDiff(t *testing.T) {
 
 func TestModel_HandleKey_HalfPageDownFindings(t *testing.T) {
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("/tmp/sock", nil, run)
 	// 10 findings so cursor can move meaningfully.
 	items := make([]string, 10)
@@ -485,7 +485,7 @@ func TestModel_HandleKey_HalfPageDownFindings(t *testing.T) {
 
 func TestModel_HandleKey_HalfPageUpFindings(t *testing.T) {
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("/tmp/sock", nil, run)
 	items := make([]string, 10)
 	for i := range items {
@@ -575,7 +575,7 @@ func TestFindingsBox_ScrollDownInBottomBorder(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.ANSI)
 	run := testRun()
 	run.Steps[0].Status = types.StepStatusCompleted
-	run.Steps[1].Status = types.StepStatusAwaitingApproval
+	run.Steps[1].Status = types.StepStatusParkedForApproval
 
 	findingsJSON := makeManyFindings(10)
 	m := NewModel("/tmp/sock", nil, run)
@@ -607,7 +607,7 @@ func TestFindingsBox_ScrollUpInBorder(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.ANSI)
 	run := testRun()
 	run.Steps[0].Status = types.StepStatusCompleted
-	run.Steps[1].Status = types.StepStatusAwaitingApproval
+	run.Steps[1].Status = types.StepStatusParkedForApproval
 
 	findingsJSON := makeManyFindings(10)
 	m := NewModel("/tmp/sock", nil, run)
@@ -645,7 +645,7 @@ func TestFindingsBox_BothScrollIndicatorsInBorder(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.ANSI)
 	run := testRun()
 	run.Steps[0].Status = types.StepStatusCompleted
-	run.Steps[1].Status = types.StepStatusAwaitingApproval
+	run.Steps[1].Status = types.StepStatusParkedForApproval
 
 	findingsJSON := makeManyFindings(10)
 	m := NewModel("/tmp/sock", nil, run)
@@ -771,7 +771,7 @@ func TestModel_HelpToggle(t *testing.T) {
 func TestModel_View_HelpOverlay(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.Ascii)
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.width = 80
 	m.height = 40
@@ -880,7 +880,7 @@ func TestModel_View_HelpOverlay_HidesActionsWhenNoApproval(t *testing.T) {
 func TestModel_View_HelpOverlay_HidesSelectionInDiffMode(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.Ascii)
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.width = 80
 	m.height = 40

@@ -395,7 +395,7 @@ func TestExecutor_StepErrorRedactsCredentialURL(t *testing.T) {
 	}
 
 	// 4) IPC step-completed event error must not carry the token.
-	ev := ec.find(ipc.EventStepCompleted, types.StepPush)
+	ev := ec.find(ipc.EventStepStatusChanged, types.StepPush)
 	if ev == nil {
 		t.Fatal("expected step completed event")
 	}

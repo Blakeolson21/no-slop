@@ -14,7 +14,7 @@ func TestModel_View_HelpOverlay_ShowsEscBackInDiffMode(t *testing.T) {
 	// Help overlay in diff mode should show Esc as "back to findings".
 	lipgloss.SetColorProfile(termenv.Ascii)
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.width = 80
 	m.height = 40
@@ -34,7 +34,7 @@ func TestModel_View_HelpOverlay_NoEscBackOutsideDiffMode(t *testing.T) {
 	// Help overlay NOT in diff mode should NOT show the "back to findings" hint.
 	lipgloss.SetColorProfile(termenv.Ascii)
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.width = 80
 	m.height = 40
@@ -56,7 +56,7 @@ func TestModel_View_HelpOverlay_NoEscBackOutsideDiffMode(t *testing.T) {
 func TestSpaceToggle_AutoAdvancesToNextFinding(t *testing.T) {
 	run := testRun()
 	m := NewModel("/tmp/sock", nil, run)
-	m.steps[0].Status = types.StepStatusAwaitingApproval
+	m.steps[0].Status = types.StepStatusParkedForApproval
 	m.stepFindings[types.StepReview] = `{"findings":[{"id":"f1","severity":"error","description":"first"},{"id":"f2","severity":"warning","description":"second"},{"id":"f3","severity":"info","description":"third"}],"summary":"3 issues"}`
 	m.ensureFindingSelection(types.StepReview)
 
@@ -77,7 +77,7 @@ func TestSpaceToggle_AutoAdvancesToNextFinding(t *testing.T) {
 func TestSpaceToggle_StaysOnLastFinding(t *testing.T) {
 	run := testRun()
 	m := NewModel("/tmp/sock", nil, run)
-	m.steps[0].Status = types.StepStatusAwaitingApproval
+	m.steps[0].Status = types.StepStatusParkedForApproval
 	m.stepFindings[types.StepReview] = `{"findings":[{"id":"f1","severity":"error","description":"first"},{"id":"f2","severity":"warning","description":"second"}],"summary":"2 issues"}`
 	m.ensureFindingSelection(types.StepReview)
 
@@ -96,7 +96,7 @@ func TestSpaceToggle_StaysOnLastFinding(t *testing.T) {
 func TestSpaceToggle_TogglesOriginalNotAdvanced(t *testing.T) {
 	run := testRun()
 	m := NewModel("/tmp/sock", nil, run)
-	m.steps[0].Status = types.StepStatusAwaitingApproval
+	m.steps[0].Status = types.StepStatusParkedForApproval
 	m.stepFindings[types.StepReview] = `{"findings":[{"id":"f1","severity":"error","description":"first"},{"id":"f2","severity":"warning","description":"second"},{"id":"f3","severity":"info","description":"third"}],"summary":"3 issues"}`
 	m.ensureFindingSelection(types.StepReview)
 
@@ -173,7 +173,7 @@ func TestModel_View_HelpOverlay_ShowsOnlyQAndHelpWhenNoActions(t *testing.T) {
 func TestModel_View_HelpOverlay_ShowsNavigationWhenAwaitingStep(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.Ascii)
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.width = 80
 	m.height = 40

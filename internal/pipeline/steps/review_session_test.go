@@ -275,7 +275,7 @@ func TestReviewLoop_ParkRespondFixKeepsRoleSessions(t *testing.T) {
 		done <- exec.Execute(context.Background(), run, repo, workDir)
 	}()
 
-	waitForReviewStatus(t, database, run.ID, types.StepStatusAwaitingApproval)
+	waitForReviewStatus(t, database, run.ID, types.StepStatusParkedForApproval)
 	steps, err := database.GetStepsByRun(run.ID)
 	if err != nil {
 		t.Fatal(err)

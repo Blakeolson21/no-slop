@@ -283,15 +283,15 @@ func TestModel_ApplyEvent_StepCompletedWithFindings(t *testing.T) {
 
 	findingsJSON := `{"findings":[{"severity":"warning","description":"test"}],"summary":"1 issue"}`
 	m.applyEvent(ipc.Event{
-		Type:     ipc.EventStepCompleted,
+		Type:     ipc.EventStepStatusChanged,
 		RunID:    run.ID,
 		StepName: ptr(types.StepReview),
-		Status:   ptr(string(types.StepStatusAwaitingApproval)),
+		Status:   ptr(string(types.StepStatusParkedForApproval)),
 		Findings: &findingsJSON,
 	})
 
-	if m.steps[0].Status != types.StepStatusAwaitingApproval {
-		t.Errorf("expected awaiting_approval, got %s", m.steps[0].Status)
+	if m.steps[0].Status != types.StepStatusParkedForApproval {
+		t.Errorf("expected parked_for_responder_approval, got %s", m.steps[0].Status)
 	}
 	if got, ok := m.stepFindings[types.StepReview]; !ok || got != findingsJSON {
 		t.Error("expected findings stored for review step")
@@ -301,7 +301,7 @@ func TestModel_ApplyEvent_StepCompletedWithFindings(t *testing.T) {
 func TestModel_View_ShowsFindingsWhenAwaiting(t *testing.T) {
 	run := testRun()
 	m := NewModel("/tmp/sock", nil, run)
-	m.steps[0].Status = types.StepStatusAwaitingApproval
+	m.steps[0].Status = types.StepStatusParkedForApproval
 	m.stepFindings[types.StepReview] = `{"findings":[{"id":"review-1","severity":"error","file":"app.go","line":5,"description":"buffer overflow risk"}],"summary":"1 critical issue"}`
 
 	view := m.View()
@@ -325,10 +325,10 @@ func TestModel_ApplyEvent_PausedStepPreselectsAllFindings(t *testing.T) {
 
 	findingsJSON := `{"findings":[{"id":"review-1","severity":"warning","description":"first"},{"id":"review-2","severity":"error","description":"second"}],"summary":"2 issues"}`
 	m.applyEvent(ipc.Event{
-		Type:     ipc.EventStepCompleted,
+		Type:     ipc.EventStepStatusChanged,
 		RunID:    run.ID,
 		StepName: ptr(types.StepReview),
-		Status:   ptr(string(types.StepStatusAwaitingApproval)),
+		Status:   ptr(string(types.StepStatusParkedForApproval)),
 		Findings: &findingsJSON,
 	})
 
@@ -341,7 +341,7 @@ func TestModel_ApplyEvent_PausedStepPreselectsAllFindings(t *testing.T) {
 func TestModel_FindingSelectionToggleAndCursor(t *testing.T) {
 	run := testRun()
 	m := NewModel("/tmp/sock", nil, run)
-	m.steps[0].Status = types.StepStatusAwaitingApproval
+	m.steps[0].Status = types.StepStatusParkedForApproval
 	m.stepFindings[types.StepReview] = `{"findings":[{"id":"review-1","severity":"warning","description":"first"},{"id":"review-2","severity":"error","description":"second"}],"summary":"2 issues"}`
 	m.ensureFindingSelection(types.StepReview)
 
@@ -384,7 +384,7 @@ func TestModel_FindingSelectionToggleAndCursor(t *testing.T) {
 func TestModel_View_HidesFixActionWhenNoFindingsSelected(t *testing.T) {
 	run := testRun()
 	m := NewModel("/tmp/sock", nil, run)
-	m.steps[0].Status = types.StepStatusAwaitingApproval
+	m.steps[0].Status = types.StepStatusParkedForApproval
 	m.stepFindings[types.StepReview] = `{"findings":[{"id":"review-1","severity":"warning","description":"first"},{"id":"review-2","severity":"error","description":"second"}],"summary":"2 issues"}`
 	m.ensureFindingSelection(types.StepReview)
 	m.clearAllFindings(types.StepReview)

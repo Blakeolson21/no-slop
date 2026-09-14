@@ -18,8 +18,8 @@ func TestRunInsertAndGet(t *testing.T) {
 	if run.ID == "" {
 		t.Fatal("expected non-empty ID")
 	}
-	if run.Status != types.RunPending {
-		t.Errorf("status = %q, want %q", run.Status, types.RunPending)
+	if run.Status != types.RunStarting {
+		t.Errorf("status = %q, want %q", run.Status, types.RunStarting)
 	}
 
 	got, err := d.GetRun(run.ID)
@@ -362,7 +362,7 @@ func TestActiveRunsAcrossRepos(t *testing.T) {
 	for _, run := range runs {
 		got[run.ID] = run.Status
 	}
-	if got[pendingRun.ID] != types.RunPending {
+	if got[pendingRun.ID] != types.RunStarting {
 		t.Fatalf("pending run missing from active runs: %#v", got)
 	}
 	if got[runningRun.ID] != types.RunRunning {
@@ -763,7 +763,7 @@ func TestRunHeadPromotionRollsBackWhenReviewTruthCannotBeRevoked(t *testing.T) {
 			}
 			gotRun, _ := d.GetRun(run.ID)
 			gotStep, _ := d.GetStepResult(step.ID)
-			if gotRun.HeadSHA != "reviewed" || gotRun.Status != types.RunPending || gotRun.ReviewApprovedHeadSHA == nil {
+			if gotRun.HeadSHA != "reviewed" || gotRun.Status != types.RunStarting || gotRun.ReviewApprovedHeadSHA == nil {
 				t.Fatalf("failed promotion partially changed run: %#v", gotRun)
 			}
 			if gotStep.FindingsJSON == nil || gotStep.CertifiedHeadSHA == nil {
@@ -917,9 +917,9 @@ func TestRecoverStaleRunsMarksStepsFailed(t *testing.T) {
 	runningStep, _ := d.InsertStepResult(run.ID, types.StepReview)
 	d.StartStep(runningStep.ID)
 	awaitingStep, _ := d.InsertStepResult(run.ID, types.StepTest)
-	d.UpdateStepStatus(awaitingStep.ID, types.StepStatusAwaitingApproval)
+	d.UpdateStepStatus(awaitingStep.ID, types.StepStatusParkedForApproval)
 	fixingStep, _ := d.InsertStepResult(run.ID, types.StepLint)
-	d.UpdateStepStatus(fixingStep.ID, types.StepStatusFixing)
+	d.UpdateStepStatus(fixingStep.ID, types.StepStatusFixerRunning)
 	completedStep, _ := d.InsertStepResult(run.ID, types.StepPush)
 	d.CompleteStep(completedStep.ID, 0, 100, "/tmp/log")
 	pendingStep, _ := d.InsertStepResult(run.ID, types.StepPR)
@@ -929,7 +929,7 @@ func TestRecoverStaleRunsMarksStepsFailed(t *testing.T) {
 		t.Fatalf("recover stale runs: %v", err)
 	}
 
-	// Running, awaiting_approval, fixing should be failed.
+	// Running, parked_for_responder_approval, fixing should be failed.
 	for _, tc := range []struct {
 		id   string
 		name string

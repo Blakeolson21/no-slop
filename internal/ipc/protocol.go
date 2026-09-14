@@ -312,7 +312,7 @@ const (
 	EventRunCompleted       EventType = "run_completed"
 	EventCIReadinessChanged EventType = "ci_readiness_changed"
 	EventStepStarted        EventType = "step_started"
-	EventStepCompleted      EventType = "step_completed"
+	EventStepStatusChanged EventType = "step_status_changed"
 	EventStepsReset         EventType = "steps_reset"
 	EventLogChunk           EventType = "log_chunk"
 	// EventStreamGap tells a subscriber that the daemon coalesced at least
@@ -333,7 +333,7 @@ type Event struct {
 	Stream           *string         `json:"stream,omitempty"`
 	Content          *string         `json:"content,omitempty"`
 	Branch           *string         `json:"branch,omitempty"`
-	Findings         *string         `json:"findings,omitempty"` // JSON-encoded findings for step_completed events
+	Findings         *string         `json:"findings,omitempty"` // JSON-encoded findings for step status change events
 	ReportedFindings *int            `json:"reported_findings,omitempty"`
 	FixedFindings    *int            `json:"fixed_findings,omitempty"`
 	DurationMS       *int64          `json:"duration_ms,omitempty"` // execution-only duration for step events

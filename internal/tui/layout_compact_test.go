@@ -131,7 +131,7 @@ func TestModel_View_ShortTerminalDoesNotOverflowHeight(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.Ascii)
 
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	run.Steps[0].FindingsJSON = ptr(`{"summary":"The review surfaced several issues that need attention before continuing.","items":[{"id":"f1","severity":"warning","file":"internal/pipeline/steps/review.go","line":101,"description":"This finding has a long description that should wrap across multiple lines in a narrow viewport and still keep the pipeline header visible."},{"id":"f2","severity":"info","file":"internal/pipeline/steps/test.go","line":202,"description":"Another wrapped finding to force the findings panel to compete for height with the pipeline and footer sections."},{"id":"f3","severity":"warning","file":"internal/pipeline/steps/lint.go","line":303,"description":"A third wrapped finding makes the old item-count heuristic overflow the terminal height."}]}`)
 
 	m := NewModel("/tmp/sock", nil, run)

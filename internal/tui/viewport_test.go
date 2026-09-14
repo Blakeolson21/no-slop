@@ -81,7 +81,7 @@ func TestFindingsBoxTitle_MultipleSeverities(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.ANSI)
 	run := testRun()
 	run.Steps[0].Status = types.StepStatusCompleted
-	run.Steps[1].Status = types.StepStatusAwaitingApproval
+	run.Steps[1].Status = types.StepStatusParkedForApproval
 
 	findingsJSON := `{"summary":"issues","items":[
 		{"id":"f1","severity":"error","file":"a.go","line":1,"description":"err"},
@@ -106,7 +106,7 @@ func TestFindingsBoxTitle_MultipleSeverities(t *testing.T) {
 func TestFindingsBoxTitle_NoCursorPosition(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.ANSI)
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 
 	findingsJSON := makeManyFindings(5)
 	m := NewModel("/tmp/sock", nil, run)
@@ -131,7 +131,7 @@ func TestFindingsBoxTitle_NoCursorPosition(t *testing.T) {
 func TestModel_View_FindingsViewportApplied(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.ANSI)
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 
 	m := NewModel("/tmp/sock", nil, run)
 	m.width = 80

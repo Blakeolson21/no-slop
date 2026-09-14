@@ -59,7 +59,7 @@ func TestModel_Yolo_AutoApprovesAwaitingStep(t *testing.T) {
 	defer client.Close()
 
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel(sock, client, run)
 	m.yoloMode = true
 
@@ -121,7 +121,7 @@ func TestModel_Yolo_FixesActionableFindings(t *testing.T) {
 	sock, client, snapshot := captureRespond(t)
 
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	fj := `{"findings":[{"id":"review-1","severity":"warning","description":"design choice","action":"ask-user"}],"summary":"1 issue"}`
 	run.Steps[0].FindingsJSON = &fj
 	m := NewModel(sock, client, run)
@@ -152,7 +152,7 @@ func TestModel_Yolo_FixesAllActionableFindingsDespiteManualDeselection(t *testin
 	sock, client, snapshot := captureRespond(t)
 
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	fj := `{"findings":[{"id":"review-1","severity":"warning","description":"first","action":"ask-user"},{"id":"review-2","severity":"warning","description":"second","action":"ask-user"}],"summary":"2 issues"}`
 	run.Steps[0].FindingsJSON = &fj
 	m := NewModel(sock, client, run)
@@ -184,7 +184,7 @@ func TestModel_Yolo_ApprovesNonActionableFindings(t *testing.T) {
 	sock, client, snapshot := captureRespond(t)
 
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	fj := `{"findings":[{"id":"review-1","severity":"info","description":"fyi","action":"no-op"}],"summary":"1 note"}`
 	run.Steps[0].FindingsJSON = &fj
 	m := NewModel(sock, client, run)
@@ -212,7 +212,7 @@ func TestModel_Yolo_ApprovesFixReviewAfterFixingOnce(t *testing.T) {
 	sock, client, snapshot := captureRespond(t)
 
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	fj := `{"findings":[{"id":"review-1","severity":"warning","description":"design choice","action":"ask-user"}],"summary":"1 issue"}`
 	run.Steps[0].FindingsJSON = &fj
 	m := NewModel(sock, client, run)
@@ -225,14 +225,14 @@ func TestModel_Yolo_ApprovesFixReviewAfterFixingOnce(t *testing.T) {
 		t.Fatal("expected fix command on first gate")
 	}
 
-	// The fix re-runs the step, which re-enters the gate as a fix_review. Yolo
+	// The fix re-runs the step, which re-enters the gate as a parked_for_responder_after_fix. Yolo
 	// must not fix again (that risks an unbounded loop); it accepts the result.
-	m.steps[0].Status = types.StepStatusFixReview
+	m.steps[0].Status = types.StepStatusParkedAfterFix
 	m.stepDiffLoaded[types.StepReview] = true
 	if cmd := m.maybeAutoApproveCmd(); cmd != nil {
 		cmd()
 	} else {
-		t.Fatal("expected approve command on fix_review gate")
+		t.Fatal("expected approve command on parked_for_responder_after_fix gate")
 	}
 
 	calls := snapshot()
@@ -252,7 +252,7 @@ func TestModel_Yolo_ApprovesExistingFixReviewWithoutPriorFix(t *testing.T) {
 	sock, client, snapshot := captureRespond(t)
 
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusFixReview
+	run.Steps[0].Status = types.StepStatusParkedAfterFix
 	fj := `{"findings":[{"id":"review-1","severity":"warning","description":"still here","action":"ask-user"}],"summary":"1 issue"}`
 	run.Steps[0].FindingsJSON = &fj
 	m := NewModel(sock, client, run)
@@ -261,7 +261,7 @@ func TestModel_Yolo_ApprovesExistingFixReviewWithoutPriorFix(t *testing.T) {
 
 	cmd := m.maybeAutoApproveCmd()
 	if cmd == nil {
-		t.Fatal("expected yolo to approve an existing fix_review gate")
+		t.Fatal("expected yolo to approve an existing parked_for_responder_after_fix gate")
 	}
 	if msg := cmd(); msg != nil {
 		t.Fatalf("expected nil msg, got %#v", msg)
@@ -279,7 +279,7 @@ func TestModel_Yolo_ApprovesExistingFixReviewWithoutPriorFix(t *testing.T) {
 
 func TestModel_Yolo_DoesNotAutoApproveTwiceForSameStep(t *testing.T) {
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("/tmp/sock", nil, run)
 	m.yoloMode = true
 
@@ -293,7 +293,7 @@ func TestModel_Yolo_DoesNotAutoApproveTwiceForSameStep(t *testing.T) {
 
 func TestModel_Yolo_NoAutoApproveWhenOff(t *testing.T) {
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("/tmp/sock", nil, run)
 
 	if cmd := m.maybeAutoApproveCmd(); cmd != nil {

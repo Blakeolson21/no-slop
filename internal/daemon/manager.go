@@ -1469,7 +1469,7 @@ func (m *RunManager) cancelActiveRuns(repoID, branch string) {
 		if run.Branch != branch {
 			continue
 		}
-		if run.Status != types.RunPending && run.Status != types.RunRunning {
+		if run.Status != types.RunStarting && run.Status != types.RunRunning {
 			continue
 		}
 

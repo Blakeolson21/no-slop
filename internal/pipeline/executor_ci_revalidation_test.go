@@ -100,7 +100,7 @@ func TestExecutor_CIRepairMustPassReviewBeforeAnotherPush(t *testing.T) {
 		}
 	})
 
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
 
 	mu.Lock()
 	gotOrder := append([]types.StepName(nil), order...)
@@ -209,7 +209,7 @@ func TestExecutor_InProcessRevalidationPreservesSkippedSteps(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- exec.Execute(context.Background(), run, repo, workDir) }()
 
-	waitForStepStatus(t, database, run.ID, types.StepTest, types.StepStatusAwaitingApproval)
+	waitForStepStatus(t, database, run.ID, types.StepTest, types.StepStatusParkedForApproval)
 	if err := exec.Respond(types.StepTest, types.ActionSkip, nil); err != nil {
 		t.Fatalf("skip test step: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestExecutor_RecoveredRevalidationPreservesSkippedStepsAndRoundNumbers(t *t
 	if _, err := database.InsertReviewStepRound(reviewResult.ID, 2, "initial", &findings, nil, repairedHead, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.ParkStepForApproval(run.ID, reviewResult.ID, types.StepStatusAwaitingApproval, 1, &findings); err != nil {
+	if err := database.ParkStepForApproval(run.ID, reviewResult.ID, types.StepStatusParkedForApproval, 1, &findings); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.InsertStepRound(testResult.ID, 1, "initial", nil, nil, 1); err != nil {

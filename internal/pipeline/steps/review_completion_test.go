@@ -36,7 +36,7 @@ func TestReviewCompletionStartsFixAndRereviewWithoutRoundTimer(t *testing.T) {
 	}}
 	events := make(chan ipc.Event, 100)
 	executor, database, run, repo, workDir := reviewSessionHarness(t, mock, []pipeline.Step{&ReviewStep{}}, func(event ipc.Event) {
-		if event.Type == ipc.EventStepCompleted {
+		if event.Type == ipc.EventStepStatusChanged {
 			events <- event
 		}
 	})
@@ -70,7 +70,7 @@ func TestReviewCompletionStartsFixAndRereviewWithoutRoundTimer(t *testing.T) {
 	close(events)
 	completions := 0
 	for event := range events {
-		if event.Type == ipc.EventStepCompleted {
+		if event.Type == ipc.EventStepStatusChanged {
 			completions++
 			t.Logf("observed %s: step=%s status=%s", event.Type, *event.StepName, *event.Status)
 		}

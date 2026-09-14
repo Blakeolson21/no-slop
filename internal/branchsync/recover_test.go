@@ -725,10 +725,10 @@ func TestCancellationReconcilesCommittedWorktreeHeadBeforeReleaseClassification(
 	t.Parallel()
 
 	f := newUnmovedRecoverFixture(t, types.RunCancelled)
-	if err := f.db.UpdateRunStatus(f.run.ID, types.RunPending); err != nil {
+	if err := f.db.UpdateRunStatus(f.run.ID, types.RunStarting); err != nil {
 		t.Fatal(err)
 	}
-	f.run.Status = types.RunPending
+	f.run.Status = types.RunStarting
 
 	managed := filepath.Join(t.TempDir(), "managed")
 	if err := gitpkg.WorktreeAdd(f.ctx, f.gate, managed, f.submitted); err != nil {
@@ -788,10 +788,10 @@ func TestCancellationReleaseRequiresVerifiedManagedHead(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newUnmovedRecoverFixture(t, types.RunCancelled)
-			if err := f.db.UpdateRunStatus(f.run.ID, types.RunPending); err != nil {
+			if err := f.db.UpdateRunStatus(f.run.ID, types.RunStarting); err != nil {
 				t.Fatal(err)
 			}
-			f.run.Status = types.RunPending
+			f.run.Status = types.RunStarting
 			f.run.TerminalHeadVerifiedAt = nil
 
 			workDir := filepath.Join(t.TempDir(), "missing-managed")
@@ -831,10 +831,10 @@ func TestSuccessfulSkippedDeliveryReleasesVerifiedUnmovedHead(t *testing.T) {
 	t.Parallel()
 
 	f := newUnmovedRecoverFixture(t, types.RunCancelled)
-	if err := f.db.UpdateRunStatus(f.run.ID, types.RunPending); err != nil {
+	if err := f.db.UpdateRunStatus(f.run.ID, types.RunStarting); err != nil {
 		t.Fatal(err)
 	}
-	f.run.Status = types.RunPending
+	f.run.Status = types.RunStarting
 	f.run.TerminalHeadVerifiedAt = nil
 
 	managed := filepath.Join(t.TempDir(), "managed")

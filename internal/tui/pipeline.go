@@ -21,7 +21,7 @@ func stepStatusIndicator(status types.StepStatus, spinnerFrame int) string {
 	switch status {
 	case types.StepStatusPending:
 		return "○"
-	case types.StepStatusRunning, types.StepStatusFixing:
+	case types.StepStatusRunning, types.StepStatusFixerRunning:
 		if len(spinnerFrames) == 0 {
 			return "◉"
 		}
@@ -29,9 +29,9 @@ func stepStatusIndicator(status types.StepStatus, spinnerFrame int) string {
 			spinnerFrame = 0
 		}
 		return spinnerFrames[spinnerFrame%len(spinnerFrames)]
-	case types.StepStatusAwaitingApproval:
+	case types.StepStatusParkedForApproval:
 		return "⏸"
-	case types.StepStatusFixReview:
+	case types.StepStatusParkedAfterFix:
 		return "⏸"
 	case types.StepStatusCompleted:
 		return "✓"
@@ -47,9 +47,9 @@ func stepStatusIndicator(status types.StepStatus, spinnerFrame int) string {
 // stepStatusStyle returns the lipgloss style for a step's status indicator.
 func stepStatusStyle(status types.StepStatus) lipgloss.Style {
 	switch status {
-	case types.StepStatusRunning, types.StepStatusFixing:
+	case types.StepStatusRunning, types.StepStatusFixerRunning:
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(ansiBlue))
-	case types.StepStatusAwaitingApproval, types.StepStatusFixReview:
+	case types.StepStatusParkedForApproval, types.StepStatusParkedAfterFix:
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(ansiYellow))
 	case types.StepStatusCompleted:
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(ansiGreen))
@@ -160,7 +160,7 @@ func renderPipelineView(run *ipc.RunInfo, steps []ipc.StepResultInfo, width int,
 		// Add status suffix for non-obvious states (dim per Typography Scale "Meta").
 		// Error messages are truncated to fit within the remaining line width.
 		switch step.Status {
-		case types.StepStatusAwaitingApproval:
+		case types.StepStatusParkedForApproval:
 			line += " " + dimStyle.Render("- awaiting approval")
 		case types.StepStatusFailed:
 			if step.Error != nil {
@@ -172,7 +172,7 @@ func renderPipelineView(run *ipc.RunInfo, steps []ipc.StepResultInfo, width int,
 				line += " " + dimStyle.Render(errText)
 			}
 		}
-		if step.ReportedFindings > 0 && (step.FixedFindings > 0 || step.Status == types.StepStatusFixing) {
+		if step.ReportedFindings > 0 && (step.FixedFindings > 0 || step.Status == types.StepStatusFixerRunning) {
 			fixedLabel := dimStyle.Render(fmt.Sprintf("%d/%d fixed", step.FixedFindings, step.ReportedFindings))
 			line = appendRightLabel(line, fixedLabel, contentWidth)
 		}
@@ -221,7 +221,7 @@ func renderActionBar(steps []ipc.StepResultInfo, showSelectionActions bool, allo
 	var b strings.Builder
 	promptStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiYellow))
 	prompt := fmt.Sprintf("%s awaiting action:", stepLabel(step.StepName))
-	if step.Status == types.StepStatusFixReview {
+	if step.Status == types.StepStatusParkedAfterFix {
 		prompt = fmt.Sprintf("%s - review fix:", stepLabel(step.StepName))
 	}
 	b.WriteString(promptStyle.Render(prompt))
@@ -450,7 +450,7 @@ func renderHelpOverlay(width int, run *ipc.RunInfo, hasAwaitingStep bool, showDi
 // awaitingStep returns the step that is currently awaiting user action, if any.
 func awaitingStep(steps []ipc.StepResultInfo) *ipc.StepResultInfo {
 	for i := range steps {
-		if steps[i].Status == types.StepStatusAwaitingApproval || steps[i].Status == types.StepStatusFixReview {
+		if steps[i].Status == types.StepStatusParkedForApproval || steps[i].Status == types.StepStatusParkedAfterFix {
 			return &steps[i]
 		}
 	}

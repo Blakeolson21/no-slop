@@ -20,7 +20,7 @@ const maxStepDiffBytes = 512 * 1024
 //
 // This diff is the only piece of gate context the pipeline never persists, so
 // it is the one thing a subscriber cannot rebuild from get_run. Serving it
-// here rather than attaching it to a step_completed event keeps the largest
+// here rather than attaching it to a step_status_changed event keeps the largest
 // possible payload off the event stream, where a frame over the transport
 // limit would kill the subscription and hide every event after it.
 //

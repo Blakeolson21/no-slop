@@ -51,8 +51,8 @@ type Run struct {
 	CustodyReturnedAt *int64
 	Error             *string
 	// AwaitingAgentSince is the unix-seconds timestamp at which the run parked
-	// at a gate awaiting the driving agent's response (an awaiting_approval or
-	// fix_review step). It is nil whenever the run is not parked: the executor
+	// at a gate awaiting the driving agent's response (an parked_for_responder_approval or
+	// parked_for_responder_after_fix step). It is nil whenever the run is not parked: the executor
 	// sets it on gate entry and clears it the moment the agent responds (or the
 	// wait is cancelled). It is observability only and does not affect gate
 	// resolution.
@@ -87,7 +87,7 @@ func scanRun(row interface {
 	Scan(...any) error
 }, r *Run) error {
 	return row.Scan(
-		&r.ID, &r.RepoID, &r.Branch, &r.HeadSHA, &r.BaseSHA, &r.SubmittedHeadSHA, &r.NoMistakesVersion, &r.NoMistakesBuildSHA, &r.ReviewApprovedHeadSHA, &r.Status,
+		&r.ID, &r.RepoID, &r.Branch, &r.HeadSHA, &r.BaseSHA, &r.SubmittedHeadSHA, &r.NoMistakesVersion, &r.NoMistakesBuildSHA, &r.ReviewApprovedHeadSHA, scanRunStatusTarget(&r.Status),
 		&r.PRURL, &r.PRState, &r.PRStateObservedAt, &r.CIReadyAt, &r.CIReadyNoCI,
 		&r.LastPushedSHA, &r.PushTargetKind, &r.PushTargetFingerprint, &r.PushRef,
 		&r.LastPushedAt, &r.PushGeneration, &r.PushActive, &r.TerminalHeadVerifiedAt,
@@ -116,7 +116,7 @@ func (d *DB) InsertRunWithIntent(repoID, branch, headSHA, baseSHA string, intent
 		SubmittedHeadSHA:   &headSHA,
 		NoMistakesVersion:  &version,
 		NoMistakesBuildSHA: &buildSHA,
-		Status:             types.RunPending,
+		Status:             types.RunStarting,
 		CreatedAt:          ts,
 		UpdatedAt:          ts,
 	}
@@ -199,13 +199,18 @@ func (d *DB) GetRunsByRepoHead(repoID, branch, headSHA string) ([]*Run, error) {
 func (d *DB) GetActiveRun(repoID, branch string) (*Run, error) {
 	r := &Run{}
 	var err error
+	// Active-run reads must match both the renamed run_starting and the
+	// legacy pending literal a pre-backfill store still holds (read-side
+	// alias window; types.NormalizeRunStatus maps the scanned value).
 	if branch == "" {
 		err = scanRun(d.sql.QueryRow(
-			`SELECT `+d.readableRunColumns()+` FROM runs WHERE repo_id = ? AND status IN ('pending', 'running') ORDER BY created_at DESC, id DESC LIMIT 1`, repoID,
+			`SELECT `+d.readableRunColumns()+` FROM runs WHERE repo_id = ? AND status IN (?, ?, ?) ORDER BY created_at DESC, id DESC LIMIT 1`, repoID,
+			types.RunStarting, types.LegacyRunPending, types.RunRunning,
 		), r)
 	} else {
 		err = scanRun(d.sql.QueryRow(
-			`SELECT `+d.readableRunColumns()+` FROM runs WHERE repo_id = ? AND branch = ? AND status IN ('pending', 'running') ORDER BY created_at DESC, id DESC LIMIT 1`, repoID, branch,
+			`SELECT `+d.readableRunColumns()+` FROM runs WHERE repo_id = ? AND branch = ? AND status IN (?, ?, ?) ORDER BY created_at DESC, id DESC LIMIT 1`, repoID, branch,
+			types.RunStarting, types.LegacyRunPending, types.RunRunning,
 		), r)
 	}
 	if err == sql.ErrNoRows {
@@ -220,8 +225,8 @@ func (d *DB) GetActiveRun(repoID, branch string) (*Run, error) {
 // GetActiveRuns returns all pending or running runs across all repos, newest first.
 func (d *DB) GetActiveRuns() ([]*Run, error) {
 	rows, err := d.sql.Query(
-		`SELECT `+d.readableRunColumns()+` FROM runs WHERE status IN (?, ?) ORDER BY created_at DESC, id DESC`,
-		types.RunPending, types.RunRunning,
+		`SELECT `+d.readableRunColumns()+` FROM runs WHERE status IN (?, ?, ?) ORDER BY created_at DESC, id DESC`,
+		types.RunStarting, types.LegacyRunPending, types.RunRunning,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("get active runs: %w", err)
@@ -360,7 +365,7 @@ func (d *DB) ReconcileTerminalPRRuns() (int, error) {
 	}
 	defer tx.Rollback()
 
-	rows, err := tx.Query(`SELECT id FROM runs WHERE status IN (?, ?) AND pr_state IN ('merged', 'closed')`, types.RunPending, types.RunRunning)
+	rows, err := tx.Query(`SELECT id FROM runs WHERE status IN (?, ?, ?) AND pr_state IN ('merged', 'closed')`, types.RunStarting, types.LegacyRunPending, types.RunRunning)
 	if err != nil {
 		return 0, fmt.Errorf("reconcile terminal PR runs: list runs: %w", err)
 	}
@@ -414,11 +419,12 @@ func finalizeTerminalPRRun(tx *sql.Tx, id string, ts, tsMS int64) error {
 	if _, err := tx.Exec(
 		`UPDATE step_results SET status = ?, exit_code = COALESCE(exit_code, 0), completed_at = COALESCE(completed_at, ?), completed_at_ms = COALESCE(completed_at_ms, CASE WHEN completed_at IS NULL THEN ? ELSE completed_at * 1000 END),
 			last_activity_at = ?, last_activity = ?, agent_pid = NULL
-			 WHERE run_id = ? AND step_name = ? AND status IN (?, ?, ?, ?)
-		   AND EXISTS (SELECT 1 FROM runs WHERE id = ? AND status IN (?, ?))`,
+			 WHERE run_id = ? AND step_name = ? AND status IN (?, ?, ?, ?, ?, ?, ?)
+		   AND EXISTS (SELECT 1 FROM runs WHERE id = ? AND status IN (?, ?, ?))`,
 		types.StepStatusCompleted, ts, tsMS, ts, "status: completed", id, types.StepCI,
-		types.StepStatusRunning, types.StepStatusAwaitingApproval, types.StepStatusFixing, types.StepStatusFixReview,
-		id, types.RunPending, types.RunRunning,
+		types.StepStatusRunning, types.StepStatusParkedForApproval, types.StepStatusFixerRunning, types.StepStatusParkedAfterFix,
+		types.LegacyStepStatusAwaitingApproval, types.LegacyStepStatusFixing, types.LegacyStepStatusFixReview,
+		id, types.RunStarting, types.LegacyRunPending, types.RunRunning,
 	); err != nil {
 		return fmt.Errorf("complete terminal CI step: %w", err)
 	}
@@ -431,7 +437,7 @@ func finalizeTerminalPRRun(tx *sql.Tx, id string, ts, tsMS int64) error {
 				THEN (? - awaiting_agent_since) * 1000 ELSE 0 END,
 			awaiting_agent_since = NULL, terminal_at_ms = COALESCE(terminal_at_ms, CASE WHEN status IN ('completed', 'failed', 'cancelled') THEN updated_at * 1000 ELSE ? END), updated_at = ?
 			 WHERE id = ?`,
-		types.RunPending, types.RunRunning, types.RunCompleted, ts, ts, tsMS, ts, id,
+		types.RunStarting, types.RunRunning, types.RunCompleted, ts, ts, tsMS, ts, id,
 	); err != nil {
 		return fmt.Errorf("finalize terminal PR run: %w", err)
 	}
@@ -676,7 +682,7 @@ func (d *DB) UpdateRunIntent(id string, intent RunIntent) error {
 
 // SetRunAwaitingAgent marks a run as parked awaiting the driving agent,
 // stamping awaiting_agent_since with the current time. Called by the executor
-// when a step enters a gate (awaiting_approval / fix_review). This is a pollable
+// when a step enters a gate (parked_for_responder_approval / parked_for_responder_after_fix). This is a pollable
 // observability signal only; it does not change gate resolution.
 func (d *DB) SetRunAwaitingAgent(id string) error {
 	ts := now()
@@ -750,14 +756,15 @@ func (d *DB) RecoverStaleRunsExcept(errMsg string, preserved map[string]struct{}
 	placeholders, args := recoveryExclusionClause(preserved)
 	stepArgs := []any{
 		types.StepStatusFailed, errMsg, ts, tsMS,
-		types.StepStatusRunning, types.StepStatusAwaitingApproval, types.StepStatusFixing, types.StepStatusFixReview,
-		types.RunPending, types.RunRunning,
+		types.StepStatusRunning, types.StepStatusParkedForApproval, types.StepStatusFixerRunning, types.StepStatusParkedAfterFix,
+		types.LegacyStepStatusAwaitingApproval, types.LegacyStepStatusFixing, types.LegacyStepStatusFixReview,
+		types.RunStarting, types.LegacyRunPending, types.RunRunning,
 	}
 	stepArgs = append(stepArgs, args...)
 	_, err = tx.Exec(
 		`UPDATE step_results SET status = ?, error = ?, completed_at = ?, completed_at_ms = ?
-		 WHERE status IN (?, ?, ?, ?) AND run_id IN (
-			SELECT id FROM runs WHERE status IN (?, ?)`+placeholders+`
+		 WHERE status IN (?, ?, ?, ?, ?, ?, ?) AND run_id IN (
+			SELECT id FROM runs WHERE status IN (?, ?, ?)`+placeholders+`
 		 )`,
 		stepArgs...,
 	)
@@ -769,14 +776,14 @@ func (d *DB) RecoverStaleRunsExcept(errMsg string, preserved map[string]struct{}
 	// failed) run is never reported as still parked awaiting the agent,
 	// accumulating the marker's elapsed time into the run's parked total so
 	// the parked evidence survives the crash.
-	runArgs := []any{types.RunFailed, errMsg, ts, ts, tsMS, ts, types.RunPending, types.RunRunning}
+	runArgs := []any{types.RunFailed, errMsg, ts, ts, tsMS, ts, types.RunStarting, types.LegacyRunPending, types.RunRunning}
 	runArgs = append(runArgs, args...)
 	result, err := tx.Exec(
 		`UPDATE runs SET status = ?, error = ?, push_active = 0,
 			parked_ms = COALESCE(parked_ms, 0) + CASE
 				WHEN awaiting_agent_since IS NOT NULL AND ? > awaiting_agent_since
 				THEN (? - awaiting_agent_since) * 1000 ELSE 0 END,
-			awaiting_agent_since = NULL, terminal_at_ms = ?, updated_at = ? WHERE status IN (?, ?)`+placeholders,
+			awaiting_agent_since = NULL, terminal_at_ms = ?, updated_at = ? WHERE status IN (?, ?, ?)`+placeholders,
 		runArgs...,
 	)
 	if err != nil {

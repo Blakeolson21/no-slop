@@ -112,7 +112,7 @@ func TestRunReconciler_SubscribeFirstAndCoalescesDuplicateDelayedEvents(t *testi
 	}
 	events <- ipc.Event{Type: ipc.EventRunUpdated, RunID: "run-1"}
 	events <- ipc.Event{Type: ipc.EventRunUpdated, RunID: "run-1"}    // duplicate
-	events <- ipc.Event{Type: ipc.EventStepCompleted, RunID: "run-1"} // delayed old transition
+	events <- ipc.Event{Type: ipc.EventStepStatusChanged, RunID: "run-1"} // delayed old transition
 	terminal, err := reconciler.Next(context.Background())
 	if err != nil || terminal.Status != types.RunCompleted {
 		t.Fatalf("event Next = %#v, %v", terminal, err)
@@ -384,7 +384,7 @@ func TestGateResolution(t *testing.T) {
 			name: "actionable findings are fixed with every finding selected",
 			gate: stepView{
 				Name:         "review",
-				Status:       string(types.StepStatusAwaitingApproval),
+				Status:       string(types.StepStatusParkedForApproval),
 				FindingsJSON: `{"findings":[{"id":"review-1","severity":"warning","description":"design choice","action":"ask-user"},{"id":"review-2","severity":"info","description":"fyi","action":"no-op"}],"summary":"2"}`,
 			},
 			wantAction:   types.ActionFix,
@@ -395,7 +395,7 @@ func TestGateResolution(t *testing.T) {
 			name: "only non-actionable findings are approved",
 			gate: stepView{
 				Name:         "test",
-				Status:       string(types.StepStatusAwaitingApproval),
+				Status:       string(types.StepStatusParkedForApproval),
 				FindingsJSON: `{"findings":[{"id":"test-1","severity":"info","description":"fyi","action":"no-op"}],"summary":"1"}`,
 			},
 			wantAction:   types.ActionApprove,
@@ -405,17 +405,17 @@ func TestGateResolution(t *testing.T) {
 			name: "no findings are approved",
 			gate: stepView{
 				Name:         "push",
-				Status:       string(types.StepStatusAwaitingApproval),
+				Status:       string(types.StepStatusParkedForApproval),
 				FindingsJSON: ``,
 			},
 			wantAction:   types.ActionApprove,
 			wantResolved: true,
 		},
 		{
-			name: "fix_review with cleared findings is approved",
+			name: "parked_for_responder_after_fix with cleared findings is approved",
 			gate: stepView{
 				Name:         "review",
-				Status:       string(types.StepStatusFixReview),
+				Status:       string(types.StepStatusParkedAfterFix),
 				FindingsJSON: `{"findings":[],"summary":"clean"}`,
 			},
 			fixRoundsUsed: 1,
@@ -423,10 +423,10 @@ func TestGateResolution(t *testing.T) {
 			wantResolved:  true,
 		},
 		{
-			name: "fix_review with residual actionable findings is fixed again while budget remains",
+			name: "parked_for_responder_after_fix with residual actionable findings is fixed again while budget remains",
 			gate: stepView{
 				Name:         "review",
-				Status:       string(types.StepStatusFixReview),
+				Status:       string(types.StepStatusParkedAfterFix),
 				FindingsJSON: `{"findings":[{"id":"review-1","severity":"error","description":"still here","action":"ask-user"},{"id":"review-2","severity":"warning","description":"new issue","action":"auto-fix"}],"summary":"2"}`,
 			},
 			fixRoundsUsed: 1,
@@ -438,7 +438,7 @@ func TestGateResolution(t *testing.T) {
 			name: "actionable findings after exhausted budget are handed back, not approved",
 			gate: stepView{
 				Name:         "review",
-				Status:       string(types.StepStatusFixReview),
+				Status:       string(types.StepStatusParkedAfterFix),
 				FindingsJSON: `{"findings":[{"id":"review-1","severity":"error","description":"still here","action":"ask-user"}],"summary":"1"}`,
 			},
 			fixRoundsUsed: maxYesFixRoundsPerStep,
@@ -448,7 +448,7 @@ func TestGateResolution(t *testing.T) {
 			name: "actionable findings without ids are handed back rather than fixing nothing or approving them away",
 			gate: stepView{
 				Name:         "review",
-				Status:       string(types.StepStatusAwaitingApproval),
+				Status:       string(types.StepStatusParkedForApproval),
 				FindingsJSON: `{"findings":[{"severity":"warning","description":"no id","action":"ask-user"}],"summary":"1"}`,
 			},
 			wantResolved: false,
@@ -792,7 +792,7 @@ func startDriveTestServer(t *testing.T, srv *ipc.Server) (*ipc.Client, string) {
 
 // TestDriveRun_ConsecutiveFixReviewParksAdvanceByRoundCount reproduces the
 // --yes wedge: a fix round that completes faster than one poll interval
-// re-parks the step as fix_review, so consecutive parks are indistinguishable
+// re-parks the step as parked_for_responder_after_fix, so consecutive parks are indistinguishable
 // by status alone. The drive loop must treat an advanced fix_round_count as
 // progress, fund rounds up to the budget, and hand the gate back parked - not
 // spin forever waiting for a status change it already missed.
@@ -818,7 +818,7 @@ func TestDriveRun_ConsecutiveFixReviewParksAdvanceByRoundCount(t *testing.T) {
 	fixRounds := 1
 	responds := 0
 
-	// The step re-parks at the same fix_review status after every round, so the
+	// The step re-parks at the same parked_for_responder_after_fix status after every round, so the
 	// persisted round count is the only signal that the answered gate was
 	// consumed and a new one is waiting.
 	events := make(chan ipc.Event, 8)
@@ -834,7 +834,7 @@ func TestDriveRun_ConsecutiveFixReviewParksAdvanceByRoundCount(t *testing.T) {
 				ID:            "sr-1",
 				RunID:         "run-1",
 				StepName:      types.StepReview,
-				Status:        types.StepStatusFixReview,
+				Status:        types.StepStatusParkedAfterFix,
 				FindingsJSON:  &fj,
 				FixRoundCount: fixRounds,
 			}},

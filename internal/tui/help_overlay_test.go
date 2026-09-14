@@ -12,7 +12,7 @@ import (
 func TestModel_View_HelpOverlay_HidesDiffToggleWhenNoDiffData(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.Ascii)
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.width = 80
 	m.height = 40
@@ -35,7 +35,7 @@ func TestModel_View_HelpOverlay_HidesDiffToggleWhenNoDiffData(t *testing.T) {
 func TestModel_View_HelpOverlay_ShowsDiffToggleWhenDiffDataExists(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.Ascii)
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.width = 80
 	m.height = 40
@@ -54,7 +54,7 @@ func TestModel_View_HelpOverlay_ShowsDiffToggleWhenDiffDataExists(t *testing.T) 
 func TestModel_View_HelpOverlay_HidesDiffToggleWhenEmptyDiffData(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.Ascii)
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.width = 80
 	m.height = 40
@@ -120,7 +120,7 @@ func TestModel_View_HelpOverlay_ShowsQuitWhenDone(t *testing.T) {
 func TestModel_View_HelpOverlay_NeverShowsCombinedDetachQuit(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.Ascii)
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.width = 80
 	m.height = 40

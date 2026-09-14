@@ -50,7 +50,7 @@ func TestReadSurfaceGate_EmitsOnEveryStateChange(t *testing.T) {
 
 	states := []string{
 		"run-1|running|review:running",
-		"run-1|running|review:awaiting_approval",
+		"run-1|running|review:parked_for_responder_approval",
 		"run-1|running|review:fixing",
 		"run-1|completed|",
 	}

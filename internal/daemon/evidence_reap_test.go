@@ -55,7 +55,7 @@ func (f *evidenceFixture) seed(branch string, status types.RunStatus, age time.D
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	if status != types.RunPending {
+	if status != types.RunStarting {
 		if err := f.db.UpdateRunStatus(run.ID, status); err != nil {
 			f.t.Fatal(err)
 		}
@@ -91,7 +91,7 @@ func TestReapEvidenceHonorsRetentionAndSparesActiveRuns(t *testing.T) {
 
 	fresh := f.seed("fresh", types.RunCompleted, time.Hour, artifact)
 	stale := f.seed("stale", types.RunCompleted, 30*24*time.Hour, artifact)
-	activePending := f.seed("active-pending", types.RunPending, 30*24*time.Hour, artifact)
+	activePending := f.seed("active-pending", types.RunStarting, 30*24*time.Hour, artifact)
 	activeRunning := f.seed("active-running", types.RunRunning, 30*24*time.Hour, artifact)
 
 	reapEvidence(f.db, f.root, evidenceReapPolicy{Retention: 14 * 24 * time.Hour}, time.Now())
@@ -215,7 +215,7 @@ func TestReapLegacyEvidenceDrainsTheSharedTempRootUnderTheSamePolicy(t *testing.
 		if err != nil {
 			t.Fatal(err)
 		}
-		if status != types.RunPending {
+		if status != types.RunStarting {
 			if err := f.db.UpdateRunStatus(run.ID, status); err != nil {
 				t.Fatal(err)
 			}

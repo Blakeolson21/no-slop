@@ -186,7 +186,7 @@ func TestTUIOverflow_StaleQueuedDeltaCannotRegressAfterSnapshot(t *testing.T) {
 	name := types.StepCI
 	stale := []ipc.Event{
 		{Type: ipc.EventStepStarted, RunID: "run-1", StepName: &name, Status: &running, StateRev: 7},
-		{Type: ipc.EventStepCompleted, RunID: "run-1", StepName: &name, Status: &running, StateRev: 11},
+		{Type: ipc.EventStepStatusChanged, RunID: "run-1", StepName: &name, Status: &running, StateRev: 11},
 	}
 	for _, e := range stale {
 		updated, _ = m.Update(eventMsg{event: e, subscriptionID: m.subscriptionID})
@@ -220,7 +220,7 @@ func TestTUIOverflow_NewerDeltaAfterSnapshotStillApplies(t *testing.T) {
 	completed := string(types.StepStatusCompleted)
 	name := types.StepCI
 	updated, _ = m.Update(eventMsg{
-		event:          ipc.Event{Type: ipc.EventStepCompleted, RunID: "run-1", StepName: &name, Status: &completed, StateRev: 43},
+		event:          ipc.Event{Type: ipc.EventStepStatusChanged, RunID: "run-1", StepName: &name, Status: &completed, StateRev: 43},
 		subscriptionID: m.subscriptionID,
 	})
 	m = updated.(Model)
@@ -452,7 +452,7 @@ func TestTUIOverflow_UnversionedDeltasStillApply(t *testing.T) {
 	completed := string(types.StepStatusCompleted)
 	name := types.StepCI
 	updated, _ := m.Update(eventMsg{
-		event:          ipc.Event{Type: ipc.EventStepCompleted, RunID: "run-1", StepName: &name, Status: &completed},
+		event:          ipc.Event{Type: ipc.EventStepStatusChanged, RunID: "run-1", StepName: &name, Status: &completed},
 		subscriptionID: m.subscriptionID,
 	})
 	m = updated.(Model)
@@ -517,10 +517,10 @@ func TestTUIOverflow_FixReviewDiffIsFetchedOnDemand(t *testing.T) {
 		return "--- a/x\n+++ b/x\n+agent fix\n", nil
 	}
 
-	gate := string(types.StepStatusFixReview)
+	gate := string(types.StepStatusParkedAfterFix)
 	name := types.StepReview
 	updated, cmd := m.Update(eventMsg{
-		event:          ipc.Event{Type: ipc.EventStepCompleted, RunID: "run-1", StepName: &name, Status: &gate, StateRev: 5},
+		event:          ipc.Event{Type: ipc.EventStepStatusChanged, RunID: "run-1", StepName: &name, Status: &gate, StateRev: 5},
 		subscriptionID: m.subscriptionID,
 	})
 	m = updated.(Model)
@@ -549,7 +549,7 @@ func TestTUIOverflow_SnapshotGateAlsoFetchesItsDiff(t *testing.T) {
 		return &ipc.RunInfo{
 			ID: "run-1", Status: types.RunRunning, StateRev: 30,
 			Steps: []ipc.StepResultInfo{
-				{RunID: "run-1", StepName: types.StepReview, Status: types.StepStatusFixReview},
+				{RunID: "run-1", StepName: types.StepReview, Status: types.StepStatusParkedAfterFix},
 			},
 		}, nil
 	}
@@ -583,7 +583,7 @@ func TestTUIOverflow_SnapshotGateReplacesPreviousRoundDiffAndInflightFetch(t *te
 	m.applySnapshot(&ipc.RunInfo{
 		ID: "run-1", Status: types.RunRunning, StateRev: 20,
 		Steps: []ipc.StepResultInfo{
-			{RunID: "run-1", StepName: types.StepReview, Status: types.StepStatusFixReview},
+			{RunID: "run-1", StepName: types.StepReview, Status: types.StepStatusParkedAfterFix},
 		},
 	})
 
@@ -612,7 +612,7 @@ func TestTUIOverflow_SnapshotGateClearsStaleGateState(t *testing.T) {
 	m := ciRunningModel(false)
 	m.steps = []ipc.StepResultInfo{{
 		ID: "review-row", RunID: "run-1", StepName: types.StepReview,
-		Status: types.StepStatusAwaitingApproval, RoundCount: 1,
+		Status: types.StepStatusParkedForApproval, RoundCount: 1,
 	}}
 	m.stepFindings[types.StepReview] = `{"findings":[{"id":"old","severity":"error","description":"old"}]}`
 	m.findingSelections[types.StepReview] = map[string]bool{"old": true}
@@ -626,7 +626,7 @@ func TestTUIOverflow_SnapshotGateClearsStaleGateState(t *testing.T) {
 		ID: "run-1", Status: types.RunRunning, StateRev: 20,
 		Steps: []ipc.StepResultInfo{{
 			ID: "review-row", RunID: "run-1", StepName: types.StepReview,
-			Status: types.StepStatusAwaitingApproval, RoundCount: 2,
+			Status: types.StepStatusParkedForApproval, RoundCount: 2,
 			FindingsJSON: &newFindings,
 		}},
 	})
@@ -709,7 +709,7 @@ func TestTUIOverflow_ReconnectClearsGenerationScopedAsyncState(t *testing.T) {
 func TestTUIOverflow_TruncatedDiffStateRendersBeforeApprovalActions(t *testing.T) {
 	m := ciRunningModel(false)
 	m.steps = []ipc.StepResultInfo{
-		{RunID: "run-1", StepName: types.StepReview, Status: types.StepStatusFixReview},
+		{RunID: "run-1", StepName: types.StepReview, Status: types.StepStatusParkedAfterFix},
 	}
 	m.stepDiffs[types.StepReview] = "diff body\n"
 	m.stepDiffTruncated[types.StepReview] = true
@@ -734,7 +734,7 @@ func TestTUIOverflow_TruncatedDiffStateRendersBeforeApprovalActions(t *testing.T
 func TestTUIOverflow_FixReviewApprovalWaitsForDiffForManualAndYolo(t *testing.T) {
 	m := ciRunningModel(false)
 	m.steps = []ipc.StepResultInfo{
-		{RunID: "run-1", StepName: types.StepReview, Status: types.StepStatusFixReview},
+		{RunID: "run-1", StepName: types.StepReview, Status: types.StepStatusParkedAfterFix},
 	}
 	m.yoloMode = true
 	m.requestStepDiff(types.StepReview, true)
@@ -777,7 +777,7 @@ func TestTUIOverflow_FixReviewApprovalWaitsForDiffForManualAndYolo(t *testing.T)
 func TestTUIOverflow_FailedReconciliationCanRetryToCurrentDiff(t *testing.T) {
 	m := ciRunningModel(false)
 	m.steps = []ipc.StepResultInfo{
-		{RunID: "run-1", StepName: types.StepReview, Status: types.StepStatusFixReview},
+		{RunID: "run-1", StepName: types.StepReview, Status: types.StepStatusParkedAfterFix},
 	}
 	m.stepDiffLoaded[types.StepReview] = true
 	m.stepDiffs[types.StepReview] = "stale diff\n"
@@ -790,7 +790,7 @@ func TestTUIOverflow_FailedReconciliationCanRetryToCurrentDiff(t *testing.T) {
 		return &ipc.RunInfo{
 			ID: "run-1", Status: types.RunRunning, StateRev: 12,
 			Steps: []ipc.StepResultInfo{
-				{RunID: "run-1", StepName: types.StepReview, Status: types.StepStatusFixReview},
+				{RunID: "run-1", StepName: types.StepReview, Status: types.StepStatusParkedAfterFix},
 			},
 		}, nil
 	}
@@ -847,10 +847,10 @@ func TestTUIOverflow_FailedDiffFetchCanRetrySuccessfully(t *testing.T) {
 		return "current diff\n", nil
 	}
 
-	gate := string(types.StepStatusFixReview)
+	gate := string(types.StepStatusParkedAfterFix)
 	name := types.StepReview
 	updated, cmd := m.Update(eventMsg{
-		event:          ipc.Event{Type: ipc.EventStepCompleted, RunID: "run-1", StepName: &name, Status: &gate, StateRev: 5},
+		event:          ipc.Event{Type: ipc.EventStepStatusChanged, RunID: "run-1", StepName: &name, Status: &gate, StateRev: 5},
 		subscriptionID: m.subscriptionID,
 	})
 	m = updated.(Model)
@@ -889,14 +889,14 @@ func TestTUIOverflow_FailedDiffFetchCanRetrySuccessfully(t *testing.T) {
 func TestTUIOverflow_ConcurrentReviewFailuresRequireBothRetries(t *testing.T) {
 	m := ciRunningModel(false)
 	m.steps = []ipc.StepResultInfo{
-		{RunID: "run-1", StepName: types.StepReview, Status: types.StepStatusFixReview},
+		{RunID: "run-1", StepName: types.StepReview, Status: types.StepStatusParkedAfterFix},
 	}
 	m.fetchStepDiff = func(types.StepName) (string, error) { return "current diff\n", nil }
 	m.reconcile = func(context.Context) (*ipc.RunInfo, error) {
 		return &ipc.RunInfo{
 			ID: "run-1", Status: types.RunRunning, StateRev: 12,
 			Steps: []ipc.StepResultInfo{
-				{RunID: "run-1", StepName: types.StepReview, Status: types.StepStatusFixReview},
+				{RunID: "run-1", StepName: types.StepReview, Status: types.StepStatusParkedAfterFix},
 			},
 		}, nil
 	}
@@ -941,7 +941,7 @@ func TestTUIOverflow_ConcurrentReviewFailuresRequireBothRetries(t *testing.T) {
 		run: &ipc.RunInfo{
 			ID: "run-1", Status: types.RunRunning, StateRev: 12,
 			Steps: []ipc.StepResultInfo{
-				{RunID: "run-1", StepName: types.StepReview, Status: types.StepStatusFixReview},
+				{RunID: "run-1", StepName: types.StepReview, Status: types.StepStatusParkedAfterFix},
 			},
 		},
 		subscriptionID: m.subscriptionID,
@@ -986,7 +986,7 @@ func TestTUIOverflow_ReconciliationRetryDisclosedBeforeGateDiscovery(t *testing.
 func TestTUIOverflow_FailedReconciliationBlocksStaleAwaitingGate(t *testing.T) {
 	m := ciRunningModel(false)
 	m.steps = []ipc.StepResultInfo{
-		{RunID: "run-1", StepName: types.StepReview, Status: types.StepStatusAwaitingApproval},
+		{RunID: "run-1", StepName: types.StepReview, Status: types.StepStatusParkedForApproval},
 	}
 	m.reconcilePending = true
 	updated, _ := m.Update(runReconciledMsg{
@@ -1008,7 +1008,7 @@ func TestTUIOverflow_FailedReconciliationBlocksStaleAwaitingGate(t *testing.T) {
 func TestTUIOverflow_LateDiffFailureAfterGateLeavesIsIgnored(t *testing.T) {
 	m := ciRunningModel(false)
 	m.steps = []ipc.StepResultInfo{
-		{RunID: "run-1", StepName: types.StepReview, Status: types.StepStatusFixReview},
+		{RunID: "run-1", StepName: types.StepReview, Status: types.StepStatusParkedAfterFix},
 	}
 	m.requestStepDiff(types.StepReview, true)
 	m.drainDiffFetches()

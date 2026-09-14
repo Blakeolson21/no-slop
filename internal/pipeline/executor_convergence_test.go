@@ -68,7 +68,7 @@ func TestExecutor_ReviewLadderParksInsteadOfAutoFixing(t *testing.T) {
 	// Rounds 1 and 2 auto-fix normally; after round 3 the counts are 1,1,1
 	// (non-decreasing across the window) and the guard parks instead of
 	// spending auto-fix round 3 of 5.
-	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusFixReview)
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedAfterFix)
 	if callCount != 3 {
 		t.Errorf("step calls = %d, want 3 (guard must stop funding auto-fix rounds)", callCount)
 	}

@@ -26,7 +26,7 @@ func trippedConvergenceJSON() string {
 func TestGateRendersConvergenceHistory(t *testing.T) {
 	gate := stepView{
 		Name:   "review",
-		Status: "fix_review",
+		Status: "parked_for_responder_after_fix",
 		FindingsJSON: findingsJSON(t, []types.Finding{
 			{ID: "r7-1", Severity: "error", File: "convex-env.sh", Action: types.ActionAskUser, Description: "env parsing diverges"},
 		}, "3 findings"),
@@ -62,7 +62,7 @@ func TestGateRendersConvergenceHistory(t *testing.T) {
 func TestGateRendersHealthyConvergenceWithoutWarning(t *testing.T) {
 	gate := stepView{
 		Name:   "review",
-		Status: "awaiting_approval",
+		Status: "parked_for_responder_approval",
 		FindingsJSON: findingsJSON(t, []types.Finding{
 			{ID: "r1-1", Severity: "warning", File: "a.go", Action: types.ActionAskUser, Description: "x"},
 		}, "1 finding"),
@@ -82,7 +82,7 @@ func TestGateRendersHealthyConvergenceWithoutWarning(t *testing.T) {
 func TestGateWithoutConvergenceReportUnchanged(t *testing.T) {
 	gate := stepView{
 		Name:   "review",
-		Status: "awaiting_approval",
+		Status: "parked_for_responder_approval",
 		FindingsJSON: findingsJSON(t, []types.Finding{
 			{ID: "review-1", Severity: "warning", File: "main.go", Action: types.ActionAskUser, Description: "x"},
 		}, "1 finding"),
@@ -183,7 +183,7 @@ func TestAxiStatusRunDoesNotDuplicateActiveReviewGateConvergence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert review step: %v", err)
 	}
-	if err := database.UpdateStepStatus(step.ID, types.StepStatusAwaitingApproval); err != nil {
+	if err := database.UpdateStepStatus(step.ID, types.StepStatusParkedForApproval); err != nil {
 		t.Fatalf("park review step: %v", err)
 	}
 	if err := database.SetStepConvergence(step.ID, trippedConvergenceJSON()); err != nil {
@@ -232,7 +232,7 @@ func TestAxiStatusRunProjectsConvergenceWhenAnotherStepHoldsTheGate(t *testing.T
 	if err != nil {
 		t.Fatalf("insert test step: %v", err)
 	}
-	if err := database.UpdateStepStatus(test.ID, types.StepStatusAwaitingApproval); err != nil {
+	if err := database.UpdateStepStatus(test.ID, types.StepStatusParkedForApproval); err != nil {
 		t.Fatalf("park test step: %v", err)
 	}
 
@@ -303,12 +303,12 @@ func TestGateResolution_ConvergenceTrippedParksInsteadOfFix(t *testing.T) {
 		{ID: "r3-1", Severity: "warning", File: "a.go", Action: types.ActionAutoFix, Description: "x"},
 	}, "1 finding")
 
-	tripped := stepView{Name: "review", Status: "fix_review", FindingsJSON: actionable, ConvergenceJSON: trippedConvergenceJSON()}
+	tripped := stepView{Name: "review", Status: "parked_for_responder_after_fix", FindingsJSON: actionable, ConvergenceJSON: trippedConvergenceJSON()}
 	if _, _, resolved := gateResolution(tripped, 1); resolved {
 		t.Fatal("tripped guard with actionable findings must not be auto-resolved")
 	}
 
-	healthy := stepView{Name: "review", Status: "fix_review", FindingsJSON: actionable, ConvergenceJSON: `{"round_findings":[3,1],"review_ms":60000}`}
+	healthy := stepView{Name: "review", Status: "parked_for_responder_after_fix", FindingsJSON: actionable, ConvergenceJSON: `{"round_findings":[3,1],"review_ms":60000}`}
 	action, ids, resolved := gateResolution(healthy, 1)
 	if !resolved || action != types.ActionFix || len(ids) != 1 {
 		t.Fatalf("healthy gate should fund a fix as before, got action=%v ids=%v resolved=%v", action, ids, resolved)
@@ -317,7 +317,7 @@ func TestGateResolution_ConvergenceTrippedParksInsteadOfFix(t *testing.T) {
 	// A tripped guard on a gate whose findings are all non-actionable is
 	// still approved: the loop is ending, there is nothing to adjudicate.
 	clean := stepView{
-		Name: "review", Status: "fix_review",
+		Name: "review", Status: "parked_for_responder_after_fix",
 		FindingsJSON:    findingsJSON(t, []types.Finding{{ID: "n1", Severity: "info", Action: types.ActionNoOp, Description: "note"}}, "clean"),
 		ConvergenceJSON: trippedConvergenceJSON(),
 	}

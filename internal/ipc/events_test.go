@@ -20,7 +20,7 @@ func TestClassOfPartitionsEventsByLossTolerance(t *testing.T) {
 		{ipc.EventRunUpdated, ipc.ClassState},
 		{ipc.EventRunCompleted, ipc.ClassState},
 		{ipc.EventStepStarted, ipc.ClassState},
-		{ipc.EventStepCompleted, ipc.ClassState},
+		{ipc.EventStepStatusChanged, ipc.ClassState},
 		{ipc.EventStepsReset, ipc.ClassState},
 	}
 	for _, tt := range tests {

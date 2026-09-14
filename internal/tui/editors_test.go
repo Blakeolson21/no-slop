@@ -38,7 +38,7 @@ func newAwaitingModel(t *testing.T, findings string) Model {
 	t.Helper()
 	lipgloss.SetColorProfile(termenv.Ascii)
 	run := testRun()
-	run.Steps[0].Status = types.StepStatusAwaitingApproval
+	run.Steps[0].Status = types.StepStatusParkedForApproval
 	m := NewModel("", nil, run)
 	m.width = 120
 	m.height = 40
