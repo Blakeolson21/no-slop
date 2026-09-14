@@ -1179,7 +1179,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 					slog.Warn("failed to record selected finding ids", "step", stepName, "round", roundNum, "error", err)
 				}
 				if dbErr := e.db.UpdateStepStatus(sr.ID, types.StepStatusFixerRunning); dbErr != nil {
-					slog.Warn("failed to update step status in db", "step", stepName, "status", "fixing", "error", dbErr)
+					slog.Warn("failed to update step status in db", "step", stepName, "status", "fixer_running", "error", dbErr)
 				}
 				e.emitStepEventWithFindingsAndError(ipc.EventStepStatusChanged, run, repo, stepName, string(types.StepStatusFixerRunning), "", "", nil)
 				phaseStart = time.Now()
@@ -1335,7 +1335,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 				slog.Warn("failed to record user decision", "step", stepName, "round", roundNum, "error", err)
 			}
 			if dbErr := e.db.UpdateStepStatus(sr.ID, types.StepStatusFixerRunning); dbErr != nil {
-				slog.Warn("failed to update step status in db", "step", stepName, "status", "fixing", "error", dbErr)
+				slog.Warn("failed to update step status in db", "step", stepName, "status", "fixer_running", "error", dbErr)
 			}
 			sctx.Fixing = true
 			sctx.PreviousFindings = mergedFindings
