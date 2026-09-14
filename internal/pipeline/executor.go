@@ -550,8 +550,8 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	}
 
 	approvalFields := telemetry.Fields{
-		"step":       string(gate.step.Name()),
-		"action":     string(response.action),
+		"step":                           string(gate.step.Name()),
+		"action":                         string(response.action),
 		"parked_for_responder_after_fix": gate.stepResult.Status == types.StepStatusParkedAfterFix,
 	}
 	if agentName := e.telemetryAgentName(); agentName != "" {
@@ -1265,8 +1265,8 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		}
 
 		approvalFields := telemetry.Fields{
-			"step":       string(stepName),
-			"action":     string(response.action),
+			"step":                           string(stepName),
+			"action":                         string(response.action),
 			"parked_for_responder_after_fix": sctx.Fixing,
 		}
 		if agentName := e.telemetryAgentName(); agentName != "" {

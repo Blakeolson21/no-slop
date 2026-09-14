@@ -20,9 +20,9 @@ import (
 // never run automatically.
 func newAxiMigrateStatusNamesCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "migrate-status-names",
-		Short: "Backfill renamed gate-state tokens in the store (idempotent)",
-		Args:  cobra.NoArgs,
+		Use:           "migrate-status-names",
+		Short:         "Backfill renamed gate-state tokens in the store (idempotent)",
+		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {

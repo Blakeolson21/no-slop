@@ -111,7 +111,7 @@ func TestRunReconciler_SubscribeFirstAndCoalescesDuplicateDelayedEvents(t *testi
 		t.Fatalf("initial Next = %#v, %v", first, err)
 	}
 	events <- ipc.Event{Type: ipc.EventRunUpdated, RunID: "run-1"}
-	events <- ipc.Event{Type: ipc.EventRunUpdated, RunID: "run-1"}    // duplicate
+	events <- ipc.Event{Type: ipc.EventRunUpdated, RunID: "run-1"}        // duplicate
 	events <- ipc.Event{Type: ipc.EventStepStatusChanged, RunID: "run-1"} // delayed old transition
 	terminal, err := reconciler.Next(context.Background())
 	if err != nil || terminal.Status != types.RunCompleted {

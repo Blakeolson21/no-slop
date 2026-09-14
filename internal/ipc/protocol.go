@@ -312,7 +312,7 @@ const (
 	EventRunCompleted       EventType = "run_completed"
 	EventCIReadinessChanged EventType = "ci_readiness_changed"
 	EventStepStarted        EventType = "step_started"
-	EventStepStatusChanged EventType = "step_status_changed"
+	EventStepStatusChanged  EventType = "step_status_changed"
 	EventStepsReset         EventType = "steps_reset"
 	EventLogChunk           EventType = "log_chunk"
 	// EventStreamGap tells a subscriber that the daemon coalesced at least
