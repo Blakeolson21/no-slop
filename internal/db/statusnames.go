@@ -117,10 +117,12 @@ func (d *DB) MigrateStatusNames() (runsUpdated, stepsUpdated int64, err error) {
 			WHEN ? THEN ?
 			WHEN ? THEN ?
 			WHEN ? THEN ?
-			ELSE status END`,
+			ELSE status END
+			WHERE status IN (?, ?, ?)`,
 		types.LegacyStepStatusFixReview, types.StepStatusParkedAfterFix,
 		types.LegacyStepStatusAwaitingApproval, types.StepStatusParkedForApproval,
 		types.LegacyStepStatusFixing, types.StepStatusFixerRunning,
+		types.LegacyStepStatusFixReview, types.LegacyStepStatusAwaitingApproval, types.LegacyStepStatusFixing,
 	)
 	if err != nil {
 		return 0, 0, fmt.Errorf("migrate step_results.status names: %w", err)
@@ -131,8 +133,8 @@ func (d *DB) MigrateStatusNames() (runsUpdated, stepsUpdated int64, err error) {
 	}
 
 	runRes, err := tx.Exec(
-		`UPDATE runs SET status = CASE status WHEN ? THEN ? ELSE status END`,
-		types.LegacyRunPending, types.RunStarting,
+		`UPDATE runs SET status = CASE status WHEN ? THEN ? ELSE status END WHERE status = ?`,
+		types.LegacyRunPending, types.RunStarting, types.LegacyRunPending,
 	)
 	if err != nil {
 		return 0, 0, fmt.Errorf("migrate runs.status names: %w", err)

@@ -124,7 +124,7 @@ const (
 	StepStatusRunning StepStatus = "running"
 	// StepStatusParkedForApproval means the step is parked at a gate waiting
 	// for the responder's decision (renamed from the ambiguous
-	// "parked_for_responder_approval").
+	// "awaiting_approval").
 	StepStatusParkedForApproval StepStatus = "parked_for_responder_approval"
 	// StepStatusFixerRunning means the fixer agent is actively working
 	// (renamed from "fixing", which read as a parked gate state).
@@ -142,9 +142,9 @@ const (
 // (one release). Writers emit only the new names; the backfill rewrites old
 // rows. Do not add to this set.
 const (
-	LegacyStepStatusAwaitingApproval StepStatus = "parked_for_responder_approval"
+	LegacyStepStatusAwaitingApproval StepStatus = "awaiting_approval"
 	LegacyStepStatusFixing           StepStatus = "fixing"
-	LegacyStepStatusFixReview        StepStatus = "parked_for_responder_after_fix"
+	LegacyStepStatusFixReview        StepStatus = "fix_review"
 )
 
 // stepStatusLegacyAliases maps each legacy stored step status literal to the
