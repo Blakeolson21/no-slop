@@ -44,9 +44,8 @@ const MaxCooldown = 8 * 24 * time.Hour
 // observation with nothing able to correct it, even though the provider's own
 // remedy (buying credits, raising the plan) restores the same account
 // immediately. One probe per interval caps that staleness at the interval and
-// costs the same wasted spawn per lane per hour the wrong-short direction
-// already accepts.
-const ProbeInterval = DefaultCooldown
+// costs at most one wasted spawn per route every five minutes.
+const ProbeInterval = 5 * time.Minute
 
 // maxReasonRunes bounds the banner excerpt kept for the failure message so a
 // noisy stderr tail cannot grow the state file or the run error without limit.

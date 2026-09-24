@@ -124,7 +124,7 @@ func newDoctorCmd() *cobra.Command {
 				quotaDetail := func(outage lanehealth.Outage) string {
 					return fmt.Sprintf("quota-exhausted until %s %s",
 						outage.Until.Local().Format("2006-01-02 15:04 MST"),
-						sDim.Render("(skipped by the pipeline, probed hourly for early recovery)"))
+						sDim.Render("(skipped by the pipeline, probed every 5 minutes for early recovery)"))
 				}
 				reportedLanes := map[string]bool{}
 

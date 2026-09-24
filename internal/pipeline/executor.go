@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -1001,6 +1002,26 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		sctx.ReviewStartingHeadSHA = reviewStartingHeadSHA
 		sctx.KnownReviewLineages = knownLineages
 		outcome, err := e.executeWithCapacity(step, sctx)
+		quotaPark := false
+		if agent.IsQuotaOutage(err) && ctx.Err() == nil {
+			// A seat reset is a recoverable gate wait. Keep its deadline on the
+			// durable finding instead of recording a failed step and run.
+			message := safeurl.RedactText(err.Error())
+			findings, marshalErr := json.Marshal(map[string]any{
+				"findings": []map[string]string{{
+					"severity": "error", "action": "ask-user",
+					"description": message,
+				}},
+				"summary": "Agent seat unavailable until quota reset",
+			})
+			if marshalErr != nil {
+				return false, "", fmt.Errorf("encode quota park: %w", marshalErr)
+			}
+			writeLog("quota park: " + message)
+			outcome = &StepOutcome{NeedsApproval: true, Findings: string(findings)}
+			err = nil
+			quotaPark = true
+		}
 		// A cross-run recovered selection skips exactly one duplicate fixer
 		// invocation. Any later explicit or automatic fix in this execution
 		// must run normally.
@@ -1276,6 +1297,12 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			approvalFields["selected_findings_count"] = selectedCount
 		}
 		telemetry.Track("approval", approvalFields)
+		if quotaPark && (response.action == types.ActionApprove || response.action == types.ActionFix) {
+			// Approval after a quota refusal authorizes a fresh attempt, not a
+			// claim that the unexecuted review or fix already passed.
+			phaseStart = time.Now()
+			continue
+		}
 
 		switch response.action {
 		case types.ActionApprove:

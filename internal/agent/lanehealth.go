@@ -28,7 +28,11 @@ type LaneOutageError struct {
 }
 
 func (e *LaneOutageError) Error() string {
-	msg := fmt.Sprintf("agent lane %s is quota-exhausted until %s", e.Lane, e.Until.Local().Format(resetTimeLayout))
+	subject := "agent lane"
+	if strings.HasPrefix(e.Lane, "route=") {
+		subject = "agent route"
+	}
+	msg := fmt.Sprintf("%s %s is quota-exhausted until %s", subject, e.Lane, e.Until.Local().Format(resetTimeLayout))
 	if e.Reason != "" {
 		msg += ": " + e.Reason
 	}
@@ -109,9 +113,8 @@ func LaneName(name types.AgentName) string {
 	return string(name)
 }
 
-// laneHealthAgent skips an invocation entirely while its lane is known to be
-// quota-exhausted, and records the outage when a provider quota banner is what
-// failed the invocation.
+// laneHealthAgent skips an invocation while its declared route/model/seat is
+// known to be quota-exhausted. Generic agents still use their lane name.
 //
 // Marking happens here rather than in the fallback wrapper so a single
 // configured agent - the default - also fails fast with a reset time instead
@@ -151,6 +154,10 @@ func WithLaneHealth(a Agent, store LaneHealthStore, now func() time.Time) Agent 
 func (l laneHealthAgent) Run(ctx context.Context, opts RunOpts) (*Result, error) {
 	opts = withInvocationIdentity(opts, l.Agent)
 	lane := l.Agent.Name()
+	key := gateRouteKey(opts)
+	if key == "" {
+		key = lane
+	}
 	startedAt := l.now()
 	// A lane that reports its own attempts emits them from below this wrapper,
 	// carrying the raw provider error, before the outage verdict exists. This
@@ -158,9 +165,9 @@ func (l laneHealthAgent) Run(ctx context.Context, opts RunOpts) (*Result, error)
 	// not report attempts is reported by the caller from this wrapper's return
 	// value, which already carries the verdict.
 	reportsAttempts := ReportsAgentAttempts(l.Agent)
-	if outage, down := l.store.Outage(lane); down {
-		if !l.store.ClaimProbe(lane) {
-			err := &LaneOutageError{Lane: lane, Until: outage.Until, Reason: outage.Reason}
+	if outage, down := l.store.Outage(key); down {
+		if !l.store.ClaimProbe(key) {
+			err := &LaneOutageError{Lane: key, Until: outage.Until, Reason: outage.Reason}
 			if opts.OnChunk != nil {
 				opts.OnChunk("\n" + err.Error() + "\n")
 			}
@@ -173,8 +180,8 @@ func (l laneHealthAgent) Run(ctx context.Context, opts RunOpts) (*Result, error)
 			return nil, err
 		}
 		if opts.OnChunk != nil {
-			opts.OnChunk(fmt.Sprintf("\nagent lane %s is marked quota-exhausted until %s; sending one probe invocation to check for early recovery\n",
-				lane, outage.Until.Local().Format(resetTimeLayout)))
+			opts.OnChunk(fmt.Sprintf("\nagent route %s is marked quota-exhausted until %s; sending one probe invocation to check for early recovery\n",
+				key, outage.Until.Local().Format(resetTimeLayout)))
 		}
 	}
 
@@ -192,7 +199,7 @@ func (l laneHealthAgent) Run(ctx context.Context, opts RunOpts) (*Result, error)
 		// misread banner - is dropped rather than left to expire on its own. A mark
 		// a concurrent run observed after this invocation started describes a later
 		// state of the account and survives.
-		_ = l.store.ClearObservedBefore(lane, startedAt)
+		_ = l.store.ClearObservedBefore(key, startedAt)
 		return result, nil
 	}
 	if ctx.Err() != nil {
@@ -211,10 +218,18 @@ func (l laneHealthAgent) Run(ctx context.Context, opts RunOpts) (*Result, error)
 	}
 	// Only a failed invocation is classified, and its text comes from the
 	// provider's stderr and error channel, never from agent-authored output.
-	if outage, quota := lanehealth.Classify(lane, err.Error(), l.now()); quota {
+	if route, model := runnerRefusalIdentity(err.Error()); route != "" && model != "" {
+		// The runner's declaration outranks the shared agent executable.
+		// A policy change between launch and refusal must never poison the
+		// route that the next invocation actually declares.
+		if !strings.HasPrefix(key, "route="+route+" model="+model+" seat=") {
+			key = routeKey(route, model, "")
+		}
+	}
+	if outage, quota := lanehealth.Classify(key, err.Error(), l.now()); quota {
 		_ = l.store.Mark(outage)
 		outageErr := &LaneOutageError{
-			Lane:   lane,
+			Lane:   key,
 			Until:  outage.Until,
 			Reason: outage.Reason,
 			cause:  err,

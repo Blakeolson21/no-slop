@@ -1,12 +1,40 @@
 package lanehealth
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestStoreRouteMarkDoesNotEnterLegacyLaneMap(t *testing.T) {
+	now := mustTime(t, "2026-09-23 03:44")
+	path := filepath.Join(t.TempDir(), "lane-health.json")
+	store := NewStore(path, func() time.Time { return now })
+	key := "route=local_codex_exec model=gpt-reserve seat=/seats/reserve"
+	if err := store.Mark(Outage{Lane: key, Until: now.Add(3 * time.Hour), Reason: "GATE_RUNNER_REFUSAL"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.Outage(key); !ok {
+		t.Fatal("route mark missing")
+	}
+	if _, ok := store.Outage("claude"); ok {
+		t.Fatal("route refusal poisoned the shared agent lane")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state struct{ Lanes, Routes map[string]Outage }
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Lanes) != 0 || len(state.Routes) != 1 {
+		t.Fatalf("route marker leaked into legacy lane map: %s", data)
+	}
+}
 
 func testStore(t *testing.T, now *time.Time) *Store {
 	t.Helper()

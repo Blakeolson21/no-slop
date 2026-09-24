@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,8 +14,96 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
+func TestGateRefusalMarksOnlyItsDeclaredRouteAndSeat(t *testing.T) {
+	now := time.Date(2026, 9, 23, 6, 50, 0, 0, time.UTC)
+	store := laneTestStore(t, &now)
+	policy := filepath.Join(t.TempDir(), "gate-runner-policy.json")
+	config := `{"turn_declarations":{"fix":{"route":"local_codex_exec","model":"gpt-reserve","state_paths":["gate_worktree","codex_home:/seats/reserve"]},"rebase":{"route":"local_codex_exec","model":"gpt-reserve","state_paths":["gate_worktree","codex_home:/seats/reserve"]},"intent":{"route":"local_codex_exec","model":"gpt-reserve","state_paths":["gate_worktree","codex_home:/seats/other"]},"test":{"route":"local_codex_exec","model":"gpt-other","state_paths":["gate_worktree","codex_home:/seats/reserve"]},"review":{"route":"local_claude_exec","model":"claude-opus-5-5","claude_config_dir":"/seats/opus"}}}`
+	if err := os.WriteFile(policy, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MO_GATE_RUNNER_POLICY", policy)
+	calls := 0
+	inner := &fallbackTestAgent{name: "claude", run: func() (*Result, error) {
+		calls++
+		if calls == 1 {
+			return nil, errors.New(`claude exited: exit status 1: GATE_RUNNER_REFUSAL {"turn":"fix","route":"local_codex_exec","declared_model":"gpt-reserve","error_message":"You've hit your usage limit. Try again at Sep 26th, 2026 3:57 PM."}`)
+		}
+		return &Result{Text: "review ran"}, nil
+	}}
+	ag := WithLaneHealth(&gateRunnerTestAgent{inner}, store, func() time.Time { return now })
+	if _, err := ag.Run(context.Background(), RunOpts{Purpose: "review-fix", Env: []string{"MO_GATE_TURN_KIND=fix"}}); !IsQuotaOutage(err) {
+		t.Fatalf("fix refusal = %v, want quota outage", err)
+	}
+	if _, marked := store.Outage("claude"); marked {
+		t.Fatal("gate refusal marked the whole claude lane")
+	}
+	marked, exists := store.Outage("route=local_codex_exec model=gpt-reserve seat=/seats/reserve")
+	if !exists || !marked.Until.Equal(time.Date(2026, 9, 26, 15, 57, 0, 0, time.UTC)) {
+		t.Fatalf("route mark lost the provider reset: %#v exists=%v", marked, exists)
+	}
+	result, err := ag.Run(context.Background(), RunOpts{Purpose: "review", Env: []string{"MO_GATE_TURN_KIND=review"}})
+	if err != nil || result == nil || result.Text != "review ran" {
+		t.Fatalf("healthy Opus review blocked: result=%#v error=%v", result, err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want fix and review", calls)
+	}
+	if _, err := ag.Run(context.Background(), RunOpts{Purpose: "rebase", Env: []string{"MO_GATE_TURN_KIND=rebase"}}); !IsQuotaOutage(err) {
+		t.Fatalf("same route and seat should stay marked: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("same seat was launched despite mark: %d calls", calls)
+	}
+	if _, err := ag.Run(context.Background(), RunOpts{Purpose: "intent", Env: []string{"MO_GATE_TURN_KIND=intent"}}); err != nil {
+		t.Fatalf("other seat on same route was blocked: %v", err)
+	}
+	if calls != 3 {
+		t.Fatalf("other seat was not launched: %d calls", calls)
+	}
+	if _, err := ag.Run(context.Background(), RunOpts{Purpose: "test-evidence", Env: []string{"MO_GATE_TURN_KIND=test"}}); err != nil {
+		t.Fatalf("other model on same seat was blocked: %v", err)
+	}
+	if calls != 4 {
+		t.Fatalf("other model was not launched: %d calls", calls)
+	}
+}
+
+func TestGateRefusalProbeIntervalIsMinutes(t *testing.T) {
+	if lanehealth.ProbeInterval > 10*time.Minute {
+		t.Fatalf("probe interval %s exceeds minutes-scale recovery", lanehealth.ProbeInterval)
+	}
+}
+
+func TestNativeAgentDoesNotInheritGateRunnerRoutePolicy(t *testing.T) {
+	now := time.Date(2026, 9, 23, 6, 50, 0, 0, time.UTC)
+	store := laneTestStore(t, &now)
+	policy := filepath.Join(t.TempDir(), "gate-runner-policy.json")
+	if err := os.WriteFile(policy, []byte(`{"turn_declarations":{"review":{"route":"local_claude_exec","model":"claude-opus-5-5","claude_config_dir":"/seats/opus"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MO_GATE_RUNNER_POLICY", policy)
+	native := &fallbackTestAgent{name: "claude", run: func() (*Result, error) {
+		return nil, errors.New("You've hit your session limit · resets in 1h")
+	}}
+	ag := WithLaneHealth(native, store, func() time.Time { return now })
+	if _, err := ag.Run(context.Background(), RunOpts{Purpose: "review", Env: []string{"MO_GATE_TURN_KIND=review"}}); !IsQuotaOutage(err) {
+		t.Fatalf("native quota = %v", err)
+	}
+	if _, ok := store.Outage("claude"); !ok {
+		t.Fatal("native agent quota was incorrectly attributed to the MO gate route")
+	}
+}
+
 const codexQuotaStderr = "codex exited: exit status 1: You've hit your usage limit. " +
 	"Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Aug 7th, 2026 11:06 PM."
+
+type gateRunnerTestAgent struct{ *fallbackTestAgent }
+
+func (a *gateRunnerTestAgent) InvocationIdentity() InvocationIdentity {
+	path := "/tmp/glm-gate-review"
+	return InvocationIdentity{ConfiguredAgent: "claude", Executable: &path}
+}
 
 func laneTestStore(t *testing.T, now *time.Time) *lanehealth.Store {
 	t.Helper()

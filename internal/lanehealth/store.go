@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Blakeolson21/no-slop/internal/filelock"
@@ -15,7 +16,7 @@ import (
 // grow the file forever. Entries closest to expiry are dropped first.
 const maxLanes = 32
 
-// Store persists lane outages in a small JSON file under NS_HOME so a mark
+// Store persists lane and gate-route outages in a small JSON file under NS_HOME so a mark
 // discovered by one run is honored by every concurrent run and by every later
 // run, including after a daemon restart. Without that, each run pays a full
 // agent spawn to rediscover the same exhausted lane - the 2026-08-04 incident,
@@ -24,7 +25,7 @@ const maxLanes = 32
 //
 // Reads are lock-free and see whole files only, because writes land via
 // os.Rename. Writes take a short advisory file lock so two runs marking
-// different lanes at the same moment cannot lose one another's mark.
+// different lanes or routes at the same moment cannot lose one another's mark.
 type Store struct {
 	path string
 	now  func() time.Time
@@ -40,7 +41,15 @@ func NewStore(path string, now func() time.Time) *Store {
 }
 
 type state struct {
-	Lanes map[string]Outage `json:"lanes"`
+	Lanes  map[string]Outage `json:"lanes"`
+	Routes map[string]Outage `json:"routes,omitempty"`
+}
+
+func (s *state) entries(key string) map[string]Outage {
+	if strings.HasPrefix(key, "route=") {
+		return s.Routes
+	}
+	return s.Lanes
 }
 
 // Outage reports the live outage for lane, if any. A mark whose reset time has
@@ -50,7 +59,7 @@ func (s *Store) Outage(lane string) (Outage, bool) {
 		return Outage{}, false
 	}
 	current := s.load()
-	outage, ok := current.Lanes[lane]
+	outage, ok := current.entries(lane)[lane]
 	if !ok || !outage.Until.After(s.now()) {
 		return Outage{}, false
 	}
@@ -63,7 +72,7 @@ func (s *Store) Mark(outage Outage) error {
 		return nil
 	}
 	return s.mutate(func(current *state) {
-		current.Lanes[outage.Lane] = outage
+		current.entries(outage.Lane)[outage.Lane] = outage
 	})
 }
 
@@ -89,13 +98,13 @@ func (s *Store) ClearObservedBefore(lane string, startedAt time.Time) error {
 	}
 	return s.mutate(func(current *state) {
 		if clearable(*current, lane, startedAt) {
-			delete(current.Lanes, lane)
+			delete(current.entries(lane), lane)
 		}
 	})
 }
 
 func clearable(current state, lane string, startedAt time.Time) bool {
-	outage, present := current.Lanes[lane]
+	outage, present := current.entries(lane)[lane]
 	return present && !outage.ObservedAt.After(startedAt)
 }
 
@@ -127,9 +136,9 @@ func (s *Store) ClaimProbe(lane string) bool {
 		if !write {
 			return
 		}
-		outage := current.Lanes[lane]
+		outage := current.entries(lane)[lane]
 		outage.LastProbeAt = now
-		current.Lanes[lane] = outage
+		current.entries(lane)[lane] = outage
 		claimed = claim
 	})
 	if err != nil {
@@ -142,7 +151,7 @@ func (s *Store) ClaimProbe(lane string) bool {
 // whether that write is a claim the caller may probe on. Starting the clock for
 // a mark with no observation time is a write that is not a claim.
 func probeDecision(current state, lane string, now time.Time) (write, claim bool) {
-	outage, ok := current.Lanes[lane]
+	outage, ok := current.entries(lane)[lane]
 	if !ok || !outage.Until.After(now) {
 		return false, false
 	}
@@ -176,6 +185,11 @@ func (s *Store) Snapshot() []Outage {
 			live = append(live, outage)
 		}
 	}
+	for _, outage := range current.Routes {
+		if outage.Until.After(now) {
+			live = append(live, outage)
+		}
+	}
 	sort.Slice(live, func(i, j int) bool { return live[i].Lane < live[j].Lane })
 	return live
 }
@@ -203,33 +217,42 @@ func (s *Store) load() state {
 	data, err := os.ReadFile(s.path)
 	if err == nil {
 		var parsed state
-		if json.Unmarshal(data, &parsed) == nil && parsed.Lanes != nil {
+		if json.Unmarshal(data, &parsed) == nil && (parsed.Lanes != nil || parsed.Routes != nil) {
+			if parsed.Lanes == nil {
+				parsed.Lanes = map[string]Outage{}
+			}
+			if parsed.Routes == nil {
+				parsed.Routes = map[string]Outage{}
+			}
 			return parsed
 		}
 	}
-	return state{Lanes: map[string]Outage{}}
+	return state{Lanes: map[string]Outage{}, Routes: map[string]Outage{}}
 }
 
 func (s *Store) prune(current *state) {
 	now := s.now()
-	for lane, outage := range current.Lanes {
+	pruneEntries(current.Lanes, now)
+	pruneEntries(current.Routes, now)
+}
+
+func pruneEntries(entries map[string]Outage, now time.Time) {
+	for lane, outage := range entries {
 		if !outage.Until.After(now) {
-			delete(current.Lanes, lane)
+			delete(entries, lane)
 		}
 	}
-	if len(current.Lanes) <= maxLanes {
+	if len(entries) <= maxLanes {
 		return
 	}
-	lanes := make([]Outage, 0, len(current.Lanes))
-	for _, outage := range current.Lanes {
+	lanes := make([]Outage, 0, len(entries))
+	for _, outage := range entries {
 		lanes = append(lanes, outage)
 	}
 	sort.Slice(lanes, func(i, j int) bool { return lanes[i].Until.After(lanes[j].Until) })
-	kept := make(map[string]Outage, maxLanes)
-	for _, outage := range lanes[:maxLanes] {
-		kept[outage.Lane] = outage
+	for _, outage := range lanes[maxLanes:] {
+		delete(entries, outage.Lane)
 	}
-	current.Lanes = kept
 }
 
 // save writes atomically via rename so a concurrent reader never observes a
