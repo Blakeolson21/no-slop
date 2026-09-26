@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Blakeolson21/no-slop/internal/safeurl"
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
@@ -237,7 +238,9 @@ func init() {
 // deliberately not an input: class identity must survive a defect moving
 // between files.
 func findingTokens(f types.Finding) map[string]struct{} {
-	text := strings.ToLower(f.Category + " " + f.Description)
+	// Redact before tokenization: a credential copied into a class label
+	// no longer has URL syntax for output redaction to recognize.
+	text := strings.ToLower(safeurl.RedactText(f.Category + " " + f.Description))
 	tokens := map[string]struct{}{}
 	var b strings.Builder
 	flush := func() {
