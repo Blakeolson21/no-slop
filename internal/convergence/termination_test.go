@@ -1,6 +1,7 @@
 package convergence
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -30,7 +31,11 @@ func TestTerminalLimits(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var rounds []*db.StepRound
 			for i, f := range tc.findings {
-				rounds = append(rounds, makeRound(t, i+1, 1, f))
+				if f.Description == "" {
+					rounds = append(rounds, makeRound(t, i+1, 1))
+				} else {
+					rounds = append(rounds, makeRound(t, i+1, 1, f))
+				}
 			}
 			report := BuildReport(rounds, nil, false, tc.limits)
 			if (report.StopReason != "") != tc.stop {
@@ -40,5 +45,26 @@ func TestTerminalLimits(t *testing.T) {
 				t.Fatal("missing ticket")
 			}
 		})
+	}
+}
+
+// A ticket can be larger than an IPC frame. Snapshots carry its local path,
+// while the full acceptance seeds remain available to the executor for export.
+func TestTerminalTicketSnapshotContainsOnlyArtifactPath(t *testing.T) {
+	report := BuildReport([]*db.StepRound{makeRound(t, 1, 1, finding("a.go", strings.Repeat("timeout detail ", 100000)))}, nil, false, Thresholds{MaxRounds: 1})
+	report.RedesignTicketPath = "/logs/run/redesign.md"
+	if len(report.RedesignTicket) < 1<<20 {
+		t.Fatal("fixture must exceed an IPC frame")
+	}
+	payload, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(payload) > 1024 {
+		t.Fatalf("snapshot includes ticket body: %d bytes", len(payload))
+	}
+	restored, ok := ParseReport(string(payload))
+	if !ok || restored.RedesignTicketPath != report.RedesignTicketPath || restored.RedesignTicket != "" {
+		t.Fatalf("snapshot contract: %+v", restored)
 	}
 }

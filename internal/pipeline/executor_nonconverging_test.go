@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -99,7 +100,7 @@ review:
 			if strings.Contains(text, "user:secret") {
 				t.Fatal("ticket leaked URL credentials")
 			}
-			log, err := os.ReadFile(p.RunLogDir(run.ID) + "/review.log")
+			log, err := os.ReadFile(filepath.Join(p.RunLogDir(run.ID), "review.log"))
 			if err != nil {
 				t.Fatal(err)
 			}
