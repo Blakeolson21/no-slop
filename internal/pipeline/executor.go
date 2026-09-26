@@ -37,6 +37,7 @@ const (
 var errSeatBlocked = errors.New("run blocked while waiting for an agent seat")
 
 type approvalResponse struct {
+	note          string
 	action        types.ApprovalAction
 	findingIDs    []string
 	instructions  map[string]string
@@ -162,7 +163,7 @@ func (e *Executor) Respond(step types.StepName, action types.ApprovalAction, fin
 // RespondWithOverrides is like Respond but also carries per-finding user
 // instructions and user-authored findings. Both are merged into the round's
 // findings on a fix action before the fix agent runs.
-func (e *Executor) RespondWithOverrides(step types.StepName, action types.ApprovalAction, findingIDs []string, instructions map[string]string, addedFindings []types.Finding) error {
+func (e *Executor) RespondWithOverrides(step types.StepName, action types.ApprovalAction, findingIDs []string, instructions map[string]string, addedFindings []types.Finding, note ...string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if !e.waiting {
@@ -171,7 +172,14 @@ func (e *Executor) RespondWithOverrides(step types.StepName, action types.Approv
 	if step != e.waitingStep {
 		return fmt.Errorf("step mismatch: responding to %q but %q is awaiting approval", step, e.waitingStep)
 	}
-	e.enqueueResponse(approvalResponse{action: action, findingIDs: findingIDs, instructions: instructions, addedFindings: addedFindings})
+	var approvalNote string
+	if len(note) > 0 {
+		approvalNote = strings.TrimSpace(note[0])
+	}
+	if approvalNote != "" && action != types.ActionApprove {
+		return fmt.Errorf("approval note requires approve action")
+	}
+	e.enqueueResponse(approvalResponse{note: approvalNote, action: action, findingIDs: findingIDs, instructions: instructions, addedFindings: addedFindings})
 	return nil
 }
 
@@ -556,6 +564,11 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 		return completeReconciledGate()
 	}
 
+	if response.note != "" {
+		if err := e.db.SetStepRoundApprovalNote(gate.lastRoundID, safeurl.RedactText(response.note)); err != nil {
+			return e.failRun(run, repo, err, ctx)
+		}
+	}
 	approvalFields := telemetry.Fields{
 		"step":                           string(gate.step.Name()),
 		"action":                         string(response.action),
@@ -1309,6 +1322,12 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			goto done
 		}
 
+		if response.note != "" {
+			if err := e.db.SetStepRoundApprovalNote(currentRoundID, safeurl.RedactText(response.note)); err != nil {
+				return false, "", err
+			}
+			writeLog("approval note: " + safeurl.RedactText(response.note))
+		}
 		approvalFields := telemetry.Fields{
 			"step":                           string(stepName),
 			"action":                         string(response.action),

@@ -200,7 +200,7 @@ Run the pipeline and decide on its findings as they come up:
    Choose one response:
    ```sh
    # accept the step as-is and continue
-   no-slop axi respond --action approve
+   no-slop axi respond --action approve --note "<adjudicator reason>"
 
    # have the pipeline fix specific findings, then continue
    no-slop axi respond --action fix --findings <id1,id2> --instructions "<optional guidance>"

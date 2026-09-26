@@ -147,6 +147,7 @@ type SubscribeParams struct {
 // an identical keyed request returns its receipt without resolving another gate.
 type RespondParams struct {
 	IdempotencyKey string               `json:"idempotency_key,omitempty"`
+	Note           string               `json:"note,omitempty"`
 	RunID          string               `json:"run_id"`
 	Step           types.StepName       `json:"step"`
 	Action         types.ApprovalAction `json:"action"`

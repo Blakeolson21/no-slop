@@ -720,7 +720,7 @@ func successReportHelp(fixes []fixRow) []string {
 }
 
 func newAxiRespondCmd() *cobra.Command {
-	var action, step, findings, instructions, addFinding, runID, idempotencyKey string
+	var action, step, findings, instructions, addFinding, runID, idempotencyKey, note string
 	var noWait, receipt bool
 	var autoYes bool
 
@@ -745,6 +745,7 @@ func newAxiRespondCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			responseArgs := respondArgs{
 				action:         action,
+				note:           note,
 				runID:          runID,
 				idempotencyKey: idempotencyKey,
 				noWait:         noWait,
@@ -770,6 +771,7 @@ func newAxiRespondCmd() *cobra.Command {
 	cmd.Flags().StringVar(&idempotencyKey, "idempotency-key", "", "stable key for one ruling; requires --run and --step (except --receipt)")
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "return the acceptance receipt without waiting for execution")
 	cmd.Flags().BoolVar(&receipt, "receipt", false, "read acceptance locally without mutation; requires --run and --idempotency-key")
+	cmd.Flags().StringVar(&note, "note", "", "adjudicator reason stored with this approval (with --action approve)")
 	cmd.Flags().StringVar(&action, "action", "", "approve | fix | skip (required)")
 	cmd.Flags().StringVar(&step, "step", "", "step to respond to (default: the step awaiting approval)")
 	cmd.Flags().StringVar(&findings, "findings", "", "comma-separated finding IDs to fix (with --action fix)")
@@ -780,6 +782,7 @@ func newAxiRespondCmd() *cobra.Command {
 }
 
 type respondArgs struct {
+	note           string
 	runID          string
 	idempotencyKey string
 	noWait         bool
@@ -816,6 +819,9 @@ func runAxiRespond(cmd *cobra.Command, ra respondArgs) error {
 	default:
 		return emitError(cmd, 2, fmt.Sprintf("unknown action %q", ra.action),
 			"Valid actions: approve, fix, skip")
+	}
+	if strings.TrimSpace(ra.note) != "" && act != types.ActionApprove {
+		return emitError(cmd, 2, "--note requires --action approve")
 	}
 
 	env, err := openAxiEnvWithOptions(axiEnvOptions{ensureDaemonConn: true, deferGlobalConfigErrorForRunningDaemon: true, explicitRunID: ra.runID})
@@ -885,7 +891,7 @@ func runAxiRespond(cmd *cobra.Command, ra respondArgs) error {
 		key = newResponseKey()
 	}
 	fmt.Fprintf(cmd.ErrOrStderr(), "Response acceptance check: %s\n", responseReceiptCommand(runID, key))
-	result, err := sendResponse(ctx, env.client, ipc.RespondParams{RunID: runID, Step: stepName, Action: act, FindingIDs: findingIDs, Instructions: instructions, AddedFindings: added, IdempotencyKey: key})
+	result, err := sendResponse(ctx, env.client, ipc.RespondParams{RunID: runID, Step: stepName, Action: act, FindingIDs: findingIDs, Instructions: instructions, AddedFindings: added, IdempotencyKey: key, Note: strings.TrimSpace(ra.note)})
 	if err != nil {
 		return emitError(cmd, 1, fmt.Sprintf("respond to %s: %v", stepName, err))
 	}

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/Blakeolson21/no-slop/internal/db"
 	"github.com/Blakeolson21/no-slop/internal/ipc"
@@ -18,6 +19,9 @@ func responseHash(params ipc.RespondParams) (string, error) {
 	case types.ActionApprove, types.ActionFix, types.ActionSkip, types.ActionAbort:
 	default:
 		return "", fmt.Errorf("unknown response action %q", params.Action)
+	}
+	if strings.TrimSpace(params.Note) != "" && params.Action != types.ActionApprove {
+		return "", fmt.Errorf("approval note requires approve action")
 	}
 	data, err := json.Marshal(params)
 	if err != nil {
@@ -78,6 +82,6 @@ func (e *Executor) AcceptResponse(params ipc.RespondParams) (*ipc.RespondResult,
 			return nil, err
 		}
 	}
-	e.enqueueResponse(approvalResponse{action: params.Action, findingIDs: params.FindingIDs, instructions: params.Instructions, addedFindings: params.AddedFindings})
+	e.enqueueResponse(approvalResponse{note: strings.TrimSpace(params.Note), action: params.Action, findingIDs: params.FindingIDs, instructions: params.Instructions, addedFindings: params.AddedFindings})
 	return result, nil
 }
