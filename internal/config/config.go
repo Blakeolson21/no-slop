@@ -267,6 +267,8 @@ type ReviewRaw struct {
 // thresholds. Pointer fields distinguish "not set" (default applies) from an
 // explicit 0 (that trigger disabled).
 type ConvergenceRaw struct {
+	MaxRounds           *int `yaml:"max_rounds"`
+	MaxRecurringRounds  *int `yaml:"max_recurring_rounds"`
 	NonDecreasingRounds *int `yaml:"non_decreasing_rounds"`
 	RecurringRounds     *int `yaml:"recurring_rounds"`
 	BudgetMinutes       *int `yaml:"budget_minutes"`
@@ -276,6 +278,8 @@ type ConvergenceRaw struct {
 // defaults in docs/src/content/docs/reference/repo-config.md; change both
 // together.
 const (
+	DefaultReviewConvergenceMaxRounds           = 5
+	DefaultReviewConvergenceMaxRecurringRounds  = 3
 	DefaultReviewConvergenceNonDecreasingRounds = 3
 	DefaultReviewConvergenceRecurringRounds     = 3
 	DefaultReviewConvergenceBudgetMinutes       = 120
@@ -576,6 +580,10 @@ type Review struct {
 // Convergence holds the resolved review convergence guard thresholds. A zero
 // value for a field disables that trigger.
 type Convergence struct {
+	// MaxRounds and MaxRecurringRounds terminate a review with outstanding
+	// actionable findings, before funding another automatic or requested fix.
+	MaxRounds          int
+	MaxRecurringRounds int
 	// NonDecreasingRounds trips the guard when the review findings count has
 	// not decreased across this many trailing consecutive rounds.
 	NonDecreasingRounds int
@@ -1787,6 +1795,8 @@ func validateReviewRaw(review ReviewRaw) error {
 		key   string
 		value *int
 	}{
+		{"max_rounds", review.Convergence.MaxRounds},
+		{"max_recurring_rounds", review.Convergence.MaxRecurringRounds},
 		{"non_decreasing_rounds", review.Convergence.NonDecreasingRounds},
 		{"recurring_rounds", review.Convergence.RecurringRounds},
 		{"budget_minutes", review.Convergence.BudgetMinutes},
@@ -1803,9 +1813,17 @@ func validateReviewRaw(review ReviewRaw) error {
 // default.
 func resolveConvergence(raw ConvergenceRaw) Convergence {
 	resolved := Convergence{
+		MaxRounds:           DefaultReviewConvergenceMaxRounds,
+		MaxRecurringRounds:  DefaultReviewConvergenceMaxRecurringRounds,
 		NonDecreasingRounds: DefaultReviewConvergenceNonDecreasingRounds,
 		RecurringRounds:     DefaultReviewConvergenceRecurringRounds,
 		BudgetMinutes:       DefaultReviewConvergenceBudgetMinutes,
+	}
+	if raw.MaxRounds != nil {
+		resolved.MaxRounds = *raw.MaxRounds
+	}
+	if raw.MaxRecurringRounds != nil {
+		resolved.MaxRecurringRounds = *raw.MaxRecurringRounds
 	}
 	if raw.NonDecreasingRounds != nil {
 		resolved.NonDecreasingRounds = *raw.NonDecreasingRounds

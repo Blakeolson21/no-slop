@@ -9,10 +9,11 @@
 // only render what was persisted, so there is exactly one evaluation owner
 // and no threshold drift between the daemon and the CLI.
 //
-// The guard is advisory by design: a tripped report never aborts a run. It
+// The warning guard is advisory: a tripped warning never aborts a run. It
 // stops the pipeline from spending further automatic fix rounds and parks the
 // gate for an explicit decision, with the full history attached, and the
-// operator can still respond fix deliberately.
+// operator can still respond fix deliberately. Separate hard limits produce
+// StopReason and a redesign ticket; the executor terminates those runs.
 package convergence
 
 import (
@@ -29,6 +30,9 @@ import (
 // Report is the per-review-step convergence report persisted as JSON on
 // step_results.convergence_json and rendered at the gate.
 type Report struct {
+	StopReason         string `json:"stop_reason,omitempty"`
+	RedesignTicket     string `json:"-"`
+	RedesignTicketPath string `json:"redesign_ticket_path,omitempty"`
 	// RoundFindings is the findings count of every review round so far, in
 	// round order (e.g. 1,1,1,2,3,3,3 for the observed ladder).
 	RoundFindings []int `json:"round_findings"`
@@ -64,6 +68,8 @@ func (r *Report) Tripped() bool {
 // Thresholds configure the guard. A zero value disables that trigger, so the
 // zero Thresholds is a fully disabled guard that still produces telemetry.
 type Thresholds struct {
+	MaxRounds          int
+	MaxRecurringRounds int
 	// NonDecreasingRounds trips the guard when the findings count has not
 	// decreased across this many trailing consecutive rounds (all non-zero).
 	NonDecreasingRounds int
@@ -106,6 +112,10 @@ func BuildReport(rounds []*db.StepRound, submittedFiles []string, submittedKnown
 	}
 	report.Recurring = recurringClasses(entries)
 	report.Warning = evaluate(&report, t)
+	report.StopReason = stopReason(rounds, t)
+	if report.StopReason != "" {
+		report.RedesignTicket = redesignTicket(rounds, report.StopReason)
+	}
 	return report
 }
 
