@@ -93,9 +93,13 @@ func TestReviewFallbackAndDuplicateEventsCannotContinueGateTwice(t *testing.T) {
 			Steps: []ipc.StepResultInfo{{StepName: types.StepReview, Status: types.StepStatusParkedForApproval}}}
 	}}
 	srv := ipc.NewServer()
-	srv.Handle(ipc.MethodRespond, func(context.Context, json.RawMessage) (interface{}, error) {
+	srv.Handle(ipc.MethodRespond, func(_ context.Context, raw json.RawMessage) (interface{}, error) {
+		var params ipc.RespondParams
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return nil, err
+		}
 		responds.Add(1)
-		return &ipc.RespondResult{OK: true}, nil
+		return &ipc.RespondResult{OK: true, RunID: params.RunID, Step: params.Step, IdempotencyKey: params.IdempotencyKey}, nil
 	})
 	client, _ := startDriveTestServer(t, srv)
 	r := newRunReconciler(source, "review")
