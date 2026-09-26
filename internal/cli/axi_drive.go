@@ -906,6 +906,28 @@ func runAxiRespond(cmd *cobra.Command, ra respondArgs) error {
 	return renderDriveResult(cmd, final, ciReady)
 }
 
+// newAxiCancelCmd uses the exact-run abort path, including its bounded wait
+// for durable terminal truth and its refusal to start a stopped daemon.
+func newAxiCancelCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:           "cancel <run>",
+		Short:         "Cancel a specific pipeline run by ID",
+		Long:          "Cancel a specific run, including a duplicate run on the same branch. Works outside its worktree. Cancellation succeeds only after terminal state is confirmed. Pipeline commits may still require custody recovery.",
+		Args:          cobra.ExactArgs(1),
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			runID := strings.TrimSpace(args[0])
+			if runID == "" {
+				return emitError(cmd, 2, "run ID is required")
+			}
+			return trackAxiSurface("axi-cancel", "/axi/cancel", nil, func() error {
+				return runAxiAbortByRunID(cmd, runID)
+			})
+		},
+	}
+}
+
 func newAxiAbortCmd() *cobra.Command {
 	var runID string
 	cmd := &cobra.Command{

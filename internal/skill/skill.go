@@ -368,6 +368,7 @@ no-slop axi sync --recover  # return custody after a terminal run left unpublish
 no-slop axi logs --step <name> --full   # full log output of one step
 no-slop axi abort         # cancel the current-branch active run
 no-slop axi abort --run <id>   # cancel a specific run by id (works outside its worktree)
+no-slop axi cancel <id>       # equivalent exact-run cancellation, including a duplicate run
 ` + "```" + `
 
 ## Reading the output
