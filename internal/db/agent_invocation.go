@@ -75,8 +75,11 @@ type AgentInvocation struct {
 	StartedAt       int64
 	CompletedAt     int64
 	DurationMS      int64
-	ExitStatus      string // ok | error | cancelled
-	FailureCategory string // parse | exit | spawn | quota | cancelled | other ("" when ok)
+	ExitStatus      string // ok | error | cancelled | refused
+	FailureCategory string // parse | exit | spawn | quota | cancelled | fix_budget_exhausted | other ("" when ok)
+	// FixBudgetLimit is the observed exhausted MO budget, including zero.
+	// Nil for other outcomes and legacy records; never inferred from the env.
+	FixBudgetLimit  *int
 	InputTokens     int
 	OutputTokens    int
 	CacheReadTokens int
@@ -136,7 +139,7 @@ const agentInvocationColumns = `id, run_id, step_name, round, purpose, agent, re
 	delta_input_tokens, delta_output_tokens, delta_cache_read_tokens,
 	model_roundtrips, tool_calls,
 	tool_wait_calls, tool_test_lint_calls, tool_edit_calls, tool_read_calls, tool_git_calls, tool_other_calls,
-	workload_files, workload_lines, finding_count`
+	workload_files, workload_lines, finding_count, fix_budget_limit`
 
 // agentInvocationInsertPlaceholders has one '?' per agentInvocationColumns entry.
 const agentInvocationInsertPlaceholders = `?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -147,7 +150,7 @@ const agentInvocationInsertPlaceholders = `?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 	?, ?, ?,
 	?, ?,
 	?, ?, ?, ?, ?, ?,
-	?, ?, ?`
+	?, ?, ?, ?`
 
 // InsertAgentInvocation records one completed agent invocation. Nil pointer
 // fields are stored as SQL NULL (database/sql dereferences non-nil pointers).
@@ -169,7 +172,7 @@ func (d *DB) InsertAgentInvocation(inv AgentInvocation) (*AgentInvocation, error
 		inv.DeltaInputTokens, inv.DeltaOutputTokens, inv.DeltaCacheReadTokens,
 		inv.ModelRoundtrips, inv.ToolCalls,
 		inv.ToolWaitCalls, inv.ToolTestLintCalls, inv.ToolEditCalls, inv.ToolReadCalls, inv.ToolGitCalls, inv.ToolOtherCalls,
-		inv.WorkloadFiles, inv.WorkloadLines, inv.FindingCount,
+		inv.WorkloadFiles, inv.WorkloadLines, inv.FindingCount, inv.FixBudgetLimit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("insert agent invocation: %w", err)
@@ -216,7 +219,7 @@ func scanAgentInvocation(row scanner) (AgentInvocation, error) {
 		&inv.DeltaInputTokens, &inv.DeltaOutputTokens, &inv.DeltaCacheReadTokens,
 		&inv.ModelRoundtrips, &inv.ToolCalls,
 		&inv.ToolWaitCalls, &inv.ToolTestLintCalls, &inv.ToolEditCalls, &inv.ToolReadCalls, &inv.ToolGitCalls, &inv.ToolOtherCalls,
-		&inv.WorkloadFiles, &inv.WorkloadLines, &inv.FindingCount,
+		&inv.WorkloadFiles, &inv.WorkloadLines, &inv.FindingCount, &inv.FixBudgetLimit,
 	); err != nil {
 		return AgentInvocation{}, fmt.Errorf("scan agent invocation: %w", err)
 	}

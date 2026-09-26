@@ -148,9 +148,14 @@ func (a *perfRecordingAgent) record(ctx context.Context, opts agent.RunOpts, age
 	}
 	a.recordResult(&inv, sessionKey, result)
 	if runErr != nil {
+		var refusal *agent.FixBudgetRefusalError
 		if ctx.Err() != nil || errors.Is(runErr, context.Canceled) {
 			inv.ExitStatus = "cancelled"
 			inv.FailureCategory = "cancelled"
+		} else if errors.As(runErr, &refusal) {
+			inv.ExitStatus = "refused"
+			inv.FailureCategory = "fix_budget_exhausted"
+			inv.FixBudgetLimit = &refusal.Limit
 		} else {
 			inv.ExitStatus = "error"
 			inv.FailureCategory = classifyInvocationFailure(runErr)

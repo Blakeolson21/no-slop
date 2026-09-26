@@ -138,7 +138,7 @@ func (a *codexAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error)
 		} else if detail == "" {
 			detail = stderr
 		}
-		retErr := fmt.Errorf("codex exited: %w: %s", waitErr, detail)
+		retErr := classifyFixBudgetRefusal(fmt.Errorf("codex exited: %w: %s", waitErr, detail), string(stderrBuf))
 		emitAgentExited(opts, "codex", pid, retErr)
 		return nil, retErr
 	}

@@ -135,7 +135,8 @@ CREATE TABLE IF NOT EXISTS agent_invocations (
     tool_other_calls      INTEGER,
     workload_files        INTEGER,
     workload_lines        INTEGER,
-    finding_count         INTEGER
+    finding_count         INTEGER,
+    fix_budget_limit      INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_invocations_run_started_id
@@ -295,4 +296,5 @@ var migrationStatements = []string{
 	`ALTER TABLE agent_invocations ADD COLUMN workload_files INTEGER`,
 	`ALTER TABLE agent_invocations ADD COLUMN workload_lines INTEGER`,
 	`ALTER TABLE agent_invocations ADD COLUMN finding_count INTEGER`,
+	`ALTER TABLE agent_invocations ADD COLUMN fix_budget_limit INTEGER`,
 }

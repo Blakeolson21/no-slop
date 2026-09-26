@@ -32,6 +32,7 @@ type ReviewTurnTiming struct {
 	StartedAt   int64  `json:"started_at" toon:"started_at"`
 	CompletedAt int64  `json:"completed_at" toon:"completed_at"`
 	ExitStatus  string `json:"exit_status" toon:"exit_status"`
+	Reason      string `json:"reason,omitempty" toon:"reason,omitempty"`
 }
 
 func (d *DB) GetReviewTiming(runID string, nowUnix int64) (*ReviewTiming, error) {
@@ -114,6 +115,9 @@ func (d *DB) getReviewTiming(runID string, now time.Time) (*ReviewTiming, error)
 			hasStart = true
 		}
 		turn := ReviewTurnTiming{Round: inv.Round, Purpose: inv.Purpose, LatencyMS: inv.DurationMS, StartedAt: inv.StartedAt, CompletedAt: inv.CompletedAt, ExitStatus: inv.ExitStatus}
+		if inv.ExitStatus == "refused" && inv.FixBudgetLimit != nil {
+			turn.Reason = agent.FixBudgetExhaustedReason(*inv.FixBudgetLimit)
+		}
 		if inv.SubprocessWaitMS != nil {
 			ms := agent.ModelTimeMS(inv.DurationMS, *inv.SubprocessWaitMS)
 			turn.ModelMS = &ms

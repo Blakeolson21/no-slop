@@ -110,7 +110,7 @@ func (a *claudeAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error
 	waitErr := started.wait()
 	stderrWG.Wait()
 	if waitErr != nil {
-		retErr := fmt.Errorf("claude exited: %w: %s", waitErr, string(stderrBuf))
+		retErr := classifyFixBudgetRefusal(fmt.Errorf("claude exited: %w: %s", waitErr, string(stderrBuf)), string(stderrBuf))
 		emitAgentExited(opts, "claude", pid, retErr)
 		return nil, retErr
 	}
