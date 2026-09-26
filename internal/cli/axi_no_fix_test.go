@@ -56,7 +56,7 @@ func TestNoFixDriveApprovesWithoutFundingRepair(t *testing.T) {
 		}
 		approved.Store(true)
 		events <- ipc.Event{Type: ipc.EventRunUpdated, RunID: "no-fix"}
-		return &ipc.RespondResult{OK: true}, nil
+		return &ipc.RespondResult{OK: true, RunID: p.RunID, Step: p.Step, IdempotencyKey: p.IdempotencyKey}, nil
 	})
 	client, _ := startDriveTestServer(t, srv)
 	reconciler := newRunReconciler(source, "no-fix")
