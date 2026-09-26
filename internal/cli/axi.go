@@ -45,6 +45,7 @@ func newAxiCmd() *cobra.Command {
 
 	cmd.AddCommand(newAxiRunCmd())
 	cmd.AddCommand(newAxiPlanCmd())
+	cmd.AddCommand(newAxiResumeCmd())
 	cmd.AddCommand(newAxiRespondCmd())
 	cmd.AddCommand(newAxiStatusCmd())
 	cmd.AddCommand(newAxiSyncCmd())
