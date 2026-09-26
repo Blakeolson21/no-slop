@@ -68,6 +68,9 @@ func (e *Executor) AcceptResponse(params ipc.RespondParams) (*ipc.RespondResult,
 	if params.Step != e.waitingStep {
 		return nil, fmt.Errorf("step mismatch: responding to %q but %q is awaiting approval", params.Step, e.waitingStep)
 	}
+	if e.waitingNoFix && params.Action == types.ActionFix {
+		return nil, fmt.Errorf("fix rounds are disabled for this run (--no-fix)")
+	}
 	round, err := e.db.LatestStepRound(e.waitingStepResultID)
 	if err != nil {
 		return nil, err

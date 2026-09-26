@@ -100,6 +100,7 @@ type stepView struct {
 
 // runView is a render-ready view of a pipeline run.
 type runView struct {
+	NoFix       bool
 	ID          string
 	Branch      string
 	Status      string
@@ -116,6 +117,7 @@ type runView struct {
 
 func runViewFromIPC(r *ipc.RunInfo) runView {
 	rv := runView{
+		NoFix:              r.NoFix,
 		ID:                 r.ID,
 		Branch:             r.Branch,
 		Status:             string(r.Status),
@@ -160,6 +162,7 @@ func runViewFromIPC(r *ipc.RunInfo) runView {
 
 func runViewFromDB(r *db.Run, steps []*db.StepResult) runView {
 	rv := runView{
+		NoFix:              r.NoFix,
 		ID:                 r.ID,
 		Branch:             r.Branch,
 		Status:             string(r.Status),
@@ -466,6 +469,9 @@ func runObjectFieldWithOptions(key string, rv runView, includeConvergence bool) 
 	// while genuinely parked (non-nil marker on a non-terminal run).
 	if rv.AwaitingAgentSince != nil && !terminalStatus(rv.Status) {
 		fields = append(fields, toon.Field{Key: "awaiting_agent", Value: formatParkedFor(*rv.AwaitingAgentSince)})
+	}
+	if rv.NoFix {
+		fields = append(fields, toon.Field{Key: "no_fix", Value: true})
 	}
 	fields = append(fields, toon.Field{Key: "head", Value: shortSHA(rv.HeadSHA)})
 	if rv.PRURL != "" {

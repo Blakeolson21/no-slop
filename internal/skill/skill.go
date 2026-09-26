@@ -343,6 +343,15 @@ funds up to 3 fix rounds per step. It approves clean gates and gates with only
 for explicit adjudication instead of approving them. Only use it when the user
 has asked you to drive the whole run without checking back unless fixing stalls.
 
+To approve findings without funding repair rounds, start the run with
+` + "`axi run --yes --no-fix --intent 'the goal'`" + `. The per-run setting disables both
+configured auto-fix and explicit fix requests, persists through reattachment and
+recovery, and makes ` + "`--yes`" + ` approve actionable findings as-is. Without
+` + "`--yes`" + `, gates still park. Initial documentation/lint work still runs.
+An existing run's setting cannot be changed by reattaching.
+Use ` + "`axi respond --action approve --note 'reason'`" + ` to retain an
+adjudicator's reason on the approved round.
+
 Fix agents may create new test files, but must preserve existing test files.
 A mechanically rejected test change returns as an ` + "`ask-user`" + ` finding with
 the proposed diff; approving that finding does not apply the rejected repair.

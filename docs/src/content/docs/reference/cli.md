@@ -15,6 +15,7 @@ no-slop --skip test,lint
 | Flag          | Type     | Default | Description                                          |
 | ------------- | -------- | ------- | ---------------------------------------------------- |
 | `-y`, `--yes` | `bool`   | `false` | Run setup wizard and accept defaults automatically   |
+| `--no-fix`    | `bool`   | `false` | Disable automatic and requested fix rounds for this run |
 | `--skip`      | `string` | (none)  | Comma-separated pipeline steps to skip for a new run |
 
 Unlike `no-slop attach`, bare `no-slop` only auto-attaches to an active run on the current branch.
@@ -107,6 +108,8 @@ no-slop axi run --intent "the user's goal" --yes
 | `-y`, `--yes` | `bool`   | `false` | Auto-fix up to 3 rounds per step; park unresolved findings       |
 | `--skip`      | `string` | (none)  | Comma-separated pipeline steps to skip                           |
 
+`--no-fix` is stored with the run and survives reattachment and daemon recovery. With `--yes --no-fix`, actionable findings are approved without funding fixes; without `--yes`, approval gates still park. Configured auto-fix budgets and explicit `respond --action fix` cannot override this setting. Initial documentation and lint work still runs. Reattaching cannot change an existing run's fix policy. `axi plan --no-fix` includes `no_fix: true` in its JSON, and run/status output exposes the persisted setting.
+
 `--intent` is not a description of the diff.
 It is the user's goal or request, and no-slop uses it verbatim instead of transcript inference.
 Err on the side of completeness: include the goal, important decisions and tradeoffs, constraints or approaches ruled in or out, and explicit requests that might otherwise look surprising in the diff.
@@ -191,6 +194,8 @@ no-slop axi respond --action skip
 | `--instructions`    | `string` | (none)             | Guidance applied to selected findings                                      |
 | `--add-finding`     | `string` | (none)             | JSON finding object to add and fix                                         |
 | `-y`, `--yes`       | `bool`   | `false`            | Auto-fix up to 3 rounds per step; park unresolved findings                 |
+
+`--note <text>` is accepted with `--action approve` and persists the adjudicator's reason on the approved round (credential-bearing URLs are redacted). On runs started with `--no-fix`, `--yes` approves findings without fixes and `--action fix` is rejected.
 
 After the explicit response, `--yes` uses the same auto-resolution behavior as `axi run --yes`: fund up to 3 fix rounds per step for `auto-fix` and `ask-user` findings, approve clean gates and gates that only contain non-actionable `no-op` findings, and stop at `outcome: checks-passed` when the CI monitor reports readiness but the PR still needs a human merge. If actionable findings survive the budget, it leaves the run parked for explicit adjudication.
 By default, `axi respond` blocks until the next gate, CI-ready decision point, or final outcome. `--no-wait` returns the acceptance receipt immediately and cannot be combined with `--yes`.
@@ -325,6 +330,8 @@ Pass `--run <id>` to cancel a specific run by its id instead of resolving the cu
 ```sh
 no-slop axi abort --run <id>
 ```
+
+`axi cancel <id>` is an equivalent positional form, useful for retiring a duplicate run on the same branch. It targets only that run and uses the same terminal-state confirmation.
 
 `--run` does not need a repo, branch, or worktree, so it works from anywhere.
 Use it to reap an orphaned CI monitor whose worktree was torn down before the PR merged - the run id is shown in `axi run` output and in the `axi` home view.

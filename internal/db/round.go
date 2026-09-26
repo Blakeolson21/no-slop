@@ -37,13 +37,13 @@ type StepRound struct {
 	// deliberately left unselected.
 	SelectedFindingIDs *string
 	SelectionSource    *string
+	ApprovalNote       *string // Adjudicator reason, stored with the round that was approved.
 	// FixSummary, when non-nil, is the agent's one-line commit summary for
 	// the fix attempt performed during this round. It is only set when the
 	// round itself was a fix round (trigger=="auto_fix").
-	ApprovalNote *string // Adjudicator reason, stored with the round that was approved.
-	FixSummary   *string
-	DurationMS   int64
-	CreatedAt    int64
+	FixSummary *string
+	DurationMS int64
+	CreatedAt  int64
 }
 
 // StepRoundStats summarizes execution rounds for a step. It lets status

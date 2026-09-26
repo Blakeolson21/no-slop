@@ -22,6 +22,7 @@ import (
 const axiPlanTrustedRef = "refs/no-slop/plan/trusted"
 
 type axiRunPlan struct {
+	NoFix          bool             `json:"no_fix,omitempty"`
 	Skip           []types.StepName `json:"skip"`
 	Yes            bool             `json:"yes"`
 	Intent         string           `json:"intent"`
@@ -101,6 +102,10 @@ func runAxiPlan(cmd *cobra.Command, proposedArgs []string) error {
 	plan, err := resolveAxiRunPlan(cmd.Context())
 	if err != nil {
 		return &exitError{code: 1, err: fmt.Errorf("resolve effective config: %w", err)}
+	}
+	plan.NoFix, err = runCmd.Flags().GetBool("no-fix")
+	if err != nil {
+		return err
 	}
 	plan.Yes = yes
 	plan.Skip = append([]types.StepName{}, skip...)

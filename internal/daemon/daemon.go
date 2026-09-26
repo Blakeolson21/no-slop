@@ -847,7 +847,7 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		runID, err := mgr.HandleRerun(ctx, p.RepoID, p.Branch, p.PreviousRunID, p.SkipSteps, p.Intent)
+		runID, err := mgr.HandleRerun(ctx, p.RepoID, p.Branch, p.PreviousRunID, p.SkipSteps, p.Intent, p.NoFix)
 		if err != nil {
 			return nil, err
 		}
@@ -987,6 +987,7 @@ func gateContextResult(result gatecontext.Result) ipc.GateContextResult {
 
 func runToInfo(d *db.DB, r *db.Run, steps []*db.StepResult) *ipc.RunInfo {
 	info := &ipc.RunInfo{
+		NoFix:              r.NoFix,
 		ID:                 r.ID,
 		RepoID:             r.RepoID,
 		Branch:             r.Branch,

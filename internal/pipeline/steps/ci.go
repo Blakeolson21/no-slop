@@ -315,6 +315,9 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutc
 
 		// Check CI status - wait for all checks to complete before fixing
 		ciFixLimit := sctx.Config.AutoFix.CI
+		if sctx.Run.NoFix {
+			ciFixLimit = 0
+		}
 		checks, err := host.GetChecks(ctx, pr)
 		if err != nil {
 			clearCIMonitorReady(sctx)

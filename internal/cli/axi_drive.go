@@ -61,7 +61,7 @@ func outcomeFor(status string) string {
 }
 
 func newAxiRunCmd() *cobra.Command {
-	var autoYes bool
+	var autoYes, noFix bool
 	var skipValue string
 	var intent string
 
@@ -74,6 +74,9 @@ func newAxiRunCmd() *cobra.Command {
 			"as consent to fund up to 3 fix rounds per step. It approves clean or no-op gates;\n" +
 			"if actionable findings survive that budget, it leaves the run parked for explicit\n" +
 			"adjudication.\n\n" +
+			"--no-fix disables automatic and requested fix rounds for this run. Combined\n" +
+			"with --yes it approves actionable findings without fixes. The setting persists\n" +
+			"across reattachment and daemon recovery. Initial documentation/lint work still runs.\n\n" +
 			"--intent is required when starting a new run: pass what the user set out\n" +
 			"to accomplish (the goal behind the change, not a description of the diff)\n" +
 			"so no-slop uses it directly instead of inferring it from transcripts.\n\n" +
@@ -96,17 +99,18 @@ func newAxiRunCmd() *cobra.Command {
 					return emitError(cmd, 2, err.Error(),
 						"Valid steps: intent, rebase, review, test, document, lint, push, pr, ci")
 				}
-				return runAxiRun(cmd, autoYes, skipSteps, intent)
+				return runAxiRun(cmd, autoYes, skipSteps, intent, noFix)
 			})
 		},
 	}
 	cmd.Flags().BoolVarP(&autoYes, "yes", "y", false, "auto-fix up to 3 rounds per step; park unresolved findings")
+	cmd.Flags().BoolVar(&noFix, "no-fix", false, "disable fix rounds for this run; --yes then approves actionable findings without fixing")
 	cmd.Flags().StringVar(&skipValue, "skip", "", "comma-separated pipeline steps to skip")
 	cmd.Flags().StringVar(&intent, "intent", "", "what the user set out to accomplish (not a description of the diff); used instead of inferring from transcripts (required to start a run)")
 	return cmd
 }
 
-func runAxiRun(cmd *cobra.Command, autoYes bool, skipSteps []types.StepName, intent string) error {
+func runAxiRun(cmd *cobra.Command, autoYes bool, skipSteps []types.StepName, intent string, noFix ...bool) error {
 	ctx := cmd.Context()
 	env, err := openAxiRunEnv()
 	if err != nil {
@@ -149,7 +153,7 @@ func runAxiRun(cmd *cobra.Command, autoYes bool, skipSteps []types.StepName, int
 			return guard(cmd)
 		}
 		var err error
-		runID, err = triggerRun(ctx, env, branch, headSHA, skipSteps, intent)
+		runID, err = triggerRun(ctx, env, branch, headSHA, skipSteps, intent, noFix...)
 		if err != nil {
 			if ownershipErr, ok := err.(*branchOwnershipError); ok {
 				return emitBranchOwnershipError(cmd, ownershipErr)
@@ -158,6 +162,12 @@ func runAxiRun(cmd *cobra.Command, autoYes bool, skipSteps []types.StepName, int
 		}
 	}
 
+	if len(noFix) > 0 && noFix[0] {
+		existing, err := getRunInfo(env.client, runID)
+		if err != nil || existing == nil || !existing.NoFix {
+			return emitError(cmd, 1, "the active run does not have --no-fix; cancel it explicitly before starting a no-fix run")
+		}
+	}
 	run, ciReady, err := driveRun(ctx, cmd.ErrOrStderr(), env.client, env.p.Socket(), runID, autoYes)
 	if err != nil {
 		return emitError(cmd, 1, fmt.Sprintf("drive run: %v", err))
@@ -295,8 +305,11 @@ func freshRunBranchOwnershipState(ctx context.Context, env *axiEnv) *branchsync.
 // the gate to trigger a pipeline, and falls back to a rerun when the push was a
 // no-op (the gate already had this commit). Callers must check for an existing
 // active run first (see activeRunID) and apply pre-flight guards.
-func triggerRun(ctx context.Context, env *axiEnv, branch, headSHA string, skipSteps []types.StepName, intent string) (string, error) {
+func triggerRun(ctx context.Context, env *axiEnv, branch, headSHA string, skipSteps []types.StepName, intent string, noFix ...bool) (string, error) {
 	pushOptions := formatSkipPushOptions(skipSteps)
+	if len(noFix) > 0 && noFix[0] {
+		pushOptions = append(pushOptions, noFixPushOption)
+	}
 	if opt := formatIntentPushOption(intent); opt != "" {
 		pushOptions = append(pushOptions, opt)
 	}
@@ -329,7 +342,7 @@ func triggerRun(ctx context.Context, env *axiEnv, branch, headSHA string, skipSt
 	// No run appeared: the push was likely up-to-date. Rerun the latest gate
 	// head so `axi run` is still useful when there are no new commits.
 	var rr ipc.RerunResult
-	if err := env.client.Call(ipc.MethodRerun, rerunParams(env.repo.ID, branch, skipSteps, intent), &rr); err != nil {
+	if err := env.client.Call(ipc.MethodRerun, rerunParams(env.repo.ID, branch, skipSteps, intent, noFix...), &rr); err != nil {
 		return "", fmt.Errorf("no run started for %q: %v", branch, err)
 	}
 	return rr.RunID, nil
@@ -413,8 +426,11 @@ func activeRunLookupParams(repoID, branch string) *ipc.GetActiveRunParams {
 	return &ipc.GetActiveRunParams{RepoID: repoID, Branch: branch}
 }
 
-func rerunParams(repoID, branch string, skipSteps []types.StepName, intent string) *ipc.RerunParams {
-	return &ipc.RerunParams{RepoID: repoID, Branch: branch, SkipSteps: skipSteps, Intent: intent}
+func rerunParams(repoID, branch string, skipSteps []types.StepName, intent string, noFix ...bool) *ipc.RerunParams {
+	return &ipc.RerunParams{
+		NoFix:  len(noFix) > 0 && noFix[0],
+		RepoID: repoID, Branch: branch, SkipSteps: skipSteps, Intent: intent,
+	}
 }
 
 // driveRun subscribes to a run and reconciles authoritative state on transition
@@ -483,6 +499,9 @@ func driveRunWithReconciler(ctx context.Context, progress io.Writer, client *ipc
 				used = fixedSteps[gate.Name]
 			}
 			action, findingIDs, resolved := gateResolution(gate, used)
+			if run.NoFix {
+				action, findingIDs, resolved = types.ActionApprove, nil, true
+			}
 			if !resolved {
 				if report, ok := convergence.ParseReport(gate.ConvergenceJSON); ok && report.Tripped() {
 					fmt.Fprintf(progress, "%s gate parked by the convergence guard: %s; leaving the run parked for explicit adjudication\n", gate.Name, report.Warning)
@@ -738,6 +757,8 @@ func newAxiRespondCmd() *cobra.Command {
 			"unless --no-wait is set. Check acceptance\n" +
 			"with --receipt --run <id> --idempotency-key <key>; inspect execution with\n" +
 			"axi status --run <id>. Acceptance does not mean execution completed.\n\n" +
+			"On a run started with --no-fix, --yes approves findings without fix rounds.\n" +
+			"Use --action approve --note <text> to persist an adjudicator reason.\n\n" +
 			preserveGateFixCommitsGuidance,
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,

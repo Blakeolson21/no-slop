@@ -126,6 +126,7 @@ func newDaemonNotifyPushCmd() *cobra.Command {
 			var result ipc.PushReceivedResult
 			return client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
 				Gate:      gatePath,
+				NoFix:     hasNoFixPushOption(pushOptions),
 				Ref:       ref,
 				Old:       oldSHA,
 				New:       newSHA,
@@ -555,4 +556,15 @@ func newDaemonRunCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&root, "root", "", "override no-slop data directory")
 	return cmd
+}
+
+const noFixPushOption = "no-slop.no-fix"
+
+func hasNoFixPushOption(options []string) bool {
+	for _, option := range options {
+		if option == noFixPushOption {
+			return true
+		}
+	}
+	return false
 }

@@ -69,6 +69,7 @@ type Executor struct {
 	waitingRunID        string
 	waitingStepResultID string
 	waitingStep         types.StepName // which step is currently awaiting approval
+	waitingNoFix        bool
 
 	gateReconcileInterval time.Duration
 	gateReconcileTimeout  time.Duration
@@ -171,6 +172,9 @@ func (e *Executor) RespondWithOverrides(step types.StepName, action types.Approv
 	}
 	if step != e.waitingStep {
 		return fmt.Errorf("step mismatch: responding to %q but %q is awaiting approval", step, e.waitingStep)
+	}
+	if e.waitingNoFix && action == types.ActionFix {
+		return fmt.Errorf("fix rounds are disabled for this run (--no-fix)")
 	}
 	var approvalNote string
 	if len(note) > 0 {
@@ -537,6 +541,7 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 	e.waitingStep = gate.step.Name()
 	e.waitingRunID = run.ID
 	e.waitingStepResultID = gate.stepResult.ID
+	e.waitingNoFix = run.NoFix
 	e.mu.Unlock()
 	e.emitStepEventWithFindingsAndError(
 		ipc.EventStepStatusChanged,
@@ -841,7 +846,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 	logPath := filepath.Join(logDir, string(stepName)+".log")
 	finalExitCode := 0
 	autoFixLimit := 0
-	if e.config != nil {
+	if e.config != nil && !run.NoFix {
 		autoFixLimit = e.config.AutoFixLimit(stepName)
 	}
 
@@ -1031,6 +1036,9 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		reviewStartingHeadSHA := run.HeadSHA
 		sctx.ReviewStartingHeadSHA = reviewStartingHeadSHA
 		sctx.KnownReviewLineages = knownLineages
+		if run.NoFix && sctx.Fixing {
+			sctx.SkipFixExecution = true
+		}
 		outcome, err := e.executeWithCapacity(step, sctx)
 		// A cross-run recovered selection skips exactly one duplicate fixer
 		// invocation. Any later explicit or automatic fix in this execution
@@ -1287,6 +1295,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		e.waitingStep = stepName
 		e.waitingRunID = run.ID
 		e.waitingStepResultID = sr.ID
+		e.waitingNoFix = run.NoFix
 
 		// Parking starts before the gate becomes observable. This includes the
 		// small handoff from publishing the gate to receiving a response, and

@@ -67,6 +67,7 @@ func (e *RPCError) Error() string { return e.Message }
 // stamped onto the run so the intent step uses it verbatim instead of inferring
 // intent from local transcripts.
 type PushReceivedParams struct {
+	NoFix bool `json:"no_fix,omitempty"`
 	// Gate is the absolute path to the gate bare repo.
 	Gate      string           `json:"gate"`
 	Ref       string           `json:"ref"`
@@ -124,6 +125,7 @@ type GetActiveRunParams struct {
 // the daemon inherits authoritative intent from the selected prior run or
 // leaves the new run to perform fresh inference.
 type RerunParams struct {
+	NoFix         bool             `json:"no_fix,omitempty"`
 	RepoID        string           `json:"repo_id"`
 	Branch        string           `json:"branch"`
 	PreviousRunID string           `json:"previous_run_id,omitempty"`
@@ -262,6 +264,7 @@ type ShutdownResult struct {
 
 // RunInfo is the IPC representation of a pipeline run.
 type RunInfo struct {
+	NoFix            bool            `json:"no_fix,omitempty"`
 	ID               string          `json:"id"`
 	RepoID           string          `json:"repo_id"`
 	Branch           string          `json:"branch"`
