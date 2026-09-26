@@ -27,10 +27,12 @@ func TestApprovalNoteFlagAndTransport(t *testing.T) {
 			return nil, err
 		}
 		received <- p
-		return &ipc.RespondResult{OK: true}, nil
+		return &ipc.RespondResult{OK: true, RunID: p.RunID, Step: p.Step, IdempotencyKey: p.IdempotencyKey}, nil
 	})
 	client, _ := startDriveTestServer(t, srv)
-	if err := sendRespond(client, "run-note", types.StepReview, types.ActionApprove, nil, nil, nil, got); err != nil {
+	if _, err := sendResponse(context.Background(), client, ipc.RespondParams{
+		RunID: "run-note", Step: types.StepReview, Action: types.ActionApprove, IdempotencyKey: "note-ruling", Note: got,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	p := <-received
