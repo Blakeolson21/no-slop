@@ -69,6 +69,19 @@ func RunWithEnv(ctx context.Context, dir string, extraEnv []string, args ...stri
 	return strings.TrimSpace(out), err
 }
 
+// OutputWithEnv executes a git command with extra KEY=VALUE entries appended
+// to the git environment and returns stdout without trimming it. It preserves
+// Output's explicit bare-repository handling.
+func OutputWithEnv(ctx context.Context, dir string, extraEnv []string, args ...string) (string, error) {
+	if isBareGitDir(dir) {
+		if dir == "" {
+			return "", fmt.Errorf("bare git directory is empty")
+		}
+		return runInDirWithEnv(ctx, dir, extraEnv, append([]string{"--git-dir=" + dir}, args...)...)
+	}
+	return runInDirWithEnv(ctx, dir, extraEnv, args...)
+}
+
 // RunBare executes Git against exactly bareDir. Unlike Run, it never falls
 // back to cwd-based repository discovery when bareDir is malformed. Gate
 // recovery uses this after structural validation so an invalid directory under
