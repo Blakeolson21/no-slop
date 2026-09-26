@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Blakeolson21/no-slop/internal/agent"
 	"github.com/Blakeolson21/no-slop/internal/db"
@@ -17,6 +18,14 @@ import (
 )
 
 const ErrorCode = "nested_gate_context"
+
+// InspectionTimeout bounds authorization on both sides of IPC. The client
+// allows a little longer for the server to return this distinct failure.
+// Cost is one active-step query, two Git probes, and one process snapshot,
+// rather than queries per registered run and subprocesses per ancestor.
+const InspectionTimeout = 30 * time.Second
+
+const TimeoutErrorCode = "gate_context_timeout"
 
 // RefusalMessage is the stable, privacy-safe error contract used at daemon
 // ingress and non-AXI command boundaries.
@@ -65,8 +74,21 @@ type Inspector struct {
 
 // Inspect classifies a caller without mutating repositories, runs, refs,
 // remotes, worktrees, or the database.
-func (i Inspector) Inspect(ctx context.Context, req Request) (Result, error) {
-	result := Result{MarkerPresent: req.MarkerPresent}
+func (i Inspector) Inspect(ctx context.Context, req Request) (result Result, err error) {
+	ctx, cancel := context.WithTimeout(ctx, InspectionTimeout)
+	defer cancel()
+	defer func() {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			err = ctxErr
+			if ctxErr == context.DeadlineExceeded {
+				err = fmt.Errorf("%s: %w", TimeoutErrorCode, ctxErr)
+			}
+		}
+	}()
+	result = Result{MarkerPresent: req.MarkerPresent}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	if i.Paths == nil {
 		return result, fmt.Errorf("gate execution context: paths are required")
 	}
@@ -77,7 +99,7 @@ func (i Inspector) Inspect(ctx context.Context, req Request) (Result, error) {
 		commonDir, top, ok := gitIdentity(ctx, req.CWD)
 		if ok {
 			worktreeRoot = top
-			id, managed, err := i.registeredManagedCommonDir(commonDir)
+			id, managed, err := i.registeredManagedCommonDir(ctx, commonDir)
 			if err != nil {
 				return result, err
 			}
@@ -96,7 +118,11 @@ func (i Inspector) Inspect(ctx context.Context, req Request) (Result, error) {
 	if req.PeerPID > 0 && (len(active) > 0 || req.DaemonPID > 0) {
 		parent := i.ParentPID
 		if parent == nil {
-			parent = processParentPID
+			parents, err := processParents(ctx)
+			if err != nil {
+				return result, fmt.Errorf("gate execution context: inspect process table: %w", err)
+			}
+			parent = func(pid int) (int, error) { return parents[pid], nil }
 		}
 		chain, err := ancestry(req.PeerPID, parent)
 		if err != nil {
@@ -108,7 +134,7 @@ func (i Inspector) Inspect(ctx context.Context, req Request) (Result, error) {
 		}
 		var matches []activeAgentStep
 		for _, step := range active {
-			if step.AgentPID > 0 && chain[step.AgentPID] {
+			if step.agentPID > 0 && chain[step.agentPID] {
 				matches = append(matches, step)
 			}
 		}
@@ -120,8 +146,8 @@ func (i Inspector) Inspect(ctx context.Context, req Request) (Result, error) {
 		// the enclosing run only when authenticated ancestry identifies exactly
 		// one active phase; refusal itself does not depend on this metadata.
 		if len(matches) == 1 {
-			result.RunID = matches[0].RunID
-			result.Phase = matches[0].Phase
+			result.RunID = matches[0].runID
+			result.Phase = matches[0].phase
 		}
 	}
 
@@ -130,13 +156,13 @@ func (i Inspector) Inspect(ctx context.Context, req Request) (Result, error) {
 	// DB record agree exactly; otherwise omit them rather than guessing.
 	if result.ManagedGit && result.RunID == "" && managedRepoID != "" && worktreeRoot != "" {
 		for _, step := range active {
-			if step.RepoID != managedRepoID {
+			if step.repoID != managedRepoID {
 				continue
 			}
-			want := i.Paths.WorktreeDir(step.RepoID, step.RunID)
+			want := i.Paths.WorktreeDir(step.repoID, step.runID)
 			if sameCanonicalPath(worktreeRoot, want) {
-				result.RunID = step.RunID
-				result.Phase = step.Phase
+				result.RunID = step.runID
+				result.Phase = step.phase
 				break
 			}
 		}
@@ -144,16 +170,29 @@ func (i Inspector) Inspect(ctx context.Context, req Request) (Result, error) {
 	return result, nil
 }
 
-type activeAgentStep = db.ActiveGateStep
+type activeAgentStep struct {
+	runID    string
+	repoID   string
+	phase    types.StepName
+	agentPID int
+}
 
 func (i Inspector) activeAgentSteps(ctx context.Context) ([]activeAgentStep, error) {
 	if i.DB == nil {
 		return nil, nil
 	}
-	return i.DB.ActiveGateSteps(ctx)
+	steps, err := i.DB.ActiveGateSteps(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("gate execution context: list active steps: %w", err)
+	}
+	out := make([]activeAgentStep, 0, len(steps))
+	for _, step := range steps {
+		out = append(out, activeAgentStep{runID: step.RunID, repoID: step.RepoID, phase: step.Phase, agentPID: step.AgentPID})
+	}
+	return out, nil
 }
 
-func (i Inspector) registeredManagedCommonDir(commonDir string) (string, bool, error) {
+func (i Inspector) registeredManagedCommonDir(ctx context.Context, commonDir string) (string, bool, error) {
 	common := canonicalPath(commonDir)
 	reposDir := canonicalPath(i.Paths.ReposDir())
 	if filepath.Dir(common) != reposDir {
@@ -167,14 +206,14 @@ func (i Inspector) registeredManagedCommonDir(commonDir string) (string, bool, e
 	if i.DB == nil {
 		return "", false, nil
 	}
-	repo, err := i.DB.GetRepo(id)
+	exists, err := i.DB.GateContextRepoExists(ctx, id)
 	if err != nil {
 		return "", false, fmt.Errorf("gate execution context: verify managed gate: %w", err)
 	}
-	if repo == nil || !sameCanonicalPath(common, i.Paths.RepoDir(repo.ID)) {
+	if !exists || !sameCanonicalPath(common, i.Paths.RepoDir(id)) {
 		return "", false, nil
 	}
-	return repo.ID, true, nil
+	return id, true, nil
 }
 
 func gitIdentity(ctx context.Context, cwd string) (commonDir, top string, ok bool) {

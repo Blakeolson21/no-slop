@@ -3,7 +3,9 @@ package db
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
@@ -117,5 +119,75 @@ func TestActiveGateStepsIncludesLegacyStatuses(t *testing.T) {
 		if step.AgentPID != 4321 {
 			t.Fatalf("lost agent ancestry: %+v", step)
 		}
+	}
+}
+
+func TestGateContextStepsPreserveActiveRunAndLegacyStatusEvidence(t *testing.T) {
+	d, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	repo, err := d.InsertRepo("/operator", "https://example.com/repo", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses := []types.RunStatus{types.RunStarting, types.LegacyRunPending, types.RunRunning, types.RunCompleted, types.RunFailed, types.RunCancelled}
+	for _, status := range statuses {
+		run, err := d.InsertRun(repo.ID, "feature", "head", "base")
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Deliberately retain the legacy on-disk token, bypassing normalized writers.
+		if _, err := d.sql.Exec(`UPDATE runs SET status = ? WHERE id = ?`, status, run.ID); err != nil {
+			t.Fatal(err)
+		}
+		step, err := d.InsertStepResult(run.ID, types.StepReview)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := d.sql.Exec(`UPDATE step_results SET status = ?, agent_pid = 1234 WHERE id = ?`, types.LegacyStepStatusFixing, step.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	steps, err := d.ActiveGateSteps(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(steps) != 3 {
+		t.Fatalf("got %d active steps, want 3: %+v", len(steps), steps)
+	}
+	for _, step := range steps {
+		if step.RepoID != repo.ID || step.Phase != types.StepReview || step.AgentPID != 1234 {
+			t.Fatalf("lost ancestry evidence: %+v", step)
+		}
+	}
+}
+
+func TestGateContextQueriesCancelWhileWaitingForDatabase(t *testing.T) {
+	d, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	conn, err := d.sql.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close() // Occupy the only connection, as another request can do.
+	for _, query := range []struct {
+		name string
+		run  func(context.Context) error
+	}{
+		{"steps", func(ctx context.Context) error { _, err := d.ActiveGateSteps(ctx); return err }},
+		{"repo", func(ctx context.Context) error { _, err := d.GateContextRepoExists(ctx, "repo"); return err }},
+	} {
+		t.Run(query.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			defer cancel()
+			if err := query.run(ctx); !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("query error = %v, want deadline exceeded", err)
+			}
+		})
 	}
 }
