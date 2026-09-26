@@ -12,6 +12,7 @@ import (
 
 	toon "github.com/toon-format/toon-go"
 
+	"github.com/Blakeolson21/no-slop/internal/convergence"
 	"github.com/Blakeolson21/no-slop/internal/ipc"
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
@@ -1079,6 +1080,9 @@ func yesBudgetScenario(t *testing.T) string {
 // approving findings nothing applied, and instead of spinning until killed.
 func TestAxiYesBudgetParksUnresolvedFindings(t *testing.T) {
 	h := NewHarness(t, SetupOpts{Agent: "claude", Scenario: yesBudgetScenario(t)})
+	// Retain the advisory-only contract under an explicit trusted policy.
+	// The default terminal policy is exercised independently below.
+	pushMainRepoConfig(t, h, "allow_repo_commands: true\nreview:\n  convergence:\n    max_rounds: 0\n    max_recurring_rounds: 0\n")
 
 	h.CommitChange("feature/yes-budget", "feature.txt", "change\n", "add feature change")
 	fw := h.AddWorktree("feature/yes-budget")
@@ -1389,5 +1393,51 @@ func assertSkillInstalled(t *testing.T, h *Harness) {
 		if _, err := os.Stat(repoPath); !os.IsNotExist(err) {
 			t.Errorf("init must not write %s into the repo (stat err = %v)", rel, err)
 		}
+	}
+}
+
+// The default terminal limit outranks --yes's responder fix budget and requires
+// no decision to stop spending rounds. Exercise the real daemon, CLI and export.
+func TestAxiNonconvergenceTerminatesWithRedesignTicket(t *testing.T) {
+	h := NewHarness(t, SetupOpts{Agent: "claude", Scenario: yesBudgetScenario(t)})
+	h.CommitChange("feature/nonconverging", "feature.txt", "change\n", "add feature change")
+	fw := h.AddWorktree("feature/nonconverging")
+	if out, err := h.RunInDir(fw, "init"); err != nil {
+		t.Fatalf("init: %v\n%s", err, out)
+	}
+	out, err := h.RunInDir(fw, "axi", "run", "--yes", "--intent", axiIntent)
+	if err == nil || !strings.Contains(out, "outcome: parked-nonconverging") {
+		t.Fatalf("terminal result: %v\n%s", err, out)
+	}
+	run := h.WaitForRun("feature/nonconverging", 30*time.Second)
+	if run.Status != types.RunParkedNonconverging || run.AwaitingAgentSince != nil {
+		t.Fatalf("run not terminal: %+v", run)
+	}
+	var report *convergence.Report
+	for _, step := range run.Steps {
+		if step.StepName == types.StepReview && step.ConvergenceJSON != nil {
+			report, _ = convergence.ParseReport(*step.ConvergenceJSON)
+		}
+		if step.StepName == types.StepPush && step.Status != types.StepStatusPending {
+			t.Fatalf("push was dispatched: %s", step.Status)
+		}
+	}
+	if report == nil || len(report.RoundFindings) != 3 || report.StopReason == "" {
+		t.Fatalf("terminal report: %+v", report)
+	}
+	ticket, err := os.ReadFile(report.RedesignTicketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, seed := range []string{"Acceptance seeds", "Round 1", "Round 2", "Round 3", "potential nil deref"} {
+		if !strings.Contains(string(ticket), seed) {
+			t.Fatalf("ticket missing %q: %s", seed, ticket)
+		}
+	}
+	if out, err := h.RunInDir(fw, "axi", "respond", "--action", "fix"); err == nil || !strings.Contains(out, "no active run to respond to") {
+		t.Fatalf("terminal run accepted fix: %s", out)
+	}
+	if got := h.RunInfo(run.ID); got.Status != types.RunParkedNonconverging {
+		t.Fatalf("response changed terminal state: %s", got.Status)
 	}
 }
