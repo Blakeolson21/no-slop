@@ -68,3 +68,21 @@ func TestTerminalTicketSnapshotContainsOnlyArtifactPath(t *testing.T) {
 		t.Fatalf("snapshot contract: %+v", restored)
 	}
 }
+
+func TestTerminalTicketRedactsCredentialsBeforeClassLabels(t *testing.T) {
+	f := finding("a.go", "https://aaa:aaasecret@example.com/repo")
+	report := BuildReport([]*db.StepRound{makeRound(t, 1, 1, f), makeRound(t, 2, 1, f)}, nil, false, Thresholds{MaxRecurringRounds: 2})
+	if report.StopReason == "" {
+		t.Fatal("recurrence must still be recognized")
+	}
+	payload, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(payload), "aaasecret") {
+		t.Fatal("snapshot exposes credential through derived class label")
+	}
+	if strings.Contains(report.RedesignTicket, "aaasecret") {
+		t.Fatal("ticket exposes a URL credential through its derived class label")
+	}
+}
