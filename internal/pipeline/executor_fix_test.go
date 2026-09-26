@@ -1083,9 +1083,11 @@ func TestExecutor_AutoFixRecordsSelectedFindingIDs(t *testing.T) {
 		fn: func(sctx *StepContext) (*StepOutcome, error) {
 			callCount++
 			if callCount == 1 {
+				// Keep a non-fixable sibling in the selection assertion. An
+				// ask-user sibling now parks before any automatic selection.
 				return &StepOutcome{
 					AutoFixable: true,
-					Findings:    `{"findings":[{"id":"review-1","severity":"warning","description":"a","action":"auto-fix"},{"id":"review-2","severity":"warning","description":"b","action":"ask-user"}],"summary":"2"}`,
+					Findings:    `{"findings":[{"id":"review-1","severity":"warning","description":"a","action":"auto-fix"},{"id":"review-2","severity":"warning","description":"b","action":"no-op"}],"summary":"2"}`,
 				}, nil
 			}
 			return &StepOutcome{FixSummary: "apply cheap fix"}, nil
