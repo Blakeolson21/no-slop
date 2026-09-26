@@ -321,6 +321,11 @@ that gate. Do not respond `fix` by default there - read the history and
 recurring findings, then deliberately approve, skip, fix specific findings, or
 escalate to the user.
 
+A terminal `parked-nonconverging` outcome means the executor stopped
+at a review round or recurring-class limit. No further fix response is accepted.
+Read the Markdown file at `run.convergence.redesign_ticket_path` for
+redesign acceptance seeds. Resolve the redesign before starting a fresh run.
+
 ## Inspecting state
 
 ```sh

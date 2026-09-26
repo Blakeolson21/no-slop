@@ -378,10 +378,17 @@ Thresholds for the review-loop convergence guard.
 
 | | |
 |---|---|
-| Type | `object` with `non_decreasing_rounds`, `recurring_rounds`, `budget_minutes` (all `int`) |
-| Default | `non_decreasing_rounds: 3`, `recurring_rounds: 3`, `budget_minutes: 120` |
+| Type | `object` with `max_rounds`, `max_recurring_rounds`, `non_decreasing_rounds`, `recurring_rounds`, `budget_minutes` (all `int`) |
+| Default | `max_rounds: 5`, `max_recurring_rounds: 3`, `non_decreasing_rounds: 3`, `recurring_rounds: 3`, `budget_minutes: 120` |
 
 A review-fix loop can *ladder* instead of converge: each fix round relocates a defect or creates new files that the next re-review then flags, so findings per round never shrink, and from the outside every round looks like fresh progress. After every review round the pipeline computes a convergence report from the round history: effective-gate finding count per round, cumulative review time, findings in files outside the originally submitted diff, and finding classes that recur across rounds under different lineages or file paths. Effective-gate counts include unresolved findings carried from earlier rounds. Recurring-class identity still comes from normalized finding content, so a related defect that appears as a new lineage or moves files is recognized as the same class.
+
+The executor enforces two terminal limits before allowing another automatic or responder-requested fix:
+
+- `max_rounds`: stop at this many completed review rounds when actionable findings remain, even if the counts shrink or oscillate.
+- `max_recurring_rounds`: stop when an actionable finding class appears in this many distinct review rounds. Multiple siblings in one round count once; `no-op` findings do not count.
+
+A breach ends the run with status and AXI outcome `parked-nonconverging` (exit 1), without requesting a responder decision. Clean or `no-op`-only final rounds can complete at the limit. Rounds accumulate across review restarts within the same run. No subsequent fix response is accepted. The executor writes a credential-redacted Markdown draft containing findings from every round to `redesign.md` in the run's log directory; `run.convergence.redesign_ticket_path` and the review log locate it. Historical findings are acceptance seeds, not a claim that every earlier finding remains unresolved. This does not file a ticket automatically. Resolve the redesign before starting a fresh run.
 
 The gate always carries this report as its `convergence` block, so the history is visible without tallying rounds by hand. The guard trips when any threshold is met:
 
@@ -389,11 +396,13 @@ The gate always carries this report as its `convergence` block, so the history i
 - `recurring_rounds`: one finding class has recurred in this many distinct rounds.
 - `budget_minutes`: cumulative review execution time (excluding time parked at gates) has reached this budget.
 
-Set a threshold to `0` to disable that trigger; negative values are rejected. A tripped guard is **advisory**: it never aborts the run and never suppresses a finding. It stops `auto_fix.review` from funding further automatic fix rounds, stops `--yes` from auto-answering the gate with `fix`, parks the gate with an explicit convergence warning, and leaves approve/skip/fix available for a deliberate decision.
+Set a threshold to `0` to disable that trigger; negative values are rejected. The older `non_decreasing_rounds`, `recurring_rounds`, and `budget_minutes` warning triggers remain **advisory** when neither terminal limit has fired. An advisory warning stops `auto_fix.review` from funding further automatic fix rounds, stops `--yes` from auto-answering the gate with `fix`, parks the gate with an explicit convergence warning, and leaves approve/skip/fix available for a deliberate decision.
 
 ```yaml
 review:
   convergence:
+    max_rounds: 5
+    max_recurring_rounds: 3
     non_decreasing_rounds: 3
     recurring_rounds: 3
     budget_minutes: 90
