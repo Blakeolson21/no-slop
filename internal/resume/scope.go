@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/Blakeolson21/no-slop/internal/db"
@@ -61,20 +62,22 @@ func CheckScope(ctx context.Context, dir string, run *db.Run, review *db.StepRes
 	if len(allowed) == 0 {
 		return Scope{}, fmt.Errorf("review has no error findings naming files")
 	}
-	// Disable replacement objects so a local replacement cannot manufacture
-	// ancestry or change the trees associated with the stored immutable IDs.
+	// Scope depends only on the stored object graph. Ignore replacement refs and
+	// legacy grafts so local history overlays cannot manufacture ancestry, and
+	// disable lazy fetching so missing objects fail closed without network or
+	// credential-helper activity.
 	for _, sha := range []string{candidate, head} {
-		resolved, err := git.Run(ctx, dir, "--no-replace-objects", "rev-parse", "--verify", sha+"^{commit}")
+		resolved, err := scopeGitRun(ctx, dir, "rev-parse", "--verify", sha+"^{commit}")
 		if err != nil || resolved != sha {
 			return Scope{}, fmt.Errorf("commit %s is unavailable or is not a commit", sha)
 		}
 	}
-	if _, err := git.Run(ctx, dir, "--no-replace-objects", "merge-base", "--is-ancestor", candidate, head); err != nil {
+	if _, err := scopeGitRun(ctx, dir, "merge-base", "--is-ancestor", candidate, head); err != nil {
 		return Scope{}, fmt.Errorf("cannot prove head descends from stored candidate: %w", err)
 	}
 	// No rename detection: a rename must authorize both the deletion and the
 	// addition. NUL delimiters preserve whitespace and newlines in file names.
-	raw, err := git.Output(ctx, dir, "--no-replace-objects", "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=none", "--name-only", "-z", candidate, head, "--")
+	raw, err := git.OutputWithEnv(ctx, dir, scopeGitEnvironment(), "--no-replace-objects", "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=none", "--name-only", "-z", candidate, head, "--")
 	if err != nil {
 		return Scope{}, fmt.Errorf("compare candidate to head: %w", err)
 	}
@@ -91,6 +94,18 @@ func CheckScope(ctx context.Context, dir string, run *db.Run, review *db.StepRes
 		}
 	}
 	return Scope{CandidateSHA: candidate, HeadSHA: head, ChangedFiles: files}, nil
+}
+
+func scopeGitRun(ctx context.Context, dir string, args ...string) (string, error) {
+	out, err := git.OutputWithEnv(ctx, dir, scopeGitEnvironment(), append([]string{"--no-replace-objects"}, args...)...)
+	return strings.TrimSpace(out), err
+}
+
+func scopeGitEnvironment() []string {
+	return []string{
+		"GIT_GRAFT_FILE=" + os.DevNull,
+		"GIT_NO_LAZY_FETCH=1",
+	}
 }
 
 func fullObjectID(value string) bool {
