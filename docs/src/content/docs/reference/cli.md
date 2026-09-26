@@ -154,6 +154,20 @@ It does not contact or start the daemon, create a run row, claim branch custody,
 Invalid or unknown run flags, invalid skip steps, unreadable configuration, an unavailable agent, or a repository that has not been initialized produce a non-zero exit with a clear error on stderr and no stdout JSON.
 Repository URLs are redacted before they enter the report, and agent and seat configuration reports selection identities rather than credential or account contents.
 
+## no-slop axi resume --check
+
+Inspect the candidate ancestry and changed-file scope of a proposed repair to a parked review:
+
+```sh
+no-slop axi resume --check --run <id> --head <full-commit-sha>
+```
+
+This is the first slice of in-place resume. Run it from the run's registered working clone, with both commits available locally. It uses the stored `review_approved_head_sha`, falling back to `submitted_head_sha` when no approval exists, and requires the proposed commit to descend from that candidate. Every changed path must exactly match a file named by a stored review finding with severity `error`; both sides of a rename count. Missing evidence, unavailable commits, an unparked review, or an empty file delta fail the check.
+
+Success prints TOON with `status: scope-checked`, the candidate and proposed SHAs, changed files, `resume_available: false`, and `test_receipt_reused: false`. It reads the registry without migrations and does not contact the daemon, fetch, change refs, or modify run state.
+
+In-place resume is not available; omitting `--check` refuses. A successful scope check does not check base freshness, test-relevant paths, typed test receipts, or preserved adjudications, and grants no authority to resume or skip validation. Those checks and scoped review execution remain for the next slice.
+
 ## no-slop axi respond
 
 Answer the current approval gate and continue until the next gate, CI-ready decision point, or final outcome.

@@ -101,6 +101,14 @@ resolved agent/seat selection as JSON. It does not start or contact the daemon,
 create a run, claim custody, register a worktree, or acquire a seat. Treat a
 non-zero exit as a refusal; a failed plan never emits partial JSON.
 
+To inspect a proposed repair to a parked review, use `no-slop axi resume --check --run <id> --head <sha>`
+from its registered working clone. This first slice checks only ancestry from
+the stored approved candidate (or submitted candidate when no approval exists)
+and whether changed files are named by review error findings. In-place resume
+is not available. A successful scope check does not check base freshness,
+test-relevant paths, typed test receipts, or preserved adjudications, and grants
+no authority to resume or skip validation.
+
 ## Before you start
 
 - The work you want validated must be **committed** on a branch. The gate
