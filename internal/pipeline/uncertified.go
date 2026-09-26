@@ -242,7 +242,9 @@ func RemapUncertifiedPipelineRangeAfterRebase(sctx *StepContext, oldHead, newHea
 		return nil, fmt.Errorf("resolve remapped uncertified range start after rebase: %w", err)
 	}
 	newTo, err := commitNthAncestor(sctx.Ctx, sctx.WorkDir, newHead, toBehind)
-	if err != nil || newFrom == "" || newTo == "" || newFrom == newTo {
+	// A selection persisted before its fixer delta has a valid equal-endpoint
+	// boundary. Rebase moves that boundary without changing its recovery state.
+	if err != nil || newFrom == "" || newTo == "" {
 		return nil, fmt.Errorf("resolve remapped uncertified range end after rebase")
 	}
 	if err := sctx.DB.UpsertUncertifiedPipelineRangeRecovery(sctx.Repo.ID, sctx.Run.Branch, newFrom, newTo, rng.SourceRunID, rng.RecoveryState); err != nil {
