@@ -122,7 +122,7 @@ func TestModel_Yolo_FixesActionableFindings(t *testing.T) {
 
 	run := testRun()
 	run.Steps[0].Status = types.StepStatusParkedForApproval
-	fj := `{"findings":[{"id":"review-1","severity":"warning","description":"design choice","action":"ask-user"}],"summary":"1 issue"}`
+	fj := `{"findings":[{"id":"review-1","severity":"warning","description":"design choice","action":"auto-fix"}],"summary":"1 issue"}`
 	run.Steps[0].FindingsJSON = &fj
 	m := NewModel(sock, client, run)
 	m.yoloMode = true
@@ -153,7 +153,7 @@ func TestModel_Yolo_FixesAllActionableFindingsDespiteManualDeselection(t *testin
 
 	run := testRun()
 	run.Steps[0].Status = types.StepStatusParkedForApproval
-	fj := `{"findings":[{"id":"review-1","severity":"warning","description":"first","action":"ask-user"},{"id":"review-2","severity":"warning","description":"second","action":"ask-user"}],"summary":"2 issues"}`
+	fj := `{"findings":[{"id":"review-1","severity":"warning","description":"first","action":"auto-fix"},{"id":"review-2","severity":"warning","description":"second","action":"auto-fix"}],"summary":"2 issues"}`
 	run.Steps[0].FindingsJSON = &fj
 	m := NewModel(sock, client, run)
 	m.yoloMode = true
@@ -213,7 +213,7 @@ func TestModel_Yolo_ApprovesFixReviewAfterFixingOnce(t *testing.T) {
 
 	run := testRun()
 	run.Steps[0].Status = types.StepStatusParkedForApproval
-	fj := `{"findings":[{"id":"review-1","severity":"warning","description":"design choice","action":"ask-user"}],"summary":"1 issue"}`
+	fj := `{"findings":[{"id":"review-1","severity":"warning","description":"design choice","action":"auto-fix"}],"summary":"1 issue"}`
 	run.Steps[0].FindingsJSON = &fj
 	m := NewModel(sock, client, run)
 	m.yoloMode = true
@@ -228,6 +228,7 @@ func TestModel_Yolo_ApprovesFixReviewAfterFixingOnce(t *testing.T) {
 	// The fix re-runs the step, which re-enters the gate as a parked_for_responder_after_fix. Yolo
 	// must not fix again (that risks an unbounded loop); it accepts the result.
 	m.steps[0].Status = types.StepStatusParkedAfterFix
+	m.stepFindings[types.StepReview] = `{"findings":[{"id":"review-1","description":"new human decision","action":"ask-user"}]}`
 	m.stepDiffLoaded[types.StepReview] = true
 	if cmd := m.maybeAutoApproveCmd(); cmd != nil {
 		cmd()
@@ -334,4 +335,40 @@ func footerContains(plain string, needles ...string) bool {
 		}
 	}
 	return false
+}
+
+func TestModel_Yolo_ParksInitialAskUserWithoutSpendingAnAction(t *testing.T) {
+	for _, action := range []string{`"action":"ask-user",`, ""} {
+		t.Run(action, func(t *testing.T) {
+			sock, client, snapshot := captureRespond(t)
+			run := testRun()
+			run.Steps[0].Status = types.StepStatusParkedForApproval
+			fj := `{"findings":[{"id":"review-1","description":"mechanical","action":"auto-fix"},{"id":"review-2",` + action + `"description":"human decision"}]}`
+			run.Steps[0].FindingsJSON = &fj
+			m := NewModel(sock, client, run)
+			m.yoloMode = true
+			// Deselecting the human decision must not turn it into consent.
+			m.findingSelections[types.StepReview] = map[string]bool{"review-1": true}
+			for i := 0; i < 2; i++ {
+				if cmd := m.maybeAutoApproveCmd(); cmd != nil {
+					t.Fatal("yolo must leave an initial ask-user gate parked")
+				}
+			}
+			if len(snapshot()) != 0 || m.yoloFixed[types.StepReview] || m.yoloApproved[types.StepReview] {
+				t.Fatal("parking consumed a yolo action")
+			}
+			// Explicit user approval remains available while yolo is on.
+			cmd := m.respondCmd(types.ActionApprove)
+			if cmd == nil {
+				t.Fatal("manual approval unavailable")
+			}
+			if msg := cmd(); msg != nil {
+				t.Fatalf("manual approval: %#v", msg)
+			}
+			calls := snapshot()
+			if len(calls) != 1 || calls[0].Action != types.ActionApprove {
+				t.Fatalf("manual response = %+v", calls)
+			}
+		})
+	}
 }

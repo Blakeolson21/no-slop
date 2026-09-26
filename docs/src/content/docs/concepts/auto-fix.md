@@ -9,7 +9,9 @@ When a pipeline step finds issues, `no-slop` can automatically ask the agent to 
 flowchart TD
   run["Run step"] --> findings{"Findings?"}
   findings -- "no" --> done["Step completes"]
-  findings -- "yes" --> eligible{"Auto-fix enabled and eligible findings?"}
+  findings -- "yes" --> human{"Initial ask-user finding?"}
+  human -- "yes" --> pause
+  human -- "no" --> eligible{"Auto-fix enabled and eligible findings?"}
   eligible -- "no" --> pause["Pause for user approval"]
   eligible -- "yes" --> fix["Agent applies fixes"]
   fix --> rerun["Re-run step"]
@@ -22,7 +24,7 @@ flowchart TD
 ## How it works
 
 1. A step executes and returns findings (e.g., test failures, lint warnings, review issues)
-2. If `auto_fix` is enabled for that step (limit > 0) and the attempt count is below the limit, the executor re-runs the step with `fixing=true`
+2. An initial `ask-user` finding parks the whole step before any sibling auto-fix runs. Otherwise, if `auto_fix` is enabled for that step (limit > 0) and the attempt count is below the limit, the executor re-runs the step with `fixing=true`
 3. The agent receives the previous findings and applies fixes
 4. The step re-runs to verify the fixes
 5. If issues remain and attempts are left, the loop continues
@@ -70,8 +72,15 @@ If an agent or integration omits `action`, no-slop fails closed by treating the 
 An unclassified finding is never eligible for automatic fixing.
 
 `ask-user` is meant for findings that need human judgment - for example, questioning an intentional product or design choice, arguing that an intentional addition, removal, or guard should be undone, or reporting that the test step could not produce enough evidence for the available intent. Routine correctness, reliability, or security fixes still stay `auto-fix` even if the smallest fix reintroduces a small amount of previously deleted logic. Agents driving the AXI skill should relay `ask-user` findings to the user unless they have explicit `--yes` consent to attempt bounded automatic resolution.
-In the TUI, yolo mode is an explicit override that auto-resolves paused steps by treating `auto-fix` and `ask-user` findings as consent to run one fix round.
-Steps with only `no-op` findings are approved as-is.
+TUI yolo mode uses three decisions at an initial approval gate:
+
+| Findings | Yolo action |
+| --- | --- |
+| Any `ask-user`, including a missing `action` | Leave the whole gate parked, including sibling `auto-fix` findings |
+| At least one `auto-fix`, with no `ask-user` | Select every finding and request one fix round |
+| Only `no-op`, or no findings | Approve as-is |
+
+Manual approve, fix, skip, and abort remain available while yolo is on. A post-fix gate (`parked_for_responder_after_fix`, formerly `fix_review`) is approved regardless of remaining findings, including when yolo attaches after the fix. It still waits for the fix diff to load. This TUI policy is separate from AXI `--yes`'s explicit consent and bounded fix policy below.
 
 The `review`, `test`, and configured-command `lint` steps use this shared model directly. The `document` step also uses the same `action` field, but unresolved documentation findings pause for approval because the initial document pass already attempted the documentation updates it could make safely.
 When `commands.lint` is empty, the combined housekeeping pass routes documentation and lint findings to their owning gates. Its unresolved lint findings describe issues left after safe fixes, so blocking findings pause for approval instead of remaining eligible for another automatic fix loop.

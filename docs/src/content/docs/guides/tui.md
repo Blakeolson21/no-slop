@@ -214,8 +214,8 @@ The `f fix (3/5)` label shows how many findings are selected out of the total.
 Press `e` to add or edit extra guidance for the current finding. Press `+` to add your own finding to the list. User-authored findings start selected by default and can be removed with `D`.
 
 Press `y` to toggle yolo mode when you want paused approval gates to resolve automatically.
-Yolo fixes gates with `auto-fix` and `ask-user` findings by selecting every finding, then approves the resulting fix-review gate.
-It approves gates with no findings or only `action: no-op` findings as-is, and fixes each step at most once so unresolved findings do not loop forever.
+An initial `ask-user` finding leaves the whole gate parked for your decision. Otherwise, yolo selects all findings for one fix round, or approves gates containing only `no-op` findings or no findings.
+Post-fix gates are approved regardless of remaining findings. See the [three yolo decisions](/no-slop/concepts/auto-fix/#finding-actions), including how they differ from AXI `--yes`.
 
 ## Outcome banner
 

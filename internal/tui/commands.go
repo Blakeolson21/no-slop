@@ -88,13 +88,11 @@ func (m Model) rerunCmd(requestID uint64) tea.Cmd {
 }
 
 // maybeAutoApproveCmd auto-resolves the current awaiting step when yolo mode is
-// on, returning nil otherwise. Yolo means "agree to fix every finding": a gate
-// whose findings are actionable gets a fix request (all findings selected),
-// while a gate with only non-actionable (no-op) findings - or none at all - is
-// approved as-is. A step is fixed at most once; the fix re-runs the step and
-// re-enters the gate as a parked_for_responder_after_fix, which yolo then approves so the pipeline
-// runs to completion without looping. Each terminal action fires once so
-// duplicate events while waiting for the round-trip don't resend it.
+// on. Initial gates with ask-user findings stay parked; other actionable gates
+// get one fix request with all findings selected, and no-op gates are approved.
+// Post-fix gates are approved regardless of their findings, including when
+// attaching after a fix. Each action fires once so duplicate events do not
+// resend it. The diff-readiness check still applies to post-fix approval.
 func (m Model) maybeAutoApproveCmd() tea.Cmd {
 	if !m.yoloMode {
 		return nil
@@ -104,6 +102,9 @@ func (m Model) maybeAutoApproveCmd() tea.Cmd {
 		return nil
 	}
 	if !m.approvalReady(step) {
+		return nil
+	}
+	if step.Status != types.StepStatusParkedAfterFix && types.HasAskUserFindings(types.Findings{Items: m.findingItems(step.StepName)}) {
 		return nil
 	}
 	if step.Status != types.StepStatusParkedAfterFix && !m.yoloFixed[step.StepName] && m.stepHasActionableFindings(step.StepName) {
