@@ -44,8 +44,8 @@ func Open(path string) (*DB, error) {
 }
 
 // OpenReadOnly opens an existing database without creating or migrating it.
-// It is used by pre-mutation authorization, where even schema repair would be
-// an unacceptable side effect before the caller is classified.
+// It serves pre-mutation authorization and local receipt lookup, where schema
+// repair would be an unacceptable side effect.
 func OpenReadOnly(path string) (*DB, error) {
 	if _, err := os.Stat(path); err != nil {
 		return nil, err
