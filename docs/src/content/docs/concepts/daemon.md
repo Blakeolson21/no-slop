@@ -47,7 +47,7 @@ no-slop init
 no-slop attach
 no-slop rerun
 no-slop axi run
-no-slop axi respond
+no-slop axi respond # except the local --receipt lookup
 ```
 
 `no-slop update` never resets the daemon in this build, because self-update is disabled and the binary is never replaced. After rebuilding from source, run `no-slop daemon restart` yourself; the [CLI reference](/no-slop/reference/cli/#no-slop-update) owns why the command is disabled.
@@ -68,7 +68,7 @@ any lifecycle mutation, with no `--force`, `--abandon-executing-runs`, or
 Every invocation of `daemon start`, `daemon stop`, `daemon restart`, or `update` - forced or not - logs the caller's PID, parent PID, and parent command line to `~/.no-mistakes/logs/cli.log`, recording `--force` and `--abandon-executing-runs` as separate fields, so a later incident can identify which agent or process triggered it and what it authorized.
 
 The daemon writes an identity record to `~/.no-mistakes/daemon.pid` and listens on a Unix socket at `~/.no-mistakes/socket`. On Windows, it uses a localhost TCP listener and a protected endpoint file at the same path. CLI clients bound how long they wait for that socket to accept a connection with `daemon_connect_timeout` (default `3s`, override with `NS_DAEMON_CONNECT_TIMEOUT`), so a daemon process that is alive but stuck fails the connection instead of hanging the caller; see [Troubleshooting](/no-slop/guides/troubleshooting/#check-for-stale-artifacts).
-Commands that ensure the daemon is running (`no-slop`, `init`, `attach`, `rerun`, `axi run`, `axi respond`) also fail fast rather than silently starting a replacement daemon when the socket file exists but nothing answers at all, such as a dead socket left behind by an unclean exit; `no-slop daemon start` self-heals past that case.
+Commands that ensure the daemon is running (`no-slop`, `init`, `attach`, `rerun`, `axi run`, and a ruling-submitting `axi respond`) also fail fast rather than silently starting a replacement daemon when the socket file exists but nothing answers at all, such as a dead socket left behind by an unclean exit; `no-slop daemon start` self-heals past that case. The read-only `axi respond --receipt` lookup reads the existing local database without contacting or starting the daemon; the [CLI reference](/no-slop/reference/cli/#no-slop-axi-respond) owns its exact contract.
 After accepting a shutdown request, `daemon stop` waits for the daemon process itself to exit before returning success. Losing IPC health is not enough because the listener closes near the start of shutdown, while the singleton lock and other process-owned resources are released only at process exit. `daemon restart` uses the same complete-stop handoff before starting the replacement, so the old and new processes do not contend for the root.
 A daemon that already died uncleanly is the one case that needs no waiting. When the recorded process is gone and nothing is still serving this root, `daemon stop` treats the root as already stopped: it removes the leftover PID file and socket and reports success, instead of waiting out the graceful-exit timeout for a process that will never exit or failing because a dead PID cannot be inspected. `daemon restart` therefore recovers from an unclean death on its own.
 

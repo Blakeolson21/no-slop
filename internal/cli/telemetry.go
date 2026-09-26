@@ -15,9 +15,10 @@ import (
 // agent and human activity show up the same way in analytics; the command
 // event, added alongside rather than replacing the pageview, keeps the
 // per-command status and duration. It fires at command entry so the surface is
-// recorded even when the command later fails. fields may be nil. Read-only
-// surfaces must use trackReadSurface instead: their polling volume made the
-// pageview+command pair the dominant source of remote telemetry rows.
+// recorded even when the command later fails. fields may be nil. Polling
+// read-only surfaces use trackReadSurface instead: their volume made the
+// pageview+command pair the dominant source of remote telemetry rows. The
+// explicitly telemetry-free local response-receipt lookup bypasses both.
 func trackAxiSurface(command, path string, fields telemetry.Fields, fn func() error) error {
 	telemetry.Pageview(path, fields)
 	return trackCommand(command, fn)
@@ -39,7 +40,8 @@ var readSurfaceNow func() time.Time
 // emit or the heartbeat interval elapsed. This is what keeps agent status
 // polling loops from flooding remote analytics (one event per poll, forever)
 // while every meaningful state transition still lands remotely. Mutation
-// surfaces (axi run/respond/abort, run lifecycle) stay full-fidelity.
+// surfaces (axi run, ruling-submitting axi respond, axi abort, and run
+// lifecycle) stay full-fidelity.
 // fn returns the state fingerprint, an optional soft status, and the error.
 func trackReadSurface(command string, fields telemetry.Fields, fn func() (string, string, error)) error {
 	start := time.Now()

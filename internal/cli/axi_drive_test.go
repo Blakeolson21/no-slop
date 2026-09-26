@@ -864,7 +864,7 @@ func TestDriveRun_ConsecutiveFixReviewParksAdvanceByRoundCount(t *testing.T) {
 		case events <- ipc.Event{Type: ipc.EventRunUpdated, RunID: "run-1"}:
 		default:
 		}
-		return &ipc.RespondResult{OK: true}, nil
+		return &ipc.RespondResult{OK: true, RunID: p.RunID, Step: p.Step, IdempotencyKey: p.IdempotencyKey}, nil
 	})
 	client, _ := startDriveTestServer(t, srv)
 

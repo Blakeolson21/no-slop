@@ -67,7 +67,7 @@ no-slop daemon stop
 no-slop daemon start
 ```
 
-If the socket file exists but nothing answers at all (a dead socket left behind by an unclean exit, e.g. a crash or `SIGKILL`), commands that ensure the daemon is running (`no-slop`, `init`, `attach`, `rerun`, `axi run`, `axi respond`) now fail fast with a `connect to daemon socket` error instead of silently starting a replacement daemon. The error message itself includes a `(run 'no-slop daemon start' to recover)` hint - run `no-slop daemon start` directly to recover, since it self-heals past a dead socket and starts a fresh daemon.
+If the socket file exists but nothing answers at all (a dead socket left behind by an unclean exit, e.g. a crash or `SIGKILL`), commands that need the daemon fail fast with a `connect to daemon socket` error instead of silently starting a replacement daemon. The error message itself includes a `(run 'no-slop daemon start' to recover)` hint - run `no-slop daemon start` directly to recover, since it self-heals past a dead socket and starts a fresh daemon. The [daemon lifecycle reference](/no-slop/concepts/daemon/#starting-and-stopping) owns which commands require a daemon; notably, the read-only `axi respond --receipt` lookup does not.
 
 ### Managed service logs
 
