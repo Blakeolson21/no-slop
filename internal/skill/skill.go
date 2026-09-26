@@ -197,7 +197,8 @@ Run the pipeline and decide on its findings as they come up:
    or global ` + "`auto_fix.review > 0`" + ` override re-enables it), so blocking and
    ask-user review findings park for your decision rather than being silently
    self-fixed. (Other steps such as test and lint may auto-fix within the
-   pipeline and re-run before they ever gate.)
+   pipeline and re-run before they ever gate.) An initial ask-user finding
+   parks the whole step before any sibling auto-fix, even with auto-fix enabled.
 
    Choose one response:
    ` + "```sh" + `

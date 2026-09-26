@@ -1228,7 +1228,7 @@ func waitForOutstandingReviewGate(t *testing.T, database *db.DB, done <-chan err
 	t.Fatalf("review never parked on outstanding findings %v; last saw %v", want, last)
 }
 
-// The auto-fix selection path picks only the auto-fixable subset. The findings
+// After the initial human gate, explicitly select only the auto-fixable subset. The findings
 // it leaves behind must survive a rereview that never mentions them again -
 // otherwise a finding raised in one round silently vanishes in the next and
 // the gate reports a clean run it did not earn.
@@ -1264,6 +1264,12 @@ func TestExecutor_UnselectedAutoFixRoundFindingSurvivesSilentRereview(t *testing
 
 	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
 	done, _ := startExecutor(t, exec, run, repo, workDir)
+
+	waitForOutstandingReviewGate(t, database, done, run.ID, "cheap fix", "needs a human")
+	cheapID := findingIDByDescription(t, database, run.ID, types.StepReview, "cheap fix")
+	if err := exec.Respond(types.StepReview, types.ActionFix, []string{cheapID}); err != nil {
+		t.Fatal(err)
+	}
 
 	waitForOutstandingReviewGate(t, database, done, run.ID, "needs a human")
 
@@ -1302,10 +1308,16 @@ func TestExecutor_ExhaustedAutoFixBudgetStillParksOnCarriedFinding(t *testing.T)
 	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
 	done, _ := startExecutor(t, exec, run, repo, workDir)
 
+	waitForOutstandingReviewGate(t, database, done, run.ID, "cheap fix", "needs a human")
+	cheapID := findingIDByDescription(t, database, run.ID, types.StepReview, "cheap fix")
+	if err := exec.Respond(types.StepReview, types.ActionFix, []string{cheapID}); err != nil {
+		t.Fatal(err)
+	}
+
 	waitForOutstandingReviewGate(t, database, done, run.ID, "needs a human", "another cheap fix")
 
-	if calls != 2 {
-		t.Errorf("step called %d times, want 2 (initial + the single budgeted auto-fix round)", calls)
+	if calls != 3 {
+		t.Errorf("step called %d times, want 3 (initial + explicit fix + the single budgeted auto-fix round)", calls)
 	}
 	if err := exec.Respond(types.StepReview, types.ActionApprove, nil); err != nil {
 		t.Fatal(err)

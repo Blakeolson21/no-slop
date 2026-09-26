@@ -422,7 +422,7 @@ func TestExecutor_AutoFixMixedFindings(t *testing.T) {
 					],"summary":"2 issues","risk_level":"medium","risk_rationale":"mixed"}`,
 				}, nil
 			}
-			// After auto-fix: verify only fixable finding was sent
+			// After explicit selection: verify only the chosen finding was sent
 			if sctx.PreviousFindings == "" {
 				t.Error("expected PreviousFindings")
 			}
@@ -446,7 +446,16 @@ func TestExecutor_AutoFixMixedFindings(t *testing.T) {
 	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
 	done, _ := startExecutor(t, exec, run, repo, workDir)
 
-	// After auto-fixing the bug, only ask-user finding remains.
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedForApproval)
+	if callCount != 1 {
+		t.Fatalf("expected initial decision before fixes, got %d calls", callCount)
+	}
+	bugID := findingIDByDescription(t, database, run.ID, types.StepReview, "bug")
+	if err := exec.Respond(types.StepReview, types.ActionFix, []string{bugID}); err != nil {
+		t.Fatal(err)
+	}
+
+	// After the authorized fix, only the ask-user finding remains.
 	// No more fixable findings, so falls through to user approval.
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusParkedAfterFix)
 
@@ -491,5 +500,51 @@ func TestExecutor_ParkedStepReleasesLogFileAfterCancel(t *testing.T) {
 	// (run 31829193856). Cancel must close the log before cleanup.
 	if err := os.Remove(logPath); err != nil {
 		t.Fatalf("parked step must close lint.log on cancel so the worktree can be removed: %v", err)
+	}
+}
+
+// A human decision must be visible before the executor spends even one sibling
+// auto-fix round, including when the producer forgot NeedsApproval or action.
+func TestExecutor_InitialAskUserParksBeforeSiblingAutoFix(t *testing.T) {
+	for _, stepName := range []types.StepName{types.StepReview, types.StepTest, types.StepLint} {
+		for _, action := range []string{`"action":"ask-user",`, ""} {
+			t.Run(string(stepName)+"/"+action, func(t *testing.T) {
+				database, p, run, repo := setupTest(t)
+				step := &mockStep{name: stepName, outcome: &StepOutcome{
+					AutoFixable: true,
+					Findings:    `{"findings":[{"id":"fix","description":"mechanical","action":"auto-fix"},{"id":"decision",` + action + `"description":"human decision"}]}`,
+				}}
+				gates := make(chan ipc.Event, 1)
+				exec := NewExecutor(database, p, &config.Config{AutoFix: config.AutoFix{Review: 2, Test: 2, Lint: 2}}, nil, []Step{step}, func(event ipc.Event) {
+					if event.Type == ipc.EventStepStatusChanged && event.Status != nil && (*event.Status == string(types.StepStatusParkedForApproval) || *event.Status == string(types.StepStatusParkedAfterFix)) {
+						gates <- event
+					}
+				})
+				done, _ := startExecutor(t, exec, run, repo, t.TempDir())
+				select {
+				case gate := <-gates:
+					if *gate.Status != string(types.StepStatusParkedForApproval) || step.callCount() != 1 {
+						t.Fatalf("first gate = %s after %d executions; want initial approval before any fix", *gate.Status, step.callCount())
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("no approval gate")
+				}
+				steps, err := database.GetStepsByRun(run.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rounds, err := database.GetRoundsByStep(steps[0].ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(rounds) != 1 || rounds[0].SelectedFindingIDs != nil {
+					t.Fatalf("initial park spent a fix selection: %+v", rounds)
+				}
+				if err := exec.Respond(stepName, types.ActionApprove, nil); err != nil {
+					t.Fatal(err)
+				}
+				waitExecutorDone(t, done)
+			})
+		}
 	}
 }

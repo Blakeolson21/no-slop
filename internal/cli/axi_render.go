@@ -522,7 +522,7 @@ func gateFields(gate stepView) []toon.Field {
 	// disabled, so agents should expect blocking and ask-user findings to park
 	// unless config explicitly opts back in.
 	if gate.Name == string(types.StepReview) {
-		gfields = append(gfields, toon.Field{Key: "note", Value: "Review auto-fix is disabled by default (`auto_fix.review: 0`; a repo or global `auto_fix.review > 0` override re-enables it), so blocking and ask-user review findings park for your decision rather than being silently self-fixed."})
+		gfields = append(gfields, toon.Field{Key: "note", Value: "Review auto-fix is disabled by default (`auto_fix.review: 0`; a repo or global `auto_fix.review > 0` override re-enables it), so blocking and ask-user review findings park for your decision rather than being silently self-fixed. An initial ask-user finding parks the whole step before any sibling auto-fix, even with auto-fix enabled."})
 	}
 	report, hasReport := convergence.ParseReport(gate.ConvergenceJSON)
 	if hasReport {

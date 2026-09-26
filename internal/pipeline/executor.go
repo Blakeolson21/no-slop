@@ -1157,9 +1157,11 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 
 		// Check if auto-fix should be attempted.
 		// Only auto-fix findings whose action is "auto-fix".
-		// This runs before the NeedsApproval check so that all severity
-		// levels (including "info") get a chance at automatic fixing.
-		if outcome.AutoFixable && autoFixLimit > 0 && autoFixAttempts < autoFixLimit && !convergenceTripped {
+		// An initial ask-user gate must be exposed before spending sibling
+		// auto-fix rounds. Once a fix has been authorized, the existing fix
+		// loop and post-fix approval policy apply.
+		initialHumanDecision := !sctx.Fixing && hasAskUserFindingsJSON(effectiveFindings)
+		if outcome.AutoFixable && autoFixLimit > 0 && autoFixAttempts < autoFixLimit && !convergenceTripped && !initialHumanDecision {
 			selectionTruth := effectiveFindings
 			if carryFindings {
 				selectionTruth, err = prepareReviewSelectionTruth(effectiveFindings)
