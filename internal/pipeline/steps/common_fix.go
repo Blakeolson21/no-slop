@@ -189,15 +189,15 @@ func commitAgentFixes(sctx *pipeline.StepContext, stepName types.StepName, summa
 	if err != nil {
 		return fmt.Errorf("resolve head after %s fix round: %w", stepName, err)
 	}
-	if err := guardFixTestCommits(sctx, headSHA); err != nil {
-		return err
-	}
 	recorded := strings.TrimSpace(sctx.Run.HeadSHA)
 	if headSHA == recorded {
 		sctx.Log("no agent changes to commit")
 		return nil
 	}
 	if err := assertPipelineHeadContinuity(sctx, stepName); err != nil {
+		return err
+	}
+	if err := guardFixTestCommits(sctx, headSHA); err != nil {
 		return err
 	}
 	startingHead := strings.TrimSpace(sctx.ReviewStartingHeadSHA)
