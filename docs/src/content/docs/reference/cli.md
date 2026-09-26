@@ -15,7 +15,6 @@ no-slop --skip test,lint
 | Flag          | Type     | Default | Description                                          |
 | ------------- | -------- | ------- | ---------------------------------------------------- |
 | `-y`, `--yes` | `bool`   | `false` | Run setup wizard and accept defaults automatically   |
-| `--no-fix`    | `bool`   | `false` | Disable automatic and requested fix rounds for this run |
 | `--skip`      | `string` | (none)  | Comma-separated pipeline steps to skip for a new run |
 
 Unlike `no-slop attach`, bare `no-slop` only auto-attaches to an active run on the current branch.
@@ -105,6 +104,7 @@ no-slop axi run --intent "the user's goal" --yes
 | Flag          | Type     | Default | Description                                                      |
 | ------------- | -------- | ------- | ---------------------------------------------------------------- |
 | `--intent`    | `string` | (none)  | What the user set out to accomplish; required to start a new run |
+| `--no-fix`    | `bool`   | `false` | Disable automatic and requested fix rounds for this run |
 | `-y`, `--yes` | `bool`   | `false` | Auto-fix up to 3 rounds per step; park unresolved findings       |
 | `--skip`      | `string` | (none)  | Comma-separated pipeline steps to skip                           |
 
