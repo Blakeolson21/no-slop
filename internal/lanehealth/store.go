@@ -63,6 +63,13 @@ func (s *Store) Mark(outage Outage) error {
 		return nil
 	}
 	return s.mutate(func(current *state) {
+		// A failed recovery probe produces a fresh classification, which has no
+		// probe timestamp of its own. Keep the durable claim (including one
+		// made by another process) rather than making a probed outage look as
+		// though it has never been tested. ObservedAt still restarts backoff.
+		if previous := current.Lanes[outage.Lane]; previous.LastProbeAt.After(outage.LastProbeAt) {
+			outage.LastProbeAt = previous.LastProbeAt
+		}
 		current.Lanes[outage.Lane] = outage
 	})
 }
