@@ -108,7 +108,7 @@ func (s *DocumentStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcom
 	// Skip entirely when nothing the agent would document has changed. No
 	// lint result is stashed, so the lint step falls back to its own pass -
 	// neither duty is ever silently skipped.
-	changedFiles, err := git.Run(ctx, sctx.WorkDir, "diff", "--name-only", baseSHA+".."+sctx.Run.HeadSHA)
+	changedFiles, err := git.Output(ctx, sctx.WorkDir, "diff", "--no-renames", "--name-only", "-z", baseSHA, sctx.Run.HeadSHA, "--")
 	if err != nil {
 		return nil, fmt.Errorf("get changed files: %w", err)
 	}
@@ -128,6 +128,11 @@ func (s *DocumentStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcom
 	preDocumentHead := sctx.Run.HeadSHA
 
 	prompt := s.buildPrompt(sctx, baseSHA, ignorePatterns, combinedLint)
+	evidence, err := documentChangeEvidence(sctx, baseSHA, changedFiles)
+	if err != nil {
+		return nil, fmt.Errorf("get document evidence: %w", err)
+	}
+	prompt += evidence
 	schema := findingsSchema
 	purpose := "document"
 	if combinedLint {
@@ -242,7 +247,8 @@ Context:
 Task:
 
 1. Understand the change
-   - Read the diff and changed files to understand what was added, modified, or removed, and the intent of the change.
+   - Use the supplied diff and changed paths to understand what was added, modified, or removed, and the intent of the change. Read changed files as needed when tools are available.
+   - A change with no documentation impact needs no documentation finding. Truncated patches or binary notices identify unavailable content; they are not proof that documentation is current.
 
 2. Find what this change made stale
    - For each fact or contract the change altered, locate its one authoritative owner document (README, docs/, doc comments, config examples, etc.).
@@ -346,8 +352,7 @@ func documentApprovalOutcome(summary string) *pipeline.StepOutcome {
 }
 
 func hasNonIgnoredDocumentChanges(changedFiles string, ignorePatterns []string) bool {
-	for _, path := range strings.Split(changedFiles, "\n") {
-		path = strings.TrimSpace(path)
+	for _, path := range strings.Split(changedFiles, "\x00") {
 		if path == "" {
 			continue
 		}
