@@ -95,12 +95,13 @@ func protectedTestFindings(sctx *pipeline.StepContext, diff string) error {
 // a permitted new file. NUL paths preserve spaces, newlines and quoting.
 // The baseline is the pipeline's recorded head, never an agent-controlled ref.
 func guardFixTestCommits(sctx *pipeline.StepContext, candidate string) (err error) {
-	baseline := sctx.Run.HeadSHA
-	if candidate == baseline {
-		return nil
-	}
+	baseline := strings.TrimSpace(sctx.Run.HeadSHA)
 	if baseline == "" {
 		return fmt.Errorf("cannot protect existing tests without a recorded starting head")
+	}
+	candidate = strings.TrimSpace(candidate)
+	if candidate == baseline {
+		return nil
 	}
 	// Even an unreadable diff fails closed: reject this repair, never let
 	// terminal head reconciliation adopt a candidate we could not inspect.
@@ -116,6 +117,12 @@ func guardFixTestCommits(sctx *pipeline.StepContext, candidate string) (err erro
 			err = fmt.Errorf("%v; restore rejected repair: %w", err, restoreErr)
 		}
 	}()
+	// The diff range is empty when candidate rewinds to an ancestor of the
+	// baseline. Require forward ancestry before inspecting commits so a CI
+	// repair cannot erase recorded history, including tests absent at candidate.
+	if _, err := stepGitRun(sctx, "merge-base", "--is-ancestor", baseline, candidate); err != nil {
+		return fmt.Errorf("fix candidate does not descend from recorded starting head: %w", err)
+	}
 	commits, err := stepGitRun(sctx, "rev-list", "--reverse", baseline+".."+candidate)
 	if err != nil {
 		return fmt.Errorf("inspect fix commits: %w", err)
