@@ -299,7 +299,8 @@ func stripThreadStatusFooter(summary string) string {
 // returns the agent's one-line fix summary (empty when the agent returned
 // nothing parseable), which the caller should place on StepOutcome.FixSummary
 // so the executor can persist it on the round record.
-func executeFixMode(sctx *pipeline.StepContext, stepName types.StepName, opts fixExecutionOptions) (string, error) {
+func executeFixMode(sctx *pipeline.StepContext, stepName types.StepName, opts fixExecutionOptions) (summary string, err error) {
+	defer guardFailedFix(sctx, &err)
 	if !sctx.Fixing {
 		return "", nil
 	}
@@ -322,7 +323,6 @@ func executeFixMode(sctx *pipeline.StepContext, stepName types.StepName, opts fi
 		Workload:   opts.Workload,
 	}
 	var result *agent.Result
-	var err error
 	if opts.SessionRole != "" {
 		result, err = sctx.RunAgentSession(opts.SessionRole, runOpts)
 	} else {
@@ -336,7 +336,7 @@ func executeFixMode(sctx *pipeline.StepContext, stepName types.StepName, opts fi
 			return "", err
 		}
 	}
-	summary, err := extractCommitSummary(result)
+	summary, err = extractCommitSummary(result)
 	if err != nil {
 		if errors.Is(err, errRejectedCommitSummary) {
 			return "", fmt.Errorf("validate %s fix summary: %w", stepName, err)

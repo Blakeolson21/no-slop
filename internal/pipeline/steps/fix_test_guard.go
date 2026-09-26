@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/Blakeolson21/no-slop/internal/agent"
-	"github.com/Blakeolson21/no-slop/internal/git"
 	"github.com/Blakeolson21/no-slop/internal/pipeline"
 	"github.com/Blakeolson21/no-slop/internal/safeurl"
+	"github.com/Blakeolson21/no-slop/internal/shellenv"
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
@@ -28,20 +28,7 @@ func (e *protectedTestChange) Error() string {
 // A rejected candidate is restored before this error can become an approval
 // gate. Thus approving the finding cannot accidentally publish the bad commit.
 func returnProtectedTestFinding(sctx *pipeline.StepContext, outcome **pipeline.StepOutcome, err *error) {
-	// An agent may commit before returning an error or malformed output. Cover
-	// that path too, before terminal head reconciliation can adopt its commit.
-	if *err != nil {
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(sctx.Ctx), 30*time.Second)
-		defer cancel()
-		cleanup := *sctx
-		cleanup.Ctx = cleanupCtx
-		head, readErr := git.HeadSHA(cleanupCtx, sctx.WorkDir)
-		if readErr == nil && head != sctx.Run.HeadSHA {
-			if guardErr := guardFixTestCommits(&cleanup, head); guardErr != nil {
-				*err = guardErr
-			}
-		}
-	}
+	guardFailedFix(sctx, err)
 
 	var blocked *protectedTestChange
 	if errors.As(*err, &blocked) {
@@ -52,6 +39,29 @@ func returnProtectedTestFinding(sctx *pipeline.StepContext, outcome **pipeline.S
 		*outcome = &pipeline.StepOutcome{NeedsApproval: true, Findings: blocked.findings}
 		*err = nil
 	}
+}
+
+func guardFailedFix(sctx *pipeline.StepContext, err *error) {
+	// An agent may commit before returning an error or malformed output. Cover
+	// that path too, before terminal head reconciliation can adopt its commit.
+	if *err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(sctx.Ctx), 30*time.Second)
+		defer cancel()
+		cleanup := *sctx
+		cleanup.Ctx = cleanupCtx
+		head, readErr := stepGitHeadSHA(&cleanup)
+		if readErr == nil && head != sctx.Run.HeadSHA {
+			// Entry continuity errors must remain read-only. Only inspect a forward
+			// repair, never try to restore a missing, backward, or sibling baseline.
+			if _, ancestryErr := stepGitRun(&cleanup, "merge-base", "--is-ancestor", sctx.Run.HeadSHA, head); ancestryErr != nil {
+				return
+			}
+			if guardErr := guardFixTestCommits(&cleanup, head); guardErr != nil {
+				*err = guardErr
+			}
+		}
+	}
+
 }
 
 func protectedTestFindings(sctx *pipeline.StepContext, diff string) error {
@@ -100,17 +110,19 @@ func guardFixTestCommits(sctx *pipeline.StepContext, candidate string) (err erro
 		}
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(sctx.Ctx), 30*time.Second)
 		defer cancel()
-		if _, restoreErr := git.Run(cleanupCtx, sctx.WorkDir, "reset", "--hard", baseline); restoreErr != nil {
+		cleanup := *sctx
+		cleanup.Ctx = cleanupCtx
+		if _, restoreErr := stepGitRun(&cleanup, "reset", "--hard", baseline); restoreErr != nil {
 			err = fmt.Errorf("%v; restore rejected repair: %w", err, restoreErr)
 		}
 	}()
-	commits, err := git.Run(sctx.Ctx, sctx.WorkDir, "rev-list", "--reverse", baseline+".."+candidate)
+	commits, err := stepGitRun(sctx, "rev-list", "--reverse", baseline+".."+candidate)
 	if err != nil {
 		return fmt.Errorf("inspect fix commits: %w", err)
 	}
 	var proposals []string
 	for _, commit := range strings.Fields(commits) {
-		changed, err := git.Output(sctx.Ctx, sctx.WorkDir, "diff-tree", "--no-commit-id", "-r", "-m", "--no-renames", "--diff-filter=MDT", "--name-only", "-z", commit)
+		changed, err := fixTestGitOutput(sctx, "diff-tree", "--no-commit-id", "-r", "-m", "--no-renames", "--diff-filter=MDT", "--name-only", "-z", commit)
 		if err != nil {
 			return fmt.Errorf("inspect fix test paths: %w", err)
 		}
@@ -124,7 +136,7 @@ func guardFixTestCommits(sctx *pipeline.StepContext, candidate string) (err erro
 			continue
 		}
 		args := []string{"show", "--format=", "--no-ext-diff", "--no-textconv", "--no-renames", "--binary", "-m", commit, "--"}
-		patch, err := git.Output(sctx.Ctx, sctx.WorkDir, append(args, paths...)...)
+		patch, err := fixTestGitOutput(sctx, append(args, paths...)...)
 		if err != nil {
 			return fmt.Errorf("read proposed test patch: %w", err)
 		}
@@ -155,4 +167,57 @@ func proposedTestFindings(result *agent.Result) error {
 		return err
 	}
 	return &protectedTestChange{findings: string(raw)}
+}
+
+// A review must still certify the restored (or safely repaired) head before
+// an adjudicator can approve this gate. Keep the protected proposal alongside
+// that independent review, even when the reviewer reports no findings.
+func mergeProtectedTestProposal(proposal string, outcome **pipeline.StepOutcome, err *error) {
+	if proposal == "" || *err != nil || *outcome == nil {
+		return
+	}
+	protected, parseErr := types.ParseFindingsJSON(proposal)
+	if parseErr != nil {
+		*err = parseErr
+		return
+	}
+	reviewed, parseErr := types.ParseFindingsJSON((*outcome).Findings)
+	if parseErr != nil {
+		*err = parseErr
+		return
+	}
+	// The proposal wins for a repeated finding ID; reviewer silence or a
+	// softer action cannot turn a prohibited test change back into auto-fix.
+	ids := make(map[string]bool)
+	for _, f := range protected.Items {
+		if f.ID != "" {
+			ids[f.ID] = true
+		}
+	}
+	for _, f := range reviewed.Items {
+		if !ids[f.ID] {
+			protected.Items = append(protected.Items, f)
+		}
+	}
+	raw, marshalErr := json.Marshal(protected)
+	if marshalErr != nil {
+		*err = marshalErr
+		return
+	}
+	(*outcome).Findings = string(raw)
+	(*outcome).FindingsNormalized = false
+	(*outcome).NeedsApproval = true
+	(*outcome).AutoFixable = false
+}
+
+// Preserve raw NUL-delimited paths and patch whitespace, with the same
+// step-scoped PATH, credential environment and bounds as other CI git work.
+func fixTestGitOutput(sctx *pipeline.StepContext, args ...string) ([]byte, error) {
+	cmd, cancel := stepGitCmd(sctx, args...)
+	defer cancel()
+	out, err := shellenv.OutputShellCommand(cmd)
+	if err != nil {
+		return nil, fmt.Errorf("git test-change inspection: %w", err)
+	}
+	return out, nil
 }

@@ -69,6 +69,9 @@ func TestFixAgentCannotChangeExistingTests(t *testing.T) {
 			if outcome == nil || !outcome.NeedsApproval || outcome.AutoFixable {
 				t.Fatalf("must ask user: %+v", outcome)
 			}
+			if outcome.ReviewApprovedHeadSHA != head {
+				t.Fatal("guard gate lacks a full rereview of the restored head")
+			}
 			findings, err := types.ParseFindingsJSON(outcome.Findings)
 			if err != nil || len(findings.Items) == 0 {
 				t.Fatalf("findings: %v %+v", err, findings)
@@ -111,6 +114,9 @@ func TestFixAgentMayAddNewTest(t *testing.T) {
 func TestFixAgentMayProposeTestDiffWithoutApplyingIt(t *testing.T) {
 	dir, base, head := setupGitRepo(t)
 	ag := &mockAgent{name: "fixer", runFn: func(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
+		if opts.Purpose != "review-fix" {
+			return &agent.Result{Output: json.RawMessage(`{"findings":[],"summary":"reviewed"}`)}, nil
+		}
 		if !strings.Contains(opts.Prompt, "never modify, delete, rename") {
 			t.Error("fix prompt does not preserve existing tests")
 		}
@@ -123,8 +129,8 @@ func TestFixAgentMayProposeTestDiffWithoutApplyingIt(t *testing.T) {
 	if err != nil || out == nil || !out.NeedsApproval || !strings.Contains(out.Findings, "old_test.go") {
 		t.Fatalf("proposal lost: %+v %v", out, err)
 	}
-	if len(ag.calls) != 1 || sctx.Run.HeadSHA != head {
-		t.Fatal("proposal must park without a rereview or changed head")
+	if len(ag.calls) != 2 || sctx.Run.HeadSHA != head {
+		t.Fatal("proposal must park after a rereview without changing head")
 	}
 }
 

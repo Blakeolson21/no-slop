@@ -2,6 +2,7 @@ package steps
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -24,6 +25,8 @@ func (s *ReviewStep) FindingsMayBeScopeLimited() bool { return true }
 
 func (s *ReviewStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutcome, err error) {
 	defer returnProtectedTestFinding(sctx, &outcome, &err)
+	var protectedProposal string
+	defer func() { mergeProtectedTestProposal(protectedProposal, &outcome, &err) }()
 	ctx := sctx.Ctx
 	baseSHA := resolveBranchBaseSHA(ctx, sctx.WorkDir, sctx.Run.BaseSHA, sctx.Repo.DefaultBranch)
 	branch := sctx.Run.Branch
@@ -116,7 +119,11 @@ Previous review findings to address:
 			Workload:                workload,
 		})
 		if err != nil {
-			return nil, err
+			var protected *protectedTestChange
+			if !errors.As(err, &protected) || sctx.Ctx.Err() != nil {
+				return nil, err
+			}
+			protectedProposal = protected.findings
 		}
 		fixSummary = summary
 	}
