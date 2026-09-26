@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -9,6 +10,8 @@ import (
 	toON "github.com/toon-format/toon-go"
 
 	"github.com/Blakeolson21/no-slop/internal/branchsync"
+	"github.com/Blakeolson21/no-slop/internal/db"
+	"github.com/Blakeolson21/no-slop/internal/paths"
 	"github.com/Blakeolson21/no-slop/internal/telemetry"
 	"github.com/spf13/cobra"
 )
@@ -102,6 +105,27 @@ func openSyncService() (*branchsync.Service, func(), error) {
 		return nil, nil, err
 	}
 	return &branchsync.Service{DB: d, Repo: repo, WorkDir: ".", GateDir: p.RepoDir(repo.ID), Paths: p}, func() { _ = d.Close() }, nil
+}
+
+// localCustodyRecoveryIsUnambiguous is a read-only preflight. Missing or
+// incompatible local state falls back to the normal gate-context classifier;
+// only a positively identified terminal recovery state can bypass that call.
+func localCustodyRecoveryIsUnambiguous(ctx context.Context) bool {
+	p, err := paths.New()
+	if err != nil {
+		return false
+	}
+	database, err := db.OpenReadOnly(p.DB())
+	if err != nil {
+		return false
+	}
+	defer database.Close()
+	repo, err := findRepo(database)
+	if err != nil {
+		return false
+	}
+	service := &branchsync.Service{DB: database, Repo: repo, WorkDir: ".", GateDir: p.RepoDir(repo.ID), Paths: p}
+	return service.RecoveryCanSkipGateContext(ctx)
 }
 
 func runHumanSync(cmd *cobra.Command, check, yes bool) error {

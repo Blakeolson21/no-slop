@@ -234,6 +234,22 @@ func (s *Service) InspectCached(ctx context.Context) State {
 	return state
 }
 
+// RecoveryCanSkipGateContext reports whether cached branch and run evidence is
+// enough to recover without caller-ancestry classification. It requires no
+// active run in the estate, so no active pipeline step can be requesting the
+// recovery. Recover rechecks the same evidence before acting.
+func (s *Service) RecoveryCanSkipGateContext(ctx context.Context) bool {
+	if s.DB == nil {
+		return false
+	}
+	active, err := s.DB.HasActiveRuns(ctx)
+	if err != nil || active {
+		return false
+	}
+	state, run, _ := s.inspect(ctx)
+	return recoveryStateUnambiguous(state, run)
+}
+
 // Refresh explicitly verifies the exact configured push ref into a private
 // no-slop ref. It never updates an ordinary remote-tracking ref.
 func (s *Service) Refresh(ctx context.Context) State {
@@ -550,9 +566,13 @@ func (s *Service) Apply(ctx context.Context) State {
 // nowhere is reported as LostPipelineHead instead of silently absent. Re-running
 // the idempotent recovery reports exactly the same facts.
 func (s *Service) Recover(ctx context.Context, keepLocal bool) State {
-	if refusal, blocked := s.gateContextRefusal(ctx); blocked {
-		return refusal
+	if !s.RecoveryCanSkipGateContext(ctx) {
+		if refusal, blocked := s.gateContextRefusal(ctx); blocked {
+			return refusal
+		}
 	}
+	// Re-read after the fast-path proof or classification before any recovery
+	// action; either check may have taken long enough for local state to move.
 	state, run, _ := s.inspect(ctx)
 	if run != nil && run.CustodyReturnedAt != nil {
 		state.Recovered = true
@@ -733,6 +753,31 @@ func (s *Service) Recover(ctx context.Context, keepLocal bool) State {
 		blocked := blockedPlan(state, StatePipelineOwned, "blocked_recover_diverged", fmt.Sprintf("the local branch and the preserved pipeline head have diverged; the preserved commits are anchored at %s - reconcile manually and re-run the recovery, run `no-slop rerun` to start a fresh validation from the gate branch head, or use --keep-local to keep the current head; no files or refs were changed", anchorRef))
 		blocked.NextAction = &NextAction{Code: "inspect_and_reconcile_manually", Command: "git log --oneline --left-right HEAD..." + anchorRef}
 		return blocked
+	}
+}
+
+// recoveryStateUnambiguous is deliberately narrow: it accepts only a
+// terminal run whose local branch record already says custody can be returned,
+// or a terminal outcome that has already released/returned custody. Active,
+// incomplete, and malformed states fall back to the gate-context classifier.
+func recoveryStateUnambiguous(state State, run *db.Run) bool {
+	if run == nil || !terminalRunStatus(run.Status) || state.Pipeline.RunID != run.ID ||
+		state.Local.Branch == "" || state.Local.Head == "" || state.Pipeline.CurrentHead != run.HeadSHA {
+		return false
+	}
+	switch state.State {
+	case StatePipelineOwned:
+		return run.CustodyReturnedAt == nil && state.Safety == "blocked_pipeline_owned_recoverable" &&
+			state.NextAction != nil && state.NextAction.Code == "recover_custody" &&
+			state.Pipeline.Status == string(run.Status)
+	case StateUserOwned:
+		return run.CustodyReturnedAt == nil && run.TerminalHeadVerifiedAt != nil &&
+			run.LastPushedSHA == nil && runHeadUnmoved(run) &&
+			state.Pipeline.SubmittedHead == run.HeadSHA && state.Safety == "user_owned"
+	case StateCustodyReturned:
+		return run.CustodyReturnedAt != nil && state.Safety == "custody_returned"
+	default:
+		return false
 	}
 }
 

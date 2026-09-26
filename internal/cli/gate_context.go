@@ -32,12 +32,15 @@ func guardGateControl(cmd *cobra.Command) error {
 	if !mutatesPipelineControl(cmd) {
 		return nil
 	}
+	if isUnambiguousCustodyRecovery(cmd) {
+		return nil
+	}
 	result, err := classifyGateControlCaller(cmd.Context())
 	if err != nil {
 		if errors.Is(err, errGateContextTimeout) {
 			help := []string{"Back off and retry the same command; classification has not authorized recovery or other pipeline control."}
 			if cmd.CommandPath() == "no-slop axi respond" {
-				help = append(help, "This invocation did not send a ruling. For an earlier uncertain response, use `no-slop axi respond --receipt --run <id> --idempotency-key <key>`. ")
+				help = append(help, "This invocation did not send a ruling. For an earlier uncertain response, use `no-slop axi respond --receipt --run <id> --idempotency-key <key>`.")
 			}
 			emitDoc(cmd,
 				toon.Field{Key: "error", Value: toon.NewObject(
@@ -59,6 +62,21 @@ func guardGateControl(cmd *cobra.Command) error {
 		return nil
 	}
 	return emitGateContextRefusal(cmd, result)
+}
+
+func isUnambiguousCustodyRecovery(cmd *cobra.Command) bool {
+	if cmd.CommandPath() != "no-slop sync" && cmd.CommandPath() != "no-slop axi sync" {
+		return false
+	}
+	recover, err := cmd.Flags().GetBool("recover")
+	if err != nil || !recover {
+		return false
+	}
+	check, err := cmd.Flags().GetBool("check")
+	if err != nil || check {
+		return false
+	}
+	return localCustodyRecoveryIsUnambiguous(cmd.Context())
 }
 
 func mutatesPipelineControl(cmd *cobra.Command) bool {
