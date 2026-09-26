@@ -155,6 +155,21 @@ func TestOutcomeBanner_FailureShowsX(t *testing.T) {
 	}
 }
 
+func TestOutcomeBanner_SeatBlockedIsDistinctFromFailure(t *testing.T) {
+	run := testRun()
+	run.Status = types.RunBlocked
+	steps := []ipc.StepResultInfo{{StepName: types.StepReview, Status: types.StepStatusBlocked, Error: ptr("no seat available")}}
+
+	banner := stripANSI(renderOutcomeBanner(run, steps))
+	if !strings.Contains(banner, "Pipeline blocked") || strings.Contains(banner, "failed") {
+		t.Fatalf("blocked banner = %q, want a distinct blocked outcome", banner)
+	}
+	view := stripANSI(renderPipelineView(run, steps, 80, 0, 40))
+	if !strings.Contains(view, "no seat available") {
+		t.Fatalf("blocked step view = %q, want the reason", view)
+	}
+}
+
 func TestOutcomeBanner_EmptyWhenRunning(t *testing.T) {
 	run := testRun()
 	run.Status = types.RunRunning

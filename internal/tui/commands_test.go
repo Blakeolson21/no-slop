@@ -17,6 +17,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+func TestCanRerunSeatBlockedRun(t *testing.T) {
+	if !canRerun(&ipc.RunInfo{Status: types.RunBlocked}) {
+		t.Fatal("a seat-blocked terminal run should offer a fresh rerun")
+	}
+}
+
 func TestOpenBrowserCmd_WaitsForBrowserCommand(t *testing.T) {
 	original := runBrowserCommand
 	t.Cleanup(func() {

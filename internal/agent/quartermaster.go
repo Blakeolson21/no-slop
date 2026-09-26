@@ -80,6 +80,27 @@ func (e *QuartermasterRefusalError) Error() string {
 	return fmt.Sprintf("quartermaster refused %s lease for %s: %s", e.Pool, e.Purpose, reason)
 }
 
+// SeatBlockedError reports that an agent invocation could not start because
+// the quartermaster did not grant a usable seat. It is distinct from errors
+// running an agent after a seat was acquired, which remain ordinary failures.
+type SeatBlockedError struct {
+	Refusal *QuartermasterRefusalError
+}
+
+func (e *SeatBlockedError) Error() string {
+	if e == nil || e.Refusal == nil {
+		return "agent seat unavailable"
+	}
+	return "agent seat unavailable: " + e.Refusal.Error()
+}
+
+func (e *SeatBlockedError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Refusal
+}
+
 type commandQuartermasterClient struct {
 	Bin string
 }
@@ -244,6 +265,9 @@ func (q quartermasterAgent) Run(ctx context.Context, opts RunOpts) (*Result, err
 		Weight:  q.opts.Weight,
 	})
 	if err != nil {
+		if refusal, ok := err.(*QuartermasterRefusalError); ok && refusal.Cause == nil {
+			return nil, &SeatBlockedError{Refusal: refusal}
+		}
 		return nil, err
 	}
 	boundEnv, err := quartermasterEnv(q.opts.Pool, lease, q.opts.Home)

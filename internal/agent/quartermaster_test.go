@@ -121,11 +121,37 @@ func TestQuartermasterRefusalStopsBeforeLaunchingAgent(t *testing.T) {
 	if !IsQuartermasterRefusal(err) {
 		t.Fatalf("error %T/%v must be a Quartermaster refusal", err, err)
 	}
+	var blocked *SeatBlockedError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("error %T/%v must report a blocked seat", err, err)
+	}
 	if inner.calls != 0 {
 		t.Fatalf("agent launched %d times after refusal, want 0", inner.calls)
 	}
 	if len(client.released) != 0 {
 		t.Fatalf("refused lease must not release anything: %+v", client.released)
+	}
+}
+
+func TestQuartermasterInfrastructureFailureIsNotASeatBlock(t *testing.T) {
+	client := &fakeQuartermasterClient{
+		acquire: &QuartermasterRefusalError{
+			Pool:    "claude",
+			Purpose: "review",
+			Reason:  "lease command failed",
+			Cause:   errors.New("quartermaster unavailable"),
+		},
+	}
+	leased := WithQuartermasterLease(&envCapturingAgent{name: "claude"}, QuartermasterOptions{
+		Client: client,
+		Pool:   "claude",
+		Holder: "test-holder",
+	})
+
+	_, err := leased.Run(context.Background(), RunOpts{Purpose: "review"})
+	var blocked *SeatBlockedError
+	if errors.As(err, &blocked) {
+		t.Fatalf("infrastructure refusal %v must remain a failure, not a seat block", err)
 	}
 }
 

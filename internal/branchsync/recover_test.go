@@ -174,7 +174,7 @@ func (f *recoverFixture) custodyReturned() bool {
 func TestTerminalPrePushRunSurfacesGuardedCustodyRecovery(t *testing.T) {
 	t.Parallel()
 
-	for _, status := range []types.RunStatus{types.RunCancelled, types.RunFailed, types.RunCompleted, types.RunParkedNonconverging} {
+	for _, status := range []types.RunStatus{types.RunCancelled, types.RunFailed, types.RunCompleted, types.RunBlocked, types.RunParkedNonconverging} {
 		t.Run(string(status), func(t *testing.T) {
 			f := newRecoverFixture(t, status)
 			state := f.service.InspectCached(f.ctx)

@@ -20,6 +20,9 @@ const (
 	RunCompleted RunStatus = "completed"
 	RunFailed    RunStatus = "failed"
 	RunCancelled RunStatus = "cancelled"
+	// RunBlocked is terminal: an external resource such as an agent seat kept
+	// the pipeline from continuing, without a step failure.
+	RunBlocked RunStatus = "blocked"
 	// RunParkedNonconverging is terminal; no responder may fund another round.
 	RunParkedNonconverging RunStatus = "parked-nonconverging"
 )
@@ -138,6 +141,7 @@ const (
 	StepStatusCompleted      StepStatus = "completed"
 	StepStatusSkipped        StepStatus = "skipped"
 	StepStatusFailed         StepStatus = "failed"
+	StepStatusBlocked        StepStatus = "blocked"
 )
 
 // Legacy step status names accepted on read during the rename alias window
@@ -193,7 +197,7 @@ func NormalizeRunStatus(raw string) RunStatus {
 func LegalRunStatusNames() []string {
 	return []string{
 		string(RunStarting), string(RunRunning), string(RunCompleted),
-		string(RunFailed), string(RunCancelled), string(RunParkedNonconverging),
+		string(RunFailed), string(RunCancelled), string(RunBlocked), string(RunParkedNonconverging),
 		string(LegacyRunPending),
 	}
 }
@@ -206,7 +210,7 @@ func LegalStepStatusNames() []string {
 		string(StepStatusPending), string(StepStatusRunning),
 		string(StepStatusParkedForApproval), string(StepStatusFixerRunning),
 		string(StepStatusParkedAfterFix), string(StepStatusCompleted),
-		string(StepStatusSkipped), string(StepStatusFailed),
+		string(StepStatusSkipped), string(StepStatusFailed), string(StepStatusBlocked),
 		// Terminal cancelled steps are written by fleet tooling, not by the
 		// Go pipeline, but they are a declared legal value.
 		"cancelled",

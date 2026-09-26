@@ -15,7 +15,7 @@ func TestActiveGateStepsSelectsOnlyActiveAncestryAcrossEstate(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := make(map[string]int)
-	for _, runStatus := range []types.RunStatus{types.RunStarting, types.RunRunning, types.RunCompleted, types.RunCancelled, types.RunFailed} {
+	for _, runStatus := range []types.RunStatus{types.RunStarting, types.RunRunning, types.RunCompleted, types.RunCancelled, types.RunFailed, types.RunBlocked} {
 		for range 8 {
 			run, err := d.InsertRun(repo.ID, "feature", "head", "base")
 			if err != nil {
@@ -24,7 +24,7 @@ func TestActiveGateStepsSelectsOnlyActiveAncestryAcrossEstate(t *testing.T) {
 			if err := d.UpdateRunStatus(run.ID, runStatus); err != nil {
 				t.Fatal(err)
 			}
-			for n, status := range []types.StepStatus{types.StepStatusPending, types.StepStatusRunning, types.StepStatusFixerRunning, types.StepStatusParkedForApproval, types.StepStatusParkedAfterFix, types.StepStatusCompleted, types.StepStatusFailed, types.StepStatusSkipped} {
+			for n, status := range []types.StepStatus{types.StepStatusPending, types.StepStatusRunning, types.StepStatusFixerRunning, types.StepStatusParkedForApproval, types.StepStatusParkedAfterFix, types.StepStatusCompleted, types.StepStatusFailed, types.StepStatusSkipped, types.StepStatusBlocked} {
 				step, err := d.InsertStepResult(run.ID, types.StepReview)
 				if err != nil {
 					t.Fatal(err)

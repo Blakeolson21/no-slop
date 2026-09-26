@@ -692,6 +692,95 @@ func TestClearStepFindings(t *testing.T) {
 	}
 }
 
+func TestBlockStepForSeatAtomicallyPersistsRunAndStep(t *testing.T) {
+	d := openTestDB(t)
+	repo, err := d.InsertRepo("/tmp/seat-blocked", "https://example.com/repo.git", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := d.InsertRun(repo.ID, "feature", "head", "base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetRunAwaitingAgent(run.ID); err != nil {
+		t.Fatal(err)
+	}
+	step, err := d.InsertStepResult(run.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.StartStep(step.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := d.BlockStepForSeat(run.ID, step.ID, "no seat available", 12); err != nil {
+		t.Fatal(err)
+	}
+	gotRun, err := d.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotStep, err := d.GetStepResult(step.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotRun.Status != types.RunBlocked || gotRun.Error == nil || *gotRun.Error != "no seat available" || gotRun.TerminalAtMS == nil || gotRun.AwaitingAgentSince != nil {
+		t.Fatalf("run = %+v, want a terminal blocked status and reason", gotRun)
+	}
+	if gotStep.Status != types.StepStatusBlocked || gotStep.Error == nil || *gotStep.Error != "no seat available" || gotStep.CompletedAt == nil || gotStep.DurationMS == nil || *gotStep.DurationMS != 12 {
+		t.Fatalf("step = %+v, want completed blocked state and reason", gotStep)
+	}
+}
+
+func TestBlockStepForSeatRollsBackWhenRunTransitionFails(t *testing.T) {
+	d := openTestDB(t)
+	repo, err := d.InsertRepo("/tmp/seat-blocked-rollback", "https://example.com/repo.git", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := d.InsertRun(repo.ID, "feature", "head", "base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.UpdateRunStatus(run.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+	step, err := d.InsertStepResult(run.ID, types.StepReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.StartStep(step.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.sql.Exec(`CREATE TRIGGER reject_seat_blocked_run
+		BEFORE UPDATE OF status ON runs
+		WHEN NEW.status = 'blocked'
+		BEGIN SELECT RAISE(FAIL, 'injected blocked status failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := d.BlockStepForSeat(run.ID, step.ID, "no seat available", 12); err == nil {
+		t.Fatal("expected the blocked run update to fail")
+	}
+	gotRun, err := d.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotStep, err := d.GetStepResult(step.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotRun.Status != types.RunRunning || gotRun.Error != nil {
+		t.Fatalf("run = %+v, want unchanged running state", gotRun)
+	}
+	if gotStep.Status != types.StepStatusRunning || gotStep.Error != nil || gotStep.CompletedAt != nil {
+		t.Fatalf("step = %+v, want unchanged running state", gotStep)
+	}
+}
+
 func TestUpdateStepStatus(t *testing.T) {
 	d := openTestDB(t)
 	repo, _ := d.InsertRepo("/home/user/project", "git@github.com:user/project.git", "main")

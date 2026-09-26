@@ -34,6 +34,8 @@ const (
 	defaultGateReconcileTimeout  = 30 * time.Second
 )
 
+var errSeatBlocked = errors.New("run blocked while waiting for an agent seat")
+
 type approvalResponse struct {
 	action        types.ApprovalAction
 	findingIDs    []string
@@ -245,6 +247,9 @@ func (e *Executor) Execute(ctx context.Context, run *db.Run, repo *db.Repo, work
 		previousHeadSHA := run.HeadSHA
 		skipRemaining, restartFrom, err := e.executeStep(ctx, step, sr, run, repo, workDir, logDir, state)
 		if err != nil {
+			if errors.Is(err, errSeatBlocked) {
+				return nil
+			}
 			return e.failRun(run, repo, err, ctx)
 		}
 		restartIndex, restarting, err := e.restartAfterStep(run, repo, previousHeadSHA, restartFrom, i)
@@ -627,6 +632,9 @@ func (e *Executor) Resume(ctx context.Context, run *db.Run, repo *db.Repo, workD
 			carriedFindings:  carried,
 		})
 		if err != nil {
+			if errors.Is(err, errSeatBlocked) {
+				return nil
+			}
 			return e.failRun(run, repo, err, ctx)
 		}
 		restartIndex, restarting, restartErr := e.restartAfterStep(run, repo, previousHeadSHA, restartFrom, gate.index)
@@ -735,6 +743,9 @@ func (e *Executor) executeRecoveredRemainder(ctx context.Context, run *db.Run, r
 		previousHeadSHA := run.HeadSHA
 		skipRemaining, restartFrom, err := e.executeStep(ctx, e.steps[index], result, run, repo, workDir, logDir, state)
 		if err != nil {
+			if errors.Is(err, errSeatBlocked) {
+				return nil
+			}
 			return e.failRun(run, repo, err, ctx)
 		}
 		restartIndex, restarting, restartErr := e.restartAfterStep(run, repo, previousHeadSHA, restartFrom, index)
@@ -761,6 +772,11 @@ func (e *Executor) executeRecoveredRemainder(ctx context.Context, run *db.Run, r
 
 func restartStepError(stepName, restartFrom types.StepName, err error) error {
 	return fmt.Errorf("step %s requested restart from %s: %w", stepName, restartFrom, err)
+}
+
+func isSeatBlockedError(err error) bool {
+	var blocked *agent.SeatBlockedError
+	return errors.As(err, &blocked)
 }
 
 func (e *Executor) skipRecoveredRemainder(run *db.Run, repo *db.Repo, start int) error {
@@ -1013,6 +1029,21 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		roundDuration := time.Since(phaseStart).Milliseconds()
 		if err != nil {
 			durationMS := executionMS + roundDuration
+			if isSeatBlockedError(err) && ctx.Err() == nil {
+				seatReason := safeurl.RedactText(err.Error())
+				if dbErr := e.db.BlockStepForSeat(run.ID, sr.ID, seatReason, durationMS); dbErr == nil {
+					fmt.Fprintf(logFile, "\nblocked: %s\n", seatReason)
+					touchLogActivity("blocked: "+seatReason, true)
+					run.Status = types.RunBlocked
+					run.Error = &seatReason
+					run.AwaitingAgentSince = nil
+					e.emitStepEventWithFindingsAndError(ipc.EventStepStatusChanged, run, repo, stepName, string(types.StepStatusBlocked), "", seatReason, &durationMS)
+					e.emitRunEvent(ipc.EventRunCompleted, run, repo)
+					return false, "", errSeatBlocked
+				} else {
+					err = fmt.Errorf("%w (could not persist blocked outcome: %v)", err, dbErr)
+				}
+			}
 			// Persist the failure reason to the step's own log file. The error
 			// often carries the only detail of why the step failed (e.g. git
 			// stderr from a rejected push); without this the step log shows the

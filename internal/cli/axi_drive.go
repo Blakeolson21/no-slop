@@ -37,7 +37,7 @@ var abortStateWaitTimeout = 10 * time.Second
 // terminalStatus reports whether a run has reached a final state.
 func terminalStatus(status string) bool {
 	switch types.RunStatus(status) {
-	case types.RunCompleted, types.RunFailed, types.RunCancelled, types.RunParkedNonconverging:
+	case types.RunCompleted, types.RunFailed, types.RunCancelled, types.RunBlocked, types.RunParkedNonconverging:
 		return true
 	default:
 		return false
@@ -53,6 +53,8 @@ func outcomeFor(status string) string {
 		return "failed"
 	case types.RunCancelled:
 		return "cancelled"
+	case types.RunBlocked:
+		return "blocked"
 	default:
 		return status
 	}

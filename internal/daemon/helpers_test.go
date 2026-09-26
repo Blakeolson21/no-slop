@@ -420,7 +420,7 @@ func waitForRunTerminalState(t *testing.T, d *db.DB, runID string) *db.Run {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if run != nil && (run.Status == types.RunCompleted || run.Status == types.RunFailed) {
+		if run != nil && (run.Status == types.RunCompleted || run.Status == types.RunFailed || run.Status == types.RunBlocked) {
 			return run
 		}
 		time.Sleep(50 * time.Millisecond)

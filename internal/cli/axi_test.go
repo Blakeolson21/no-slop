@@ -409,6 +409,7 @@ func TestOutcomeFor(t *testing.T) {
 		string(types.RunCompleted): "passed",
 		string(types.RunFailed):    "failed",
 		string(types.RunCancelled): "cancelled",
+		string(types.RunBlocked):   "blocked",
 	}
 	for in, want := range cases {
 		if got := outcomeFor(in); got != want {

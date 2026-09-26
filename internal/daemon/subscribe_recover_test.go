@@ -219,7 +219,7 @@ func TestSubscribeToCompletedRunYieldsOneGapThenCloses(t *testing.T) {
 		if err := client.Call(ipc.MethodGetRun, &ipc.GetRunParams{RunID: pushResult.RunID}, &result); err != nil {
 			t.Fatal(err)
 		}
-		if result.Run != nil && (result.Run.Status == types.RunCompleted || result.Run.Status == types.RunFailed || result.Run.Status == types.RunCancelled) {
+		if result.Run != nil && (result.Run.Status == types.RunCompleted || result.Run.Status == types.RunFailed || result.Run.Status == types.RunCancelled || result.Run.Status == types.RunBlocked) {
 			break
 		}
 		select {

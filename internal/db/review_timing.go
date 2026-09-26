@@ -93,7 +93,7 @@ func (d *DB) getReviewTiming(runID string, now time.Time) (*ReviewTiming, error)
 		if err != nil {
 			return nil, err
 		}
-		if run != nil && (run.Status == types.RunCompleted || run.Status == types.RunFailed || run.Status == types.RunCancelled || run.Status == types.RunParkedNonconverging) {
+		if run != nil && (run.Status == types.RunCompleted || run.Status == types.RunFailed || run.Status == types.RunCancelled || run.Status == types.RunBlocked || run.Status == types.RunParkedNonconverging) {
 			if run.TerminalAtMS != nil {
 				endMS = *run.TerminalAtMS
 			} else {

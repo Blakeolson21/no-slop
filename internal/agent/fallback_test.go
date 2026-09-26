@@ -60,6 +60,34 @@ func TestFallbackAgentFallsBackOnLaunchFailure(t *testing.T) {
 	}
 }
 
+func TestFallbackAgentTriesNextLaneWhenSeatIsBlocked(t *testing.T) {
+	first := &fallbackTestAgent{
+		name: "codex",
+		run: func() (*Result, error) {
+			return nil, &SeatBlockedError{Refusal: &QuartermasterRefusalError{
+				Pool: "codex", Purpose: "review", Reason: "no seat available",
+			}}
+		},
+	}
+	second := &fallbackTestAgent{
+		name: "claude",
+		run: func() (*Result, error) {
+			return &Result{Text: "ok"}, nil
+		},
+	}
+
+	result, err := NewFallback([]Agent{first, second}).Run(context.Background(), RunOpts{})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result == nil || result.Text != "ok" {
+		t.Fatalf("Run() result = %+v, want text ok", result)
+	}
+	if first.calls != 1 || second.calls != 1 {
+		t.Fatalf("calls = first %d second %d, want 1/1", first.calls, second.calls)
+	}
+}
+
 func TestFallbackAgentDoesNotFallBackOnFindingsResult(t *testing.T) {
 	first := &fallbackTestAgent{
 		name: "codex",

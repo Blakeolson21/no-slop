@@ -22,6 +22,7 @@ func TestStepStatusIcon(t *testing.T) {
 		{types.StepStatusCompleted, "✓"},
 		{types.StepStatusSkipped, "–"},
 		{types.StepStatusFailed, "✗"},
+		{types.StepStatusBlocked, "⚠"},
 	}
 	for _, tt := range tests {
 		if got := stepStatusIcon(tt.status); got != tt.icon {

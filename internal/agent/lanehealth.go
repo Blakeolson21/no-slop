@@ -55,7 +55,7 @@ func IsQuotaOutage(err error) bool {
 // IsAgentUnavailable reports whether an invocation failed because the agent
 // lane could not serve it, rather than because the work the agent was asked to
 // assess produced a negative result. Agent adapters return successful Result
-// values for structured findings; launch failures, provider outages, timeouts,
+// values for structured findings; lease refusals, provider outages, timeouts,
 // and process exits arrive as errors.
 //
 // This is the single availability classifier used both by fallback routing and
@@ -66,6 +66,10 @@ func IsQuotaOutage(err error) bool {
 func IsAgentUnavailable(err error) bool {
 	if err == nil {
 		return false
+	}
+	var seatBlocked *SeatBlockedError
+	if errors.As(err, &seatBlocked) {
+		return true
 	}
 	if IsQuotaOutage(err) || errors.Is(err, context.DeadlineExceeded) {
 		return true

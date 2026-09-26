@@ -39,6 +39,8 @@ func stepStatusIndicator(status types.StepStatus, spinnerFrame int) string {
 		return "–"
 	case types.StepStatusFailed:
 		return "✗"
+	case types.StepStatusBlocked:
+		return "⚠"
 	default:
 		return "?"
 	}
@@ -49,7 +51,7 @@ func stepStatusStyle(status types.StepStatus) lipgloss.Style {
 	switch status {
 	case types.StepStatusRunning, types.StepStatusFixerRunning:
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(ansiBlue))
-	case types.StepStatusParkedForApproval, types.StepStatusParkedAfterFix:
+	case types.StepStatusParkedForApproval, types.StepStatusParkedAfterFix, types.StepStatusBlocked:
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(ansiYellow))
 	case types.StepStatusCompleted:
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(ansiGreen))
@@ -72,6 +74,8 @@ func runStatusStyled(status types.RunStatus) string {
 		style = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiGreen))
 	case types.RunFailed, types.RunCancelled, types.RunParkedNonconverging:
 		style = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiRed))
+	case types.RunBlocked:
+		style = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiYellow))
 	default:
 		style = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiBrightBlack))
 	}
@@ -162,7 +166,7 @@ func renderPipelineView(run *ipc.RunInfo, steps []ipc.StepResultInfo, width int,
 		switch step.Status {
 		case types.StepStatusParkedForApproval:
 			line += " " + dimStyle.Render("- awaiting approval")
-		case types.StepStatusFailed:
+		case types.StepStatusFailed, types.StepStatusBlocked:
 			if step.Error != nil {
 				errText := "- " + *step.Error
 				remaining := contentWidth - lipgloss.Width(line) - 1 // -1 for space before suffix
@@ -324,6 +328,9 @@ func renderOutcomeBanner(run *ipc.RunInfo, steps []ipc.StepResultInfo) string {
 	case types.RunParkedNonconverging:
 		style := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiRed))
 		return style.Render("✗ Review stopped: non-converging") + elapsed
+	case types.RunBlocked:
+		style := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiYellow))
+		return style.Render("⚠ Pipeline blocked") + elapsed
 	case types.RunCancelled:
 		style := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiRed))
 		return style.Render("✗ Pipeline cancelled") + elapsed

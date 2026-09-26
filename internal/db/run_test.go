@@ -566,7 +566,7 @@ func TestUpdateRunPRStateIgnoresDuplicateAndDelayedRegressions(t *testing.T) {
 }
 
 func TestUpdateRunPRStateDoesNotRewriteAlreadyTerminalStatus(t *testing.T) {
-	for _, status := range []types.RunStatus{types.RunCompleted, types.RunFailed, types.RunCancelled} {
+	for _, status := range []types.RunStatus{types.RunCompleted, types.RunFailed, types.RunCancelled, types.RunBlocked} {
 		t.Run(string(status), func(t *testing.T) {
 			d := openTestDB(t)
 			repo, _ := d.InsertRepo("/home/user/pr-idempotent-"+string(status), "git@github.com:user/project.git", "main")

@@ -67,7 +67,7 @@ func TestNormalizeStatusLegacyEquivalence(t *testing.T) {
 	}
 	for _, n := range []string{
 		string(RunStarting), string(RunRunning), string(RunCompleted),
-		string(RunFailed), string(RunCancelled), string(LegacyRunPending),
+		string(RunFailed), string(RunCancelled), string(RunBlocked), string(LegacyRunPending),
 	} {
 		if !legalRun[n] {
 			t.Errorf("LegalRunStatusNames missing %q", n)
@@ -81,7 +81,7 @@ func TestNormalizeStatusLegacyEquivalence(t *testing.T) {
 		string(StepStatusPending), string(StepStatusRunning),
 		string(StepStatusParkedForApproval), string(StepStatusFixerRunning),
 		string(StepStatusParkedAfterFix), string(StepStatusCompleted),
-		string(StepStatusSkipped), string(StepStatusFailed), "cancelled",
+		string(StepStatusSkipped), string(StepStatusFailed), string(StepStatusBlocked), "cancelled",
 		string(LegacyStepStatusFixReview), string(LegacyStepStatusAwaitingApproval),
 		string(LegacyStepStatusFixing),
 	} {

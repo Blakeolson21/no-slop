@@ -57,7 +57,7 @@ func canRerun(run *ipc.RunInfo) bool {
 		return false
 	}
 	switch run.Status {
-	case types.RunFailed, types.RunCancelled, types.RunParkedNonconverging:
+	case types.RunFailed, types.RunCancelled, types.RunBlocked, types.RunParkedNonconverging:
 		return true
 	default:
 		return false

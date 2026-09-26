@@ -211,6 +211,49 @@ func (d *DB) ParkStepForApproval(runID, stepID string, status types.StepStatus, 
 	return nil
 }
 
+// BlockStepForSeat atomically records a terminal seat block on the active step
+// and its run. A refusal to acquire an agent seat is not a step failure, and
+// neither row may claim a different outcome if the process stops mid-write.
+func (d *DB) BlockStepForSeat(runID, stepID, reason string, durationMS int64) error {
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return fmt.Errorf("begin seat-blocked transition: %w", err)
+	}
+	defer tx.Rollback()
+
+	ts, tsMS := nowWithMillis()
+	stepResult, err := tx.Exec(
+		`UPDATE step_results SET status = ?, error = ?, duration_ms = ?, completed_at = ?, completed_at_ms = ?, last_activity_at = ?, last_activity = ?, agent_pid = NULL WHERE id = ? AND run_id = ? AND status IN (?, ?)`,
+		types.StepStatusBlocked, reason, durationMS, ts, tsMS, ts, "blocked: "+reason, stepID, runID, types.StepStatusRunning, types.StepStatusFixerRunning,
+	)
+	if err != nil {
+		return fmt.Errorf("block step for unavailable agent seat: %w", err)
+	}
+	if changed, err := stepResult.RowsAffected(); err != nil {
+		return fmt.Errorf("block step for unavailable agent seat rows affected: %w", err)
+	} else if changed != 1 {
+		return fmt.Errorf("block step for unavailable agent seat: updated %d rows", changed)
+	}
+
+	terminalAt := any(tsMS)
+	runResult, err := tx.Exec(
+		`UPDATE runs SET error = ?, status = ?, push_active = 0, awaiting_agent_since = NULL, terminal_head_verified_at = NULL, terminal_at_ms = `+terminalAtForTransitionSQL+`, updated_at = ? WHERE id = ? AND status = ?`,
+		reason, types.RunBlocked, terminalAt, terminalAt, ts, runID, types.RunRunning,
+	)
+	if err != nil {
+		return fmt.Errorf("block run for unavailable agent seat: %w", err)
+	}
+	if changed, err := runResult.RowsAffected(); err != nil {
+		return fmt.Errorf("block run for unavailable agent seat rows affected: %w", err)
+	} else if changed != 1 {
+		return fmt.Errorf("block run for unavailable agent seat: updated %d rows", changed)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit seat-blocked transition: %w", err)
+	}
+	return nil
+}
+
 // StartStep marks a step as running with a started_at timestamp.
 func (d *DB) StartStep(id string) error {
 	return d.StartStepWithAutoFixLimit(id, 0)

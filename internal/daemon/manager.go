@@ -1250,7 +1250,15 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 			}
 			addRunPerformanceSummary(m.db, run.ID, fields)
 			telemetry.Track("run", fields)
-			slog.Info("pipeline completed", "run_id", run.ID)
+			if run.Status == types.RunBlocked {
+				reason := ""
+				if run.Error != nil {
+					reason = *run.Error
+				}
+				slog.Info("pipeline blocked", "run_id", run.ID, "reason", reason)
+			} else {
+				slog.Info("pipeline completed", "run_id", run.ID)
+			}
 		}
 		// Collection runs here, on the finished run, because a case is only
 		// honest once the human gate decision it labels is recorded - which is

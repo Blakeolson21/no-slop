@@ -221,7 +221,7 @@ func (m *Model) applySnapshot(run *ipc.RunInfo) bool {
 			m.requestStepDiff(s.StepName, true)
 		}
 	}
-	if run.Status == types.RunCompleted || run.Status == types.RunFailed || run.Status == types.RunCancelled || run.Status == types.RunParkedNonconverging {
+	if run.Status == types.RunCompleted || run.Status == types.RunFailed || run.Status == types.RunCancelled || run.Status == types.RunBlocked || run.Status == types.RunParkedNonconverging {
 		m.flushPartialLog()
 		m.done = true
 	}
@@ -327,7 +327,7 @@ func (m *Model) updateStepStatus(name types.StepName, status types.StepStatus) {
 }
 
 func (m Model) stepInFixReview(name types.StepName) bool {
-	if m.done || m.run == nil || m.run.Status == types.RunCompleted || m.run.Status == types.RunFailed || m.run.Status == types.RunCancelled || m.run.Status == types.RunParkedNonconverging {
+	if m.done || m.run == nil || m.run.Status == types.RunCompleted || m.run.Status == types.RunFailed || m.run.Status == types.RunCancelled || m.run.Status == types.RunBlocked || m.run.Status == types.RunParkedNonconverging {
 		return false
 	}
 	for i := range m.steps {
