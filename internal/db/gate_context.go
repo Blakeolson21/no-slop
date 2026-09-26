@@ -40,3 +40,11 @@ func (d *DB) ActiveGateSteps(ctx context.Context) ([]ActiveGateStep, error) {
 	}
 	return steps, rows.Err()
 }
+
+// GateContextRepoExists verifies registered gate identity within the same
+// deadline as the rest of classification, including waiting for a DB connection.
+func (d *DB) GateContextRepoExists(ctx context.Context, id string) (bool, error) {
+	var exists bool
+	err := d.sql.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM repos WHERE id = ?)`, id).Scan(&exists)
+	return exists, err
+}

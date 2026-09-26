@@ -3,35 +3,46 @@
 package gatecontext
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/Blakeolson21/no-slop/internal/shellenv"
 )
 
-func processParentPID(pid int) (int, error) {
-	if pid <= 1 {
-		return 0, nil
-	}
-	cmd := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "ppid=")
+// One snapshot avoids a process launch per ancestor on busy machines.
+func processParents(ctx context.Context) (map[int]int, error) {
+	cmd := exec.CommandContext(ctx, "ps", "-A", "-o", "pid=,ppid=")
 	cmd.Env = append(os.Environ(), "LC_ALL=C", "LANG=C")
-	out, err := cmd.Output()
+	shellenv.ConfigureShellCommand(cmd)
+	out, err := shellenv.OutputShellCommand(cmd)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
 	if err != nil {
-		// The authenticated client can disappear only after sending its request;
-		// treat an already-gone process as the end of the chain.
-		if _, ok := err.(*exec.ExitError); ok {
-			return 0, nil
+		return nil, err
+	}
+	parents := make(map[int]int)
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
 		}
-		return 0, err
+		if len(fields) != 2 {
+			return nil, fmt.Errorf("invalid process ancestry row")
+		}
+		pid, pidErr := strconv.Atoi(fields[0])
+		ppid, parentErr := strconv.Atoi(fields[1])
+		if pidErr != nil || parentErr != nil || pid < 0 || ppid < 0 {
+			return nil, fmt.Errorf("invalid process ancestry identifiers")
+		}
+		parents[pid] = ppid
 	}
-	value := strings.TrimSpace(string(out))
-	if value == "" {
-		return 0, nil
+	if len(parents) == 0 {
+		return nil, fmt.Errorf("empty process ancestry snapshot")
 	}
-	ppid, err := strconv.Atoi(value)
-	if err != nil {
-		return 0, fmt.Errorf("parse parent pid: %w", err)
-	}
-	return ppid, nil
+	return parents, nil
 }
