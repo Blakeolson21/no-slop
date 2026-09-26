@@ -17,7 +17,8 @@ import (
 
 // exitError carries an explicit process exit code. Commands that render their
 // own structured output (the axi surface) return one of these so they can map
-// outcomes onto AXI exit-code conventions (0 success/no-op, 1 error, 2 usage)
+// outcomes onto AXI exit-code conventions (0 success/no-op, 1 error, 2 usage,
+// 75 retryable gate-context timeout)
 // without cobra printing the Go error to the user. A nil inner err prints
 // nothing to stderr; a non-nil err is surfaced as a diagnostic.
 type exitError struct {
