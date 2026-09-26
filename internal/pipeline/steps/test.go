@@ -21,7 +21,8 @@ type TestStep struct{}
 
 func (s *TestStep) Name() types.StepName { return types.StepTest }
 
-func (s *TestStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
+func (s *TestStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutcome, err error) {
+	defer returnProtectedTestFinding(sctx, &outcome, &err)
 	if err := assertPipelineHeadContinuity(sctx, s.Name()); err != nil {
 		return nil, err
 	}

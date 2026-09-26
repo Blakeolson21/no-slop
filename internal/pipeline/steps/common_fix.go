@@ -42,7 +42,20 @@ var errRejectedCommitSummary = errors.New("rejected commit summary")
 var commitSummarySchema = json.RawMessage(fmt.Sprintf(`{
 	"type": "object",
 	"properties": {
-		"summary": {"type": "string", "maxLength": %d}
+		"summary": {"type": "string", "maxLength": %d},
+		"findings": {
+			"type": "array",
+			"items": {
+				"type": "object",
+				"properties": {
+					"id": {"type": "string"},
+					"severity": {"type": "string"},
+					"action": {"type": "string", "enum": ["ask-user"]},
+					"description": {"type": "string"}
+				},
+				"required": ["description", "action"]
+			}
+		}
 	},
 	"required": ["summary"]
 }`, config.MaxFixMessageSummaryBytes))
@@ -176,6 +189,9 @@ func commitAgentFixes(sctx *pipeline.StepContext, stepName types.StepName, summa
 	if err != nil {
 		return fmt.Errorf("resolve head after %s fix round: %w", stepName, err)
 	}
+	if err := guardFixTestCommits(sctx, headSHA); err != nil {
+		return err
+	}
 	recorded := strings.TrimSpace(sctx.Run.HeadSHA)
 	if headSHA == recorded {
 		sctx.Log("no agent changes to commit")
@@ -298,7 +314,7 @@ func executeFixMode(sctx *pipeline.StepContext, stepName types.StepName, opts fi
 		purpose = string(stepName) + "-fix"
 	}
 	runOpts := agent.RunOpts{
-		Prompt:     opts.Prompt,
+		Prompt:     opts.Prompt + preserveExistingTestsPrompt,
 		CWD:        sctx.WorkDir,
 		JSONSchema: commitSummarySchema,
 		OnChunk:    sctx.LogChunk,
@@ -329,6 +345,9 @@ func executeFixMode(sctx *pipeline.StepContext, stepName types.StepName, opts fi
 	}
 	if err := commitAgentFixes(sctx, stepName, summary, opts.FallbackSummary); err != nil {
 		return "", err
+	}
+	if err := proposedTestFindings(result); err != nil {
+		return summary, err
 	}
 	return summary, nil
 }

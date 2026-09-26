@@ -2,6 +2,7 @@ package steps
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -121,7 +122,8 @@ func (s *CIStep) ReconcileApprovalGate(sctx *pipeline.StepContext) (bool, error)
 	}
 }
 
-func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
+func (s *CIStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutcome, err error) {
+	defer returnProtectedTestFinding(sctx, &outcome, &err)
 	if err := assertPipelineHeadContinuity(sctx, s.Name()); err != nil {
 		return nil, err
 	}
@@ -468,6 +470,10 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 					previousHeadSHA := sctx.Run.HeadSHA
 					result, err := s.autoFixCI(sctx, host, pr, fixTargets, mergeConflict)
 					if err != nil {
+						var protected *protectedTestChange
+						if errors.As(err, &protected) {
+							return nil, err
+						}
 						if fatalErr := s.handleCIRepairError(sctx, previousHeadSHA, "manual fix", err); fatalErr != nil {
 							return nil, fatalErr
 						}
@@ -501,6 +507,10 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 					previousHeadSHA := sctx.Run.HeadSHA
 					result, err := s.autoFixCI(sctx, host, pr, fixTargets, mergeConflict)
 					if err != nil {
+						var protected *protectedTestChange
+						if errors.As(err, &protected) {
+							return nil, err
+						}
 						if fatalErr := s.handleCIRepairError(sctx, previousHeadSHA, "auto-fix", err); fatalErr != nil {
 							return nil, fatalErr
 						}

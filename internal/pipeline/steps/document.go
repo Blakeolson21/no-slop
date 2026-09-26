@@ -85,7 +85,8 @@ var housekeepingFindingsSchema = json.RawMessage(`{
 	"required": ["findings", "summary"]
 }`)
 
-func (s *DocumentStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, error) {
+func (s *DocumentStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutcome, err error) {
+	defer returnProtectedTestFinding(sctx, &outcome, &err)
 	if err := assertPipelineHeadContinuity(sctx, s.Name()); err != nil {
 		return nil, err
 	}
@@ -141,7 +142,7 @@ func (s *DocumentStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcom
 	}
 
 	result, err := sctx.Agent.Run(ctx, agent.RunOpts{
-		Prompt:     prompt,
+		Prompt:     prompt + preserveExistingTestsPrompt,
 		CWD:        sctx.WorkDir,
 		JSONSchema: schema,
 		OnChunk:    sctx.LogChunk,

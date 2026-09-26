@@ -11,6 +11,13 @@ import (
 
 // isTestFile returns true if the file path matches common test file naming patterns.
 func isTestFile(path string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
+		switch part {
+		case "test", "tests", "__tests__", "spec", "specs":
+			return true
+		}
+	}
+
 	base := filepath.Base(path)
 	if base == "" {
 		return false

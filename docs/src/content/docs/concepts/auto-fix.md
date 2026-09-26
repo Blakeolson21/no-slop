@@ -135,3 +135,9 @@ Round trigger types:
 - `auto_fix` - also used when you press `f` in the TUI or use `no-slop axi respond --action fix` to run a follow-up fix
 
 Legacy `user_fix` rounds are still rendered as `auto-fix` in PR summaries for backward compatibility.
+
+## Existing test protection
+
+Fix agents may add new test files, but cannot modify, delete, rename, or replace existing tests. Before adopting a repair, the pipeline checks each candidate commit, including commits the agent created itself. The guard uses the shared test-file naming rules and test/spec directories. It rejects the whole repair when an existing test changes, restores the pre-repair head, and returns an `ask-user` finding containing the proposed test diff. A test edit followed by a revert is still rejected. Approving this finding does not apply the rejected repair.
+
+An agent can instead leave the test unchanged and return the proposed diff as an `ask-user` finding. Large mechanically captured diffs are explicitly truncated in the finding to bound the gate payload; the step log retains the full proposal.

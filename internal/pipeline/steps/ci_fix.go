@@ -56,8 +56,8 @@ func (s *CIStep) autoFixCI(sctx *pipeline.StepContext, host scm.Host, pr *scm.PR
 	case len(failingNames) > 0 && mergeConflict:
 		promptIntro = "The following CI checks have failed and the PR has merge conflicts with the base branch. Diagnose and fix the CI issues, then rebase onto the base branch and resolve the merge conflicts."
 		promptRules = `- You MUST produce file changes that fix the failing checks. Do not conclude that nothing needs to change.
-		- If a test fails only on a specific OS (e.g. Windows CRLF, path separators), fix the test to be cross-platform.
-		- If a test is flaky, make it deterministic.
+		- If a repair requires modifying an existing test, propose its diff as an ask-user finding.
+		- Preserve existing tests, including flaky tests.
 		- Make the smallest correct root-cause fix.
 		- Do not refactor beyond what is needed for that root-cause fix.
 		- Verify the fix by running the most relevant commands locally before finishing.`
@@ -69,8 +69,8 @@ func (s *CIStep) autoFixCI(sctx *pipeline.StepContext, host scm.Host, pr *scm.PR
 	default:
 		promptIntro = "The following CI checks have failed on this PR. Diagnose and fix the issues."
 		promptRules = `- You MUST produce file changes that fix the failing checks. Do not conclude that nothing needs to change.
-		- If a test fails only on a specific OS (e.g. Windows CRLF, path separators), fix the test to be cross-platform.
-		- If a test is flaky, make it deterministic.
+		- If a repair requires modifying an existing test, propose its diff as an ask-user finding.
+		- Preserve existing tests, including flaky tests.
 		- Make the smallest correct root-cause fix.
 		- Do not refactor beyond what is needed for that root-cause fix.
 		- Verify the fix by running the most relevant commands locally before finishing.`
@@ -112,7 +112,7 @@ CI logs:
 
 	sctx.Log("running agent to fix CI issues...")
 	result, err := sctx.Agent.Run(ctx, agent.RunOpts{
-		Prompt:     prompt,
+		Prompt:     prompt + preserveExistingTestsPrompt,
 		CWD:        sctx.WorkDir,
 		JSONSchema: commitSummarySchema,
 		OnChunk:    sctx.LogChunk,
@@ -134,6 +134,9 @@ CI logs:
 		fixResult.HeadPersisted = getErr == nil && persisted != nil && persisted.HeadSHA == fixResult.HeadSHA
 	}
 	if err != nil {
+		return fixResult, err
+	}
+	if err := proposedTestFindings(result); err != nil {
 		return fixResult, err
 	}
 	return fixResult, nil
@@ -182,6 +185,9 @@ func (s *CIStep) commitRepair(sctx *pipeline.StepContext, summary string) (bool,
 }
 
 func (s *CIStep) recordLocalRepair(sctx *pipeline.StepContext, newHeadSHA string) (bool, error) {
+	if err := guardFixTestCommits(sctx, newHeadSHA); err != nil {
+		return false, err
+	}
 	rollbackRange, err := pipeline.PersistUncertifiedPipelineRangeWithRollback(sctx, sctx.Run.HeadSHA, newHeadSHA)
 	if err != nil {
 		return false, fmt.Errorf("persist uncertified review range before CI head adoption: %w", err)

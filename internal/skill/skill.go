@@ -343,6 +343,10 @@ funds up to 3 fix rounds per step. It approves clean gates and gates with only
 for explicit adjudication instead of approving them. Only use it when the user
 has asked you to drive the whole run without checking back unless fixing stalls.
 
+Fix agents may create new test files, but must preserve existing test files.
+A mechanically rejected test change returns as an ` + "`ask-user`" + ` finding with
+the proposed diff; approving that finding does not apply the rejected repair.
+
 A review ` + "`gate:`" + ` may carry a ` + "`convergence`" + ` block: findings per round
 (` + "`rounds: 1,1,2`" + `), cumulative review time, findings in files outside the
 originally submitted diff, and finding classes recurring across rounds even
