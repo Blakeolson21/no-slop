@@ -2,8 +2,12 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"os"
+	"strings"
+	"time"
 
 	toon "github.com/toon-format/toon-go"
 
@@ -15,6 +19,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var errGateContextTimeout = errors.New(gatecontext.TimeoutErrorCode)
+
+// Give the bounded inspector time to report its own deadline before the
+// transport deadline fires. Cancellation of this invocation still wins.
+const gateContextCallTimeout = gatecontext.InspectionTimeout + 5*time.Second
+
 // guardGateControl is the one CLI policy for commands that can mutate pipeline
 // ownership. It runs before command-specific resource opening, flag-driven
 // auto-approval, daemon admission, or any Git/DB mutation.
@@ -24,6 +34,22 @@ func guardGateControl(cmd *cobra.Command) error {
 	}
 	result, err := classifyGateControlCaller(cmd.Context())
 	if err != nil {
+		if errors.Is(err, errGateContextTimeout) {
+			help := []string{"Back off and retry the same command; classification has not authorized recovery or other pipeline control."}
+			if cmd.CommandPath() == "no-slop axi respond" {
+				help = append(help, "This invocation did not send a ruling. For an earlier uncertain response, use `no-slop axi respond --receipt --run <id> --idempotency-key <key>`. ")
+			}
+			emitDoc(cmd,
+				toon.Field{Key: "error", Value: toon.NewObject(
+					toon.Field{Key: "code", Value: gatecontext.TimeoutErrorCode},
+					toon.Field{Key: "message", Value: "daemon reachable but gate execution classification timed out; no mutation was attempted"},
+					toon.Field{Key: "retryable", Value: true},
+					toon.Field{Key: "daemon_reachable", Value: true},
+				)},
+				toon.Field{Key: "help", Value: help},
+			)
+			return &exitError{code: 75}
+		}
 		if cmd.CommandPath() == "no-slop axi respond" {
 			return fmt.Errorf("%w; this invocation did not send a ruling. For an earlier uncertain response, use `no-slop axi respond --receipt --run <id> --idempotency-key <key>`", err)
 		}
@@ -78,7 +104,14 @@ func classifyGateControlCaller(ctx context.Context) (gatecontext.Result, error) 
 		}
 		defer client.Close()
 		var wire ipc.GateContextResult
-		if err := client.Call(ipc.MethodGateContext, &ipc.GateContextParams{CWD: cwd, MarkerPresent: marker}, &wire); err != nil {
+		if err := client.CallWithContext(ctx, ipc.MethodGateContext, &ipc.GateContextParams{CWD: cwd, MarkerPresent: marker}, &wire, gateContextCallTimeout); err != nil {
+			var netErr net.Error
+			var rpcErr *ipc.RPCError
+			if errors.Is(err, context.DeadlineExceeded) ||
+				(errors.As(err, &netErr) && netErr.Timeout()) ||
+				(errors.As(err, &rpcErr) && strings.HasPrefix(rpcErr.Message, gatecontext.TimeoutErrorCode+":")) {
+				return gatecontext.Result{}, fmt.Errorf("%w: %v", errGateContextTimeout, err)
+			}
 			return gatecontext.Result{}, fmt.Errorf("classify gate execution context: %w", err)
 		}
 		return gatecontext.Result{

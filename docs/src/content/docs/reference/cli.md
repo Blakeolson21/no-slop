@@ -250,8 +250,9 @@ no-slop axi sync --recover --keep-local
 | `--keep-local` | `bool` | `false` | With `--recover`: keep the current local head; never touches the worktree   |
 
 The default command is an explicit non-interactive apply request and never prompts.
-All modes return the complete `branch_sync` object as TOON.
+After preflight succeeds, all modes return the complete `branch_sync` object as TOON.
 Exit code `0` means an eligible check, applied synchronization or recovery, already-synchronized, custody-returned, or user-owned no-op, or expected merged-and-removed no-op; blocked operational states return `1`.
+If the daemon answers health but gate execution classification times out, preflight returns exit code `75` with `error.code: gate_context_timeout`, `retryable: true`, and `daemon_reachable: true`. Back off and retry the same command; no mutation was attempted. This condition is separate from a custody refusal and does not authorize skipping classification.
 The ordinary worktree mutation is either a strict fast-forward of the invoking clean checked-out branch to the freshly verified pipeline-owned pushed SHA, or an equivalent-diverged advance.
 When a clean local branch and the pipeline-pushed head are diverged but the local unique work is content-equivalent to work already represented in the live pipeline head, `sync` reports `safety: safe_equivalent_advance`, anchors the pre-sync head under `refs/no-slop/sync-anchor/<run>`, and moves to the pipeline head with reset semantics.
 Genuine divergence still reports `safety: blocked_diverged` and changes nothing.
