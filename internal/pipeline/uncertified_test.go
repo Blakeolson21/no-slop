@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -752,6 +753,104 @@ func TestRemapUncertifiedPipelineRangeAfterRebase_RewrittenHeadStaysBindable(t *
 	BindUncertifiedPipelineRange(sctx)
 	if sctx.UncertifiedFromSHA != got.FromSHA || sctx.UncertifiedToSHA != got.ToSHA {
 		t.Fatalf("bind after remap from=%q to=%q, want from=%q to=%q", sctx.UncertifiedFromSHA, sctx.UncertifiedToSHA, got.FromSHA, got.ToSHA)
+	}
+}
+
+func TestRemapUncertifiedPipelineRangeAfterRebase_PreservesNoDeltaSelection(t *testing.T) {
+	for _, laterCommit := range []bool{false, true} {
+		t.Run(fmt.Sprintf("later_commit_%v", laterCommit), func(t *testing.T) {
+			database, _, source, repo := setupTest(t)
+			dir := t.TempDir()
+			initGitRepo(t, dir)
+			base := currentSHA(t, dir)
+			execGit(t, dir, "checkout", "-b", "feature")
+			writeTestFile(t, dir, "author.txt", "author\n")
+			execGit(t, dir, "add", ".")
+			execGit(t, dir, "commit", "-m", "author")
+			selectedHead := currentSHA(t, dir)
+
+			review, err := database.InsertStepResult(source.ID, types.StepReview)
+			if err != nil {
+				t.Fatal(err)
+			}
+			findings := `{"findings":[{"id":"review-a","severity":"error","description":"selected defect","action":"auto-fix"},{"id":"review-b","severity":"warning","description":"unselected defect","action":"ask-user"}]}`
+			round, err := database.InsertEffectiveReviewStepRoundWithProvenance(review.ID, 1, "initial", &findings, nil, selectedHead, selectedHead, "", nil, nil, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			selected := `["review-a"]`
+			if err := database.PersistReviewFixSelection(db.ReviewFixSelection{
+				RoundID: round.ID, StepResultID: review.ID, RepoID: repo.ID, Branch: source.Branch,
+				FromSHA: selectedHead, HeadSHA: selectedHead, SourceRunID: source.ID,
+				RoundFindingsJSON: findings, StepFindingsJSON: findings,
+				SelectedFindingIDs: &selected, SelectionSource: db.RoundSelectionSourceAutoFix,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			before, err := database.GetUncertifiedPipelineRange(repo.ID, source.Branch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if laterCommit {
+				writeTestFile(t, dir, "later.txt", "later author change\n")
+				execGit(t, dir, "add", ".")
+				execGit(t, dir, "commit", "-m", "later author change")
+			}
+			oldHead := currentSHA(t, dir)
+			execGit(t, dir, "checkout", "-b", "newbase", base)
+			writeTestFile(t, dir, "main.txt", "main advance\n")
+			execGit(t, dir, "add", ".")
+			execGit(t, dir, "commit", "-m", "main advance")
+			execGit(t, dir, "checkout", "feature")
+			execGit(t, dir, "rebase", "newbase")
+			newHead := currentSHA(t, dir)
+			wantBoundary := newHead
+			if laterCommit {
+				wantBoundary = gitRun(t, dir, "rev-parse", "HEAD~1")
+			}
+			replacement, err := database.InsertRun(repo.ID, source.Branch, newHead, base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sctx := &StepContext{Ctx: context.Background(), DB: database, Repo: repo, Run: replacement, WorkDir: dir}
+			rollback, err := RemapUncertifiedPipelineRangeAfterRebase(sctx, oldHead, newHead)
+			if err != nil {
+				t.Fatalf("remap selected finding with no fixer delta: %v", err)
+			}
+			got, err := database.GetUncertifiedPipelineRange(repo.ID, source.Branch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := *before
+			want.FromSHA, want.ToSHA, want.CreatedAt = wantBoundary, wantBoundary, got.CreatedAt
+			if !reflect.DeepEqual(got, &want) {
+				t.Fatalf("rebased recovery = %#v, want %#v", got, &want)
+			}
+			if err := BindUncertifiedPipelineRange(sctx); err != nil {
+				t.Fatal(err)
+			}
+			if !sctx.Fixing || !sctx.SkipFixExecution || sctx.UncertifiedFromSHA != wantBoundary || sctx.UncertifiedToSHA != wantBoundary {
+				t.Fatalf("rebased selection did not bind for a review-only fix round: %#v", sctx)
+			}
+			selectedFindings, err := types.ParseFindingsJSON(sctx.PreviousFindings)
+			if err != nil || len(selectedFindings.Items) != 1 || selectedFindings.Items[0].ID != "review-a" {
+				t.Fatalf("selected findings = %s, error = %v", sctx.PreviousFindings, err)
+			}
+			carried, err := types.ParseFindingsJSON(sctx.UncertifiedPriorFindings)
+			if err != nil || len(carried.Items) != 1 || carried.Items[0].ID != "review-b" {
+				t.Fatalf("unselected findings = %s, error = %v", sctx.UncertifiedPriorFindings, err)
+			}
+			if rollback == nil {
+				t.Fatal("rebase remap did not provide rollback")
+			}
+			if err := rollback(); err != nil {
+				t.Fatal(err)
+			}
+			restored, err := database.GetUncertifiedPipelineRange(repo.ID, source.Branch)
+			if err != nil || !reflect.DeepEqual(restored, before) {
+				t.Fatalf("rollback = %#v, error = %v, want %#v", restored, err, before)
+			}
+		})
 	}
 }
 
