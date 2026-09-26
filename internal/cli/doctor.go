@@ -123,7 +123,7 @@ func newDoctorCmd() *cobra.Command {
 				}
 				quotaDetail := func(outage lanehealth.Outage) string {
 					return fmt.Sprintf("quota-exhausted until %s %s",
-						outage.Until.Local().Format("2006-01-02 15:04 MST"),
+						outage.ResetTime(),
 						sDim.Render("(skipped by the pipeline, probed hourly for early recovery)"))
 				}
 				reportedLanes := map[string]bool{}
@@ -187,7 +187,7 @@ func newDoctorCmd() *cobra.Command {
 							// "it is fine", which is the one thing it is not.
 							warn("gate validation", fmt.Sprintf("%s is runnable but quota-exhausted until %s %s",
 								cfg.Agent,
-								outage.Until.Local().Format("2006-01-02 15:04 MST"),
+								outage.ResetTime(),
 								sDim.Render("(delete "+p.LaneHealthFile()+" if that account's quota was already restored)")))
 						} else {
 							ok("gate validation", fmt.Sprintf("%s is runnable", cfg.Agent))

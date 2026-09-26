@@ -57,11 +57,15 @@ const maxReasonRunes = 200
 // LastProbeAt is when an invocation was last let through the mark to test for
 // early recovery; it is zero until the first probe is claimed.
 type Outage struct {
-	Lane        string    `json:"lane"`
-	Until       time.Time `json:"until"`
-	Reason      string    `json:"reason,omitempty"`
-	ObservedAt  time.Time `json:"observed_at"`
-	LastProbeAt time.Time `json:"last_probe_at,omitempty"`
+	Lane  string    `json:"lane"`
+	Until time.Time `json:"until"`
+	// ResetTimezone preserves the zone used to interpret the provider's clock.
+	// JSON time values retain the offset but discard the IANA location name.
+	// Empty means a legacy mark whose source zone was not recorded.
+	ResetTimezone string    `json:"reset_timezone,omitempty"`
+	Reason        string    `json:"reason,omitempty"`
+	ObservedAt    time.Time `json:"observed_at"`
+	LastProbeAt   time.Time `json:"last_probe_at,omitempty"`
 }
 
 // quotaBanners are the provider strings that mean "this account cannot run
@@ -120,10 +124,11 @@ func Classify(lane, text string, now time.Time) (Outage, bool) {
 		until = now.Add(DefaultCooldown)
 	}
 	return Outage{
-		Lane:       lane,
-		Until:      until,
-		Reason:     excerpt(text),
-		ObservedAt: now,
+		Lane:          lane,
+		Until:         until,
+		ResetTimezone: resetTimezone(until),
+		Reason:        excerpt(text),
+		ObservedAt:    now,
 	}, true
 }
 

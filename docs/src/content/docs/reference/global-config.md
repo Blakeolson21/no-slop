@@ -127,6 +127,7 @@ Neither does a cancelled or timed-out run: the next entry would inherit the same
 
 When an invocation fails with a provider quota-exhaustion banner, that entry is recorded as unusable until its quota resets, and later invocations skip it without launching the process.
 The reset time comes from the provider's own banner when it states one, and otherwise defaults to one hour.
+New records retain the timezone used to interpret that clock, and quota errors and `doctor` show it with a numeric UTC offset. A named timezone in the banner takes precedence; otherwise parsing uses the invocation's effective IANA `TZ` (an empty value means UTC), falling back to the daemon timezone when `TZ` is absent or unsupported. A wrapper that changes its own timezone without reporting it in the banner remains unknown to the daemon. Legacy records keep their local-time display because their original timezone was not recorded.
 The record is stored in `lane-health.json` under the daemon root, so concurrent runs and runs started after a daemon restart honor it too instead of each spending an agent launch to rediscover the same exhausted account.
 A successful invocation clears a record that was written no later than the moment that invocation started, so a record another run wrote while it was still running stays in force.
 One invocation an hour is still let through a recorded entry to check whether it recovered early, so a reset the provider stated days out cannot keep an entry unused for longer than an hour after its quota is actually restored.

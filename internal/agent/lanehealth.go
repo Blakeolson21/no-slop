@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -11,24 +12,20 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
-// resetTimeLayout renders a lane's recovery time in the operator's local zone,
-// with the zone named, because the whole point of the message is telling a
-// human when work can resume.
-const resetTimeLayout = "2006-01-02 15:04 MST"
-
 // LaneOutageError reports that one agent lane cannot run because the
 // provider's quota is exhausted until Until. It wraps the provider failure
 // that produced the mark when there is one, so the original banner still
 // reaches the step log.
 type LaneOutageError struct {
-	Lane   string
-	Until  time.Time
-	Reason string
-	cause  error
+	Lane          string
+	Until         time.Time
+	Reason        string
+	ResetTimezone string
+	cause         error
 }
 
 func (e *LaneOutageError) Error() string {
-	msg := fmt.Sprintf("agent lane %s is quota-exhausted until %s", e.Lane, e.Until.Local().Format(resetTimeLayout))
+	msg := fmt.Sprintf("agent lane %s is quota-exhausted until %s", e.Lane, lanehealth.FormatResetTime(e.Until, e.ResetTimezone))
 	if e.Reason != "" {
 		msg += ": " + e.Reason
 	}
@@ -156,6 +153,7 @@ func (l laneHealthAgent) Run(ctx context.Context, opts RunOpts) (*Result, error)
 	opts = withInvocationIdentity(opts, l.Agent)
 	lane := l.Agent.Name()
 	startedAt := l.now()
+	resetLocation := quotaObservationTime(startedAt, opts.Env).Location()
 	// A lane that reports its own attempts emits them from below this wrapper,
 	// carrying the raw provider error, before the outage verdict exists. This
 	// wrapper therefore owns attempt fidelity for such a lane. A lane that does
@@ -164,7 +162,7 @@ func (l laneHealthAgent) Run(ctx context.Context, opts RunOpts) (*Result, error)
 	reportsAttempts := ReportsAgentAttempts(l.Agent)
 	if outage, down := l.store.Outage(lane); down {
 		if !l.store.ClaimProbe(lane) {
-			err := &LaneOutageError{Lane: lane, Until: outage.Until, Reason: outage.Reason}
+			err := &LaneOutageError{Lane: lane, Until: outage.Until, Reason: outage.Reason, ResetTimezone: outage.ResetTimezone}
 			if opts.OnChunk != nil {
 				opts.OnChunk("\n" + err.Error() + "\n")
 			}
@@ -178,7 +176,7 @@ func (l laneHealthAgent) Run(ctx context.Context, opts RunOpts) (*Result, error)
 		}
 		if opts.OnChunk != nil {
 			opts.OnChunk(fmt.Sprintf("\nagent lane %s is marked quota-exhausted until %s; sending one probe invocation to check for early recovery\n",
-				lane, outage.Until.Local().Format(resetTimeLayout)))
+				lane, outage.ResetTime()))
 		}
 	}
 
@@ -215,13 +213,14 @@ func (l laneHealthAgent) Run(ctx context.Context, opts RunOpts) (*Result, error)
 	}
 	// Only a failed invocation is classified, and its text comes from the
 	// provider's stderr and error channel, never from agent-authored output.
-	if outage, quota := lanehealth.Classify(lane, err.Error(), l.now()); quota {
+	if outage, quota := lanehealth.Classify(lane, err.Error(), l.now().In(resetLocation)); quota {
 		_ = l.store.Mark(outage)
 		outageErr := &LaneOutageError{
-			Lane:   lane,
-			Until:  outage.Until,
-			Reason: outage.Reason,
-			cause:  err,
+			Lane:          lane,
+			Until:         outage.Until,
+			Reason:        outage.Reason,
+			ResetTimezone: outage.ResetTimezone,
+			cause:         err,
 		}
 		relay.amend(outageErr)
 		return nil, outageErr
@@ -281,4 +280,27 @@ func (l laneHealthAgent) ReportsAgentAttempts() bool {
 
 func (l laneHealthAgent) NeutralizesGateInstructions() bool {
 	return NeutralizesGateInstructions(l.Agent)
+}
+
+// quotaObservationTime uses the same last-wins TZ environment as the child.
+// A timezone in the provider banner still takes precedence in Classify. An
+// absent or unsupported TZ retains the daemon location; never guess Central
+// just because an operator happens to read the banner there.
+func quotaObservationTime(now time.Time, env []string) time.Time {
+	zone, set := os.LookupEnv("TZ")
+	for _, entry := range env {
+		if value, ok := strings.CutPrefix(entry, "TZ="); ok {
+			zone, set = value, true
+		}
+	}
+	if !set {
+		return now
+	}
+	if zone == "" {
+		return now.In(time.UTC)
+	}
+	if loc, err := time.LoadLocation(strings.TrimPrefix(zone, ":")); err == nil {
+		return now.In(loc)
+	}
+	return now
 }

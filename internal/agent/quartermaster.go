@@ -286,13 +286,13 @@ func (q quartermasterAgent) Run(ctx context.Context, opts RunOpts) (*Result, err
 		outcome = "failed"
 		if ctx.Err() != nil {
 			outcome = "cancelled"
-		} else if outage, quota := lanehealth.Classify(q.opts.Pool, runErr.Error(), time.Now()); quota {
+		} else if outage, quota := lanehealth.Classify(q.opts.Pool, runErr.Error(), quotaObservationTime(time.Now(), opts.Env)); quota {
 			runErr = &QuartermasterRefusalError{
 				Pool:    q.opts.Pool,
 				Purpose: purpose,
 				Reason: fmt.Sprintf("leased account %s reported quota exhaustion until %s: %s",
 					lease.Account,
-					outage.Until.Local().Format(resetTimeLayout),
+					outage.ResetTime(),
 					outage.Reason),
 			}
 		}
