@@ -3,7 +3,10 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/Blakeolson21/no-slop/internal/convergence"
@@ -42,29 +45,40 @@ func submittedDiffFiles(ctx context.Context, workDir string, run *db.Run) ([]str
 
 // evaluateReviewConvergence builds the review step's convergence report from
 // its persisted rounds, persists it for status surfaces, and returns it. Every
-// failure is soft: convergence is observability plus an advisory guard, so a
-// telemetry error must never fail the run.
-func (e *Executor) evaluateReviewConvergence(ctx context.Context, stepResultID string, run *db.Run, workDir string) convergence.Report {
+// failure stops execution: missing history must not bypass a terminal limit.
+func (e *Executor) evaluateReviewConvergence(ctx context.Context, stepResultID string, run *db.Run, workDir string) (convergence.Report, error) {
 	rounds, err := e.db.GetRoundsByStep(stepResultID)
 	if err != nil {
-		slog.Warn("failed to load review rounds for convergence report", "error", err)
-		return convergence.Report{}
+		return convergence.Report{}, fmt.Errorf("load review convergence history: %w", err)
 	}
 	files, known := submittedDiffFiles(ctx, workDir, run)
 	thresholds := convergence.Thresholds{}
 	if e.config != nil {
 		c := e.config.Review.Convergence
 		thresholds = convergence.Thresholds{
+			MaxRounds:           c.MaxRounds,
+			MaxRecurringRounds:  c.MaxRecurringRounds,
 			NonDecreasingRounds: c.NonDecreasingRounds,
 			RecurringRounds:     c.RecurringRounds,
 			BudgetMS:            int64(c.BudgetMinutes) * 60 * 1000,
 		}
 	}
 	report := convergence.BuildReport(rounds, files, known, thresholds)
-	if data, err := json.Marshal(report); err == nil {
-		if dbErr := e.db.SetStepConvergence(stepResultID, string(data)); dbErr != nil {
-			slog.Warn("failed to persist convergence report", "error", dbErr)
+	if report.StopReason != "" {
+		report.RedesignTicketPath = filepath.Join(e.paths.RunLogDir(run.ID), "redesign.md")
+		if err := os.WriteFile(report.RedesignTicketPath, []byte(report.RedesignTicket), 0o644); err != nil {
+			return report, fmt.Errorf("write redesign ticket: %w", err)
 		}
 	}
-	return report
+	data, err := json.Marshal(report)
+	if err != nil {
+		return report, fmt.Errorf("encode review convergence: %w", err)
+	}
+	if err := e.db.SetStepConvergence(stepResultID, string(data)); err != nil {
+		return report, fmt.Errorf("persist review convergence: %w", err)
+	}
+	return report, nil
 }
+
+// ErrNonconverging distinguishes a deliberate terminal limit from step errors.
+var ErrNonconverging = errors.New("parked-nonconverging")

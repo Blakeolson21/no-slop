@@ -37,7 +37,7 @@ var abortStateWaitTimeout = 10 * time.Second
 // terminalStatus reports whether a run has reached a final state.
 func terminalStatus(status string) bool {
 	switch types.RunStatus(status) {
-	case types.RunCompleted, types.RunFailed, types.RunCancelled:
+	case types.RunCompleted, types.RunFailed, types.RunCancelled, types.RunParkedNonconverging:
 		return true
 	default:
 		return false
@@ -701,6 +701,9 @@ func renderDriveResult(cmd *cobra.Command, run *ipc.RunInfo, ciReady bool) error
 	}
 
 	help := []string{preserveGateFixCommitsGuidance}
+	if rv.Status == string(types.RunParkedNonconverging) {
+		help = append([]string{nonconvergingHelpGuidance}, help...)
+	}
 	if hasBranchSync {
 		help = append(help, branchSyncAgentGuidance)
 	}
@@ -1261,3 +1264,5 @@ func splitCSV(s string) []string {
 	}
 	return out
 }
+
+const nonconvergingHelpGuidance = "The executor stopped this review loop at its non-convergence limit. Read the Markdown file at run.convergence.redesign_ticket_path for redesign acceptance seeds; no further fix response is accepted. Resolve the redesign before starting a fresh run."

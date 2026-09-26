@@ -20,6 +20,8 @@ const (
 	RunCompleted RunStatus = "completed"
 	RunFailed    RunStatus = "failed"
 	RunCancelled RunStatus = "cancelled"
+	// RunParkedNonconverging is terminal; no responder may fund another round.
+	RunParkedNonconverging RunStatus = "parked-nonconverging"
 )
 
 // Legacy run status names accepted on read during the rename alias window
@@ -191,7 +193,7 @@ func NormalizeRunStatus(raw string) RunStatus {
 func LegalRunStatusNames() []string {
 	return []string{
 		string(RunStarting), string(RunRunning), string(RunCompleted),
-		string(RunFailed), string(RunCancelled),
+		string(RunFailed), string(RunCancelled), string(RunParkedNonconverging),
 		string(LegacyRunPending),
 	}
 }

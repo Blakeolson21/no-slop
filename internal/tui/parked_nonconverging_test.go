@@ -44,3 +44,19 @@ func TestParkedNonconvergingReviewRendersAsPausedGate(t *testing.T) {
 		t.Errorf("a run parked by the convergence guard must not render a terminal outcome banner: %q", banner)
 	}
 }
+
+func TestTerminalNonconvergenceRendersDone(t *testing.T) {
+	run := parkedNonconvergingRun()
+	run.Status = types.RunParkedNonconverging
+	run.Steps[0].Status = types.StepStatusFailed
+	m := NewModel("", nil, run)
+	if !m.done {
+		t.Fatal("terminal run still waiting")
+	}
+	if title := m.terminalTitle(); !strings.Contains(title, "Non-converging") {
+		t.Fatalf("title=%q", title)
+	}
+	if banner := renderOutcomeBanner(run, run.Steps); !strings.Contains(banner, "non-converging") {
+		t.Fatalf("banner=%q", banner)
+	}
+}

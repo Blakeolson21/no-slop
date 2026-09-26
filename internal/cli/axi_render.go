@@ -446,7 +446,7 @@ func statusRunObjectField(rv runView) toon.Field {
 }
 
 func runObjectFieldWithKey(key string, rv runView) toon.Field {
-	return runObjectFieldWithOptions(key, rv, false)
+	return runObjectFieldWithOptions(key, rv, rv.Status == string(types.RunParkedNonconverging))
 }
 
 func runObjectFieldWithKeyAndConvergence(key string, rv runView) toon.Field {
@@ -586,6 +586,9 @@ func convergenceField(report *convergence.Report) toon.Field {
 			entries = append(entries, entry)
 		}
 		fields = append(fields, toon.Field{Key: "recurring", Value: entries})
+	}
+	if report.StopReason != "" {
+		fields = append(fields, toon.Field{Key: "stop_reason", Value: report.StopReason}, toon.Field{Key: "redesign_ticket_path", Value: report.RedesignTicketPath})
 	}
 	if report.Warning != "" {
 		fields = append(fields, toon.Field{Key: "warning", Value: report.Warning})

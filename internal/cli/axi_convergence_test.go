@@ -326,3 +326,30 @@ func TestGateResolution_ConvergenceTrippedParksInsteadOfFix(t *testing.T) {
 		t.Fatalf("non-actionable gate should approve even when tripped, got action=%v resolved=%v", action, resolved)
 	}
 }
+
+func TestTerminalNonconvergenceDriveResult(t *testing.T) {
+	run := parkedNonconvergingRun()
+	run.Status = types.RunParkedNonconverging
+	run.AwaitingAgentSince = nil
+	run.Steps[0].Status = types.StepStatusFailed
+	report := `{"round_findings":[1,1,1],"stop_reason":"recurring class limit","redesign_ticket_path":"/tmp/run/redesign.md"}`
+	run.Steps[0].ConvergenceJSON = &report
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+	err := renderDriveResult(cmd, run, false)
+	if err == nil {
+		t.Fatal("terminal nonconvergence returned success")
+	}
+	if !terminalStatus(string(run.Status)) {
+		t.Fatal("driver would continue waiting")
+	}
+	for _, want := range []string{"outcome: parked-nonconverging", "redesign_ticket_path: /tmp/run/redesign.md", "no further fix response is accepted"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q: %s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "\ngate:") {
+		t.Fatalf("terminal stop offered responder gate: %s", out.String())
+	}
+}
