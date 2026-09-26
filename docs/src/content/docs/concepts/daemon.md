@@ -87,7 +87,13 @@ When a push arrives via the post-receive hook:
 1. Creates a detached worktree at `~/.no-mistakes/worktrees/<repoID>/<runID>/`
 2. Starts the pipeline executor in that worktree
 3. Streams events to any connected TUI clients and serves request/response state to AXI clients
-4. Cleans up the worktree when the run finishes (success or failure)
+4. Cleans up the worktree when the run finishes
+
+If the quartermaster does not grant an agent seat, the run and current step
+finish with status `blocked`; the refusal is kept as the outcome reason. This
+is distinct from a step failure because no agent invocation started. The run
+releases its worktree, and `no-slop rerun` starts a fresh run when a seat is
+available.
 
 Event delivery is bounded, so a slow or wedged client can never stall a run. Under pressure the daemon may drop ordinary log output, but it never silently loses a state change: it coalesces those into a single gap signal, and the TUI and `axi` respond by re-reading authoritative run state. A live view can therefore skip log lines while it is behind, but it converges on the run's real state. After a dropped connection, the TUI retries with a bounded delay and reconciles when it reattaches; if the daemon remains unavailable, it surfaces the connection error instead of retrying forever.
 
