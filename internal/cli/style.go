@@ -21,7 +21,7 @@ func runStatusStyle(status types.RunStatus) string {
 	switch status {
 	case types.RunCompleted:
 		return sGreen.Render(s)
-	case types.RunFailed:
+	case types.RunFailed, types.RunParkedNonconverging:
 		return sRed.Render(s)
 	case types.RunRunning:
 		return sBlue.Render(s)

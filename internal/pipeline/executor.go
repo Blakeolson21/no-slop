@@ -1101,7 +1101,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		}
 		if dbErr != nil {
 			currentRoundID = roundInsertID(currentRoundID, inserted, dbErr)
-			if carryFindings {
+			if carryFindings || stepName == types.StepReview {
 				return false, "", fmt.Errorf("persist %s round %d: %w", stepName, roundNum, dbErr)
 			}
 			slog.Warn("failed to insert step round", "step", stepName, "round", roundNum, "error", dbErr)
@@ -1131,15 +1131,24 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			e.emitRunEvent(ipc.EventRunUpdated, run, repo)
 		}
 
-		// Review-loop convergence: rebuild and persist the report after every
-		// review round so status surfaces always carry the per-round history.
-		// A tripped guard is advisory - it stops the pipeline from spending
-		// further automatic fix rounds and parks the gate for an explicit
-		// decision, but never aborts the run and never blocks an explicit
-		// approve, skip, or fix response.
+		// Evaluate terminal limits before either automatic fixing or a responder
+		// gate, so no responder can fund the next round after a breach.
 		convergenceTripped := false
 		if stepName == types.StepReview {
-			report := e.evaluateReviewConvergence(ctx, sr.ID, run, workDir)
+			report, reportErr := e.evaluateReviewConvergence(ctx, sr.ID, run, workDir)
+			if reportErr != nil {
+				return false, "", reportErr
+			}
+			if report.StopReason != "" {
+				durationMS := executionMS + time.Since(phaseStart).Milliseconds()
+				reason := safeurl.RedactText(report.StopReason)
+				writeLog("Non-convergence limit: " + reason + "\nRedesign ticket: " + report.RedesignTicketPath)
+				if err := e.db.FailStep(sr.ID, reason, durationMS); err != nil {
+					return false, "", fmt.Errorf("persist nonconverging review: %w", err)
+				}
+				e.emitStepEventWithFindingsAndError(ipc.EventStepStatusChanged, run, repo, stepName, string(types.StepStatusFailed), "", reason, &durationMS)
+				return false, "", fmt.Errorf("%w: %s", ErrNonconverging, reason)
+			}
 			if report.Tripped() {
 				convergenceTripped = true
 				writeLog("convergence warning: " + report.Warning)
@@ -1694,6 +1703,9 @@ func (e *Executor) failRun(run *db.Run, repo *db.Repo, err error, ctxs ...contex
 		}
 	}
 	runStatus := types.RunFailed
+	if errors.Is(err, ErrNonconverging) {
+		runStatus = types.RunParkedNonconverging
+	}
 	if errMsg == types.RunCancelReasonAbortedByUser || errMsg == types.RunCancelReasonSuperseded {
 		runStatus = types.RunCancelled
 	}

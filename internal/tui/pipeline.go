@@ -70,7 +70,7 @@ func runStatusStyled(status types.RunStatus) string {
 		style = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiBlue))
 	case types.RunCompleted:
 		style = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiGreen))
-	case types.RunFailed, types.RunCancelled:
+	case types.RunFailed, types.RunCancelled, types.RunParkedNonconverging:
 		style = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiRed))
 	default:
 		style = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiBrightBlack))
@@ -321,6 +321,9 @@ func renderOutcomeBanner(run *ipc.RunInfo, steps []ipc.StepResultInfo) string {
 			return style.Render("✗ "+failedLabel+" failed") + elapsed
 		}
 		return style.Render("✗ Pipeline failed") + elapsed
+	case types.RunParkedNonconverging:
+		style := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiRed))
+		return style.Render("✗ Review stopped: non-converging") + elapsed
 	case types.RunCancelled:
 		style := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiRed))
 		return style.Render("✗ Pipeline cancelled") + elapsed

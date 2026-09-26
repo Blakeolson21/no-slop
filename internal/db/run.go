@@ -71,8 +71,8 @@ type Run struct {
 
 const runColumns = `id, repo_id, branch, head_sha, base_sha, submitted_head_sha, no_mistakes_version, no_mistakes_build_sha, review_approved_head_sha, status, pr_url, pr_state, pr_state_observed_at, ci_ready_at, COALESCE(ci_ready_no_ci, 0), last_pushed_sha, push_target_kind, push_target_fingerprint, push_ref, last_pushed_at, push_generation, COALESCE(push_active, 0), terminal_head_verified_at`
 const runColumnsSuffix = `, custody_returned_at, error, awaiting_agent_since, COALESCE(parked_ms, 0), intent, intent_source, intent_session_id, intent_score, created_at, updated_at`
-const terminalAtForTransitionSQL = `CASE WHEN ? IS NULL THEN NULL ELSE COALESCE(terminal_at_ms, CASE WHEN status IN ('completed', 'failed', 'cancelled') THEN updated_at * 1000 ELSE ? END) END`
-const preserveLegacyTerminalAtSQL = `COALESCE(terminal_at_ms, CASE WHEN status IN ('completed', 'failed', 'cancelled') THEN updated_at * 1000 END)`
+const terminalAtForTransitionSQL = `CASE WHEN ? IS NULL THEN NULL ELSE COALESCE(terminal_at_ms, CASE WHEN status IN ('completed', 'failed', 'cancelled', 'parked-nonconverging') THEN updated_at * 1000 ELSE ? END) END`
+const preserveLegacyTerminalAtSQL = `COALESCE(terminal_at_ms, CASE WHEN status IN ('completed', 'failed', 'cancelled', 'parked-nonconverging') THEN updated_at * 1000 END)`
 
 func (d *DB) readableRunColumns() string {
 	columns := runColumns + ", terminal_at_ms"
@@ -251,7 +251,7 @@ func (d *DB) UpdateRunStatus(id string, status types.RunStatus) error {
 	if terminalRunStatus(status) {
 		terminalAt = tsMS
 	}
-	_, err := d.sql.Exec(`UPDATE runs SET status = ?, push_active = CASE WHEN ? IN ('completed', 'failed', 'cancelled') THEN 0 ELSE push_active END, terminal_head_verified_at = NULL, terminal_at_ms = `+terminalAtForTransitionSQL+`, updated_at = ? WHERE id = ?`, status, status, terminalAt, terminalAt, ts, id)
+	_, err := d.sql.Exec(`UPDATE runs SET status = ?, push_active = CASE WHEN ? IN ('completed', 'failed', 'cancelled', 'parked-nonconverging') THEN 0 ELSE push_active END, terminal_head_verified_at = NULL, terminal_at_ms = `+terminalAtForTransitionSQL+`, updated_at = ? WHERE id = ?`, status, status, terminalAt, terminalAt, ts, id)
 	if err != nil {
 		return fmt.Errorf("update run status: %w", err)
 	}
@@ -435,7 +435,7 @@ func finalizeTerminalPRRun(tx *sql.Tx, id string, ts, tsMS int64) error {
 			parked_ms = COALESCE(parked_ms, 0) + CASE
 				WHEN awaiting_agent_since IS NOT NULL AND ? > awaiting_agent_since
 				THEN (? - awaiting_agent_since) * 1000 ELSE 0 END,
-			awaiting_agent_since = NULL, terminal_at_ms = COALESCE(terminal_at_ms, CASE WHEN status IN ('completed', 'failed', 'cancelled') THEN updated_at * 1000 ELSE ? END), updated_at = ?
+			awaiting_agent_since = NULL, terminal_at_ms = COALESCE(terminal_at_ms, CASE WHEN status IN ('completed', 'failed', 'cancelled', 'parked-nonconverging') THEN updated_at * 1000 ELSE ? END), updated_at = ?
 			 WHERE id = ?`,
 		types.RunStarting, types.RunRunning, types.RunCompleted, ts, ts, tsMS, ts, id,
 	); err != nil {
@@ -637,7 +637,7 @@ func (d *DB) promoteRunHead(id, headSHA string, terminal *terminalHeadPromotion)
 }
 
 func terminalRunStatus(status types.RunStatus) bool {
-	return status == types.RunCompleted || status == types.RunFailed || status == types.RunCancelled
+	return status == types.RunCompleted || status == types.RunFailed || status == types.RunCancelled || status == types.RunParkedNonconverging
 }
 
 // RunIntentSourceAgent is the intent_source value stamped when the driving
