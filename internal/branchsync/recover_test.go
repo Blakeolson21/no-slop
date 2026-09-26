@@ -194,6 +194,28 @@ func TestTerminalPrePushRunSurfacesGuardedCustodyRecovery(t *testing.T) {
 	}
 }
 
+func TestRecoveryCanSkipGateContextOnlyForUnambiguousTerminalOwnership(t *testing.T) {
+	terminal := newRecoverFixture(t, types.RunCancelled)
+	if !terminal.service.RecoveryCanSkipGateContext(terminal.ctx) {
+		t.Fatal("terminal recover_custody state should be locally unambiguous")
+	}
+	otherBranchRun, err := terminal.db.InsertRun(terminal.repo.ID, "feature/other", terminal.submitted, terminal.base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := terminal.db.UpdateRunStatus(otherBranchRun.ID, types.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+	if terminal.service.RecoveryCanSkipGateContext(terminal.ctx) {
+		t.Fatal("an active run on another branch must keep estate-wide gate-context classification")
+	}
+
+	active := newRecoverFixture(t, types.RunRunning)
+	if active.service.RecoveryCanSkipGateContext(active.ctx) {
+		t.Fatal("active pipeline ownership must still require gate-context classification")
+	}
+}
+
 // TestActivePrePushRunStaysBlockedWithoutRecovery pins the other half of the
 // class split: while the run is still active the pre-push block is correct and
 // no custody-return action may be offered.

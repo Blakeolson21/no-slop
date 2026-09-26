@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -39,6 +40,52 @@ func TestGateContextOtherFailuresDoNotBecomeRetryableTimeouts(t *testing.T) {
 			return &ipc.GateContextResult{Nested: true, AgentDescendant: true}, nil
 		}, time.Second, 1)
 	})
+}
+
+func TestAxiSyncRecoverSkipsClassificationForUnambiguousTerminalCustody(t *testing.T) {
+	f := newCLIRecoverFixture(t)
+	p, err := paths.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := ipc.NewServer()
+	srv.Handle(ipc.MethodHealth, func(context.Context, json.RawMessage) (interface{}, error) {
+		return &ipc.HealthResult{Status: "ok"}, nil
+	})
+	var classifyCalls atomic.Int32
+	srv.Handle(ipc.MethodGateContext, func(context.Context, json.RawMessage) (interface{}, error) {
+		classifyCalls.Add(1)
+		return nil, errors.New(gatecontext.TimeoutErrorCode + ": context deadline exceeded")
+	})
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Serve(p.Socket()) }()
+	t.Cleanup(func() {
+		srv.Close()
+		select {
+		case <-errCh:
+		case <-time.After(time.Second):
+			t.Error("fake daemon did not stop")
+		}
+	})
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if client, dialErr := ipc.Dial(p.Socket()); dialErr == nil {
+			client.Close()
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	out, err := executeCmd("axi", "sync", "--recover")
+	if err != nil {
+		t.Fatalf("recovery of terminal pipeline custody should not need daemon classification: %v\n%s", err, out)
+	}
+	if calls := classifyCalls.Load(); calls != 0 {
+		t.Fatalf("gate-context classification calls = %d, want 0 for unambiguous terminal custody", calls)
+	}
+	if got := cliGit(t, f.local, "rev-parse", "HEAD"); got != f.preserved {
+		t.Fatalf("HEAD = %s, want preserved %s", got, f.preserved)
+	}
 }
 
 func testRecoveryClassificationFailure(t *testing.T, handler ipc.HandlerFunc, timeout time.Duration, wantExit int) {

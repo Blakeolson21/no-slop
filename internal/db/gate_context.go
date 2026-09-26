@@ -48,3 +48,12 @@ func (d *DB) GateContextRepoExists(ctx context.Context, id string) (bool, error)
 	err := d.sql.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM repos WHERE id = ?)`, id).Scan(&exists)
 	return exists, err
 }
+
+// HasActiveRuns provides the minimal estate-wide check needed before a
+// terminal recovery can bypass process-ancestry classification.
+func (d *DB) HasActiveRuns(ctx context.Context) (bool, error) {
+	var active bool
+	err := d.sql.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM runs WHERE status IN (?, ?, ?))`,
+		types.RunStarting, types.LegacyRunPending, types.RunRunning).Scan(&active)
+	return active, err
+}
