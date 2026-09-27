@@ -117,11 +117,26 @@ func guardFixTestCommits(sctx *pipeline.StepContext, candidate string) (err erro
 			err = fmt.Errorf("%v; restore rejected repair: %w", err, restoreErr)
 		}
 	}()
-	// The diff range is empty when candidate rewinds to an ancestor of the
-	// baseline. Require forward ancestry before inspecting commits so a CI
-	// repair cannot erase recorded history, including tests absent at candidate.
-	if _, err := stepGitRun(sctx, "merge-base", "--is-ancestor", baseline, candidate); err != nil {
-		return fmt.Errorf("fix candidate does not descend from recorded starting head: %w", err)
+	// A CI fixer may rebase the feature commits onto an advanced base, which
+	// replaces their SHAs and makes the recorded head a sibling of the result.
+	// Keep rejecting rewinds, but inspect the tree against the recorded baseline
+	// for a rewritten history instead of requiring the old head to be an ancestor.
+	mergeBase, err := stepGitRun(sctx, "merge-base", baseline, candidate)
+	if err != nil {
+		return fmt.Errorf("inspect fix candidate history: %w", err)
+	}
+	mergeBase = strings.TrimSpace(mergeBase)
+	switch mergeBase {
+	case baseline:
+		// Ordinary forward repair: inspect every commit below, including edits
+		// later reverted in the candidate history.
+	case candidate:
+		return fmt.Errorf("fix candidate rewinds recorded starting head %s", baseline)
+	default:
+		// Rebased repair: the original commits no longer descend from baseline.
+		// A tree comparison ensures every test present at the recorded head is
+		// still present with identical content in the rebased result.
+		return guardRebasedFixTests(sctx, baseline, candidate)
 	}
 	commits, err := stepGitRun(sctx, "rev-list", "--reverse", baseline+".."+candidate)
 	if err != nil {
@@ -156,6 +171,28 @@ func guardFixTestCommits(sctx *pipeline.StepContext, candidate string) (err erro
 	// repair so dependent product changes cannot ship against the old tests.
 	// No branch ref, run head, or uncertified range has been advanced yet.
 	return protectedTestFindings(sctx, strings.Join(proposals, "\n"))
+}
+
+func guardRebasedFixTests(sctx *pipeline.StepContext, baseline, candidate string) error {
+	changed, err := fixTestGitOutput(sctx, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", "--diff-filter=MDT", baseline, candidate, "--")
+	if err != nil {
+		return fmt.Errorf("inspect existing tests across CI rebase: %w", err)
+	}
+	var paths []string
+	for _, file := range strings.Split(string(changed), "\x00") {
+		if file != "" && isTestFile(file) {
+			paths = append(paths, ":(literal)"+file)
+		}
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	args := []string{"diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--binary", baseline, candidate, "--"}
+	patch, err := fixTestGitOutput(sctx, append(args, paths...)...)
+	if err != nil {
+		return fmt.Errorf("read existing-test changes across CI rebase: %w", err)
+	}
+	return protectedTestFindings(sctx, string(patch))
 }
 
 func proposedTestFindings(result *agent.Result) error {
