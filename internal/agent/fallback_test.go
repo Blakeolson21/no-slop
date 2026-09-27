@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,16 +13,42 @@ import (
 
 type fallbackTestAgent struct {
 	name      string
+	home      string
+	model     string
 	run       func() (*Result, error)
+	probe     func(context.Context, RunOpts) (*Result, error)
 	calls     int
+	runOpts   []RunOpts
+	probes    []RunOpts
 	resumable bool
 }
 
 func (a *fallbackTestAgent) Name() string { return a.name }
 
-func (a *fallbackTestAgent) Run(context.Context, RunOpts) (*Result, error) {
+func (a *fallbackTestAgent) Run(_ context.Context, opts RunOpts) (*Result, error) {
 	a.calls++
+	a.runOpts = append(a.runOpts, opts)
 	return a.run()
+}
+
+func (a *fallbackTestAgent) QuotaScope(opts RunOpts) (QuotaScope, bool) {
+	home := a.home
+	if home == "" {
+		home = filepath.Join(os.TempDir(), "no-slop-agent-test-homes", a.name)
+	}
+	model := a.model
+	if model == "" {
+		model = "test-model"
+	}
+	return accountModelScope(a.name, home, model, opts.CWD)
+}
+
+func (a *fallbackTestAgent) RunQuotaProbe(ctx context.Context, opts RunOpts) (*Result, error) {
+	a.probes = append(a.probes, opts)
+	if a.probe != nil {
+		return a.probe(ctx, opts)
+	}
+	return &Result{Text: "OK"}, nil
 }
 
 func (a *fallbackTestAgent) Close() error { return nil }

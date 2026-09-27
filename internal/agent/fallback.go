@@ -154,7 +154,11 @@ func (a *fallbackAgent) Run(ctx context.Context, opts RunOpts) (*Result, error) 
 func allLanesExhausted(outages []*LaneOutageError, everyLane bool) error {
 	parts := make([]string, 0, len(outages))
 	for _, outage := range outages {
-		part := fmt.Sprintf("%s until %s", outage.Lane, lanehealth.FormatResetTime(outage.Until, outage.ResetTimezone))
+		part := outage.Lane
+		if outage.AccountID != "" && outage.Model != "" {
+			part = fmt.Sprintf("%s account %s model %s", part, shortAccountID(outage.AccountID), outage.Model)
+		}
+		part += " until " + lanehealth.FormatResetTime(outage.Until, outage.ResetTimezone)
 		if outage.Reason != "" {
 			part += " (" + truncateRunes(outage.Reason, 120) + ")"
 		}

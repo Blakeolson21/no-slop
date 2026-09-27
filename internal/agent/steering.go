@@ -66,6 +66,22 @@ func (s steeredAgent) InvocationIdentity() InvocationIdentity {
 	return ResolveInvocationIdentity(s.Agent)
 }
 
+func (s steeredAgent) QuotaScope(opts RunOpts) (QuotaScope, bool) {
+	reporter, ok := s.Agent.(QuotaScopeReporter)
+	if !ok {
+		return QuotaScope{}, false
+	}
+	return reporter.QuotaScope(opts)
+}
+
+func (s steeredAgent) RunQuotaProbe(ctx context.Context, opts RunOpts) (*Result, error) {
+	runner, ok := s.Agent.(QuotaProbeRunner)
+	if !ok {
+		return nil, fmt.Errorf("agent %q does not support quota probes", s.Name())
+	}
+	return runner.RunQuotaProbe(ctx, opts)
+}
+
 // WithSteering wraps an agent so every invocation is steered to keep writes
 // inside the worktree, naming evidenceRoot as the one permitted out-of-worktree
 // destination. Wrapping is idempotent: an already-steered agent is returned

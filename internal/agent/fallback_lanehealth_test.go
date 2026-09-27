@@ -181,11 +181,10 @@ func TestFallbackHonorsMarksWrittenByAnEarlierProcess(t *testing.T) {
 	now := time.Date(2026, 8, 4, 3, 44, 0, 0, time.Local)
 	store := laneTestStore(t, &now)
 	clock := func() time.Time { return now }
-	if err := store.Mark(lanehealth.Outage{
-		Lane:   "codex",
+	if err := store.Mark(laneTestOutage("codex", lanehealth.Outage{
 		Until:  now.Add(3 * 24 * time.Hour),
 		Reason: "You've hit your usage limit",
-	}); err != nil {
+	})); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
 

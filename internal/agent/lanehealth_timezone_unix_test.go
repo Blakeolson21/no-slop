@@ -27,12 +27,14 @@ exit 1
 	t.Setenv("TZ", "UTC")
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
 	store := laneTestStore(t, &now)
-	ag := WithLaneHealth(&codexAgent{bin: bin}, store, func() time.Time { return now })
+	native := &codexAgent{bin: bin, extraArgs: []string{"--model", "gpt-5.6-sol"}}
+	ag := WithLaneHealth(native, store, func() time.Time { return now })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := ag.Run(ctx, RunOpts{CWD: dir, Prompt: "probe fixture", Env: []string{
+	opts := RunOpts{CWD: dir, Prompt: "probe fixture", Env: []string{
 		"TZ=UTC", "TZ=America/Chicago", "NS_TEST_TZ_FILE=" + seen,
-	}})
+	}}
+	_, err := ag.Run(ctx, opts)
 	if !IsQuotaOutage(err) {
 		t.Fatalf("expected classified process failure: %v", err)
 	}
@@ -40,7 +42,11 @@ exit 1
 	if readErr != nil || string(gotEnv) != "America/Chicago" {
 		t.Fatalf("child timezone = %q, read error = %v", gotEnv, readErr)
 	}
-	mark, live := store.Outage("codex")
+	scope, scoped := native.QuotaScope(opts)
+	if !scoped {
+		t.Fatal("native codex account/model scope was not resolved")
+	}
+	mark, live := store.Outage(scope.Key)
 	if !live || !mark.Until.Equal(time.Date(2026, 9, 15, 6, 25, 0, 0, time.UTC)) {
 		t.Fatalf("provider clock disagrees with the child's actual timezone: %+v", mark)
 	}

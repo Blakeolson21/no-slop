@@ -17,7 +17,7 @@ func TestLaneQuotaUsesInvocationTimezoneAndRetainsItAfterReload(t *testing.T) {
 	}}
 	lane := WithLaneHealth(inner, store, func() time.Time { return now })
 	_, first := lane.Run(context.Background(), RunOpts{Env: []string{"TZ=UTC", "TZ=America/Chicago"}})
-	mark, live := store.Outage("codex")
+	mark, live := store.Outage(laneTestScope("codex").Key)
 	if !live {
 		t.Fatal("missing mark")
 	}

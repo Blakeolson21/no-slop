@@ -110,23 +110,18 @@ func newDoctorCmd() *cobra.Command {
 					}
 				}
 
-				// A lane suppressed by a quota cooldown is installed and healthy-looking
-				// but will not be used until it resets, so doctor is where that
-				// otherwise-invisible state has to surface.
+				// Scoped quota marks are reported separately from installed agents:
+				// one exhausted account/model does not make every account on its
+				// provider lane unavailable.
 				var liveOutages []lanehealth.Outage
-				laneOutages := map[string]lanehealth.Outage{}
 				if p != nil {
 					liveOutages = lanehealth.NewStore(p.LaneHealthFile(), nil).Snapshot()
-					for _, outage := range liveOutages {
-						laneOutages[outage.Lane] = outage
-					}
 				}
 				quotaDetail := func(outage lanehealth.Outage) string {
-					return fmt.Sprintf("quota-exhausted until %s %s",
+					return fmt.Sprintf("quota-exhausted until %s (account %s, model %s; only this account/model is skipped, probed hourly)",
 						outage.ResetTime(),
-						sDim.Render("(skipped by the pipeline, probed hourly for early recovery)"))
+						shortQuotaAccountID(outage.AccountID), outage.Model)
 				}
-				reportedLanes := map[string]bool{}
 
 				agents := doctorAgentChecks()
 				fmt.Fprintln(w)
@@ -141,12 +136,7 @@ func newDoctorCmd() *cobra.Command {
 							found = append(found, path)
 						}
 					}
-					lane := agent.LaneName(types.AgentName(a.name))
-					outage, exhausted := laneOutages[lane]
 					switch {
-					case len(missing) == 0 && exhausted:
-						reportedLanes[lane] = true
-						warn(label, quotaDetail(outage))
 					case len(missing) == 0:
 						ok(label, strings.Join(found, ", "))
 					case len(a.binaries) > 1:
@@ -156,15 +146,7 @@ func newDoctorCmd() *cobra.Command {
 					}
 				}
 
-				// The pipeline honors whatever the store recorded, and a lane
-				// configured as an explicit acp:<target> - or under any other name
-				// this list does not enumerate - is recorded under a key with no row
-				// above. The recorded state, not the enumeration, decides what a
-				// cooldown-invisibility surface has to show.
 				for _, outage := range liveOutages {
-					if reportedLanes[outage.Lane] {
-						continue
-					}
 					warn(fmt.Sprintf("%-14s", outage.Lane), quotaDetail(outage))
 				}
 
@@ -181,14 +163,10 @@ func newDoctorCmd() *cobra.Command {
 						if err := cfg.ResolveAgent(cmd.Context(), exec.LookPath); err != nil {
 							fail("gate validation", err.Error())
 							allOK = false
-						} else if outage, exhausted := laneOutages[agent.LaneName(cfg.Agent)]; exhausted {
-							// Reporting the resolved gate agent as runnable while the
-							// Agents section reports the same lane parked reads as
-							// "it is fine", which is the one thing it is not.
-							warn("gate validation", fmt.Sprintf("%s is runnable but quota-exhausted until %s %s",
-								cfg.Agent,
-								outage.ResetTime(),
-								sDim.Render("(delete "+p.LaneHealthFile()+" if that account's quota was already restored)")))
+						} else if cfg.Quartermaster.Enabled {
+							ok("gate validation", fmt.Sprintf("%s is runnable; account/model health is checked after each seat is selected", cfg.Agent))
+						} else if outage, exhausted := configuredAgentOutage(cfg, p.LaneHealthFile()); exhausted {
+							warn("gate validation", fmt.Sprintf("%s %s", cfg.Agent, quotaDetail(outage)))
 						} else {
 							ok("gate validation", fmt.Sprintf("%s is runnable", cfg.Agent))
 						}
@@ -205,6 +183,32 @@ func newDoctorCmd() *cobra.Command {
 			})
 		},
 	}
+}
+
+func configuredAgentOutage(cfg *config.Config, statePath string) (lanehealth.Outage, bool) {
+	if cfg == nil || statePath == "" {
+		return lanehealth.Outage{}, false
+	}
+	a, err := agent.NewWithOptions(cfg.Agent, cfg.AgentPathFor(cfg.Agent), cfg.AgentArgsFor(cfg.Agent), agent.Options{
+		ACPRegistryOverrides:   cfg.ACPRegistryOverrides,
+		DisableProjectSettings: cfg.DisableProjectSettings,
+	})
+	if err != nil {
+		return lanehealth.Outage{}, false
+	}
+	defer a.Close()
+	scope, ok := agent.ResolveQuotaScope(a, agent.RunOpts{})
+	if !ok {
+		return lanehealth.Outage{}, false
+	}
+	return lanehealth.NewStore(statePath, nil).Outage(scope.Key)
+}
+
+func shortQuotaAccountID(accountID string) string {
+	if len(accountID) > 12 {
+		return accountID[:12]
+	}
+	return accountID
 }
 
 func doctorAgentChecks() []doctorAgentCheck {

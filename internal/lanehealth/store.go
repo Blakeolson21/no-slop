@@ -11,14 +11,16 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/filelock"
 )
 
-// maxLanes bounds the persisted state so a misconfigured agent list cannot
-// grow the file forever. Entries closest to expiry are dropped first.
-const maxLanes = 32
+// maxOutages bounds the persisted state so a misconfigured account/model list
+// cannot grow the file forever. Entries closest to expiry are dropped first.
+const maxOutages = 32
 
-// Store persists lane outages in a small JSON file under NS_HOME so a mark
-// discovered by one run is honored by every concurrent run and by every later
-// run, including after a daemon restart. Without that, each run pays a full
-// agent spawn to rediscover the same exhausted lane - the 2026-08-04 incident,
+const stateVersion = 2
+
+// Store persists account/model outages in a small JSON file under NS_HOME so a
+// mark discovered by one run is honored by every concurrent run and by every
+// later run, including after a daemon restart. Without that, each run pays a
+// full agent spawn to rediscover the same exhausted account/model - the 2026-08-04 incident,
 // where roughly a dozen runs failed one after another on the same dead Codex
 // quota.
 //
@@ -40,26 +42,36 @@ func NewStore(path string, now func() time.Time) *Store {
 }
 
 type state struct {
-	Lanes map[string]Outage `json:"lanes"`
+	Version int               `json:"version"`
+	Outages map[string]Outage `json:"outages"`
 }
 
-// Outage reports the live outage for lane, if any. A mark whose reset time has
-// arrived is not live: the lane is presumed recovered and gets tried again.
-func (s *Store) Outage(lane string) (Outage, bool) {
+// Outage reports the live outage for scopeKey, if any. A mark whose reset time
+// has arrived is not live: that account/model is presumed recovered and gets
+// tried again.
+func (s *Store) Outage(scopeKey string) (Outage, bool) {
 	if s == nil || s.path == "" {
 		return Outage{}, false
 	}
 	current := s.load()
-	outage, ok := current.Lanes[lane]
+	outage, ok := current.Outages[scopeKey]
 	if !ok || !outage.Until.After(s.now()) {
 		return Outage{}, false
 	}
 	return outage, true
 }
 
-// Mark records an outage, replacing any existing mark for the same lane.
+// Mark records an outage, replacing any existing mark for the same
+// account/model. Unscoped legacy marks are ignored because there is no safe way
+// to map them onto an exact provider account and model.
 func (s *Store) Mark(outage Outage) error {
 	if s == nil || s.path == "" || outage.Lane == "" {
+		return nil
+	}
+	if outage.ScopeKey == "" {
+		outage.ScopeKey = ScopeKey(outage.AccountID, outage.Model)
+	}
+	if outage.ScopeKey == "" {
 		return nil
 	}
 	return s.mutate(func(current *state) {
@@ -67,15 +79,15 @@ func (s *Store) Mark(outage Outage) error {
 		// probe timestamp of its own. Keep the durable claim (including one
 		// made by another process) rather than making a probed outage look as
 		// though it has never been tested. ObservedAt still restarts backoff.
-		if previous := current.Lanes[outage.Lane]; previous.LastProbeAt.After(outage.LastProbeAt) {
+		if previous := current.Outages[outage.ScopeKey]; previous.LastProbeAt.After(outage.LastProbeAt) {
 			outage.LastProbeAt = previous.LastProbeAt
 		}
-		current.Lanes[outage.Lane] = outage
+		current.Outages[outage.ScopeKey] = outage
 	})
 }
 
-// ClearObservedBefore drops the mark for lane when it was observed no later
-// than startedAt. A lane that just completed an invocation is demonstrably
+// ClearObservedBefore drops the mark for scopeKey when it was observed no later
+// than startedAt. An account/model that just completed an invocation is demonstrably
 // healthy, so its mark - including one written from a misread banner - must not
 // outlive that evidence.
 //
@@ -83,60 +95,60 @@ func (s *Store) Mark(outage Outage) error {
 // invocation authorized before the provider ran out of quota still completes,
 // and its success says nothing about a banner another run hit while it was
 // streaming. Clearing that fresher mark would send the next run right back into
-// the dead lane, which is the burst this package exists to stop. A mark with no
+// the dead account/model, which is the burst this package exists to stop. A mark with no
 // ObservedAt - a legacy row, or one written by hand - carries no such evidence
 // and is always cleared.
-func (s *Store) ClearObservedBefore(lane string, startedAt time.Time) error {
-	if s == nil || s.path == "" || lane == "" {
+func (s *Store) ClearObservedBefore(scopeKey string, startedAt time.Time) error {
+	if s == nil || s.path == "" || scopeKey == "" {
 		return nil
 	}
 	current := s.load()
-	if !clearable(current, lane, startedAt) {
+	if !clearable(current, scopeKey, startedAt) {
 		return nil
 	}
 	return s.mutate(func(current *state) {
-		if clearable(*current, lane, startedAt) {
-			delete(current.Lanes, lane)
+		if clearable(*current, scopeKey, startedAt) {
+			delete(current.Outages, scopeKey)
 		}
 	})
 }
 
-func clearable(current state, lane string, startedAt time.Time) bool {
-	outage, present := current.Lanes[lane]
+func clearable(current state, scopeKey string, startedAt time.Time) bool {
+	outage, present := current.Outages[scopeKey]
 	return present && !outage.ObservedAt.After(startedAt)
 }
 
 // ClaimProbe reports whether the caller may send one probe invocation through
-// a lane that is currently marked, and durably records the claim so concurrent
-// runs and later runs do not all probe the same lane at once.
+// an account/model that is currently marked, and durably records the claim so
+// concurrent runs and later runs do not all probe the same scope at once.
 //
 // It answers true only when the claim was written, so a lock or write failure
 // keeps the lane skipped rather than turning every run into a probe. A mark
 // with no ObservedAt - a legacy row, or one written by hand - starts its probe
 // clock at the first claim instead of being probed immediately.
 //
-// Every invocation of a marked lane asks, and all but one per interval are
+// Every invocation of a marked scope asks, and all but one per interval are
 // refused, so a refusal is decided from a lock-free read and takes the
 // exclusive lock only when it is going to write. Reading stale state can only
 // understate how long ago the last probe was, so no probe is lost, and the
 // decision is made again under the lock before anything is recorded.
-func (s *Store) ClaimProbe(lane string) bool {
-	if s == nil || s.path == "" || lane == "" {
+func (s *Store) ClaimProbe(scopeKey string) bool {
+	if s == nil || s.path == "" || scopeKey == "" {
 		return false
 	}
 	now := s.now()
-	if write, _ := probeDecision(s.load(), lane, now); !write {
+	if write, _ := probeDecision(s.load(), scopeKey, now); !write {
 		return false
 	}
 	claimed := false
 	err := s.mutate(func(current *state) {
-		write, claim := probeDecision(*current, lane, now)
+		write, claim := probeDecision(*current, scopeKey, now)
 		if !write {
 			return
 		}
-		outage := current.Lanes[lane]
+		outage := current.Outages[scopeKey]
 		outage.LastProbeAt = now
-		current.Lanes[lane] = outage
+		current.Outages[scopeKey] = outage
 		claimed = claim
 	})
 	if err != nil {
@@ -148,8 +160,8 @@ func (s *Store) ClaimProbe(lane string) bool {
 // probeDecision reports whether lane's probe clock has to be written, and
 // whether that write is a claim the caller may probe on. Starting the clock for
 // a mark with no observation time is a write that is not a claim.
-func probeDecision(current state, lane string, now time.Time) (write, claim bool) {
-	outage, ok := current.Lanes[lane]
+func probeDecision(current state, scopeKey string, now time.Time) (write, claim bool) {
+	outage, ok := current.Outages[scopeKey]
 	if !ok || !outage.Until.After(now) {
 		return false, false
 	}
@@ -170,20 +182,28 @@ func lastProbeReference(outage Outage) time.Time {
 	return outage.ObservedAt
 }
 
-// Snapshot returns every live outage, ordered by lane name.
+// Snapshot returns every live outage, ordered by lane, account, and model.
 func (s *Store) Snapshot() []Outage {
 	if s == nil || s.path == "" {
 		return nil
 	}
 	now := s.now()
 	current := s.load()
-	live := make([]Outage, 0, len(current.Lanes))
-	for _, outage := range current.Lanes {
+	live := make([]Outage, 0, len(current.Outages))
+	for _, outage := range current.Outages {
 		if outage.Until.After(now) {
 			live = append(live, outage)
 		}
 	}
-	sort.Slice(live, func(i, j int) bool { return live[i].Lane < live[j].Lane })
+	sort.Slice(live, func(i, j int) bool {
+		if live[i].Lane != live[j].Lane {
+			return live[i].Lane < live[j].Lane
+		}
+		if live[i].AccountID != live[j].AccountID {
+			return live[i].AccountID < live[j].AccountID
+		}
+		return live[i].Model < live[j].Model
+	})
 	return live
 }
 
@@ -210,38 +230,39 @@ func (s *Store) load() state {
 	data, err := os.ReadFile(s.path)
 	if err == nil {
 		var parsed state
-		if json.Unmarshal(data, &parsed) == nil && parsed.Lanes != nil {
+		if json.Unmarshal(data, &parsed) == nil && parsed.Version == stateVersion && parsed.Outages != nil {
 			return parsed
 		}
 	}
-	return state{Lanes: map[string]Outage{}}
+	return state{Version: stateVersion, Outages: map[string]Outage{}}
 }
 
 func (s *Store) prune(current *state) {
 	now := s.now()
-	for lane, outage := range current.Lanes {
+	for key, outage := range current.Outages {
 		if !outage.Until.After(now) {
-			delete(current.Lanes, lane)
+			delete(current.Outages, key)
 		}
 	}
-	if len(current.Lanes) <= maxLanes {
+	if len(current.Outages) <= maxOutages {
 		return
 	}
-	lanes := make([]Outage, 0, len(current.Lanes))
-	for _, outage := range current.Lanes {
-		lanes = append(lanes, outage)
+	outages := make([]Outage, 0, len(current.Outages))
+	for _, outage := range current.Outages {
+		outages = append(outages, outage)
 	}
-	sort.Slice(lanes, func(i, j int) bool { return lanes[i].Until.After(lanes[j].Until) })
-	kept := make(map[string]Outage, maxLanes)
-	for _, outage := range lanes[:maxLanes] {
-		kept[outage.Lane] = outage
+	sort.Slice(outages, func(i, j int) bool { return outages[i].Until.After(outages[j].Until) })
+	kept := make(map[string]Outage, maxOutages)
+	for _, outage := range outages[:maxOutages] {
+		kept[outage.ScopeKey] = outage
 	}
-	current.Lanes = kept
+	current.Outages = kept
 }
 
 // save writes atomically via rename so a concurrent reader never observes a
 // partial file.
 func (s *Store) save(current state) error {
+	current.Version = stateVersion
 	data, err := json.Marshal(current)
 	if err != nil {
 		return fmt.Errorf("encode lane health state: %w", err)

@@ -14,13 +14,25 @@ func testStore(t *testing.T, now *time.Time) *Store {
 	return NewStore(path, func() time.Time { return *now })
 }
 
+func testScoped(lane string, outage Outage) Outage {
+	outage.Lane = lane
+	outage.AccountID = "test-account-" + lane
+	outage.Model = "test-model"
+	outage.ScopeKey = ScopeKey(outage.AccountID, outage.Model)
+	return outage
+}
+
+func testScopeKey(lane string) string {
+	return ScopeKey("test-account-"+lane, "test-model")
+}
+
 func TestStoreMarkIsVisibleToASeparateStoreOnTheSameFile(t *testing.T) {
 	now := mustTime(t, "2026-08-04 03:44")
 	path := filepath.Join(t.TempDir(), "lane-health.json")
 	clock := func() time.Time { return now }
 
 	writer := NewStore(path, clock)
-	if err := writer.Mark(Outage{Lane: "codex", Until: now.Add(3 * time.Hour), Reason: "usage limit"}); err != nil {
+	if err := writer.Mark(testScoped("codex", Outage{Until: now.Add(3 * time.Hour), Reason: "usage limit"})); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
 
@@ -28,7 +40,7 @@ func TestStoreMarkIsVisibleToASeparateStoreOnTheSameFile(t *testing.T) {
 	// daemon restart, the next process - reading the mark instead of
 	// rediscovering the dead lane itself.
 	reader := NewStore(path, clock)
-	outage, ok := reader.Outage("codex")
+	outage, ok := reader.Outage(testScopeKey("codex"))
 	if !ok {
 		t.Fatalf("expected the persisted codex outage to be visible")
 	}
@@ -44,23 +56,23 @@ func TestStoreOutageExpiresAtResetTime(t *testing.T) {
 	now := mustTime(t, "2026-08-04 03:44")
 	store := testStore(t, &now)
 	until := now.Add(time.Hour)
-	if err := store.Mark(Outage{Lane: "codex", Until: until, Reason: "usage limit"}); err != nil {
+	if err := store.Mark(testScoped("codex", Outage{Until: until, Reason: "usage limit"})); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
 
-	if _, ok := store.Outage("codex"); !ok {
+	if _, ok := store.Outage(testScopeKey("codex")); !ok {
 		t.Fatalf("outage must be live before its reset time")
 	}
 	now = until.Add(-time.Second)
-	if _, ok := store.Outage("codex"); !ok {
+	if _, ok := store.Outage(testScopeKey("codex")); !ok {
 		t.Fatalf("outage must still be live one second before its reset time")
 	}
 	now = until
-	if _, ok := store.Outage("codex"); ok {
+	if _, ok := store.Outage(testScopeKey("codex")); ok {
 		t.Fatalf("outage must expire at its reset time")
 	}
 	now = until.Add(time.Hour)
-	if _, ok := store.Outage("codex"); ok {
+	if _, ok := store.Outage(testScopeKey("codex")); ok {
 		t.Fatalf("outage must stay expired after its reset time")
 	}
 }
@@ -68,13 +80,13 @@ func TestStoreOutageExpiresAtResetTime(t *testing.T) {
 func TestStoreClearRemovesAMarkObservedBeforeTheInvocation(t *testing.T) {
 	now := mustTime(t, "2026-08-04 03:44")
 	store := testStore(t, &now)
-	if err := store.Mark(Outage{Lane: "codex", Until: now.Add(time.Hour), ObservedAt: now}); err != nil {
+	if err := store.Mark(testScoped("codex", Outage{Until: now.Add(time.Hour), ObservedAt: now})); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
-	if err := store.ClearObservedBefore("codex", now.Add(time.Minute)); err != nil {
+	if err := store.ClearObservedBefore(testScopeKey("codex"), now.Add(time.Minute)); err != nil {
 		t.Fatalf("ClearObservedBefore: %v", err)
 	}
-	if _, ok := store.Outage("codex"); ok {
+	if _, ok := store.Outage(testScopeKey("codex")); ok {
 		t.Fatalf("cleared lane must not report an outage")
 	}
 }
@@ -84,13 +96,13 @@ func TestStoreClearRemovesAMarkObservedBeforeTheInvocation(t *testing.T) {
 func TestStoreClearRemovesAMarkWithNoObservationTime(t *testing.T) {
 	now := mustTime(t, "2026-08-04 03:44")
 	store := testStore(t, &now)
-	if err := store.Mark(Outage{Lane: "codex", Until: now.Add(time.Hour)}); err != nil {
+	if err := store.Mark(testScoped("codex", Outage{Until: now.Add(time.Hour)})); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
-	if err := store.ClearObservedBefore("codex", now); err != nil {
+	if err := store.ClearObservedBefore(testScopeKey("codex"), now); err != nil {
 		t.Fatalf("ClearObservedBefore: %v", err)
 	}
-	if _, ok := store.Outage("codex"); ok {
+	if _, ok := store.Outage(testScopeKey("codex")); ok {
 		t.Fatalf("a mark with no observation time must be cleared by a success")
 	}
 }
@@ -103,25 +115,24 @@ func TestStoreClearKeepsAMarkObservedAfterTheInvocationStarted(t *testing.T) {
 	store := testStore(t, &now)
 	startedAt := now
 	observedAt := now.Add(5 * time.Second)
-	if err := store.Mark(Outage{
-		Lane:       "codex",
+	if err := store.Mark(testScoped("codex", Outage{
 		Until:      now.Add(3 * time.Hour),
 		ObservedAt: observedAt,
 		Reason:     "usage limit",
-	}); err != nil {
+	})); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
 	now = observedAt.Add(time.Minute)
-	if err := store.ClearObservedBefore("codex", startedAt); err != nil {
+	if err := store.ClearObservedBefore(testScopeKey("codex"), startedAt); err != nil {
 		t.Fatalf("ClearObservedBefore: %v", err)
 	}
-	if _, ok := store.Outage("codex"); !ok {
+	if _, ok := store.Outage(testScopeKey("codex")); !ok {
 		t.Fatalf("a mark observed after the invocation started must survive it")
 	}
-	if err := store.ClearObservedBefore("codex", observedAt); err != nil {
+	if err := store.ClearObservedBefore(testScopeKey("codex"), observedAt); err != nil {
 		t.Fatalf("ClearObservedBefore at the observation: %v", err)
 	}
-	if _, ok := store.Outage("codex"); ok {
+	if _, ok := store.Outage(testScopeKey("codex")); ok {
 		t.Fatalf("an invocation that started no earlier than the mark must clear it")
 	}
 }
@@ -129,16 +140,16 @@ func TestStoreClearKeepsAMarkObservedAfterTheInvocationStarted(t *testing.T) {
 func TestStoreKeepsLanesIndependent(t *testing.T) {
 	now := mustTime(t, "2026-08-04 03:44")
 	store := testStore(t, &now)
-	if err := store.Mark(Outage{Lane: "codex", Until: now.Add(time.Hour)}); err != nil {
+	if err := store.Mark(testScoped("codex", Outage{Until: now.Add(time.Hour)})); err != nil {
 		t.Fatalf("Mark codex: %v", err)
 	}
-	if err := store.Mark(Outage{Lane: "claude", Until: now.Add(2 * time.Hour)}); err != nil {
+	if err := store.Mark(testScoped("claude", Outage{Until: now.Add(2 * time.Hour)})); err != nil {
 		t.Fatalf("Mark claude: %v", err)
 	}
-	if _, ok := store.Outage("codex"); !ok {
+	if _, ok := store.Outage(testScopeKey("codex")); !ok {
 		t.Fatalf("codex outage lost after marking claude")
 	}
-	if _, ok := store.Outage("claude"); !ok {
+	if _, ok := store.Outage(testScopeKey("claude")); !ok {
 		t.Fatalf("claude outage missing")
 	}
 }
@@ -155,10 +166,10 @@ func TestStoreFailsOpenOnCorruptState(t *testing.T) {
 	if _, ok := store.Outage("codex"); ok {
 		t.Fatalf("corrupt state must report no outage")
 	}
-	if err := store.Mark(Outage{Lane: "codex", Until: now.Add(time.Hour)}); err != nil {
+	if err := store.Mark(testScoped("codex", Outage{Until: now.Add(time.Hour)})); err != nil {
 		t.Fatalf("Mark over corrupt state: %v", err)
 	}
-	if _, ok := store.Outage("codex"); !ok {
+	if _, ok := store.Outage(testScopeKey("codex")); !ok {
 		t.Fatalf("mark written over corrupt state must be readable")
 	}
 }
@@ -179,11 +190,11 @@ func TestNilStoreIsSafe(t *testing.T) {
 func TestStorePrunesExpiredEntriesOnWrite(t *testing.T) {
 	now := mustTime(t, "2026-08-04 03:44")
 	store := testStore(t, &now)
-	if err := store.Mark(Outage{Lane: "stale", Until: now.Add(time.Minute)}); err != nil {
+	if err := store.Mark(testScoped("stale", Outage{Until: now.Add(time.Minute)})); err != nil {
 		t.Fatalf("Mark stale: %v", err)
 	}
 	now = now.Add(time.Hour)
-	if err := store.Mark(Outage{Lane: "codex", Until: now.Add(time.Hour)}); err != nil {
+	if err := store.Mark(testScoped("codex", Outage{Until: now.Add(time.Hour)})); err != nil {
 		t.Fatalf("Mark codex: %v", err)
 	}
 	data, err := os.ReadFile(store.path)
@@ -203,39 +214,39 @@ func TestStorePrunesExpiredEntriesOnWrite(t *testing.T) {
 func TestStoreClaimsOneProbePerIntervalThroughALongMark(t *testing.T) {
 	now := mustTime(t, "2026-08-04 03:44")
 	store := testStore(t, &now)
-	if err := store.Mark(Outage{
-		Lane:       "codex",
+	if err := store.Mark(testScoped("codex", Outage{
 		Until:      now.Add(4 * 24 * time.Hour),
 		ObservedAt: now,
 		Reason:     "usage limit",
-	}); err != nil {
+	})); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
+	key := testScopeKey("codex")
 
-	if store.ClaimProbe("codex") {
+	if store.ClaimProbe(key) {
 		t.Fatalf("the mark must be trusted for its first interval")
 	}
 	now = now.Add(ProbeInterval - time.Minute)
-	if store.ClaimProbe("codex") {
+	if store.ClaimProbe(key) {
 		t.Fatalf("a probe must not be claimed before the interval elapses")
 	}
 	now = now.Add(time.Minute)
-	if !store.ClaimProbe("codex") {
+	if !store.ClaimProbe(key) {
 		t.Fatalf("a probe must be claimed once the interval has elapsed")
 	}
 	// The claim is durable, so concurrent runs and later runs do not all probe.
-	if store.ClaimProbe("codex") {
+	if store.ClaimProbe(key) {
 		t.Fatalf("a second probe must not be claimed inside the same interval")
 	}
-	if NewStore(store.path, func() time.Time { return now }).ClaimProbe("codex") {
+	if NewStore(store.path, func() time.Time { return now }).ClaimProbe(key) {
 		t.Fatalf("another process must observe the claim already spent")
 	}
-	if _, live := store.Outage("codex"); !live {
+	if _, live := store.Outage(key); !live {
 		t.Fatalf("claiming a probe must not clear the mark")
 	}
 
 	now = now.Add(ProbeInterval)
-	if !store.ClaimProbe("codex") {
+	if !store.ClaimProbe(key) {
 		t.Fatalf("the next interval must allow another probe")
 	}
 }
@@ -244,18 +255,19 @@ func TestStoreClaimsOneProbePerIntervalThroughALongMark(t *testing.T) {
 func TestStoreRemarkRestartsTheProbeClock(t *testing.T) {
 	now := mustTime(t, "2026-08-04 03:44")
 	store := testStore(t, &now)
-	if err := store.Mark(Outage{Lane: "codex", Until: now.Add(72 * time.Hour), ObservedAt: now}); err != nil {
+	if err := store.Mark(testScoped("codex", Outage{Until: now.Add(72 * time.Hour), ObservedAt: now})); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
+	key := testScopeKey("codex")
 	now = now.Add(ProbeInterval)
-	if !store.ClaimProbe("codex") {
+	if !store.ClaimProbe(key) {
 		t.Fatalf("expected the first probe to be claimed")
 	}
-	if err := store.Mark(Outage{Lane: "codex", Until: now.Add(72 * time.Hour), ObservedAt: now}); err != nil {
+	if err := store.Mark(testScoped("codex", Outage{Until: now.Add(72 * time.Hour), ObservedAt: now})); err != nil {
 		t.Fatalf("re-Mark: %v", err)
 	}
 	now = now.Add(ProbeInterval - time.Minute)
-	if store.ClaimProbe("codex") {
+	if store.ClaimProbe(key) {
 		t.Fatalf("a fresh mark must be trusted for a full interval again")
 	}
 }
@@ -265,14 +277,15 @@ func TestStoreRemarkRestartsTheProbeClock(t *testing.T) {
 func TestStoreStartsTheProbeClockForAMarkWithNoObservationTime(t *testing.T) {
 	now := mustTime(t, "2026-08-04 03:44")
 	store := testStore(t, &now)
-	if err := store.Mark(Outage{Lane: "codex", Until: now.Add(72 * time.Hour)}); err != nil {
+	if err := store.Mark(testScoped("codex", Outage{Until: now.Add(72 * time.Hour)})); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
-	if store.ClaimProbe("codex") {
+	key := testScopeKey("codex")
+	if store.ClaimProbe(key) {
 		t.Fatalf("a mark with no observation time must not be probed on sight")
 	}
 	now = now.Add(ProbeInterval)
-	if !store.ClaimProbe("codex") {
+	if !store.ClaimProbe(key) {
 		t.Fatalf("the probe must become due one interval after the clock started")
 	}
 }
@@ -284,14 +297,14 @@ func TestStoreStartsTheProbeClockForAMarkWithNoObservationTime(t *testing.T) {
 func TestStoreClaimProbeDoesNotRewriteStateWhenNoProbeIsDue(t *testing.T) {
 	now := mustTime(t, "2026-08-04 03:44")
 	store := testStore(t, &now)
-	if err := store.Mark(Outage{
-		Lane:       "codex",
+	if err := store.Mark(testScoped("codex", Outage{
 		Until:      now.Add(4 * 24 * time.Hour),
 		ObservedAt: now,
 		Reason:     "usage limit",
-	}); err != nil {
+	})); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
+	key := testScopeKey("codex")
 	// The state file is replaced by rename, so a write gives the path a new
 	// identity; an unchanged identity means nothing was written.
 	before, err := os.Stat(store.path)
@@ -301,11 +314,11 @@ func TestStoreClaimProbeDoesNotRewriteStateWhenNoProbeIsDue(t *testing.T) {
 
 	now = now.Add(ProbeInterval - time.Minute)
 	for i := 0; i < 5; i++ {
-		if store.ClaimProbe("codex") {
+		if store.ClaimProbe(key) {
 			t.Fatalf("a probe must not be claimed before the interval elapses")
 		}
 	}
-	if store.ClaimProbe("unmarked") {
+	if store.ClaimProbe(testScopeKey("unmarked")) {
 		t.Fatalf("an unmarked lane needs no probe")
 	}
 	after, err := os.Stat(store.path)
@@ -317,7 +330,7 @@ func TestStoreClaimProbeDoesNotRewriteStateWhenNoProbeIsDue(t *testing.T) {
 	}
 
 	now = now.Add(time.Minute)
-	if !store.ClaimProbe("codex") {
+	if !store.ClaimProbe(key) {
 		t.Fatalf("a probe must still be claimed once the interval has elapsed")
 	}
 	claimed, err := os.Stat(store.path)
@@ -332,18 +345,19 @@ func TestStoreClaimProbeDoesNotRewriteStateWhenNoProbeIsDue(t *testing.T) {
 func TestStoreClaimProbeRefusesUnmarkedAndExpiredLanes(t *testing.T) {
 	now := mustTime(t, "2026-08-04 03:44")
 	store := testStore(t, &now)
-	if store.ClaimProbe("codex") {
+	if store.ClaimProbe(testScopeKey("codex")) {
 		t.Fatalf("an unmarked lane needs no probe")
 	}
-	if err := store.Mark(Outage{Lane: "codex", Until: now.Add(time.Minute), ObservedAt: now}); err != nil {
+	if err := store.Mark(testScoped("codex", Outage{Until: now.Add(time.Minute), ObservedAt: now})); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
+	key := testScopeKey("codex")
 	now = now.Add(2 * time.Hour)
-	if store.ClaimProbe("codex") {
+	if store.ClaimProbe(key) {
 		t.Fatalf("an expired mark is not a live outage to probe")
 	}
 	var nilStore *Store
-	if nilStore.ClaimProbe("codex") {
+	if nilStore.ClaimProbe(testScopeKey("codex")) {
 		t.Fatalf("a nil store must never claim a probe")
 	}
 }

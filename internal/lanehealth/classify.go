@@ -35,8 +35,8 @@ const DefaultCooldown = time.Hour
 // DefaultCooldown rather than parking a lane for months.
 const MaxCooldown = 8 * 24 * time.Hour
 
-// ProbeInterval is how often one invocation is let through a marked lane to
-// test whether it recovered early.
+// ProbeInterval is how often one bounded, cheap invocation is let through a
+// marked account/model to test whether it recovered early.
 //
 // A mark can otherwise only be undone by the reset time it recorded, and the
 // evidence that would undo it - a successful invocation - is exactly what the
@@ -48,17 +48,24 @@ const MaxCooldown = 8 * 24 * time.Hour
 // already accepts.
 const ProbeInterval = DefaultCooldown
 
+// ProbeTimeout bounds a recovery probe independently of the pipeline step's
+// deadline. A stuck probe must not consume the task's full runtime budget.
+const ProbeTimeout = 30 * time.Second
+
 // maxReasonRunes bounds the banner excerpt kept for the failure message so a
 // noisy stderr tail cannot grow the state file or the run error without limit.
 const maxReasonRunes = 200
 
-// Outage records that one agent lane is quota-exhausted until Until.
+// Outage records that one provider account/model is quota-exhausted until Until.
 //
 // LastProbeAt is when an invocation was last let through the mark to test for
 // early recovery; it is zero until the first probe is claimed.
 type Outage struct {
-	Lane  string    `json:"lane"`
-	Until time.Time `json:"until"`
+	ScopeKey  string    `json:"scope_key"`
+	AccountID string    `json:"account_id"`
+	Model     string    `json:"model"`
+	Lane      string    `json:"lane"`
+	Until     time.Time `json:"until"`
 	// ResetTimezone preserves the zone used to interpret the provider's clock.
 	// JSON time values retain the offset but discard the IANA location name.
 	// Empty means a legacy mark whose source zone was not recorded.

@@ -86,6 +86,8 @@ func TestAgentLaneQuotaCooldownJourney(t *testing.T) {
 	claudePath := filepath.Join(h.BinDir, "claude")
 	source := "agent: [codex, claude]\n" +
 		"log_level: debug\n" +
+		"agent_args_override:\n" +
+		"  codex: [--model, gpt-5.6-sol]\n" +
 		"agent_path_override:\n" +
 		"  codex: " + shellQuote(codexPath) + "\n" +
 		"  claude: " + shellQuote(claudePath) + "\n" +
@@ -119,17 +121,38 @@ func TestAgentLaneQuotaCooldownJourney(t *testing.T) {
 		t.Fatalf("read lane-health state: %v", err)
 	}
 	var state struct {
-		Lanes map[string]struct {
-			Until  time.Time `json:"until"`
-			Reason string    `json:"reason"`
-		} `json:"lanes"`
+		Version int `json:"version"`
+		Outages map[string]struct {
+			Lane      string    `json:"lane"`
+			AccountID string    `json:"account_id"`
+			Model     string    `json:"model"`
+			Until     time.Time `json:"until"`
+			Reason    string    `json:"reason"`
+		} `json:"outages"`
 	}
 	if err := json.Unmarshal(stateData, &state); err != nil {
 		t.Fatalf("parse lane-health state %q: %v", stateData, err)
 	}
-	outage, marked := state.Lanes["codex"]
+	var outage struct {
+		Lane      string    `json:"lane"`
+		AccountID string    `json:"account_id"`
+		Model     string    `json:"model"`
+		Until     time.Time `json:"until"`
+		Reason    string    `json:"reason"`
+	}
+	marked := false
+	for _, candidate := range state.Outages {
+		if candidate.Lane == "codex" && candidate.Model == "gpt-5.6-sol" {
+			outage = candidate
+			marked = true
+			break
+		}
+	}
 	if !marked {
 		t.Fatalf("codex must be marked quota-exhausted, got %s", stateData)
+	}
+	if outage.AccountID == "" {
+		t.Fatalf("codex outage must identify its account scope, got %s", stateData)
 	}
 	// The banner names an exact instant, so the parsed reset must be that
 	// instant rather than the conservative default.

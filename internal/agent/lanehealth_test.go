@@ -24,6 +24,21 @@ func laneTestStore(t *testing.T, now *time.Time) *lanehealth.Store {
 	)
 }
 
+func laneTestScope(name string) QuotaScope {
+	agent := &fallbackTestAgent{name: name}
+	scope, _ := agent.QuotaScope(RunOpts{})
+	return scope
+}
+
+func laneTestOutage(name string, outage lanehealth.Outage) lanehealth.Outage {
+	scope := laneTestScope(name)
+	outage.Lane = name
+	outage.ScopeKey = scope.Key
+	outage.AccountID = scope.AccountID
+	outage.Model = scope.Model
+	return outage
+}
+
 func TestWithLaneHealthMarksTheLaneOnAQuotaBanner(t *testing.T) {
 	now := time.Date(2026, 8, 4, 3, 44, 0, 0, time.Local)
 	store := laneTestStore(t, &now)
@@ -46,7 +61,7 @@ func TestWithLaneHealthMarksTheLaneOnAQuotaBanner(t *testing.T) {
 	if !strings.Contains(err.Error(), "usage limit") {
 		t.Fatalf("error %q must keep the provider banner", err)
 	}
-	if _, ok := store.Outage("codex"); !ok {
+	if _, ok := store.Outage(laneTestScope("codex").Key); !ok {
 		t.Fatalf("the quota banner must be persisted as a lane outage")
 	}
 }
@@ -54,11 +69,10 @@ func TestWithLaneHealthMarksTheLaneOnAQuotaBanner(t *testing.T) {
 func TestWithLaneHealthSkipsAMarkedLaneWithoutInvokingIt(t *testing.T) {
 	now := time.Date(2026, 8, 4, 3, 44, 0, 0, time.Local)
 	store := laneTestStore(t, &now)
-	if err := store.Mark(lanehealth.Outage{
-		Lane:   "codex",
+	if err := store.Mark(laneTestOutage("codex", lanehealth.Outage{
 		Until:  now.Add(3 * time.Hour),
 		Reason: "You've hit your usage limit",
-	}); err != nil {
+	})); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
 	inner := &fallbackTestAgent{name: "codex", run: func() (*Result, error) {
@@ -86,7 +100,7 @@ func TestWithLaneHealthRunsAgainOnceTheMarkExpires(t *testing.T) {
 	now := time.Date(2026, 8, 4, 3, 44, 0, 0, time.Local)
 	store := laneTestStore(t, &now)
 	until := now.Add(3 * time.Hour)
-	if err := store.Mark(lanehealth.Outage{Lane: "codex", Until: until, Reason: "usage limit"}); err != nil {
+	if err := store.Mark(laneTestOutage("codex", lanehealth.Outage{Until: until, Reason: "usage limit"})); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
 	inner := &fallbackTestAgent{name: "codex", run: func() (*Result, error) {
@@ -117,12 +131,11 @@ func TestWithLaneHealthRunsAgainOnceTheMarkExpires(t *testing.T) {
 func TestWithLaneHealthProbesALongMarkAndClearsItWhenTheLaneRecovered(t *testing.T) {
 	now := time.Date(2026, 8, 4, 3, 44, 0, 0, time.Local)
 	store := laneTestStore(t, &now)
-	if err := store.Mark(lanehealth.Outage{
-		Lane:       "codex",
+	if err := store.Mark(laneTestOutage("codex", lanehealth.Outage{
 		Until:      now.Add(4 * 24 * time.Hour),
 		ObservedAt: now,
 		Reason:     "You've hit your usage limit",
-	}); err != nil {
+	})); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
 	inner := &fallbackTestAgent{name: "codex", run: func() (*Result, error) {
@@ -145,10 +158,10 @@ func TestWithLaneHealthProbesALongMarkAndClearsItWhenTheLaneRecovered(t *testing
 	if res.Text != "ok" {
 		t.Fatalf("Text = %q, want ok", res.Text)
 	}
-	if inner.calls != 1 {
-		t.Fatalf("inner calls = %d, want exactly 1 probe", inner.calls)
+	if inner.calls != 1 || len(inner.probes) != 1 {
+		t.Fatalf("task calls/probes = %d/%d, want one task and one probe", inner.calls, len(inner.probes))
 	}
-	if outage, live := store.Outage("codex"); live {
+	if outage, live := store.Outage(laneTestScope("codex").Key); live {
 		t.Fatalf("a successful probe must clear the mark, still marked until %s", outage.Until)
 	}
 }
@@ -158,15 +171,17 @@ func TestWithLaneHealthProbesALongMarkAndClearsItWhenTheLaneRecovered(t *testing
 func TestWithLaneHealthReparksWhenTheProbeHitsTheBannerAgain(t *testing.T) {
 	now := time.Date(2026, 8, 4, 3, 44, 0, 0, time.Local)
 	store := laneTestStore(t, &now)
-	if err := store.Mark(lanehealth.Outage{
-		Lane:       "codex",
+	if err := store.Mark(laneTestOutage("codex", lanehealth.Outage{
 		Until:      now.Add(4 * 24 * time.Hour),
 		ObservedAt: now,
 		Reason:     "You've hit your usage limit",
-	}); err != nil {
+	})); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
-	inner := &fallbackTestAgent{name: "codex", run: func() (*Result, error) {
+	inner := &fallbackTestAgent{name: "codex", probe: func(context.Context, RunOpts) (*Result, error) {
+		return nil, errors.New(codexQuotaStderr)
+	}, run: func() (*Result, error) {
+		t.Fatal("the task must not run after a quota probe fails")
 		return nil, errors.New(codexQuotaStderr)
 	}}
 	lane := WithLaneHealth(inner, store, func() time.Time { return now })
@@ -175,16 +190,16 @@ func TestWithLaneHealthReparksWhenTheProbeHitsTheBannerAgain(t *testing.T) {
 	if _, err := lane.Run(context.Background(), RunOpts{}); err == nil {
 		t.Fatalf("expected the probe to surface the banner again")
 	}
-	if inner.calls != 1 {
-		t.Fatalf("inner calls = %d, want 1", inner.calls)
+	if inner.calls != 0 || len(inner.probes) != 1 {
+		t.Fatalf("task calls/probes = %d/%d, want no task and one probe", inner.calls, len(inner.probes))
 	}
 	for i := 0; i < 3; i++ {
 		if _, err := lane.Run(context.Background(), RunOpts{}); err == nil {
 			t.Fatalf("the re-marked lane must stay skipped")
 		}
 	}
-	if inner.calls != 1 {
-		t.Fatalf("inner calls = %d, want the lane skipped again after a failed probe", inner.calls)
+	if inner.calls != 0 || len(inner.probes) != 1 {
+		t.Fatalf("task calls/probes = %d/%d, want no task and one failed probe", inner.calls, len(inner.probes))
 	}
 }
 
@@ -194,7 +209,7 @@ func TestWithLaneHealthClearsTheMarkOnSuccess(t *testing.T) {
 	now := time.Date(2026, 8, 4, 3, 44, 0, 0, time.Local)
 	store := laneTestStore(t, &now)
 	until := now.Add(3 * time.Hour)
-	if err := store.Mark(lanehealth.Outage{Lane: "codex", Until: until, Reason: "usage limit"}); err != nil {
+	if err := store.Mark(laneTestOutage("codex", lanehealth.Outage{Until: until, Reason: "usage limit"})); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
 	inner := &fallbackTestAgent{name: "codex", run: func() (*Result, error) {
@@ -207,7 +222,7 @@ func TestWithLaneHealthClearsTheMarkOnSuccess(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	now = until.Add(-time.Hour)
-	if _, ok := store.Outage("codex"); ok {
+	if _, ok := store.Outage(laneTestScope("codex").Key); ok {
 		t.Fatalf("a successful invocation must clear the lane mark")
 	}
 }
@@ -225,12 +240,11 @@ func TestWithLaneHealthKeepsAMarkWrittenWhileTheInvocationWasRunning(t *testing.
 		// Five seconds in, a concurrent run's codex invocation is rejected with
 		// the banner and marks the lane.
 		now = now.Add(5 * time.Second)
-		if err := store.Mark(lanehealth.Outage{
-			Lane:       "codex",
+		if err := store.Mark(laneTestOutage("codex", lanehealth.Outage{
 			Until:      until,
 			ObservedAt: now,
 			Reason:     "You've hit your usage limit",
-		}); err != nil {
+		})); err != nil {
 			t.Fatalf("concurrent Mark: %v", err)
 		}
 		now = now.Add(55 * time.Second)
@@ -241,7 +255,7 @@ func TestWithLaneHealthKeepsAMarkWrittenWhileTheInvocationWasRunning(t *testing.
 	if _, err := lane.Run(context.Background(), RunOpts{}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	outage, live := store.Outage("codex")
+	outage, live := store.Outage(laneTestScope("codex").Key)
 	if !live {
 		t.Fatalf("a mark observed after this invocation started must survive its success")
 	}
@@ -266,7 +280,7 @@ func TestWithLaneHealthLeavesNonQuotaFailuresUnmarked(t *testing.T) {
 	if errors.As(err, &outageErr) {
 		t.Fatalf("a non-quota failure must not become a lane outage")
 	}
-	if _, ok := store.Outage("codex"); ok {
+	if _, ok := store.Outage(laneTestScope("codex").Key); ok {
 		t.Fatalf("a non-quota failure must not mark the lane")
 	}
 }
@@ -291,7 +305,7 @@ func TestWithLaneHealthDoesNotMarkOnACancelledRun(t *testing.T) {
 	if errors.As(err, &outageErr) {
 		t.Fatalf("a cancelled run must not be reported as a lane outage")
 	}
-	if _, ok := store.Outage("codex"); ok {
+	if _, ok := store.Outage(laneTestScope("codex").Key); ok {
 		t.Fatalf("a cancelled run must not mark the lane")
 	}
 }
@@ -327,7 +341,7 @@ func TestWithLaneHealthIgnoresAQuotaBannerQuotedByAgentOutput(t *testing.T) {
 	if errors.As(err, &outageErr) {
 		t.Fatalf("agent-authored text must not become a lane outage: %v", err)
 	}
-	if outage, ok := store.Outage("codex"); ok {
+	if outage, ok := store.Outage(laneTestScope("codex").Key); ok {
 		t.Fatalf("agent-authored text must not mark the lane (marked until %s)", outage.Until)
 	}
 }

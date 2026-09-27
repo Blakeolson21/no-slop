@@ -162,6 +162,17 @@ func (a *bannerReportingAgent) Close() error { return nil }
 
 func (a *bannerReportingAgent) ReportsAgentAttempts() bool { return true }
 
+func (a *bannerReportingAgent) QuotaScope(agent.RunOpts) (agent.QuotaScope, bool) {
+	accountID, model := "test-account-codex", "test-model"
+	return agent.QuotaScope{
+		Key: lanehealth.ScopeKey(accountID, model), AccountID: accountID, Model: model,
+	}, true
+}
+
+func (a *bannerReportingAgent) RunQuotaProbe(context.Context, agent.RunOpts) (*agent.Result, error) {
+	return nil, errors.New("unexpected quota probe in live-banner test")
+}
+
 func (a *bannerReportingAgent) Run(_ context.Context, opts agent.RunOpts) (*agent.Result, error) {
 	if opts.OnAttempt != nil {
 		opts.OnAttempt(agent.Attempt{

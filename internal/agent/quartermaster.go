@@ -286,6 +286,12 @@ func (q quartermasterAgent) Run(ctx context.Context, opts RunOpts) (*Result, err
 		outcome = "failed"
 		if ctx.Err() != nil {
 			outcome = "cancelled"
+		} else if IsQuotaOutage(runErr) {
+			// The inner lane-health wrapper already identified the leased
+			// account/model and attached the durable outage. Preserve that
+			// structured result so fallback routing and attempt telemetry keep
+			// seeing a quota outage rather than a generic lease refusal. The
+			// lease authority still receives its existing "failed" outcome.
 		} else if outage, quota := lanehealth.Classify(q.opts.Pool, runErr.Error(), quotaObservationTime(time.Now(), opts.Env)); quota {
 			runErr = &QuartermasterRefusalError{
 				Pool:    q.opts.Pool,

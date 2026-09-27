@@ -37,11 +37,7 @@ func TestDoctorReportsAQuotaExhaustedExplicitACPTargetLane(t *testing.T) {
 
 	until := time.Now().Add(72 * time.Hour).Truncate(time.Minute)
 	store := lanehealth.NewStore(p.LaneHealthFile(), nil)
-	if err := store.Mark(lanehealth.Outage{
-		Lane:   "acp:gemini",
-		Until:  until,
-		Reason: "You've hit your usage limit",
-	}); err != nil {
+	if err := store.Mark(doctorTestOutage("acp:gemini", "gemini-model", until)); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
 
@@ -50,9 +46,12 @@ func TestDoctorReportsAQuotaExhaustedExplicitACPTargetLane(t *testing.T) {
 		t.Fatalf("doctor failed: %v\n%s", err, out)
 	}
 
-	line := doctorAgentLine(t, out, "acp:gemini")
+	line := doctorLineContaining(t, out, "quota-exhausted")
 	if !strings.Contains(line, "quota-exhausted") {
 		t.Fatalf("the acp:gemini lane must report its recorded cooldown:\n%s", line)
+	}
+	if !strings.Contains(line, "acp:gemini") {
+		t.Fatalf("the quota row must name the explicit ACP target:\n%s", line)
 	}
 	if !strings.Contains(line, until.Local().Format("2006-01-02 15:04 MST")) {
 		t.Fatalf("the acp:gemini row must name the reset time:\n%s", line)
@@ -78,7 +77,7 @@ func TestDoctorReportsAMarkedAliasLaneExactlyOnce(t *testing.T) {
 	}
 	until := time.Now().Add(72 * time.Hour).Truncate(time.Minute)
 	store := lanehealth.NewStore(p.LaneHealthFile(), nil)
-	if err := store.Mark(lanehealth.Outage{Lane: "acp:cursor", Until: until}); err != nil {
+	if err := store.Mark(doctorTestOutage("acp:cursor", "cursor-model", until)); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
 

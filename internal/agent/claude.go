@@ -65,6 +65,14 @@ func (a *claudeAgent) Run(ctx context.Context, opts RunOpts) (*Result, error) {
 	})
 }
 
+func (a *claudeAgent) QuotaScope(opts RunOpts) (QuotaScope, bool) {
+	return nativeQuotaScope("claude", a.extraArgs, opts)
+}
+
+func (a *claudeAgent) RunQuotaProbe(ctx context.Context, opts RunOpts) (*Result, error) {
+	return runQuotaProbeOnce(ctx, a, opts, a.runOnce)
+}
+
 func (a *claudeAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error) {
 	resumeID := ""
 	if opts.Session != nil {

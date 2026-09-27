@@ -24,6 +24,21 @@ func (a *attemptReportingAgent) Close() error { return nil }
 
 func (a *attemptReportingAgent) ReportsAgentAttempts() bool { return true }
 
+func (a *attemptReportingAgent) QuotaScope(RunOpts) (QuotaScope, bool) {
+	return laneTestScope(a.name), true
+}
+
+func (a *attemptReportingAgent) RunQuotaProbe(ctx context.Context, opts RunOpts) (*Result, error) {
+	startedAt := time.Now()
+	var result *Result
+	var err error
+	if len(a.runs) > 0 {
+		result, err = a.runs[0]()
+	}
+	emitAgentAttempt(opts, a.name, result, err, startedAt, time.Now())
+	return result, err
+}
+
 func (a *attemptReportingAgent) Run(_ context.Context, opts RunOpts) (*Result, error) {
 	var result *Result
 	var err error
@@ -164,12 +179,11 @@ func TestWithLaneHealthPassesThroughAttemptsItDoesNotClassify(t *testing.T) {
 func TestWithLaneHealthReportsASkippedLaneAsAnAttempt(t *testing.T) {
 	now := time.Date(2026, 8, 4, 3, 44, 0, 0, time.Local)
 	store := laneTestStore(t, &now)
-	if err := store.Mark(lanehealth.Outage{
-		Lane:       "codex",
+	if err := store.Mark(laneTestOutage("codex", lanehealth.Outage{
 		Until:      now.Add(3 * time.Hour),
 		ObservedAt: now,
 		Reason:     "You've hit your usage limit",
-	}); err != nil {
+	})); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
 	inner := &attemptReportingAgent{name: "codex", runs: []func() (*Result, error){

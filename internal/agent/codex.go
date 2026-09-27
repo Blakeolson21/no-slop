@@ -58,6 +58,14 @@ func (a *codexAgent) Run(ctx context.Context, opts RunOpts) (*Result, error) {
 	})
 }
 
+func (a *codexAgent) QuotaScope(opts RunOpts) (QuotaScope, bool) {
+	return nativeQuotaScope("codex", a.extraArgs, opts)
+}
+
+func (a *codexAgent) RunQuotaProbe(ctx context.Context, opts RunOpts) (*Result, error) {
+	return runQuotaProbeOnce(ctx, a, opts, a.runOnce)
+}
+
 func (a *codexAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error) {
 	schemaPath := ""
 	validationSchema := opts.JSONSchema

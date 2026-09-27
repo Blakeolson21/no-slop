@@ -37,11 +37,7 @@ func TestDoctorReportsAQuotaExhaustedACPAliasLane(t *testing.T) {
 
 	until := time.Now().Add(72 * time.Hour).Truncate(time.Minute)
 	store := lanehealth.NewStore(p.LaneHealthFile(), nil)
-	if err := store.Mark(lanehealth.Outage{
-		Lane:   "acp:cursor",
-		Until:  until,
-		Reason: "You've hit your usage limit",
-	}); err != nil {
+	if err := store.Mark(doctorTestOutage("acp:cursor", "cursor-model", until)); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
 
@@ -50,19 +46,19 @@ func TestDoctorReportsAQuotaExhaustedACPAliasLane(t *testing.T) {
 		t.Fatalf("doctor failed: %v\n%s", err, out)
 	}
 
-	agentLine := doctorAgentLine(t, out, "cursor")
+	agentLine := doctorLineContaining(t, out, "quota-exhausted")
 	if !strings.Contains(agentLine, "quota-exhausted") {
-		t.Fatalf("cursor row must report the quota cooldown recorded for acp:cursor:\n%s", agentLine)
+		t.Fatalf("doctor must report the quota cooldown recorded for acp:cursor:\n%s", agentLine)
+	}
+	if !strings.Contains(agentLine, "acp:cursor") {
+		t.Fatalf("quota row must name the recorded lane:\n%s", agentLine)
 	}
 	if !strings.Contains(agentLine, until.Local().Format("2006-01-02 15:04 MST")) {
 		t.Fatalf("cursor row must name the reset time:\n%s", agentLine)
 	}
 
 	gateLine := doctorLineContaining(t, out, "gate validation")
-	if !strings.Contains(gateLine, "quota-exhausted") {
-		t.Fatalf("gate validation must not report the parked alias lane as simply runnable:\n%s", gateLine)
-	}
-	if !strings.Contains(gateLine, until.Local().Format("2006-01-02 15:04 MST")) {
-		t.Fatalf("gate validation must name the reset time:\n%s", gateLine)
+	if !strings.Contains(gateLine, "cursor is runnable") || strings.Contains(gateLine, "quota-exhausted") {
+		t.Fatalf("an alias mark for an unknown account/model must not claim the whole lane is unavailable:\n%s", gateLine)
 	}
 }

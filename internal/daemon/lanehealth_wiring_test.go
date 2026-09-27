@@ -26,12 +26,20 @@ func TestNewPipelineAgentSkipsQuotaExhaustedLanesAndNamesEveryResetTime(t *testi
 	)
 	codexUntil := now.Add(72 * time.Hour)
 	claudeUntil := now.Add(4 * time.Hour)
-	for _, outage := range []lanehealth.Outage{
-		{Lane: string(types.AgentCodex), Until: codexUntil, Reason: "You've hit your usage limit"},
-		{Lane: string(types.AgentClaude), Until: claudeUntil, Reason: "You've hit your session limit"},
-	} {
+	models := map[types.AgentName]string{
+		types.AgentCodex:  "test-codex-model",
+		types.AgentClaude: "test-claude-model",
+	}
+	for name, model := range models {
+		until := codexUntil
+		reason := "You've hit your usage limit"
+		if name == types.AgentClaude {
+			until = claudeUntil
+			reason = "You've hit your session limit"
+		}
+		outage := testLaneOutage(t, name, model, until, reason)
 		if err := store.Mark(outage); err != nil {
-			t.Fatalf("Mark %s: %v", outage.Lane, err)
+			t.Fatalf("Mark %s: %v", name, err)
 		}
 	}
 
@@ -41,6 +49,10 @@ func TestNewPipelineAgentSkipsQuotaExhaustedLanesAndNamesEveryResetTime(t *testi
 	cfg := &config.Config{
 		Agent:  types.AgentCodex,
 		Agents: []types.AgentName{types.AgentCodex, types.AgentClaude},
+		AgentArgsOverride: map[string][]string{
+			string(types.AgentCodex):  {"--model", models[types.AgentCodex]},
+			string(types.AgentClaude): {"--model", models[types.AgentClaude]},
+		},
 		AgentPathOverride: map[string]string{
 			string(types.AgentCodex):  missing,
 			string(types.AgentClaude): missing,
@@ -61,8 +73,10 @@ func TestNewPipelineAgentSkipsQuotaExhaustedLanesAndNamesEveryResetTime(t *testi
 		t.Fatalf("error %q must report that no lane can run", msg)
 	}
 	for _, want := range []string{
-		"codex until " + codexUntil.Local().Format("2006-01-02 15:04 MST"),
-		"claude until " + claudeUntil.Local().Format("2006-01-02 15:04 MST"),
+		"codex account ",
+		"model " + models[types.AgentCodex] + " until " + codexUntil.Local().Format("2006-01-02 15:04 MST"),
+		"claude account ",
+		"model " + models[types.AgentClaude] + " until " + claudeUntil.Local().Format("2006-01-02 15:04 MST"),
 	} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("error %q must contain %q", msg, want)
@@ -73,19 +87,18 @@ func TestNewPipelineAgentSkipsQuotaExhaustedLanesAndNamesEveryResetTime(t *testi
 	}
 }
 
-// Quartermaster admission is an inner layer, not a replacement: with it
-// enabled, a lane whose provider quota is already known to be exhausted must
-// still be skipped from persisted lane health before any lease is requested.
-// Otherwise enabling it silently disables the cooldown on exactly the two
-// lanes (claude, codex) it governs.
-func TestNewPipelineAgentKeepsLaneHealthWhenQuartermasterIsEnabled(t *testing.T) {
+// Account selection has to precede the health lookup. An old account/model
+// mark must not suppress a different Quartermaster seat before its identity is
+// known.
+func TestNewPipelineAgentResolvesLaneHealthAfterQuartermasterSelectsAccount(t *testing.T) {
 	now := time.Now()
 	store := lanehealth.NewStore(
 		filepath.Join(t.TempDir(), "lane-health.json"),
 		func() time.Time { return now },
 	)
 	codexUntil := now.Add(72 * time.Hour)
-	if err := store.Mark(lanehealth.Outage{Lane: string(types.AgentCodex), Until: codexUntil, Reason: "You've hit your usage limit"}); err != nil {
+	model := "test-codex-model"
+	if err := store.Mark(testLaneOutage(t, types.AgentCodex, model, codexUntil, "You've hit your usage limit")); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
 
@@ -94,6 +107,9 @@ func TestNewPipelineAgentKeepsLaneHealthWhenQuartermasterIsEnabled(t *testing.T)
 	cfg := &config.Config{
 		Agent:  types.AgentCodex,
 		Agents: []types.AgentName{types.AgentCodex},
+		AgentArgsOverride: map[string][]string{
+			string(types.AgentCodex): {"--model", model},
+		},
 		AgentPathOverride: map[string]string{
 			string(types.AgentCodex): missing,
 		},
@@ -111,21 +127,31 @@ func TestNewPipelineAgentKeepsLaneHealthWhenQuartermasterIsEnabled(t *testing.T)
 	defer func() { _ = ag.Close() }()
 
 	_, runErr := ag.Run(context.Background(), agent.RunOpts{Prompt: "x", CWD: t.TempDir()})
-	if runErr == nil {
-		t.Fatalf("expected the marked codex lane to refuse before leasing")
+	if runErr == nil || !agent.IsQuartermasterRefusal(runErr) {
+		t.Fatalf("account selection must run before scoped health lookup, got %v", runErr)
 	}
-	if !agent.IsQuotaOutage(runErr) {
-		t.Fatalf("error %v must be the persisted quota outage, not a lease or spawn failure", runErr)
+	if agent.IsQuotaOutage(runErr) {
+		t.Fatalf("the pre-lease account mark must not suppress another account: %v", runErr)
 	}
-	msg := runErr.Error()
-	if !strings.Contains(msg, codexUntil.Local().Format("2006-01-02 15:04 MST")) {
-		t.Fatalf("error %q must name the persisted reset time", msg)
+	if !strings.Contains(runErr.Error(), missingQuartermaster) {
+		t.Fatalf("expected account admission before health lookup, got %v", runErr)
 	}
-	if strings.Contains(msg, missingQuartermaster) {
-		t.Fatalf("a marked lane must not request a lease, but the error names the quartermaster binary: %q", msg)
+}
+
+func testLaneOutage(t *testing.T, name types.AgentName, model string, until time.Time, reason string) lanehealth.Outage {
+	t.Helper()
+	configured, err := agent.NewWithOptions(name, string(name), []string{"--model", model}, agent.Options{})
+	if err != nil {
+		t.Fatalf("NewWithOptions(%s): %v", name, err)
 	}
-	if strings.Contains(msg, missing) {
-		t.Fatalf("a marked lane must not be spawned, but the error names the agent binary: %q", msg)
+	scope, ok := agent.ResolveQuotaScope(configured, agent.RunOpts{})
+	_ = configured.Close()
+	if !ok {
+		t.Fatalf("could not resolve test scope for %s", name)
+	}
+	return lanehealth.Outage{
+		ScopeKey: scope.Key, AccountID: scope.AccountID, Model: scope.Model,
+		Lane: string(name), Until: until, Reason: reason,
 	}
 }
 

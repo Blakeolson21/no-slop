@@ -152,9 +152,9 @@ func (p *Paths) RunEvidenceDir(configured, runID string) string {
 	return filepath.Join(p.EvidenceRoot(configured), runID)
 }
 
-// LaneHealthFile persists which configured agent lanes are quota-exhausted and
-// when each recovers, so concurrent runs and later runs skip a dead lane
-// instead of each paying an agent spawn to rediscover it.
+// LaneHealthFile persists provider account/model quota marks and when each
+// recovers, so concurrent runs and later runs avoid respawning that exact
+// exhausted scope.
 func (p *Paths) LaneHealthFile() string {
 	return filepath.Join(p.root, "lane-health.json")
 }

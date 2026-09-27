@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -21,14 +22,17 @@ func TestDoctorPreservesPersistedResetTimezone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(p.ConfigFile(), []byte("agent: codex\nagent_args_override:\n  codex: [--model, gpt-5.6-sol]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	chicago, err := time.LoadLocation("America/Chicago")
 	if err != nil {
 		t.Fatal(err)
 	}
 	until := time.Now().Add(72 * time.Hour).In(chicago)
-	if err := lanehealth.NewStore(p.LaneHealthFile(), nil).Mark(lanehealth.Outage{
-		Lane: "codex", Until: until, ResetTimezone: "America/Chicago",
-	}); err != nil {
+	mark := doctorConfiguredOutage(t, "codex", "gpt-5.6-sol", until)
+	mark.ResetTimezone = "America/Chicago"
+	if err := lanehealth.NewStore(p.LaneHealthFile(), nil).Mark(mark); err != nil {
 		t.Fatal(err)
 	}
 	out, err := executeCmd("doctor")
@@ -36,7 +40,7 @@ func TestDoctorPreservesPersistedResetTimezone(t *testing.T) {
 		t.Fatalf("doctor: %v\n%s", err, out)
 	}
 	want := until.Format("2006-01-02 15:04 MST -07:00") + " (America/Chicago)"
-	for _, line := range []string{doctorAgentLine(t, out, "codex"), doctorLineContaining(t, out, "gate validation")} {
+	for _, line := range []string{doctorLineContaining(t, out, "quota-exhausted"), doctorLineContaining(t, out, "gate validation")} {
 		if !strings.Contains(line, want) {
 			t.Errorf("persisted zone missing from doctor: %s; want %s", line, want)
 		}

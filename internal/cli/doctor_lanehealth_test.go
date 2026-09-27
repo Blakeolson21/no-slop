@@ -1,13 +1,16 @@
 package cli
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Blakeolson21/no-slop/internal/agent"
 	"github.com/Blakeolson21/no-slop/internal/lanehealth"
 	"github.com/Blakeolson21/no-slop/internal/paths"
 	"github.com/Blakeolson21/no-slop/internal/telemetry"
+	"github.com/Blakeolson21/no-slop/internal/types"
 )
 
 // A lane parked by a quota cooldown is installed and looks healthy, so without
@@ -29,11 +32,7 @@ func TestDoctorReportsAQuotaExhaustedAgentLane(t *testing.T) {
 	}
 	until := time.Now().Add(72 * time.Hour).Truncate(time.Minute)
 	store := lanehealth.NewStore(p.LaneHealthFile(), nil)
-	if err := store.Mark(lanehealth.Outage{
-		Lane:   "codex",
-		Until:  until,
-		Reason: "You've hit your usage limit",
-	}); err != nil {
+	if err := store.Mark(doctorTestOutage("codex", "gpt-5.6-sol", until)); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
 
@@ -42,9 +41,9 @@ func TestDoctorReportsAQuotaExhaustedAgentLane(t *testing.T) {
 		t.Fatalf("doctor failed: %v\n%s", err, out)
 	}
 
-	line := doctorAgentLine(t, out, "codex")
+	line := doctorLineContaining(t, out, "quota-exhausted")
 	if !strings.Contains(line, "quota-exhausted") {
-		t.Fatalf("codex row must report the quota cooldown:\n%s", line)
+		t.Fatalf("doctor must report the scoped quota cooldown:\n%s", line)
 	}
 	if !strings.Contains(line, until.Local().Format("2006-01-02 15:04 MST")) {
 		t.Fatalf("codex row must name the reset time:\n%s", line)
@@ -71,11 +70,10 @@ func TestDoctorGateValidationNamesTheCooldownOnTheResolvedAgent(t *testing.T) {
 	}
 	until := time.Now().Add(72 * time.Hour).Truncate(time.Minute)
 	store := lanehealth.NewStore(p.LaneHealthFile(), nil)
-	if err := store.Mark(lanehealth.Outage{
-		Lane:   "codex",
-		Until:  until,
-		Reason: "You've hit your usage limit",
-	}); err != nil {
+	if err := os.WriteFile(p.ConfigFile(), []byte("agent: codex\nagent_args_override:\n  codex: [--model, gpt-5.6-sol]\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := store.Mark(doctorConfiguredOutage(t, types.AgentCodex, "gpt-5.6-sol", until)); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
 
@@ -91,8 +89,8 @@ func TestDoctorGateValidationNamesTheCooldownOnTheResolvedAgent(t *testing.T) {
 	if !strings.Contains(line, until.Local().Format("2006-01-02 15:04 MST")) {
 		t.Fatalf("gate validation must name the reset time:\n%s", line)
 	}
-	if !strings.Contains(line, p.LaneHealthFile()) {
-		t.Fatalf("gate validation must name the remedy the docs prescribe:\n%s", line)
+	if !strings.Contains(line, "model gpt-5.6-sol") {
+		t.Fatalf("gate validation must identify the exact model scope:\n%s", line)
 	}
 }
 
@@ -148,7 +146,7 @@ func TestDoctorReportsAnExpiredMarkAsHealthy(t *testing.T) {
 	// reads it with the real clock.
 	past := time.Now().Add(-2 * time.Hour)
 	store := lanehealth.NewStore(p.LaneHealthFile(), func() time.Time { return past.Add(-time.Hour) })
-	if err := store.Mark(lanehealth.Outage{Lane: "codex", Until: past, Reason: "usage limit"}); err != nil {
+	if err := store.Mark(doctorTestOutage("codex", "gpt-5.6-sol", past)); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
 
@@ -157,11 +155,36 @@ func TestDoctorReportsAnExpiredMarkAsHealthy(t *testing.T) {
 		t.Fatalf("doctor failed: %v\n%s", err, out)
 	}
 
-	line := doctorAgentLine(t, out, "codex")
-	if strings.Contains(line, "quota-exhausted") {
-		t.Fatalf("an expired mark must not park the lane:\n%s", line)
+	if strings.Contains(out, "quota-exhausted") {
+		t.Fatalf("an expired mark must not be reported:\n%s", out)
 	}
+	line := doctorAgentLine(t, out, "codex")
 	if !strings.Contains(line, codexPath) {
 		t.Fatalf("codex row must report the resolved binary:\n%s", line)
+	}
+}
+
+func doctorTestOutage(lane, model string, until time.Time) lanehealth.Outage {
+	accountID := "test-account-" + lane
+	return lanehealth.Outage{
+		ScopeKey: lanehealth.ScopeKey(accountID, model), AccountID: accountID, Model: model,
+		Lane: lane, Until: until, Reason: "You've hit your usage limit",
+	}
+}
+
+func doctorConfiguredOutage(t *testing.T, name types.AgentName, model string, until time.Time) lanehealth.Outage {
+	t.Helper()
+	a, err := agent.NewWithOptions(name, string(name), []string{"--model", model}, agent.Options{})
+	if err != nil {
+		t.Fatalf("NewWithOptions(%s): %v", name, err)
+	}
+	scope, ok := agent.ResolveQuotaScope(a, agent.RunOpts{})
+	_ = a.Close()
+	if !ok {
+		t.Fatalf("could not resolve test scope for %s", name)
+	}
+	return lanehealth.Outage{
+		ScopeKey: scope.Key, AccountID: scope.AccountID, Model: scope.Model,
+		Lane: string(name), Until: until, Reason: "You've hit your usage limit",
 	}
 }

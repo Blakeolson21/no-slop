@@ -18,6 +18,9 @@ import (
 // reaches the step log.
 type LaneOutageError struct {
 	Lane          string
+	ScopeKey      string
+	AccountID     string
+	Model         string
 	Until         time.Time
 	Reason        string
 	ResetTimezone string
@@ -25,7 +28,15 @@ type LaneOutageError struct {
 }
 
 func (e *LaneOutageError) Error() string {
-	msg := fmt.Sprintf("agent lane %s is quota-exhausted until %s", e.Lane, lanehealth.FormatResetTime(e.Until, e.ResetTimezone))
+	subject := "agent lane " + e.Lane
+	if e.AccountID != "" && e.Model != "" {
+		account := e.AccountID
+		if len(account) > 12 {
+			account = account[:12]
+		}
+		subject = fmt.Sprintf("agent lane %s account %s model %s", e.Lane, account, e.Model)
+	}
+	msg := fmt.Sprintf("%s is quota-exhausted until %s", subject, lanehealth.FormatResetTime(e.Until, e.ResetTimezone))
 	if e.Reason != "" {
 		msg += ": " + e.Reason
 	}
@@ -92,10 +103,10 @@ func IsAgentUnavailable(err error) bool {
 // LaneHealthStore is the slice of lanehealth.Store this package needs, kept as
 // an interface so tests and future callers can substitute their own.
 type LaneHealthStore interface {
-	Outage(lane string) (lanehealth.Outage, bool)
-	ClaimProbe(lane string) bool
+	Outage(scopeKey string) (lanehealth.Outage, bool)
+	ClaimProbe(scopeKey string) bool
 	Mark(outage lanehealth.Outage) error
-	ClearObservedBefore(lane string, startedAt time.Time) error
+	ClearObservedBefore(scopeKey string, startedAt time.Time) error
 }
 
 // LaneName returns the key a configured agent name's lane health is recorded
@@ -151,6 +162,18 @@ func WithLaneHealth(a Agent, store LaneHealthStore, now func() time.Time) Agent 
 
 func (l laneHealthAgent) Run(ctx context.Context, opts RunOpts) (*Result, error) {
 	opts = withInvocationIdentity(opts, l.Agent)
+	_, scoped := l.Agent.(QuotaScopeReporter)
+	probeRunner, probeable := l.Agent.(QuotaProbeRunner)
+	if !scoped || !probeable {
+		// An exact home/model identity and a one-shot probe are both required.
+		// Unknown wrappers remain usable, but they cannot create a broad lane
+		// mark that suppresses unrelated accounts or models.
+		return l.Agent.Run(ctx, opts)
+	}
+	scope, resolved := ResolveQuotaScope(l.Agent, opts)
+	if !resolved || scope.Key == "" {
+		return l.Agent.Run(ctx, opts)
+	}
 	lane := l.Agent.Name()
 	startedAt := l.now()
 	resetLocation := quotaObservationTime(startedAt, opts.Env).Location()
@@ -160,9 +183,16 @@ func (l laneHealthAgent) Run(ctx context.Context, opts RunOpts) (*Result, error)
 	// not report attempts is reported by the caller from this wrapper's return
 	// value, which already carries the verdict.
 	reportsAttempts := ReportsAgentAttempts(l.Agent)
-	if outage, down := l.store.Outage(lane); down {
-		if !l.store.ClaimProbe(lane) {
-			err := &LaneOutageError{Lane: lane, Until: outage.Until, Reason: outage.Reason, ResetTimezone: outage.ResetTimezone}
+	var relay *attemptRelay
+	if opts.OnAttempt != nil && reportsAttempts {
+		relay = &attemptRelay{downstream: opts.OnAttempt}
+		opts.OnAttempt = relay.capture
+	}
+	defer relay.release()
+
+	if outage, down := l.store.Outage(scope.Key); down {
+		if !l.store.ClaimProbe(scope.Key) {
+			err := laneOutageError(lane, outage, nil)
 			if opts.OnChunk != nil {
 				opts.OnChunk("\n" + err.Error() + "\n")
 			}
@@ -175,18 +205,48 @@ func (l laneHealthAgent) Run(ctx context.Context, opts RunOpts) (*Result, error)
 			return nil, err
 		}
 		if opts.OnChunk != nil {
-			opts.OnChunk(fmt.Sprintf("\nagent lane %s is marked quota-exhausted until %s; sending one probe invocation to check for early recovery\n",
-				lane, outage.ResetTime()))
+			opts.OnChunk(fmt.Sprintf("\nagent lane %s account %s model %s is marked quota-exhausted until %s; sending one bounded probe to check for early recovery\n",
+				lane, shortAccountID(scope.AccountID), scope.Model, outage.ResetTime()))
+		}
+		probeStarted := l.now()
+		probeCtx, cancel := context.WithTimeout(ctx, lanehealth.ProbeTimeout)
+		_, probeErr := probeRunner.RunQuotaProbe(probeCtx, quotaProbeOpts(opts))
+		cancel()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if probeErr != nil {
+			if refreshed, quota := lanehealth.Classify(lane, probeErr.Error(), l.now().In(resetLocation)); quota {
+				refreshed.ScopeKey = scope.Key
+				refreshed.AccountID = scope.AccountID
+				refreshed.Model = scope.Model
+				_ = l.store.Mark(refreshed)
+				err := laneOutageError(lane, refreshed, probeErr)
+				relay.amend(err)
+				return nil, err
+			}
+			// An unavailable probe is not evidence that the quota recovered. Keep
+			// the existing mark and its backoff, then route around this account.
+			err := laneOutageError(lane, outage, probeErr)
+			relay.amend(err)
+			return nil, err
+		}
+		_ = l.store.ClearObservedBefore(scope.Key, probeStarted)
+		if current, stillMarked := l.store.Outage(scope.Key); stillMarked {
+			// A concurrent run can have observed a new outage while the probe was
+			// running. Its newer evidence survives the success and still blocks.
+			err := laneOutageError(lane, current, nil)
+			relay.amend(err)
+			return nil, err
+		}
+		if opts.OnChunk != nil {
+			opts.OnChunk(fmt.Sprintf("\nagent lane %s account %s model %s recovered; continuing the requested invocation\n",
+				lane, shortAccountID(scope.AccountID), scope.Model))
 		}
 	}
 
-	var relay *attemptRelay
-	if opts.OnAttempt != nil && reportsAttempts {
-		relay = &attemptRelay{downstream: opts.OnAttempt}
-		opts.OnAttempt = relay.capture
-	}
-	defer relay.release()
-
+	startedAt = l.now()
+	resetLocation = quotaObservationTime(startedAt, opts.Env).Location()
 	result, err := l.Agent.Run(ctx, opts)
 	if err == nil {
 		// A completed invocation is direct evidence the lane worked when it was
@@ -194,7 +254,7 @@ func (l laneHealthAgent) Run(ctx context.Context, opts RunOpts) (*Result, error)
 		// misread banner - is dropped rather than left to expire on its own. A mark
 		// a concurrent run observed after this invocation started describes a later
 		// state of the account and survives.
-		_ = l.store.ClearObservedBefore(lane, startedAt)
+		_ = l.store.ClearObservedBefore(scope.Key, startedAt)
 		return result, nil
 	}
 	if ctx.Err() != nil {
@@ -214,18 +274,35 @@ func (l laneHealthAgent) Run(ctx context.Context, opts RunOpts) (*Result, error)
 	// Only a failed invocation is classified, and its text comes from the
 	// provider's stderr and error channel, never from agent-authored output.
 	if outage, quota := lanehealth.Classify(lane, err.Error(), l.now().In(resetLocation)); quota {
+		outage.ScopeKey = scope.Key
+		outage.AccountID = scope.AccountID
+		outage.Model = scope.Model
 		_ = l.store.Mark(outage)
-		outageErr := &LaneOutageError{
-			Lane:          lane,
-			Until:         outage.Until,
-			Reason:        outage.Reason,
-			ResetTimezone: outage.ResetTimezone,
-			cause:         err,
-		}
+		outageErr := laneOutageError(lane, outage, err)
 		relay.amend(outageErr)
 		return nil, outageErr
 	}
 	return result, err
+}
+
+func laneOutageError(lane string, outage lanehealth.Outage, cause error) *LaneOutageError {
+	return &LaneOutageError{
+		Lane:          lane,
+		ScopeKey:      outage.ScopeKey,
+		AccountID:     outage.AccountID,
+		Model:         outage.Model,
+		Until:         outage.Until,
+		Reason:        outage.Reason,
+		ResetTimezone: outage.ResetTimezone,
+		cause:         cause,
+	}
+}
+
+func shortAccountID(accountID string) string {
+	if len(accountID) > 12 {
+		return accountID[:12]
+	}
+	return accountID
 }
 
 // attemptRelay defers a lane's most recent adapter attempt so the lane wrapper
