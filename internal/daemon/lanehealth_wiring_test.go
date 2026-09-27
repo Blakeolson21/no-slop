@@ -44,8 +44,11 @@ func TestNewPipelineAgentSkipsQuotaExhaustedLanesAndNamesEveryResetTime(t *testi
 	}
 
 	// Point both lanes at binaries that cannot exist, so if the cooldown were
-	// NOT consumed the failure would be a spawn error naming those paths.
-	missing := filepath.Join(t.TempDir(), "definitely-not-installed")
+	// NOT consumed the failure would be a spawn error naming those paths. Keep
+	// provider names in the basenames so exact scope resolution still works for
+	// these deliberately missing executables.
+	missingCodex := filepath.Join(t.TempDir(), "codex")
+	missingClaude := filepath.Join(t.TempDir(), "claude")
 	cfg := &config.Config{
 		Agent:  types.AgentCodex,
 		Agents: []types.AgentName{types.AgentCodex, types.AgentClaude},
@@ -54,8 +57,8 @@ func TestNewPipelineAgentSkipsQuotaExhaustedLanesAndNamesEveryResetTime(t *testi
 			string(types.AgentClaude): {"--model", models[types.AgentClaude]},
 		},
 		AgentPathOverride: map[string]string{
-			string(types.AgentCodex):  missing,
-			string(types.AgentClaude): missing,
+			string(types.AgentCodex):  missingCodex,
+			string(types.AgentClaude): missingClaude,
 		},
 	}
 	ag, err := newPipelineAgent(context.Background(), cfg, fakeLookPath, store)
@@ -82,7 +85,7 @@ func TestNewPipelineAgentSkipsQuotaExhaustedLanesAndNamesEveryResetTime(t *testi
 			t.Fatalf("error %q must contain %q", msg, want)
 		}
 	}
-	if strings.Contains(msg, missing) {
+	if strings.Contains(msg, missingCodex) || strings.Contains(msg, missingClaude) {
 		t.Fatalf("no marked lane may be spawned, but the error names the binary: %q", msg)
 	}
 }
