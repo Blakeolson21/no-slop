@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -133,10 +134,9 @@ func guardFixTestCommits(sctx *pipeline.StepContext, candidate string) (err erro
 	case candidate:
 		return fmt.Errorf("fix candidate rewinds recorded starting head %s", baseline)
 	default:
-		// Rebased repair: the original commits no longer descend from baseline.
-		// A tree comparison ensures every test present at the recorded head is
-		// still present with identical content in the rebased result.
-		return guardRebasedFixTests(sctx, baseline, candidate)
+		// Rebased repair: compare every existing-test change in the rewritten
+		// history with the original commit series, then verify the final tree.
+		return guardRebasedFixTests(sctx, mergeBase, baseline, candidate)
 	}
 	commits, err := stepGitRun(sctx, "rev-list", "--reverse", baseline+".."+candidate)
 	if err != nil {
@@ -173,14 +173,60 @@ func guardFixTestCommits(sctx *pipeline.StepContext, candidate string) (err erro
 	return protectedTestFindings(sctx, strings.Join(proposals, "\n"))
 }
 
-func guardRebasedFixTests(sctx *pipeline.StepContext, baseline, candidate string) error {
+type fixTestCommitChange struct {
+	commit    string
+	signature string
+	paths     []string
+}
+
+func guardRebasedFixTests(sctx *pipeline.StepContext, mergeBase, baseline, candidate string) error {
+	protected, err := baselineTestPaths(sctx, baseline)
+	if err != nil {
+		return fmt.Errorf("inspect baseline test paths: %w", err)
+	}
+	if len(protected) == 0 {
+		return nil
+	}
+
+	baselineChanges, err := fixTestHistoryChanges(sctx, mergeBase, baseline, protected)
+	if err != nil {
+		return fmt.Errorf("inspect recorded test history: %w", err)
+	}
+	candidateChanges, err := fixTestHistoryChanges(sctx, mergeBase, candidate, protected)
+	if err != nil {
+		return fmt.Errorf("inspect rebased test history: %w", err)
+	}
+	var proposals []string
+	baselineIndex := 0
+	for _, change := range candidateChanges {
+		matched := -1
+		for i := baselineIndex; i < len(baselineChanges); i++ {
+			if baselineChanges[i].signature == change.signature {
+				matched = i
+				break
+			}
+		}
+		if matched >= 0 {
+			baselineIndex = matched + 1
+			continue
+		}
+		patch, err := fixTestCommitPatch(sctx, change.commit, change.paths)
+		if err != nil {
+			return fmt.Errorf("read rebased repair test patch: %w", err)
+		}
+		proposals = append(proposals, string(patch))
+	}
+	if len(proposals) > 0 {
+		return protectedTestFindings(sctx, strings.Join(proposals, "\n"))
+	}
+
 	changed, err := fixTestGitOutput(sctx, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", "--diff-filter=MDT", baseline, candidate, "--")
 	if err != nil {
 		return fmt.Errorf("inspect existing tests across CI rebase: %w", err)
 	}
 	var paths []string
 	for _, file := range strings.Split(string(changed), "\x00") {
-		if file != "" && isTestFile(file) {
+		if file != "" && protected[file] {
 			paths = append(paths, ":(literal)"+file)
 		}
 	}
@@ -193,6 +239,87 @@ func guardRebasedFixTests(sctx *pipeline.StepContext, baseline, candidate string
 		return fmt.Errorf("read existing-test changes across CI rebase: %w", err)
 	}
 	return protectedTestFindings(sctx, string(patch))
+}
+
+func baselineTestPaths(sctx *pipeline.StepContext, baseline string) (map[string]bool, error) {
+	paths, err := fixTestGitOutput(sctx, "ls-tree", "-r", "-z", "--name-only", baseline)
+	if err != nil {
+		return nil, err
+	}
+	protected := make(map[string]bool)
+	for _, path := range strings.Split(string(paths), "\x00") {
+		if path != "" && isTestFile(path) {
+			protected[path] = true
+		}
+	}
+	return protected, nil
+}
+
+// fixTestHistoryChanges returns the per-commit transitions to test files that
+// existed at the run's recorded head. Rebased feature commits may have new
+// commit IDs, but unchanged test transitions still have the same path, modes,
+// and blob IDs. Requiring the candidate transitions to be an ordered subset
+// of the recorded series permits those rewritten commits while exposing added
+// edit-and-revert commits whose net tree diff is empty.
+func fixTestHistoryChanges(sctx *pipeline.StepContext, from, to string, protected map[string]bool) ([]fixTestCommitChange, error) {
+	commits, err := stepGitRun(sctx, "rev-list", "--first-parent", "--reverse", from+".."+to)
+	if err != nil {
+		return nil, err
+	}
+	var changes []fixTestCommitChange
+	for _, commit := range strings.Fields(commits) {
+		raw, err := fixTestGitOutput(sctx, "diff-tree", "--root", "--no-commit-id", "-r", "--raw", "-z", "--no-renames", commit)
+		if err != nil {
+			return nil, err
+		}
+		fields := strings.Split(string(raw), "\x00")
+		var transitions []string
+		var paths []string
+		for i := 0; i < len(fields) && fields[i] != ""; {
+			if i+1 >= len(fields) {
+				return nil, fmt.Errorf("malformed raw diff for commit %s", commit)
+			}
+			metadata := fields[i]
+			path := fields[i+1]
+			i += 2
+			if !strings.HasPrefix(metadata, ":") || !protected[path] {
+				if !strings.HasPrefix(metadata, ":") {
+					return nil, fmt.Errorf("malformed raw diff metadata for commit %s", commit)
+				}
+				continue
+			}
+			parts := strings.Fields(strings.TrimPrefix(metadata, ":"))
+			if len(parts) != 5 {
+				return nil, fmt.Errorf("unexpected raw diff metadata for commit %s", commit)
+			}
+			var transition strings.Builder
+			for _, part := range append([]string{path}, parts...) {
+				fmt.Fprintf(&transition, "%d:", len(part))
+				transition.WriteString(part)
+			}
+			transitions = append(transitions, transition.String())
+			paths = append(paths, path)
+		}
+		if len(transitions) == 0 {
+			continue
+		}
+		sort.Strings(transitions)
+		sort.Strings(paths)
+		changes = append(changes, fixTestCommitChange{
+			commit:    commit,
+			signature: strings.Join(transitions, "\x00"),
+			paths:     paths,
+		})
+	}
+	return changes, nil
+}
+
+func fixTestCommitPatch(sctx *pipeline.StepContext, commit string, paths []string) ([]byte, error) {
+	args := []string{"show", "--format=", "--first-parent", "--no-ext-diff", "--no-textconv", "--no-renames", "--binary", commit, "--"}
+	for _, path := range paths {
+		args = append(args, ":(literal)"+path)
+	}
+	return fixTestGitOutput(sctx, args...)
 }
 
 func proposedTestFindings(result *agent.Result) error {
