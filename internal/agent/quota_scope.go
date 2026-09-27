@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Blakeolson21/no-slop/internal/lanehealth"
+	"github.com/pelletier/go-toml/v2"
 )
 
 // QuotaScope identifies the provider account and selected model whose quota
@@ -57,7 +57,9 @@ type QuotaProbeRunner interface {
 const quotaProbePrompt = "This is a quota availability check. Reply with exactly one word: OK. Do not use tools."
 
 func quotaProbeOpts(opts RunOpts) RunOpts {
-	opts.Prompt = quotaProbePrompt
+	if !opts.quotaProbePrepared {
+		opts.Prompt = quotaProbePrompt
+	}
 	opts.JSONSchema = nil
 	opts.OnChunk = nil
 	opts.Session = nil
@@ -65,6 +67,7 @@ func quotaProbeOpts(opts RunOpts) RunOpts {
 	opts.SessionFallbackReason = ""
 	opts.Purpose = "quota-probe"
 	opts.Workload = nil
+	opts.quotaProbePrepared = true
 	return opts
 }
 
@@ -97,18 +100,11 @@ func accountModelScope(provider, home, model, cwd string) (QuotaScope, bool) {
 
 func nativeQuotaScope(configuredProvider string, args []string, opts RunOpts) (QuotaScope, bool) {
 	provider := strings.ToLower(strings.TrimSpace(configuredProvider))
-	if pool, ok := effectiveEnvValue(opts.Env, "NS_QUARTERMASTER_POOL"); ok {
-		if pool == "codex" || pool == "claude" {
-			provider = pool
-		}
-	} else if provider == "claude" {
-		_, claudeHomeSet := effectiveEnvValue(opts.Env, "CLAUDE_CONFIG_DIR")
-		if _, codexHomeSet := effectiveEnvValue(opts.Env, "CODEX_HOME"); codexHomeSet && !claudeHomeSet {
-			// A configured claude lane can be a local wrapper around Codex. When
-			// it receives CODEX_HOME and no Claude home, the resolved Codex home
-			// is the credential authority, not the lane label.
-			provider = "codex"
-		}
+	if pool, ok := effectiveEnvValue(opts.Env, "NS_QUARTERMASTER_POOL"); ok && (pool == "codex" || pool == "claude") {
+		// Quartermaster's selected pool is the explicit provider identity for a
+		// leased invocation. Other inherited home variables are not evidence of
+		// which provider the configured adapter or wrapper executes.
+		provider = pool
 	}
 	if provider != "codex" && provider != "claude" {
 		return QuotaScope{}, false
@@ -237,44 +233,23 @@ func codexConfiguredModel(home string, args []string) string {
 	if err != nil {
 		return ""
 	}
-	var topModel, defaultProfile string
-	profiles := map[string]string{}
-	section := ""
-	scanner := bufio.NewScanner(strings.NewReader(string(data)))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			section = strings.TrimSuffix(strings.TrimPrefix(line, "["), "]")
-			continue
-		}
-		key, raw, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		value, ok := parseConfigString(raw)
-		if !ok {
-			continue
-		}
-		switch {
-		case section == "" && strings.TrimSpace(key) == "model":
-			topModel = value
-		case section == "" && strings.TrimSpace(key) == "profile":
-			defaultProfile = value
-		case strings.HasPrefix(section, "profiles.") && strings.TrimSpace(key) == "model":
-			name := strings.Trim(strings.TrimPrefix(section, "profiles."), `"'`)
-			profiles[name] = value
-		}
+	var config struct {
+		Model    string `toml:"model"`
+		Profile  string `toml:"profile"`
+		Profiles map[string]struct {
+			Model string `toml:"model"`
+		} `toml:"profiles"`
+	}
+	if err := toml.Unmarshal(data, &config); err != nil {
+		return ""
 	}
 	if !profileSelected {
-		profile = defaultProfile
+		profile = config.Profile
 	}
-	if profile != "" && profiles[profile] != "" {
-		return profiles[profile]
+	if selected, ok := config.Profiles[profile]; ok && strings.TrimSpace(selected.Model) != "" {
+		return strings.TrimSpace(selected.Model)
 	}
-	return topModel
+	return strings.TrimSpace(config.Model)
 }
 
 func codexProfileArg(args []string) (string, bool) {
