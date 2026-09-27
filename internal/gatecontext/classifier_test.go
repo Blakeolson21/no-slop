@@ -158,6 +158,36 @@ func TestInspectorUsesAuthenticatedProcessAncestryAfterCWDChange(t *testing.T) {
 	}
 }
 
+func TestInspectorRecoveryCallerRejectsDaemonDescendantWithoutActiveRuns(t *testing.T) {
+	f := newTopologyFixture(t)
+	active, err := f.d.HasActiveRuns(context.Background())
+	if err != nil {
+		t.Fatalf("check active runs: %v", err)
+	}
+	if active {
+		t.Fatal("fixture unexpectedly has active runs")
+	}
+	parents := map[int]int{9300: 5000, 5000: 1}
+	inspector := gatecontext.Inspector{
+		DB:    f.d,
+		Paths: f.p,
+		ParentPID: func(pid int) (int, error) {
+			return parents[pid], nil
+		},
+	}
+	got, err := inspector.InspectRecoveryCaller(context.Background(), gatecontext.Request{
+		CWD:       f.work,
+		PeerPID:   9300,
+		DaemonPID: 5000,
+	})
+	if err != nil {
+		t.Fatalf("inspect recovery caller: %v", err)
+	}
+	if !got.Nested || !got.DaemonDescendant {
+		t.Fatalf("daemon descendant without active runs = %+v, want caller refusal", got)
+	}
+}
+
 func TestInspectorConcurrentClassificationIsDeterministic(t *testing.T) {
 	f := newTopologyFixture(t)
 	inspector := gatecontext.Inspector{DB: f.d, Paths: f.p}

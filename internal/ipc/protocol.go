@@ -168,9 +168,12 @@ type CancelRunParams struct {
 
 // GateContextParams asks the daemon to classify the authenticated caller.
 // CWD and MarkerPresent are evidence only; peer PID comes from the transport.
+// CallerAuthorizationOnly selects the terminal-recovery fast path, which
+// checks daemon ancestry and managed Git location without active-step lookup.
 type GateContextParams struct {
-	CWD           string `json:"cwd,omitempty"`
-	MarkerPresent bool   `json:"marker_present,omitempty"`
+	CWD                     string `json:"cwd,omitempty"`
+	MarkerPresent           bool   `json:"marker_present,omitempty"`
+	CallerAuthorizationOnly bool   `json:"caller_authorization_only,omitempty"`
 }
 
 // AdmitPushParams asks whether a local receive hook's authenticated process

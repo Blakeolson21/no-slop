@@ -49,8 +49,8 @@ func (d *DB) GateContextRepoExists(ctx context.Context, id string) (bool, error)
 	return exists, err
 }
 
-// HasActiveRuns provides the minimal estate-wide check needed before a
-// terminal recovery can bypass process-ancestry classification.
+// HasActiveRuns provides the estate-wide check used by terminal recovery to
+// skip active-agent lookup. Authenticated daemon ancestry is still checked.
 func (d *DB) HasActiveRuns(ctx context.Context) (bool, error) {
 	var active bool
 	err := d.sql.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM runs WHERE status IN (?, ?, ?))`,

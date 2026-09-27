@@ -806,7 +806,18 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		result, err := classify(ctx, p.CWD, p.MarkerPresent, false)
+		var result gatecontext.Result
+		var err error
+		if p.CallerAuthorizationOnly {
+			result, err = (gatecontext.Inspector{DB: d, Paths: mgr.paths}).InspectRecoveryCaller(ctx, gatecontext.Request{
+				CWD:           p.CWD,
+				PeerPID:       ipc.PeerPID(ctx),
+				DaemonPID:     os.Getpid(),
+				MarkerPresent: p.MarkerPresent,
+			})
+		} else {
+			result, err = classify(ctx, p.CWD, p.MarkerPresent, false)
+		}
 		if err != nil {
 			return nil, err
 		}
