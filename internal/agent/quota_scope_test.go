@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -27,6 +28,60 @@ func TestClaudeQuotaScopeIgnoresInheritedCodexHome(t *testing.T) {
 	want, _ := accountModelScope("claude", claudeHome, "claude-sonnet-4", "")
 	if !ok || scope.AccountID != want.AccountID || scope.Model != want.Model || scope.Key != want.Key {
 		t.Fatalf("Claude scope = %+v, resolved %t; want its configured home/model %+v", scope, ok, want)
+	}
+}
+
+func TestQuotaScopeUsesResolvedExecutableProviderInsteadOfConfiguredLane(t *testing.T) {
+	codexHome := t.TempDir()
+	claudeHome := t.TempDir()
+	if err := os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(`model = "gpt-codex"`), 0o644); err != nil {
+		t.Fatalf("write Codex config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(claudeHome, "settings.local.json"), []byte(`{"model":"claude-opus"}`), 0o644); err != nil {
+		t.Fatalf("write Claude config: %v", err)
+	}
+	codexBin := filepath.Join(t.TempDir(), identityExecutableName("codex-gate-seat"))
+	if err := os.WriteFile(codexBin, []byte("codex executable fixture"), 0o755); err != nil {
+		t.Fatalf("write executable fixture: %v", err)
+	}
+
+	// This adapter is configured as Claude, but its executable override runs
+	// Codex. The Codex home/model must determine the persisted scope.
+	scope, ok := (&claudeAgent{bin: codexBin}).QuotaScope(RunOpts{Env: []string{
+		"CODEX_HOME=" + codexHome,
+		"CLAUDE_CONFIG_DIR=" + claudeHome,
+	}})
+	want, _ := accountModelScope("codex", codexHome, "gpt-codex", "")
+	if !ok || scope.Key != want.Key || scope.AccountID != want.AccountID || scope.Model != want.Model {
+		t.Fatalf("resolved scope = %+v, %t; want Codex executable scope %+v", scope, ok, want)
+	}
+}
+
+func TestQuotaScopeDoesNotGuessProviderForUnknownExecutableOverride(t *testing.T) {
+	claudeHome := t.TempDir()
+	if err := os.WriteFile(filepath.Join(claudeHome, "settings.local.json"), []byte(`{"model":"claude-opus"}`), 0o644); err != nil {
+		t.Fatalf("write Claude config: %v", err)
+	}
+	unknownBin := filepath.Join(t.TempDir(), identityExecutableName("custom-agent-wrapper"))
+	if err := os.WriteFile(unknownBin, []byte("unknown executable fixture"), 0o755); err != nil {
+		t.Fatalf("write executable fixture: %v", err)
+	}
+
+	if scope, ok := (&claudeAgent{bin: unknownBin}).QuotaScope(RunOpts{Env: []string{
+		"CLAUDE_CONFIG_DIR=" + claudeHome,
+	}}); ok {
+		t.Fatalf("unknown executable must not inherit the configured Claude identity: %+v", scope)
+	}
+}
+
+func TestQuotaProbeRequiresResolvedModel(t *testing.T) {
+	called := false
+	_, err := runQuotaProbeOnce(context.Background(), &fallbackTestAgent{name: "codex"}, RunOpts{}, func(context.Context, RunOpts) (*Result, error) {
+		called = true
+		return &Result{Text: "OK"}, nil
+	})
+	if err == nil || called {
+		t.Fatalf("quota probe without a resolved model: err=%v, runner called=%t; want fail closed before invocation", err, called)
 	}
 }
 

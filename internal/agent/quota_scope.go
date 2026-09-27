@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -23,6 +24,9 @@ type QuotaScope struct {
 	Key       string
 	AccountID string
 	Model     string
+	provider  string
+	home      string
+	homeEnv   string
 }
 
 // QuotaScopeReporter is implemented by adapters that can resolve an exact
@@ -54,7 +58,7 @@ type QuotaProbeRunner interface {
 	RunQuotaProbe(ctx context.Context, opts RunOpts) (*Result, error)
 }
 
-const quotaProbePrompt = "This is a quota availability check. Reply with exactly one word: OK. Do not use tools."
+const quotaProbePrompt = "This is an account and model availability check, not a task. Do not read or change files, run commands, or use tools. Reply with exactly one word: OK."
 
 func quotaProbeOpts(opts RunOpts) RunOpts {
 	if !opts.quotaProbePrepared {
@@ -72,11 +76,45 @@ func quotaProbeOpts(opts RunOpts) RunOpts {
 }
 
 func runQuotaProbeOnce(ctx context.Context, a Agent, opts RunOpts, run func(context.Context, RunOpts) (*Result, error)) (*Result, error) {
+	if strings.TrimSpace(opts.quotaProbeModel) == "" {
+		return nil, fmt.Errorf("quota probe requires a resolved model")
+	}
 	opts = withInvocationIdentity(opts, a)
 	startedAt := time.Now()
 	result, err := run(ctx, quotaProbeOpts(opts))
 	emitAgentAttempt(opts, a.Name(), result, err, startedAt, time.Now())
 	return result, err
+}
+
+// isolatedQuotaProbeOpts removes the requested task's working directory from a
+// recovery probe while preserving the exact provider home resolved for its
+// account/model scope. The temporary directory is empty and is removed by the
+// caller after the bounded adapter invocation completes.
+func isolatedQuotaProbeOpts(opts RunOpts, scope QuotaScope) (RunOpts, func(), error) {
+	if scope.provider == "" || scope.home == "" || scope.homeEnv == "" {
+		return RunOpts{}, nil, fmt.Errorf("quota scope has no resolved provider home")
+	}
+	dir, err := os.MkdirTemp("", "no-slop-quota-probe-")
+	if err != nil {
+		return RunOpts{}, nil, fmt.Errorf("create isolated quota probe directory: %w", err)
+	}
+	opts = quotaProbeOpts(opts)
+	opts.CWD = dir
+	opts.Env = setEnvValue(opts.Env, "PWD", dir)
+	opts.Env = setEnvValue(opts.Env, scope.homeEnv, scope.home)
+	opts.quotaProbeModel = scope.Model
+	return opts, func() { _ = os.RemoveAll(dir) }, nil
+}
+
+func setEnvValue(entries []string, name, value string) []string {
+	updated := make([]string, 0, len(entries)+1)
+	for _, entry := range entries {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok || key != name {
+			updated = append(updated, entry)
+		}
+	}
+	return append(updated, name+"="+value)
 }
 
 func accountModelScope(provider, home, model, cwd string) (QuotaScope, bool) {
@@ -95,25 +133,19 @@ func accountModelScope(provider, home, model, cwd string) (QuotaScope, bool) {
 		Key:       lanehealth.ScopeKey(accountID, model),
 		AccountID: accountID,
 		Model:     model,
+		provider:  provider,
+		home:      home,
+		homeEnv:   providerHomeEnvironment(provider),
 	}, true
 }
 
-func nativeQuotaScope(configuredProvider string, args []string, opts RunOpts) (QuotaScope, bool) {
-	provider := strings.ToLower(strings.TrimSpace(configuredProvider))
-	if pool, ok := effectiveEnvValue(opts.Env, "NS_QUARTERMASTER_POOL"); ok && (pool == "codex" || pool == "claude") {
-		// Quartermaster's selected pool is the explicit provider identity for a
-		// leased invocation. Other inherited home variables are not evidence of
-		// which provider the configured adapter or wrapper executes.
-		provider = pool
-	}
-	if provider != "codex" && provider != "claude" {
+func nativeQuotaScope(configuredProvider, bin string, args []string, opts RunOpts) (QuotaScope, bool) {
+	provider, resolved := nativeProviderForExecutable(configuredProvider, bin)
+	if !resolved {
 		return QuotaScope{}, false
 	}
 
-	homeVariable := "CODEX_HOME"
-	if provider == "claude" {
-		homeVariable = "CLAUDE_CONFIG_DIR"
-	}
+	homeVariable := providerHomeEnvironment(provider)
 	home, set := effectiveEnvValue(opts.Env, homeVariable)
 	if !set || home == "" {
 		userHome, ok := effectiveEnvValue(opts.Env, "HOME")
@@ -148,6 +180,52 @@ func nativeQuotaScope(configuredProvider string, args []string, opts RunOpts) (Q
 		}
 	}
 	return accountModelScope(provider, home, model, opts.CWD)
+}
+
+func nativeProviderForExecutable(configuredProvider, bin string) (string, bool) {
+	configuredProvider = strings.ToLower(strings.TrimSpace(configuredProvider))
+	if configuredProvider != "codex" && configuredProvider != "claude" {
+		return "", false
+	}
+	identity := nativeInvocationIdentity(configuredProvider, bin, nil)
+	if identity.Executable != nil {
+		// The resolved executable is authoritative when available. In
+		// particular, an adapter configured as Claude can be overridden to a
+		// Codex binary; using Agent.Name or inherited home variables would then
+		// mark the wrong account.
+		if provider, ok := nativeProviderFromExecutableName(filepath.Base(*identity.Executable)); ok {
+			return provider, true
+		}
+		// Some vendor installers symlink a canonical command name to a
+		// versioned executable whose basename carries no provider identity.
+		// Keep the launcher name only when the resolved target is not itself
+		// recognizable as the other supported provider.
+		return nativeProviderFromExecutableName(filepath.Base(bin))
+	}
+	// Preserve the canonical command identity when the command is not
+	// currently on PATH. A missing executable cannot successfully produce a
+	// quota banner, while custom unresolved commands remain untracked.
+	return nativeProviderFromExecutableName(filepath.Base(bin))
+}
+
+func nativeProviderFromExecutableName(name string) (string, bool) {
+	name = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), filepath.Ext(name))
+	for _, provider := range []string{"codex", "claude"} {
+		if name == provider || strings.HasPrefix(name, provider+"-") || strings.HasPrefix(name, provider+"_") {
+			return provider, true
+		}
+	}
+	return "", false
+}
+
+func providerHomeEnvironment(provider string) string {
+	if provider == "codex" {
+		return "CODEX_HOME"
+	}
+	if provider == "claude" {
+		return "CLAUDE_CONFIG_DIR"
+	}
+	return ""
 }
 
 // resolveQuotaHome matches the directory the adapter runs from when a provider

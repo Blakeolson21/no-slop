@@ -106,6 +106,40 @@ func TestClaudeAgent_BuildArgs_UserPermissionModeSuppressesDefault(t *testing.T)
 	}
 }
 
+func TestClaudeAgent_BuildArgs_QuotaProbeDisablesTaskToolsAndPermissions(t *testing.T) {
+	ca := &claudeAgent{bin: "claude", extraArgs: []string{
+		"--model", "task-model",
+		"--fallback-model", "task-fallback",
+		"--tools", "Bash,Read",
+		"--allowedTools", "Bash(*)",
+		"--mcp-config", "/private/task-mcp.json",
+		"--settings", "/private/task-settings.json",
+		"--setting-sources", "user,project",
+		"--dangerously-skip-permissions",
+		"--max-turns", "20",
+		"--resume", "task-session",
+		"--add-dir", "/private/task-data",
+		"--continue",
+	}}
+	args := ca.buildArgs(nil, "", "claude-sonnet-4")
+	joined := strings.Join(args, "\x00")
+	for _, denied := range []string{
+		"task-model", "task-fallback", "task-session", "Bash,Read", "Bash(*)",
+		"/private/task-mcp.json", "/private/task-settings.json", "/private/task-data",
+		"user,project", "--dangerously-skip-permissions", "--allowedTools", "--resume", "--continue",
+	} {
+		if strings.Contains(joined, denied) {
+			t.Errorf("quota probe retained task tool override %q in %v", denied, args)
+		}
+	}
+	if !argsContainPair(args, "--model", "claude-sonnet-4") || !argsContainPair(args, "--tools", "") || !argsContainPair(args, "--disallowedTools", "*") || !argsContainPair(args, "--max-turns", "1") || !argsContain(args, "--safe-mode") {
+		t.Fatalf("quota probe lacks its exact-model, tool-free, one-turn mode: %v", args)
+	}
+	if !argsContain(args, "--no-session-persistence") {
+		t.Fatalf("quota probe should not persist a session under the account home: %v", args)
+	}
+}
+
 func TestParseClaudeEvents_AssistantMessage(t *testing.T) {
 	events := `{"type":"assistant","message":{"usage":{"input_tokens":100,"output_tokens":50},"content":[{"type":"text","text":"hello world"}]}}
 `

@@ -66,7 +66,7 @@ func (a *claudeAgent) Run(ctx context.Context, opts RunOpts) (*Result, error) {
 }
 
 func (a *claudeAgent) QuotaScope(opts RunOpts) (QuotaScope, bool) {
-	return nativeQuotaScope("claude", a.extraArgs, opts)
+	return nativeQuotaScope("claude", a.bin, a.extraArgs, opts)
 }
 
 func (a *claudeAgent) RunQuotaProbe(ctx context.Context, opts RunOpts) (*Result, error) {
@@ -78,7 +78,12 @@ func (a *claudeAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error
 	if opts.Session != nil {
 		resumeID = opts.Session.ID
 	}
-	args := a.buildArgs(opts.JSONSchema, resumeID)
+	var args []string
+	if opts.quotaProbePrepared {
+		args = a.buildArgs(opts.JSONSchema, resumeID, opts.quotaProbeModel)
+	} else {
+		args = a.buildArgs(opts.JSONSchema, resumeID)
+	}
 	cmd := exec.CommandContext(ctx, a.bin, args...)
 	cmd.Dir = opts.CWD
 	// Claude Code print mode documents text stdin as its non-interactive
@@ -179,9 +184,17 @@ func finalizeClaudeResult(result *claudeResult, schema json.RawMessage, usage To
 // is not added. A non-empty resumeID continues that session via --resume
 // (never --fork-session: the session identity must stay stable so later
 // turns keep resuming the same conversation).
-func (a *claudeAgent) buildArgs(schema json.RawMessage, resumeID string) []string {
-	args := make([]string, 0, len(a.extraArgs)+11)
-	args = append(args, a.extraArgs...)
+func (a *claudeAgent) buildArgs(schema json.RawMessage, resumeID string, quotaProbeModel ...string) []string {
+	quotaProbe := len(quotaProbeModel) > 0 && quotaProbeModel[0] != ""
+	extraArgs := a.extraArgs
+	if quotaProbe {
+		// A probe uses only the adapter's managed probe flags below. Reusing
+		// arbitrary task launch overrides could re-enable tools, resume a task,
+		// or load additional settings.
+		extraArgs = nil
+	}
+	args := make([]string, 0, len(extraArgs)+16)
+	args = append(args, extraArgs...)
 	args = append(args,
 		"-p",
 		"--verbose",
@@ -195,9 +208,10 @@ func (a *claudeAgent) buildArgs(schema json.RawMessage, resumeID string) []strin
 	// agent; `--setting-sources user` drops the project and local sources (the
 	// full project surface) while preserving the operator's own user-level config
 	// and auth. Suppressed only when the operator did not pin their own
-	// --setting-sources. When the repo did not opt out, nothing is added and
-	// claude loads its project memory exactly as before (backward-compat).
-	if a.disableProjectSettings && !claudeUserSetSettingSources(a.extraArgs) {
+	// --setting-sources. Quota probes use safe mode instead so no customization
+	// source can contribute instructions, hooks, MCP servers, or tools. Ordinary
+	// runs keep their existing behavior when the repo did not opt out.
+	if !quotaProbe && a.disableProjectSettings && !claudeUserSetSettingSources(extraArgs) {
 		args = append(args, "--setting-sources", "user")
 	}
 	if resumeID != "" {
@@ -206,7 +220,16 @@ func (a *claudeAgent) buildArgs(schema json.RawMessage, resumeID string) []strin
 	if len(schema) > 0 {
 		args = append(args, "--json-schema", string(schema))
 	}
-	if !claudeUserSetPermissionMode(a.extraArgs) {
+	if quotaProbe {
+		args = append(args,
+			"--model", quotaProbeModel[0],
+			"--safe-mode",
+			"--tools", "",
+			"--disallowedTools", "*",
+			"--max-turns", "1",
+			"--no-session-persistence",
+		)
+	} else if !claudeUserSetPermissionMode(a.extraArgs) {
 		args = append(args, "--dangerously-skip-permissions")
 	}
 	return args

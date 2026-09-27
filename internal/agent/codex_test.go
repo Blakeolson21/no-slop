@@ -83,6 +83,48 @@ func TestCodexAgent_BuildArgs_UserExecutionModeSuppressesBypass(t *testing.T) {
 	}
 }
 
+func TestCodexAgent_BuildArgs_QuotaProbeDisablesTaskExecutionMode(t *testing.T) {
+	ca := &codexAgent{bin: "codex", extraArgs: []string{
+		"--model", "task-model",
+		"--profile", "task-profile",
+		"--cd", "/private/task-root",
+		"--resume", "task-session",
+		"--image", "/private/context.png",
+		"--worktree",
+		"--sandbox", "danger-full-access",
+		"--ask-for-approval", "on-request",
+		"--add-dir", "/private/task-data",
+		"-c", "features.shell_tool=true",
+		"-c", "mcp_servers.task.command='private-tool'",
+	}}
+	args := ca.buildArgs("-", "", "", "gpt-5.6-sol")
+
+	if !argsContainPair(args, "--model", "gpt-5.6-sol") {
+		t.Fatalf("probe must explicitly select the marked model: %v", args)
+	}
+	for _, denied := range []string{
+		"task-model", "task-profile", "/private/task-root", "task-session", "/private/context.png",
+		"danger-full-access", "on-request", "/private/task-data",
+		"features.shell_tool=true", "mcp_servers.task.command", "private-tool",
+		"--dangerously-bypass-approvals-and-sandbox", "--yolo", "--full-auto",
+	} {
+		if strings.Contains(strings.Join(args, "\x00"), denied) {
+			t.Errorf("quota probe retained task execution override %q in %v", denied, args)
+		}
+	}
+	if !argsContainPair(args, "--sandbox", "read-only") || !argsContainPair(args, "--ask-for-approval", "never") || !argsContainPair(args, "--disable", "shell_tool") {
+		t.Fatalf("quota probe lacks its read-only, non-interactive, tool-disabled mode: %v", args)
+	}
+	if !argsContainPair(args, "-c", `web_search="disabled"`) {
+		t.Fatalf("quota probe must not expose web search: %v", args)
+	}
+	for _, flag := range []string{"--ephemeral", "--ignore-user-config", "--ignore-rules"} {
+		if !argsContain(args, flag) {
+			t.Errorf("quota probe is missing %s: %v", flag, args)
+		}
+	}
+}
+
 func TestCodexAgent_BuildArgs_WithOutputSchema(t *testing.T) {
 	ca := &codexAgent{bin: "codex"}
 	args := ca.buildArgs("review", "/tmp/schema.json", "")

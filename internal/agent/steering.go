@@ -33,6 +33,15 @@ func WorktreeSteering(evidenceRoot string) string {
 `, location)
 }
 
+// quotaProbeSteering keeps recovery probes inside the availability-check
+// boundary. Probes run from an empty temporary directory and have no project
+// task; their adapters also apply probe-specific tool or sandbox restrictions.
+const quotaProbeSteering = `Quota probe boundary:
+- This is an account and model availability check, not repository work. Do not inspect files, run commands, or use tools.
+- Do not create, modify, move, or delete files. Reply with exactly one word: OK.
+
+`
+
 // steeredAgent wraps an Agent and prepends the steering preamble to each prompt.
 type steeredAgent struct {
 	Agent
@@ -80,7 +89,7 @@ func (s steeredAgent) RunQuotaProbe(ctx context.Context, opts RunOpts) (*Result,
 		return nil, fmt.Errorf("agent %q does not support quota probes", s.Name())
 	}
 	opts = quotaProbeOpts(opts)
-	opts.Prompt = s.preamble + opts.Prompt
+	opts.Prompt = quotaProbeSteering + opts.Prompt
 	return runner.RunQuotaProbe(ctx, opts)
 }
 

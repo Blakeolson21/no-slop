@@ -132,16 +132,37 @@ func TestLaneHealthUsesABoundedCheapProbeBeforeTheRequestedInvocation(t *testing
 	}
 }
 
-func TestLaneHealthQuotaProbeRetainsWorktreeSteering(t *testing.T) {
+func TestLaneHealthQuotaProbeIsolatedAndSteered(t *testing.T) {
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
 	store := laneTestStore(t, &now)
 	evidenceRoot := filepath.Join(t.TempDir(), "evidence")
+	taskCWD := t.TempDir()
+	accountHome := t.TempDir()
+	expectedScope, _ := accountModelScope("codex", accountHome, "gpt-5.6-sol", "")
 	inner := &fallbackTestAgent{
 		name:  "codex",
-		home:  t.TempDir(),
+		home:  accountHome,
 		model: "gpt-5.6-sol",
 		run:   func() (*Result, error) { return &Result{Text: "requested task"}, nil },
-		probe: func(context.Context, RunOpts) (*Result, error) { return &Result{Text: "OK"}, nil },
+		probe: func(_ context.Context, opts RunOpts) (*Result, error) {
+			if opts.CWD == taskCWD {
+				t.Errorf("quota probe retained task working directory %q", opts.CWD)
+			}
+			if opts.CWD == "" {
+				t.Error("quota probe working directory must be an isolated temporary directory")
+			} else if entries, err := os.ReadDir(opts.CWD); err != nil {
+				t.Errorf("read isolated probe directory: %v", err)
+			} else if len(entries) != 0 {
+				t.Errorf("isolated probe directory contains %d entries", len(entries))
+			}
+			if got, _ := effectiveEnvValue(opts.Env, "CODEX_HOME"); got != expectedScope.home {
+				t.Errorf("quota probe CODEX_HOME = %q, want the resolved account home %q", got, expectedScope.home)
+			}
+			if opts.quotaProbeModel != "gpt-5.6-sol" {
+				t.Errorf("quota probe model = %q, want gpt-5.6-sol", opts.quotaProbeModel)
+			}
+			return &Result{Text: "OK"}, nil
+		},
 	}
 	scope, _ := inner.QuotaScope(RunOpts{})
 	if err := store.Mark(scopedTestOutage(scope, inner.Name(), now.Add(24*time.Hour), now.Add(-lanehealth.ProbeInterval))); err != nil {
@@ -149,15 +170,18 @@ func TestLaneHealthQuotaProbeRetainsWorktreeSteering(t *testing.T) {
 	}
 	now = now.Add(lanehealth.ProbeInterval)
 	wrapped := WithLaneHealth(WithSteering(inner, evidenceRoot), store, func() time.Time { return now })
-	if _, err := wrapped.Run(context.Background(), RunOpts{CWD: t.TempDir(), Prompt: "requested task prompt"}); err != nil {
+	if _, err := wrapped.Run(context.Background(), RunOpts{CWD: taskCWD, Prompt: "requested task prompt"}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if len(inner.probes) != 1 {
 		t.Fatalf("probe calls = %d, want 1", len(inner.probes))
 	}
-	want := WorktreeSteering(evidenceRoot) + quotaProbePrompt
+	want := quotaProbeSteering + quotaProbePrompt
 	if got := inner.probes[0].Prompt; got != want {
-		t.Fatalf("probe prompt = %q, want the worktree boundary followed by the fixed probe", got)
+		t.Fatalf("probe prompt = %q, want the probe boundary followed by the fixed check", got)
+	}
+	if _, err := os.Stat(inner.probes[0].CWD); !os.IsNotExist(err) {
+		t.Fatalf("isolated probe directory was not removed after the call: stat err=%v", err)
 	}
 }
 

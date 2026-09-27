@@ -59,7 +59,7 @@ func (a *codexAgent) Run(ctx context.Context, opts RunOpts) (*Result, error) {
 }
 
 func (a *codexAgent) QuotaScope(opts RunOpts) (QuotaScope, bool) {
-	return nativeQuotaScope("codex", a.extraArgs, opts)
+	return nativeQuotaScope("codex", a.bin, a.extraArgs, opts)
 }
 
 func (a *codexAgent) RunQuotaProbe(ctx context.Context, opts RunOpts) (*Result, error) {
@@ -100,7 +100,12 @@ func (a *codexAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error)
 	}
 	// Both exec and exec resume accept "-" as the stdin prompt. Keeping the
 	// payload out of argv avoids per-argument OS limits on multi-round prompts.
-	args := a.buildArgs("-", schemaPath, resumeID)
+	var args []string
+	if opts.quotaProbePrepared {
+		args = a.buildArgs("-", schemaPath, resumeID, opts.quotaProbeModel)
+	} else {
+		args = a.buildArgs("-", schemaPath, resumeID)
+	}
 	cmd := exec.CommandContext(ctx, a.bin, args...)
 	cmd.Dir = opts.CWD
 	cmd.Stdin = strings.NewReader(opts.Prompt)
@@ -177,13 +182,21 @@ func (a *codexAgent) Close() error { return nil }
 // narrower flag surface than `codex exec` (no --color, no -s/--sandbox as of
 // codex 0.144): unsupported user extraArgs make the invocation fail fast and
 // the caller's cold fallback preserves correctness.
-func (a *codexAgent) buildArgs(prompt, schemaPath, resumeID string) []string {
-	args := make([]string, 0, len(a.extraArgs)+11)
+func (a *codexAgent) buildArgs(prompt, schemaPath, resumeID string, quotaProbeModel ...string) []string {
+	quotaProbe := len(quotaProbeModel) > 0 && quotaProbeModel[0] != ""
+	extraArgs := a.extraArgs
+	if quotaProbe {
+		// A probe uses only the adapter's managed probe flags below. Reusing
+		// arbitrary task launch overrides could select a different model, restore
+		// the task's working directory, or enable tools.
+		extraArgs = nil
+	}
+	args := make([]string, 0, len(extraArgs)+20)
 	args = append(args, "exec")
 	if resumeID != "" {
 		args = append(args, "resume")
 	}
-	args = append(args, a.extraArgs...)
+	args = append(args, extraArgs...)
 	if resumeID != "" {
 		args = append(args, resumeID)
 	}
@@ -191,7 +204,22 @@ func (a *codexAgent) buildArgs(prompt, schemaPath, resumeID string) []string {
 	if schemaPath != "" {
 		args = append(args, "--output-schema", schemaPath)
 	}
-	if !codexUserSetExecutionMode(a.extraArgs) {
+	if quotaProbe {
+		args = append(args,
+			"--model", quotaProbeModel[0],
+			"--sandbox", "read-only",
+			"--ask-for-approval", "never",
+			"--skip-git-repo-check",
+			"--ephemeral",
+			"--ignore-user-config",
+			"--ignore-rules",
+			"-c", `web_search="disabled"`,
+			"--disable", "shell_tool",
+			"--disable", "unified_exec",
+			"--disable", "view_image",
+			"--disable", "sleep_tool",
+		)
+	} else if !codexUserSetExecutionMode(a.extraArgs) {
 		args = append(args, "--dangerously-bypass-approvals-and-sandbox")
 	}
 	if resumeID == "" {
@@ -217,10 +245,10 @@ func (a *codexAgent) buildArgs(prompt, schemaPath, resumeID string) []string {
 	// When the repo did not opt out, none of this is added and codex loads
 	// AGENTS.md exactly as before (backward-compat for ordinary repos).
 	if a.disableProjectSettings {
-		if !codexUserSetProjectDocMaxBytes(a.extraArgs) {
+		if !codexUserSetProjectDocMaxBytes(extraArgs) {
 			args = append(args, "-c", "project_doc_max_bytes=0")
 		}
-		if !codexArgsContain(a.extraArgs, "--ignore-rules") {
+		if !quotaProbe && !codexArgsContain(extraArgs, "--ignore-rules") {
 			args = append(args, "--ignore-rules")
 		}
 	}

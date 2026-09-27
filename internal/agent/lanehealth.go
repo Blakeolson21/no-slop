@@ -121,15 +121,15 @@ func LaneName(name types.AgentName) string {
 	return string(name)
 }
 
-// laneHealthAgent skips an invocation entirely while its lane is known to be
-// quota-exhausted, and records the outage when a provider quota banner is what
-// failed the invocation.
+// laneHealthAgent skips an invocation while its resolved provider account and
+// model are known to be quota-exhausted, and records the outage when a provider
+// quota banner is what failed the invocation.
 //
 // Marking happens here rather than in the fallback wrapper so a single
-// configured agent - the default - also fails fast with a reset time instead
-// of spawning a process to be told it is out of quota.
+// configured account/model scope also fails fast with a reset time instead of
+// spawning a process to be told it is out of quota.
 //
-// A marked lane is not sealed until its reset time: one invocation per
+// A marked account/model scope is not sealed until its reset time: one probe per
 // lanehealth.ProbeInterval is let through, and its success clears the mark. A
 // reset the provider stated days out is otherwise trusted from one observation
 // with no way to correct it, because the only evidence that could - a
@@ -209,8 +209,17 @@ func (l laneHealthAgent) Run(ctx context.Context, opts RunOpts) (*Result, error)
 				lane, shortAccountID(scope.AccountID), scope.Model, outage.ResetTime()))
 		}
 		probeStarted := l.now()
+		probeOpts, cleanupProbeDir, probeOptsErr := isolatedQuotaProbeOpts(opts, scope)
+		if probeOptsErr != nil {
+			err := laneOutageError(lane, outage, probeOptsErr)
+			relay.amend(err)
+			return nil, err
+		}
 		probeCtx, cancel := context.WithTimeout(ctx, lanehealth.ProbeTimeout)
-		_, probeErr := probeRunner.RunQuotaProbe(probeCtx, quotaProbeOpts(opts))
+		_, probeErr := func() (*Result, error) {
+			defer cleanupProbeDir()
+			return probeRunner.RunQuotaProbe(probeCtx, probeOpts)
+		}()
 		cancel()
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
