@@ -514,6 +514,11 @@ func waitForDaemonStartWithProcess(p *paths.Paths, proc *os.Process, exitCh <-ch
 							managedPID = record.PID
 							nextManagedProbe = time.Now().Add(250 * time.Millisecond)
 						}
+					} else if gone, err := recordedDaemonProvablyGone(p, record.PID); err == nil && gone {
+						// The published child can exit before our first observation,
+						// leaving no start time to inspect. Use the shared positive
+						// death proof; an inspection error alone is not an exit.
+						return fmt.Errorf("managed daemon child %d exited before readiness", record.PID)
 					}
 				}
 			} else if !time.Now().Before(nextManagedProbe) {
