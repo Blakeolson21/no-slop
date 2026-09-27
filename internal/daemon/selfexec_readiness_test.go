@@ -134,6 +134,94 @@ func TestWaitForManagedDaemonStartDetectsExitAfterPIDFileRemoval(t *testing.T) {
 	}
 }
 
+func TestWaitForManagedDaemonStartDetectsExitBeforePIDObservation(t *testing.T) {
+	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NM_TEST_DAEMON_START_TIMEOUT", "3s")
+	t.Setenv("NM_TEST_DAEMON_START_POLL_INTERVAL", "10ms")
+
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = append(os.Environ(), "NM_DAEMON_HELPER_PROCESS=block")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	startedAt, err := daemonProcessStartTime(cmd.Process.Pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeDaemonPIDFile(p.PIDFile(), daemonPIDFile{PID: cmd.Process.Pid, StartedAt: startedAt.UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	// Force the race from the published-child test: the child publishes its
+	// identity but exits before the readiness waiter can inspect its start time.
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = cmd.Wait()
+
+	oldHealth, oldInspect := daemonHealthCheck, inspectManagedDaemonService
+	daemonHealthCheck = func(*paths.Paths) (bool, error) { return false, nil }
+	inspectManagedDaemonService = func(*paths.Paths, managedServiceLaunch) (managedServiceState, error) {
+		return managedServiceUnknown, nil
+	}
+	t.Cleanup(func() {
+		daemonHealthCheck, inspectManagedDaemonService = oldHealth, oldInspect
+	})
+
+	started := time.Now()
+	err = waitForDaemonStart(p, 0, time.Time{})
+	if err == nil || !strings.Contains(err.Error(), "managed daemon child") || !strings.Contains(err.Error(), "exited before readiness") {
+		t.Fatalf("waitForDaemonStart error = %v, want managed child exit", err)
+	}
+	if elapsed := time.Since(started); elapsed >= time.Second {
+		t.Fatalf("already exited child detection took %v, want prompt failure", elapsed)
+	}
+}
+
+func TestWaitForManagedDaemonStartDoesNotInferExitFromInspectionError(t *testing.T) {
+	for _, livenessErr := range []error{nil, fmt.Errorf("liveness unavailable")} {
+		t.Run(fmt.Sprint(livenessErr), func(t *testing.T) {
+			p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
+			if err := p.EnsureDirs(); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("NM_TEST_DAEMON_START_TIMEOUT", "3s")
+			t.Setenv("NM_TEST_DAEMON_START_POLL_INTERVAL", "10ms")
+			const childPID = 65001
+			if err := writeDaemonPIDFile(p.PIDFile(), daemonPIDFile{PID: childPID, StartedAt: time.Now().UTC()}); err != nil {
+				t.Fatal(err)
+			}
+			oldHealth, oldInspect := daemonHealthCheck, inspectManagedDaemonService
+			oldStartTime, oldRunning := daemonProcessStartTime, daemonProcessRunning
+			t.Cleanup(func() {
+				daemonHealthCheck, inspectManagedDaemonService = oldHealth, oldInspect
+				daemonProcessStartTime, daemonProcessRunning = oldStartTime, oldRunning
+			})
+			checks := 0
+			daemonHealthCheck = func(*paths.Paths) (bool, error) {
+				checks++
+				return checks > 1, nil
+			}
+			inspectManagedDaemonService = func(*paths.Paths, managedServiceLaunch) (managedServiceState, error) {
+				return managedServiceUnknown, nil
+			}
+			daemonProcessStartTime = func(int) (time.Time, error) {
+				return time.Time{}, fmt.Errorf("start time unavailable")
+			}
+			daemonProcessRunning = func(int) (bool, error) { return livenessErr == nil, livenessErr }
+			if err := waitForDaemonStart(p, 0, time.Time{}); err != nil {
+				t.Fatalf("inspection uncertainty must allow readiness to arrive: %v", err)
+			}
+		})
+	}
+}
+
 func TestStartDetachedDaemonTimeoutKillsAndReapsChild(t *testing.T) {
 	p := paths.WithRoot(filepath.Join(t.TempDir(), "ns-home"))
 	if err := p.EnsureDirs(); err != nil {
