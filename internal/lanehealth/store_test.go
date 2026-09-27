@@ -163,7 +163,7 @@ func TestStoreFailsOpenOnCorruptState(t *testing.T) {
 		t.Fatalf("seed corrupt state: %v", err)
 	}
 	store := NewStore(path, func() time.Time { return now })
-	if _, ok := store.Outage("codex"); ok {
+	if _, ok := store.Outage(testScopeKey("codex")); ok {
 		t.Fatalf("corrupt state must report no outage")
 	}
 	if err := store.Mark(testScoped("codex", Outage{Until: now.Add(time.Hour)})); err != nil {
