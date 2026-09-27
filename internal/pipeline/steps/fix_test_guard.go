@@ -196,18 +196,17 @@ func guardRebasedFixTests(sctx *pipeline.StepContext, mergeBase, baseline, candi
 	if err != nil {
 		return fmt.Errorf("inspect rebased test history: %w", err)
 	}
+	// Match rewritten copies of test-changing commits from the recorded history.
+	// Rebased merge histories can interleave commits from several parents, so
+	// compare a multiset of transitions instead of a first-parent sequence.
+	baselineTransitions := make(map[string]int, len(baselineChanges))
+	for _, change := range baselineChanges {
+		baselineTransitions[change.signature]++
+	}
 	var proposals []string
-	baselineIndex := 0
 	for _, change := range candidateChanges {
-		matched := -1
-		for i := baselineIndex; i < len(baselineChanges); i++ {
-			if baselineChanges[i].signature == change.signature {
-				matched = i
-				break
-			}
-		}
-		if matched >= 0 {
-			baselineIndex = matched + 1
+		if baselineTransitions[change.signature] > 0 {
+			baselineTransitions[change.signature]--
 			continue
 		}
 		patch, err := fixTestCommitPatch(sctx, change.commit, change.paths)
@@ -258,17 +257,17 @@ func baselineTestPaths(sctx *pipeline.StepContext, baseline string) (map[string]
 // fixTestHistoryChanges returns the per-commit transitions to test files that
 // existed at the run's recorded head. Rebased feature commits may have new
 // commit IDs, but unchanged test transitions still have the same path, modes,
-// and blob IDs. Requiring the candidate transitions to be an ordered subset
-// of the recorded series permits those rewritten commits while exposing added
-// edit-and-revert commits whose net tree diff is empty.
+// and blob IDs. Walking every reachable commit and comparing merges to each
+// parent exposes side-branch and merge-resolution edits even when the final
+// tree matches the recorded head.
 func fixTestHistoryChanges(sctx *pipeline.StepContext, from, to string, protected map[string]bool) ([]fixTestCommitChange, error) {
-	commits, err := stepGitRun(sctx, "rev-list", "--first-parent", "--reverse", from+".."+to)
+	commits, err := stepGitRun(sctx, "rev-list", "--topo-order", "--reverse", from+".."+to)
 	if err != nil {
 		return nil, err
 	}
 	var changes []fixTestCommitChange
 	for _, commit := range strings.Fields(commits) {
-		raw, err := fixTestGitOutput(sctx, "diff-tree", "--root", "--no-commit-id", "-r", "--raw", "-z", "--no-renames", commit)
+		raw, err := fixTestGitOutput(sctx, "diff-tree", "--root", "--no-commit-id", "-r", "-m", "--raw", "-z", "--no-renames", commit)
 		if err != nil {
 			return nil, err
 		}
@@ -315,7 +314,7 @@ func fixTestHistoryChanges(sctx *pipeline.StepContext, from, to string, protecte
 }
 
 func fixTestCommitPatch(sctx *pipeline.StepContext, commit string, paths []string) ([]byte, error) {
-	args := []string{"show", "--format=", "--first-parent", "--no-ext-diff", "--no-textconv", "--no-renames", "--binary", commit, "--"}
+	args := []string{"show", "--format=", "-m", "--no-ext-diff", "--no-textconv", "--no-renames", "--binary", commit, "--"}
 	for _, path := range paths {
 		args = append(args, ":(literal)"+path)
 	}
