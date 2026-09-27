@@ -132,6 +132,35 @@ func TestLaneHealthUsesABoundedCheapProbeBeforeTheRequestedInvocation(t *testing
 	}
 }
 
+func TestLaneHealthQuotaProbeRetainsWorktreeSteering(t *testing.T) {
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	store := laneTestStore(t, &now)
+	evidenceRoot := filepath.Join(t.TempDir(), "evidence")
+	inner := &fallbackTestAgent{
+		name:  "codex",
+		home:  t.TempDir(),
+		model: "gpt-5.6-sol",
+		run:   func() (*Result, error) { return &Result{Text: "requested task"}, nil },
+		probe: func(context.Context, RunOpts) (*Result, error) { return &Result{Text: "OK"}, nil },
+	}
+	scope, _ := inner.QuotaScope(RunOpts{})
+	if err := store.Mark(scopedTestOutage(scope, inner.Name(), now.Add(24*time.Hour), now.Add(-lanehealth.ProbeInterval))); err != nil {
+		t.Fatalf("seed outage: %v", err)
+	}
+	now = now.Add(lanehealth.ProbeInterval)
+	wrapped := WithLaneHealth(WithSteering(inner, evidenceRoot), store, func() time.Time { return now })
+	if _, err := wrapped.Run(context.Background(), RunOpts{CWD: t.TempDir(), Prompt: "requested task prompt"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(inner.probes) != 1 {
+		t.Fatalf("probe calls = %d, want 1", len(inner.probes))
+	}
+	want := WorktreeSteering(evidenceRoot) + quotaProbePrompt
+	if got := inner.probes[0].Prompt; got != want {
+		t.Fatalf("probe prompt = %q, want the worktree boundary followed by the fixed probe", got)
+	}
+}
+
 func TestCodexQuotaScopeUsesResolvedHomeAndConfiguredModel(t *testing.T) {
 	firstHome := t.TempDir()
 	secondHome := t.TempDir()

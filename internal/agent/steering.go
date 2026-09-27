@@ -79,6 +79,8 @@ func (s steeredAgent) RunQuotaProbe(ctx context.Context, opts RunOpts) (*Result,
 	if !ok {
 		return nil, fmt.Errorf("agent %q does not support quota probes", s.Name())
 	}
+	opts = quotaProbeOpts(opts)
+	opts.Prompt = s.preamble + opts.Prompt
 	return runner.RunQuotaProbe(ctx, opts)
 }
 
