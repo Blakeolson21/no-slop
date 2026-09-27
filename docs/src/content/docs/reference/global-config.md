@@ -125,15 +125,14 @@ If a pipeline invocation fails because that agent lane could not serve it - the 
 Structured findings and schema/output validation problems do not trigger fallback.
 Neither does a cancelled or timed-out run: the next entry would inherit the same dead deadline, so the chain stops there instead of spending another agent launch to rediscover it.
 
-When an invocation fails with a provider quota-exhaustion banner, that entry is recorded as unusable until its quota resets, and later invocations skip it without launching the process.
+When an invocation fails with a provider quota-exhaustion banner, no-slop records the resolved provider account and exact selected model. The account identity is a digest of its resolved home; the home path and account directory name are not written to `lane-health.json`. Another account or model on the same agent lane remains eligible. If the account or model cannot be resolved, no-slop does not create a lane-wide mark.
 The reset time comes from the provider's own banner when it states one, and otherwise defaults to one hour.
-New records retain the timezone used to interpret that clock, and quota errors and `doctor` show it with a numeric UTC offset. A named timezone in the banner takes precedence; otherwise parsing uses the invocation's effective IANA `TZ` (an empty value means UTC), falling back to the daemon timezone when `TZ` is absent or unsupported. A wrapper that changes its own timezone without reporting it in the banner remains unknown to the daemon. Legacy records keep their local-time display because their original timezone was not recorded.
-The record is stored in `lane-health.json` under the daemon root, so concurrent runs and runs started after a daemon restart honor it too instead of each spending an agent launch to rediscover the same exhausted account.
-A successful invocation clears a record that was written no later than the moment that invocation started, so a record another run wrote while it was still running stays in force.
-One invocation an hour is still let through a recorded entry to check whether it recovered early, so a reset the provider stated days out cannot keep an entry unused for longer than an hour after its quota is actually restored.
-If every configured entry is exhausted, the step fails with a message naming each entry and when it recovers.
-A recorded entry is otherwise invisible, so [`no-slop doctor`](/no-slop/reference/cli/#no-slop-doctor) is where it surfaces.
-The record describes the account that was signed in when the banner appeared, so if you switch that provider to a different account before the stated reset, delete `lane-health.json` to make the entry available again immediately rather than waiting for the next hourly check.
+New records retain the timezone used to interpret that clock, and quota errors and `doctor` show it with a numeric UTC offset. A named timezone in the banner takes precedence; otherwise parsing uses the invocation's effective IANA `TZ` (an empty value means UTC), falling back to the daemon timezone when `TZ` is absent or unsupported. A wrapper that changes its own timezone without reporting it in the banner remains unknown to the daemon.
+The record is stored in `lane-health.json` under the daemon root, so concurrent runs and runs started after a daemon restart honor the same account/model mark.
+A recovered mark gets one fresh, one-word request on that exact account/model per hour, bounded to 30 seconds and sent without the task prompt or saved session. A successful probe clears the mark and the normal request then runs separately; a failed or timed-out probe keeps the mark and its backoff.
+A successful task invocation clears a mark that predates that invocation, so a mark another run wrote while it was still running stays in force.
+If every configured entry is exhausted, the step fails with a message naming each lane, account digest, model, and reset time.
+Recorded scopes are shown by [`no-slop doctor`](/no-slop/reference/cli/#no-slop-doctor). Old lane-only records cannot identify an account/model safely and are ignored after the scoped state format is introduced.
 
 ### acpx_path
 
@@ -267,13 +266,13 @@ When enabled, no-slop asks an external lease authority for a provider account be
 
 Only the `claude` and `codex` lanes take leases. Other lanes (`rovodev`, `opencode`, `pi`, `copilot`, and ACP targets) launch unchanged, and the whole feature is inert while `enabled` is false.
 
-Leasing sits *inside* quota-exhaustion cooldown, so a lane recorded as exhausted under [`agent`](#agent) is skipped before a lease is even requested.
+Lane-health checks sit *inside* the lease, so they can identify the selected account and model. A recorded mark for another account or model does not reject the selected seat; a matching mark is checked after lease acquisition and the seat is handed back when the invocation ends.
 When a lease is granted, the invocation runs with the leased account's home bound (`CLAUDE_CONFIG_DIR` or `CODEX_HOME`) and its identity exported as `NS_QUARTERMASTER_ACCOUNT`, `NS_QUARTERMASTER_LEASE_ID`, and `NS_QUARTERMASTER_POOL`.
 Account homes are resolved from the execution-account registry, falling back to `~/.claude-accounts/<account>` or `~/.codex-accounts/<account>`; see [Environment Variables](/no-slop/reference/environment/#ns_quartermaster_account_registry).
 
 A refusal - the authority declining, an unreachable or unusable lease binary, a lease response missing the account or lease identity, or a missing account home - fails the step rather than probing for another account or falling back to the next configured lane.
 Each lease call is bounded, and the seat is always handed back when the invocation ends, including when the step is cancelled; a hand-back that fails is reported, because the account stays leased until its TTL expires.
-If the leased account itself reports quota exhaustion, the failure names that account and its reset time, and the quota cooldown outside the lease still decides whether the lane is parked and another configured lane runs.
+If the leased account and model report quota exhaustion, that exact scope is marked with its reset time. Later invocations check the mark after selecting a seat, and can run a short probe of that same account and model when the probe becomes due.
 
 An invalid `ttl` or a negative `weight` fails config load.
 These are global-only: a `quartermaster` block in a repository's `.no-slop.yaml` is ignored, because a repository does not get to name an executable this machine's daemon runs.

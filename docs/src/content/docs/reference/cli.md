@@ -509,7 +509,7 @@ Checks:
 Uses indicators: `✓` (available), `–` (not found, optional), `✗` (problem detected).
 
 The standalone runner rows inspect default binary names; the `cursor` row reports whichever of `cursor-agent` and `acpx` are missing.
-`doctor` is the only place a provider quota cooldown surfaces, so it reports one three ways: an installed runner whose quota is exhausted reports `quota-exhausted until <time>` instead of its binary path; a recorded lane with no runner row above it, such as an explicit `acp:<target>` fallback, gets its own row under the same name; and `gate validation` reports the resolved agent as runnable but quota-exhausted rather than plainly runnable. See [Global Config Reference](/no-slop/reference/global-config/#agent) for how the cooldown is recorded and cleared.
+`doctor` reports every recorded account/model quota mark in its own row, including the account digest, selected model, and reset time. A mark does not make other account/model scopes on the same lane unavailable. `gate validation` checks the resolved account/model when no account lease is selected later; with Quartermaster enabled, it defers that check until the lease is chosen. See [Global Config Reference](/no-slop/reference/global-config/#agent) for how the cooldown is recorded and cleared.
 The [Global Config Reference](/no-slop/reference/global-config/) owns ACP gate-validation availability and probing semantics.
 Each validation run performs the authoritative agent resolution again after applying any trusted repository-level override.
 
