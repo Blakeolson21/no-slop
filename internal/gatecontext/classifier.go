@@ -75,6 +75,18 @@ type Inspector struct {
 // Inspect classifies a caller without mutating repositories, runs, refs,
 // remotes, worktrees, or the database.
 func (i Inspector) Inspect(ctx context.Context, req Request) (result Result, err error) {
+	return i.inspect(ctx, req, false)
+}
+
+// InspectRecoveryCaller checks the authenticated caller and canonical managed
+// Git location for the terminal-recovery fast path. The caller's daemon
+// ancestry remains an independent authorization check; active-step lookup is
+// omitted because the caller has already proved there are no active runs.
+func (i Inspector) InspectRecoveryCaller(ctx context.Context, req Request) (result Result, err error) {
+	return i.inspect(ctx, req, true)
+}
+
+func (i Inspector) inspect(ctx context.Context, req Request, recoveryCallerOnly bool) (result Result, err error) {
 	ctx, cancel := context.WithTimeout(ctx, InspectionTimeout)
 	defer cancel()
 	defer func() {
@@ -111,9 +123,12 @@ func (i Inspector) Inspect(ctx context.Context, req Request) (result Result, err
 		}
 	}
 
-	active, err := i.activeAgentSteps(ctx)
-	if err != nil {
-		return result, err
+	var active []activeAgentStep
+	if !recoveryCallerOnly {
+		active, err = i.activeAgentSteps(ctx)
+		if err != nil {
+			return result, err
+		}
 	}
 	if req.PeerPID > 0 && (len(active) > 0 || req.DaemonPID > 0) {
 		parent := i.ParentPID

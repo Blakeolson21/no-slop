@@ -108,8 +108,9 @@ func openSyncService() (*branchsync.Service, func(), error) {
 }
 
 // localCustodyRecoveryIsUnambiguous is a read-only preflight. Missing or
-// incompatible local state falls back to the normal gate-context classifier;
-// only a positively identified terminal recovery state can bypass that call.
+// incompatible local state falls back to full gate-context classification;
+// only a positively identified terminal recovery state can use the lighter
+// caller-authorization check.
 func localCustodyRecoveryIsUnambiguous(ctx context.Context) bool {
 	p, err := paths.New()
 	if err != nil {

@@ -235,9 +235,10 @@ func (s *Service) InspectCached(ctx context.Context) State {
 }
 
 // RecoveryCanSkipGateContext reports whether cached branch and run evidence is
-// enough to recover without caller-ancestry classification. It requires no
-// active run in the estate, so no active pipeline step can be requesting the
-// recovery. Recover rechecks the same evidence before acting.
+// enough to skip full gate-context classification during recovery. It is not
+// caller authorization: the CLI still checks authenticated daemon ancestry
+// and managed Git location on this fast path. Recover rechecks this evidence
+// before acting.
 func (s *Service) RecoveryCanSkipGateContext(ctx context.Context) bool {
 	if s.DB == nil {
 		return false

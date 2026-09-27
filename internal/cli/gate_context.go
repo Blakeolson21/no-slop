@@ -32,10 +32,8 @@ func guardGateControl(cmd *cobra.Command) error {
 	if !mutatesPipelineControl(cmd) {
 		return nil
 	}
-	if isUnambiguousCustodyRecovery(cmd) {
-		return nil
-	}
-	result, err := classifyGateControlCaller(cmd.Context())
+	callerAuthorizationOnly := isUnambiguousCustodyRecovery(cmd)
+	result, err := classifyGateControlCaller(cmd.Context(), callerAuthorizationOnly)
 	if err != nil {
 		if errors.Is(err, errGateContextTimeout) {
 			help := []string{"Back off and retry the same command; classification has not authorized recovery or other pipeline control."}
@@ -101,7 +99,7 @@ func mutatesPipelineControl(cmd *cobra.Command) bool {
 	}
 }
 
-func classifyGateControlCaller(ctx context.Context) (gatecontext.Result, error) {
+func classifyGateControlCaller(ctx context.Context, callerAuthorizationOnly bool) (gatecontext.Result, error) {
 	p, err := paths.New()
 	if err != nil {
 		return gatecontext.Result{}, fmt.Errorf("resolve paths: %w", err)
@@ -122,7 +120,11 @@ func classifyGateControlCaller(ctx context.Context) (gatecontext.Result, error) 
 		}
 		defer client.Close()
 		var wire ipc.GateContextResult
-		if err := client.CallWithContext(ctx, ipc.MethodGateContext, &ipc.GateContextParams{CWD: cwd, MarkerPresent: marker}, &wire, gateContextCallTimeout); err != nil {
+		if err := client.CallWithContext(ctx, ipc.MethodGateContext, &ipc.GateContextParams{
+			CWD:                     cwd,
+			MarkerPresent:           marker,
+			CallerAuthorizationOnly: callerAuthorizationOnly,
+		}, &wire, gateContextCallTimeout); err != nil {
 			var netErr net.Error
 			var rpcErr *ipc.RPCError
 			if errors.Is(err, context.DeadlineExceeded) ||
@@ -157,7 +159,12 @@ func classifyGateControlCaller(ctx context.Context) (gatecontext.Result, error) 
 	} else if !os.IsNotExist(openErr) {
 		return gatecontext.Result{}, fmt.Errorf("open gate registry read-only: %w", openErr)
 	}
-	return (gatecontext.Inspector{DB: database, Paths: p}).Inspect(ctx, gatecontext.Request{CWD: cwd, MarkerPresent: marker})
+	inspector := gatecontext.Inspector{DB: database, Paths: p}
+	request := gatecontext.Request{CWD: cwd, MarkerPresent: marker}
+	if callerAuthorizationOnly {
+		return inspector.InspectRecoveryCaller(ctx, request)
+	}
+	return inspector.Inspect(ctx, request)
 }
 
 func emitGateContextRefusal(cmd *cobra.Command, result gatecontext.Result) error {
