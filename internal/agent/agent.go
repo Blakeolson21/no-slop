@@ -59,6 +59,7 @@ type RunOpts struct {
 	// while adding their own invocation guidance.
 	quotaProbePrepared bool
 	quotaProbeModel    string
+	quotaProbeArgs     []string
 	// invocationIdentity is populated by the concrete adapter immediately
 	// before its retry loop. It is deliberately internal instrumentation rather
 	// than caller input: recorded launch identity must be observed, not claimed.

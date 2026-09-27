@@ -27,6 +27,7 @@ type QuotaScope struct {
 	provider  string
 	home      string
 	homeEnv   string
+	probeArgs []string
 }
 
 // QuotaScopeReporter is implemented by adapters that can resolve an exact
@@ -103,6 +104,7 @@ func isolatedQuotaProbeOpts(opts RunOpts, scope QuotaScope) (RunOpts, func(), er
 	opts.Env = setEnvValue(opts.Env, "PWD", dir)
 	opts.Env = setEnvValue(opts.Env, scope.homeEnv, scope.home)
 	opts.quotaProbeModel = scope.Model
+	opts.quotaProbeArgs = append([]string(nil), scope.probeArgs...)
 	return opts, func() { _ = os.RemoveAll(dir) }, nil
 }
 
@@ -179,7 +181,11 @@ func nativeQuotaScope(configuredProvider, bin string, args []string, opts RunOpt
 			model = claudeConfiguredModel(home)
 		}
 	}
-	return accountModelScope(provider, home, model, opts.CWD)
+	scope, ok := accountModelScope(provider, home, model, opts.CWD)
+	if ok && provider == "codex" {
+		scope.probeArgs = codexQuotaProbeConfigArgs(home, args)
+	}
+	return scope, ok
 }
 
 func nativeProviderForExecutable(configuredProvider, bin string) (string, bool) {
@@ -272,11 +278,13 @@ func modelFromArgs(args []string) (string, bool) {
 			model = strings.TrimSpace(strings.TrimPrefix(arg, "--model="))
 		case strings.HasPrefix(arg, "-m="):
 			model = strings.TrimSpace(strings.TrimPrefix(arg, "-m="))
-		case arg == "--profile":
+		case arg == "--profile" || arg == "-p":
 			if i+1 < len(args) {
 				i++
 			}
-		case strings.HasPrefix(arg, "--profile="):
+		case strings.HasPrefix(arg, "--profile="), strings.HasPrefix(arg, "-p="):
+			// The selected profile's effective model is resolved from config.toml.
+		case strings.HasPrefix(arg, "-p") && len(arg) > 2:
 			// The selected profile's effective model is resolved from config.toml.
 		case arg == "-c" || arg == "--config":
 			if i+1 < len(args) {
@@ -306,28 +314,7 @@ func modelConfigOverride(value string) (string, bool) {
 }
 
 func codexConfiguredModel(home string, args []string) string {
-	profile, profileSelected := codexProfileArg(args)
-	data, err := os.ReadFile(filepath.Join(home, "config.toml"))
-	if err != nil {
-		return ""
-	}
-	var config struct {
-		Model    string `toml:"model"`
-		Profile  string `toml:"profile"`
-		Profiles map[string]struct {
-			Model string `toml:"model"`
-		} `toml:"profiles"`
-	}
-	if err := toml.Unmarshal(data, &config); err != nil {
-		return ""
-	}
-	if !profileSelected {
-		profile = config.Profile
-	}
-	if selected, ok := config.Profiles[profile]; ok && strings.TrimSpace(selected.Model) != "" {
-		return strings.TrimSpace(selected.Model)
-	}
-	return strings.TrimSpace(config.Model)
+	return codexEffectiveQuotaConfig(home, args).Model
 }
 
 func codexProfileArg(args []string) (string, bool) {
@@ -335,16 +322,225 @@ func codexProfileArg(args []string) (string, bool) {
 	selected := false
 	for i := 0; i < len(args); i++ {
 		switch {
-		case args[i] == "--profile" && i+1 < len(args):
+		case (args[i] == "--profile" || args[i] == "-p") && i+1 < len(args):
 			profile = args[i+1]
 			selected = true
 			i++
-		case strings.HasPrefix(args[i], "--profile="):
+		case strings.HasPrefix(args[i], "--profile="), strings.HasPrefix(args[i], "-p="):
 			profile = strings.TrimPrefix(args[i], "--profile=")
+			if strings.HasPrefix(args[i], "-p=") {
+				profile = strings.TrimPrefix(args[i], "-p=")
+			}
+			selected = true
+		case strings.HasPrefix(args[i], "-p") && len(args[i]) > 2:
+			profile = strings.TrimPrefix(args[i], "-p")
+			profile = strings.TrimPrefix(profile, "=")
 			selected = true
 		}
 	}
 	return profile, selected
+}
+
+type codexQuotaConfig struct {
+	Model          string                            `toml:"model"`
+	Profile        string                            `toml:"profile"`
+	ModelProvider  string                            `toml:"model_provider"`
+	OpenAIBaseURL  string                            `toml:"openai_base_url"`
+	OSSProvider    string                            `toml:"oss_provider"`
+	Profiles       map[string]codexQuotaProfile      `toml:"profiles"`
+	ModelProviders map[string]codexModelProviderConf `toml:"model_providers"`
+}
+
+type codexQuotaProfile struct {
+	Model          string                            `toml:"model"`
+	ModelProvider  string                            `toml:"model_provider"`
+	OpenAIBaseURL  string                            `toml:"openai_base_url"`
+	OSSProvider    string                            `toml:"oss_provider"`
+	ModelProviders map[string]codexModelProviderConf `toml:"model_providers"`
+}
+
+type codexModelProviderConf struct {
+	BaseURL            string `toml:"base_url"`
+	WireAPI            string `toml:"wire_api"`
+	EnvKey             string `toml:"env_key"`
+	RequiresOpenAIAuth *bool  `toml:"requires_openai_auth"`
+}
+
+func codexEffectiveQuotaConfig(home string, args []string) codexQuotaProfile {
+	base := codexQuotaProfile{}
+	data, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err == nil {
+		var config codexQuotaConfig
+		if toml.Unmarshal(data, &config) == nil {
+			base = codexQuotaProfile{
+				Model:          strings.TrimSpace(config.Model),
+				ModelProvider:  strings.TrimSpace(config.ModelProvider),
+				OpenAIBaseURL:  strings.TrimSpace(config.OpenAIBaseURL),
+				OSSProvider:    strings.TrimSpace(config.OSSProvider),
+				ModelProviders: config.ModelProviders,
+			}
+			profile, selected := codexProfileArg(args)
+			if !selected {
+				profile = strings.TrimSpace(config.Profile)
+			}
+			if profile != "" && safeCodexProfileName(profile) {
+				if profileData, readErr := os.ReadFile(filepath.Join(home, profile+".config.toml")); readErr == nil {
+					var selectedConfig codexQuotaConfig
+					if toml.Unmarshal(profileData, &selectedConfig) == nil {
+						base = mergeCodexQuotaConfig(base, codexQuotaProfile{
+							Model:          strings.TrimSpace(selectedConfig.Model),
+							ModelProvider:  strings.TrimSpace(selectedConfig.ModelProvider),
+							OpenAIBaseURL:  strings.TrimSpace(selectedConfig.OpenAIBaseURL),
+							OSSProvider:    strings.TrimSpace(selectedConfig.OSSProvider),
+							ModelProviders: selectedConfig.ModelProviders,
+						})
+					}
+				} else if selectedConfig, ok := config.Profiles[profile]; ok {
+					base = mergeCodexQuotaConfig(base, selectedConfig)
+				}
+			}
+		}
+	}
+	applyCodexQuotaConfigOverrides(&base, args)
+	return base
+}
+
+func safeCodexProfileName(profile string) bool {
+	return profile != "" && profile != "." && profile != ".." && filepath.Base(profile) == profile && !strings.ContainsRune(profile, 0)
+}
+
+func mergeCodexQuotaConfig(base, overlay codexQuotaProfile) codexQuotaProfile {
+	if overlay.Model != "" {
+		base.Model = overlay.Model
+	}
+	if overlay.ModelProvider != "" {
+		base.ModelProvider = overlay.ModelProvider
+	}
+	if overlay.OpenAIBaseURL != "" {
+		base.OpenAIBaseURL = overlay.OpenAIBaseURL
+	}
+	if overlay.OSSProvider != "" {
+		base.OSSProvider = overlay.OSSProvider
+	}
+	if base.ModelProviders == nil && len(overlay.ModelProviders) > 0 {
+		base.ModelProviders = make(map[string]codexModelProviderConf, len(overlay.ModelProviders))
+	}
+	for name, provider := range overlay.ModelProviders {
+		base.ModelProviders[name] = mergeCodexModelProviderConfig(base.ModelProviders[name], provider)
+	}
+	return base
+}
+
+func mergeCodexModelProviderConfig(base, overlay codexModelProviderConf) codexModelProviderConf {
+	if overlay.BaseURL != "" {
+		base.BaseURL = overlay.BaseURL
+	}
+	if overlay.WireAPI != "" {
+		base.WireAPI = overlay.WireAPI
+	}
+	if overlay.EnvKey != "" {
+		base.EnvKey = overlay.EnvKey
+	}
+	if overlay.RequiresOpenAIAuth != nil {
+		base.RequiresOpenAIAuth = overlay.RequiresOpenAIAuth
+	}
+	return base
+}
+
+func applyCodexQuotaConfigOverrides(config *codexQuotaProfile, args []string) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		var override string
+		switch {
+		case (arg == "-c" || arg == "--config") && i+1 < len(args):
+			i++
+			override = args[i]
+		case strings.HasPrefix(arg, "--config="):
+			override = strings.TrimPrefix(arg, "--config=")
+		default:
+			continue
+		}
+		key, raw, ok := strings.Cut(override, "=")
+		if !ok {
+			continue
+		}
+		value, valueOK := parseConfigString(raw)
+		if !valueOK {
+			continue
+		}
+		switch key {
+		case "model_provider":
+			config.ModelProvider = value
+		case "openai_base_url":
+			config.OpenAIBaseURL = value
+		case "oss_provider":
+			config.OSSProvider = value
+		default:
+			const prefix = "model_providers."
+			if !strings.HasPrefix(key, prefix) {
+				continue
+			}
+			providerName, field, ok := strings.Cut(strings.TrimPrefix(key, prefix), ".")
+			if !ok || providerName == "" {
+				continue
+			}
+			provider := config.ModelProviders[providerName]
+			switch field {
+			case "base_url":
+				provider.BaseURL = value
+			case "wire_api":
+				provider.WireAPI = value
+			case "env_key":
+				provider.EnvKey = value
+			case "requires_openai_auth":
+				parsed, err := strconv.ParseBool(strings.TrimSpace(raw))
+				if err == nil {
+					provider.RequiresOpenAIAuth = &parsed
+				}
+			}
+			if config.ModelProviders == nil {
+				config.ModelProviders = make(map[string]codexModelProviderConf)
+			}
+			config.ModelProviders[providerName] = provider
+		}
+	}
+}
+
+// codexQuotaProbeConfigArgs reconstructs only the selected provider route from
+// the account config. User config itself stays disabled during the probe, so
+// MCP servers, hooks, instructions, and unrelated capabilities do not leak
+// into this one-word availability check.
+func codexQuotaProbeConfigArgs(home string, args []string) []string {
+	config := codexEffectiveQuotaConfig(home, args)
+	var probeArgs []string
+	if codexArgsContain(args, "--oss") {
+		probeArgs = append(probeArgs, "--oss")
+	}
+	if config.ModelProvider != "" {
+		probeArgs = append(probeArgs, "-c", "model_provider="+strconv.Quote(config.ModelProvider))
+	}
+	if config.OpenAIBaseURL != "" {
+		probeArgs = append(probeArgs, "-c", "openai_base_url="+strconv.Quote(config.OpenAIBaseURL))
+	}
+	if config.OSSProvider != "" {
+		probeArgs = append(probeArgs, "-c", "oss_provider="+strconv.Quote(config.OSSProvider))
+	}
+	if provider, ok := config.ModelProviders[config.ModelProvider]; ok && config.ModelProvider != "" {
+		prefix := "model_providers." + config.ModelProvider + "."
+		if provider.BaseURL != "" {
+			probeArgs = append(probeArgs, "-c", prefix+"base_url="+strconv.Quote(provider.BaseURL))
+		}
+		if provider.WireAPI != "" {
+			probeArgs = append(probeArgs, "-c", prefix+"wire_api="+strconv.Quote(provider.WireAPI))
+		}
+		if provider.EnvKey != "" {
+			probeArgs = append(probeArgs, "-c", prefix+"env_key="+strconv.Quote(provider.EnvKey))
+		}
+		if provider.RequiresOpenAIAuth != nil {
+			probeArgs = append(probeArgs, "-c", prefix+"requires_openai_auth="+strconv.FormatBool(*provider.RequiresOpenAIAuth))
+		}
+	}
+	return probeArgs
 }
 
 func claudeConfiguredModel(home string) string {

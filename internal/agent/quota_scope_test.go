@@ -114,3 +114,65 @@ model = "gpt-work"
 		t.Fatalf("Codex scope = %+v, resolved %t; want selected profile model gpt-work", scope, ok)
 	}
 }
+
+func TestCodexQuotaScopeParsesShortProfileFlag(t *testing.T) {
+	home := t.TempDir()
+	config := `model = "gpt-base"
+[profiles.work]
+model = "gpt-work"
+`
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(config), 0o644); err != nil {
+		t.Fatalf("write Codex config: %v", err)
+	}
+
+	scope, ok := (&codexAgent{bin: "codex", extraArgs: []string{"-p", "work"}}).QuotaScope(RunOpts{Env: []string{"CODEX_HOME=" + home}})
+	if !ok || scope.Model != "gpt-work" {
+		t.Fatalf("Codex scope = %+v, resolved %t; want short -p profile model gpt-work", scope, ok)
+	}
+}
+
+func TestCodexQuotaProbeReconstructsSelectedProfileProviderRoute(t *testing.T) {
+	home := t.TempDir()
+	config := `model = "gpt-base"
+model_provider = "openai"
+
+[model_providers.company]
+base_url = "https://inference.example/v1"
+wire_api = "responses"
+env_key = "COMPANY_API_KEY"
+`
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(config), 0o644); err != nil {
+		t.Fatalf("write Codex config: %v", err)
+	}
+	profile := `model = "gpt-work"
+model_provider = "company"
+`
+	if err := os.WriteFile(filepath.Join(home, "work.config.toml"), []byte(profile), 0o644); err != nil {
+		t.Fatalf("write Codex profile: %v", err)
+	}
+
+	agent := &codexAgent{bin: "codex", extraArgs: []string{"-p", "work"}}
+	scope, ok := agent.QuotaScope(RunOpts{Env: []string{"CODEX_HOME=" + home}})
+	if !ok || scope.Model != "gpt-work" {
+		t.Fatalf("Codex scope = %+v, resolved %t; want profile model gpt-work", scope, ok)
+	}
+	probeArgs := agent.buildArgsWithQuotaProbe("-", "", "", scope.Model, scope.probeArgs)
+	for _, want := range []string{
+		"model_provider=\"company\"",
+		"model_providers.company.base_url=\"https://inference.example/v1\"",
+		"model_providers.company.wire_api=\"responses\"",
+		"model_providers.company.env_key=\"COMPANY_API_KEY\"",
+	} {
+		if !argsContain(probeArgs, want) {
+			t.Errorf("quota probe lost selected profile route %q: %v", want, probeArgs)
+		}
+	}
+	if !argsContainPair(probeArgs, "--model", "gpt-work") {
+		t.Errorf("quota probe did not use the marked profile model: %v", probeArgs)
+	}
+	for _, required := range []string{"--ignore-user-config", "--sandbox", "read-only", "--disable", "shell_tool"} {
+		if !argsContain(probeArgs, required) {
+			t.Errorf("quota probe lost restriction %q while preserving its provider route: %v", required, probeArgs)
+		}
+	}
+}

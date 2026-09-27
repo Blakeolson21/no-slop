@@ -112,8 +112,8 @@ func TestCodexAgent_BuildArgs_QuotaProbeDisablesTaskExecutionMode(t *testing.T) 
 			t.Errorf("quota probe retained task execution override %q in %v", denied, args)
 		}
 	}
-	if !argsContainPair(args, "--sandbox", "read-only") || !argsContainPair(args, "--ask-for-approval", "never") || !argsContainPair(args, "--disable", "shell_tool") {
-		t.Fatalf("quota probe lacks its read-only, non-interactive, tool-disabled mode: %v", args)
+	if !argsContainPair(args, "--sandbox", "read-only") || argsContain(args, "--ask-for-approval") || !argsContainPair(args, "--disable", "shell_tool") {
+		t.Fatalf("quota probe must use the supported read-only, tool-disabled exec mode without task approval flags: %v", args)
 	}
 	if !argsContainPair(args, "-c", `web_search="disabled"`) {
 		t.Fatalf("quota probe must not expose web search: %v", args)
@@ -121,6 +121,39 @@ func TestCodexAgent_BuildArgs_QuotaProbeDisablesTaskExecutionMode(t *testing.T) 
 	for _, flag := range []string{"--ephemeral", "--ignore-user-config", "--ignore-rules"} {
 		if !argsContain(args, flag) {
 			t.Errorf("quota probe is missing %s: %v", flag, args)
+		}
+	}
+}
+
+func TestCodexQuotaProbeDoesNotUseUnsupportedApprovalFlag(t *testing.T) {
+	args := (&codexAgent{bin: "codex"}).buildArgs("-", "", "", "gpt-5.6-sol")
+	if argsContain(args, "--ask-for-approval") {
+		t.Fatalf("quota probe uses the unsupported codex exec approval flag: %v", args)
+	}
+}
+
+func TestCodexQuotaProbePreservesProviderRoutingOverrides(t *testing.T) {
+	ca := &codexAgent{bin: "codex", extraArgs: []string{
+		"-p", "work",
+		"-c", `model_provider="company"`,
+		"-c", `model_providers.company.base_url="https://inference.example/v1"`,
+		"--cd", "/private/task-root",
+		"--model", "task-model",
+		"--add-dir", "/private/task-data",
+	}}
+	args := ca.buildArgs("-", "", "", "gpt-5.6-sol")
+
+	for _, want := range []string{
+		"model_provider=\"company\"",
+		"model_providers.company.base_url=\"https://inference.example/v1\"",
+	} {
+		if !argsContain(args, want) {
+			t.Errorf("quota probe dropped provider routing value %q: %v", want, args)
+		}
+	}
+	for _, denied := range []string{"/private/task-root", "task-model", "/private/task-data"} {
+		if argsContain(args, denied) {
+			t.Errorf("quota probe retained task override %q: %v", denied, args)
 		}
 	}
 }

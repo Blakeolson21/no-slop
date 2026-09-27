@@ -102,7 +102,7 @@ func (a *codexAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, error)
 	// payload out of argv avoids per-argument OS limits on multi-round prompts.
 	var args []string
 	if opts.quotaProbePrepared {
-		args = a.buildArgs("-", schemaPath, resumeID, opts.quotaProbeModel)
+		args = a.buildArgsWithQuotaProbe("-", schemaPath, resumeID, opts.quotaProbeModel, opts.quotaProbeArgs)
 	} else {
 		args = a.buildArgs("-", schemaPath, resumeID)
 	}
@@ -186,10 +186,25 @@ func (a *codexAgent) buildArgs(prompt, schemaPath, resumeID string, quotaProbeMo
 	quotaProbe := len(quotaProbeModel) > 0 && quotaProbeModel[0] != ""
 	extraArgs := a.extraArgs
 	if quotaProbe {
-		// A probe uses only the adapter's managed probe flags below. Reusing
-		// arbitrary task launch overrides could select a different model, restore
-		// the task's working directory, or enable tools.
-		extraArgs = nil
+		// Keep provider/profile routing while dropping task-specific model,
+		// working-directory, session, and capability overrides.
+		extraArgs = codexQuotaProbeConfigArgs("", a.extraArgs)
+	}
+	model := ""
+	if quotaProbe {
+		model = quotaProbeModel[0]
+	}
+	return a.buildArgsWithQuotaProbe(prompt, schemaPath, resumeID, model, extraArgs)
+}
+
+func (a *codexAgent) buildArgsWithQuotaProbe(prompt, schemaPath, resumeID, quotaProbeModel string, probeArgs []string) []string {
+	quotaProbe := strings.TrimSpace(quotaProbeModel) != ""
+	extraArgs := a.extraArgs
+	if quotaProbe {
+		if probeArgs == nil {
+			probeArgs = codexQuotaProbeConfigArgs("", a.extraArgs)
+		}
+		extraArgs = probeArgs
 	}
 	args := make([]string, 0, len(extraArgs)+20)
 	args = append(args, "exec")
@@ -206,9 +221,8 @@ func (a *codexAgent) buildArgs(prompt, schemaPath, resumeID string, quotaProbeMo
 	}
 	if quotaProbe {
 		args = append(args,
-			"--model", quotaProbeModel[0],
+			"--model", quotaProbeModel,
 			"--sandbox", "read-only",
-			"--ask-for-approval", "never",
 			"--skip-git-repo-check",
 			"--ephemeral",
 			"--ignore-user-config",
