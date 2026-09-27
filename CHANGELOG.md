@@ -1,5 +1,54 @@
 # Changelog
 
+## [1.55.0](https://github.com/Blakeolson21/no-slop/compare/v1.54.0...v1.55.0) (2026-09-27)
+
+
+### Features
+
+* **axi:** add read-only resume candidate scope check ([25e1dc9](https://github.com/Blakeolson21/no-slop/commit/25e1dc9a7140ec8d2f808a83bdb80fb81ad74722))
+* **axi:** cancel a specific run by positional ID ([6f5eb6c](https://github.com/Blakeolson21/no-slop/commit/6f5eb6cb80fbb215d005873dac3658fc8b549f35))
+* **axi:** persist a no-fix policy for each run ([075061e](https://github.com/Blakeolson21/no-slop/commit/075061e6d4a91e34ff889c09f3a026ebb034108e))
+* **axi:** persist adjudicator notes with approvals ([51485df](https://github.com/Blakeolson21/no-slop/commit/51485dfc4f7c0be56a089509e401df004b3813ff))
+* **convergence:** add terminal round and recurring-class limits ([cc52ad2](https://github.com/Blakeolson21/no-slop/commit/cc52ad27c867885c77e12b49be8ecc765a78cd0e))
+* **daemon,docs:** wire status validator into startup and sweep docs ([4e7da32](https://github.com/Blakeolson21/no-slop/commit/4e7da323304b03abeddd3d876e4526233065e368))
+* **pipeline:** persist seat-blocked run outcomes ([5b49ff3](https://github.com/Blakeolson21/no-slop/commit/5b49ff370dbb127e7cba6b3e9975a7a66f5e0423))
+* **pipeline:** terminate non-converging reviews and expose redesign drafts ([a48d166](https://github.com/Blakeolson21/no-slop/commit/a48d16670b8bc4edf01676d631dbf6fb93639949))
+* separate review capacity and verify completion-driven continuation ([bc8368a](https://github.com/Blakeolson21/no-slop/commit/bc8368a4042baeb4dc4e1a30f332f11da4d830c4))
+
+
+### Bug Fixes
+
+* **axi:** expose retry keys and acceptance receipt lookup ([3127c4a](https://github.com/Blakeolson21/no-slop/commit/3127c4aba890e3f0025864c50f8a0ab1a1225b3c))
+* **axi:** report exhausted fix turns as refused ([75cc6e4](https://github.com/Blakeolson21/no-slop/commit/75cc6e4676177f33f5f1f081392148cc72ef6baa))
+* **branchsync:** recover unambiguous terminal custody without classification ([a272db1](https://github.com/Blakeolson21/no-slop/commit/a272db1a08e66283f6ee17cce0aaa6de2216a852))
+* **ci:** allow test-preserving rebases ([5ee9f6f](https://github.com/Blakeolson21/no-slop/commit/5ee9f6fbde5bf43f198228f01f549f603a6b807d))
+* **ci:** inspect merged rebased test history ([fdb71fa](https://github.com/Blakeolson21/no-slop/commit/fdb71fae7076dae1705d0b3f83776cd2b18c33f5))
+* **ci:** inspect rebased repair test commits ([62199f0](https://github.com/Blakeolson21/no-slop/commit/62199f0f068b309e2df3b02aab4233510f70d9fe))
+* **ci:** reject repair history rewinds ([adce120](https://github.com/Blakeolson21/no-slop/commit/adce1209cbafccff6754c69fe624d48334e50c7f))
+* **cli:** repair WIP build break and stale awaiting_agent assertion ([8cdbeeb](https://github.com/Blakeolson21/no-slop/commit/8cdbeebb7d54a932d5e24ccf679d7fe485e1d4fa))
+* **cli:** report classification timeouts as retryable preflight failures ([9aecf49](https://github.com/Blakeolson21/no-slop/commit/9aecf49714fc46b99f9fc66d743cbc663eba504a))
+* **cli:** retain caller authorization during custody recovery ([62ff92f](https://github.com/Blakeolson21/no-slop/commit/62ff92f2c0802788c7748c0a6f294ddbc3cba451))
+* **codex:** stream prompts through stdin and bound round history ([972cebe](https://github.com/Blakeolson21/no-slop/commit/972cebeb0e300f7b8e428d78720ddb5ad18d5947))
+* **convergence:** redact credentials before deriving exported class labels ([dbab77e](https://github.com/Blakeolson21/no-slop/commit/dbab77e8581222fee55f2ed849d57007d60b0534))
+* **daemon:** detect published child exit before PID observation ([4ae72ce](https://github.com/Blakeolson21/no-slop/commit/4ae72ced6c3bb81ab5cff35f9ff2672c1d1df72c))
+* **daemon:** persist response receipts before queue admission ([fcbf6e8](https://github.com/Blakeolson21/no-slop/commit/fcbf6e85d9d5662eccee9cde23a5d2b6121c8b5b))
+* **document:** supply bounded diff evidence to agent turns ([f7a0193](https://github.com/Blakeolson21/no-slop/commit/f7a01938fafccd0c6c939efe1842c67b4abc56f7))
+* **gatecontext:** bound classification and batch ancestry evidence ([f086fd0](https://github.com/Blakeolson21/no-slop/commit/f086fd0d49da0d0f66c3aad7c7becc9e30e0eeee))
+* **pipeline:** keep continuity refusal ahead of test guard ([8d99fda](https://github.com/Blakeolson21/no-slop/commit/8d99fdae26657849cafcb94572e8c77510991a67))
+* **pipeline:** park initial human decisions before sibling auto-fixes ([610728e](https://github.com/Blakeolson21/no-slop/commit/610728e706df799aee28c02ae83940ac4cd1218b))
+* **pipeline:** reject repairs that change existing tests ([b24e308](https://github.com/Blakeolson21/no-slop/commit/b24e3081154a618f29bd599082bb4023c7c8e68d))
+* **resume:** ignore grafts and lazy fetches during scope checks ([be9def0](https://github.com/Blakeolson21/no-slop/commit/be9def0cc44a84779d557e6124151b7e68c2f3d4))
+* **review:** preserve no-delta selections across rebase ([61ab722](https://github.com/Blakeolson21/no-slop/commit/61ab722ea2dc7fb3a3aedf60278be0a47c05aee6))
+* **review:** rereview restored heads and preserve git step environment ([f31f342](https://github.com/Blakeolson21/no-slop/commit/f31f342642d49c4999b4b8a3f4ea4591260ac76a))
+* **review:** unify head promotion recovery ([eb3b48f](https://github.com/Blakeolson21/no-slop/commit/eb3b48f99114bbeb2dab51fad16792d50e13e0ed))
+* **tui:** leave initial ask-user gates parked in yolo mode ([a66f57b](https://github.com/Blakeolson21/no-slop/commit/a66f57bbb26b38d1d6b855f8e2d0b1825b5a60f2))
+* **types,db:** legacy alias constants must hold the old literals ([0be11a5](https://github.com/Blakeolson21/no-slop/commit/0be11a5d384d0d155b5ca4972da1c8041bb64cc5))
+
+
+### Performance Improvements
+
+* **gatecontext:** classify active ancestry in one query ([796aee8](https://github.com/Blakeolson21/no-slop/commit/796aee8edd966432d0d80e28a42fafd30325a857))
+
 ## [1.54.0](https://github.com/Blakeolson21/no-slop/compare/v1.53.0...v1.54.0) (2026-09-05)
 
 
