@@ -150,6 +150,14 @@ func InitWithFork(ctx context.Context, d *db.DB, p *paths.Paths, workDir, forkUR
 		return nil, false, err
 	}
 
+	if existing == nil {
+		if err := attachUpstreamStore(ctx, p, bareDir, absRoot, upstreamURL); err != nil {
+			_ = removeWorkingRemotes(ctx, absRoot)
+			os.RemoveAll(bareDir)
+			return nil, false, fmt.Errorf("attach upstream object store: %w", err)
+		}
+	}
+
 	if existing != nil {
 		var repo *db.Repo
 		if forkURL != "" {

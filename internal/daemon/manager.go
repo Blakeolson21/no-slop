@@ -443,6 +443,7 @@ func (m *RunManager) resumeRecoveredRun(plan recoveredRunPlan) {
 			cancel(nil)
 			_ = plan.agent.Close()
 			m.closeSubscribers(plan.run.ID)
+			m.retainFinishedRunObjects(plan.run.ID)
 			if err := git.WorktreeRemove(context.Background(), plan.gateDir, plan.workDir); err != nil {
 				slog.Warn("failed to remove recovered worktree", "path", plan.workDir, "error", err)
 			}
@@ -994,6 +995,12 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 		return "", fmt.Errorf("create run: %w", err)
 	}
 
+	if err := gate.RetainRun(ctx, m.paths, run); err != nil {
+		m.db.UpdateRunError(run.ID, "retain upstream run objects: "+safeurl.RedactText(err.Error()))
+		trackStartFailure("retain_run_objects")
+		return "", fmt.Errorf("retain upstream run objects: %w", err)
+	}
+
 	// Create worktree from the gate bare repo.
 	gateDir := m.paths.RepoDir(repo.ID)
 	wtDir := m.paths.WorktreeDir(repo.ID, run.ID)
@@ -1207,6 +1214,7 @@ func (m *RunManager) startRunWithIntentSource(ctx context.Context, repo *db.Repo
 			// Close subscriber channels for this run.
 			m.closeSubscribers(run.ID)
 			m.sweepRunWorktreeProcesses(wtDir)
+			m.retainFinishedRunObjects(run.ID)
 			// Clean up worktree.
 			if rmErr := git.WorktreeRemove(context.Background(), gateDir, wtDir); rmErr != nil {
 				slog.Warn("failed to remove worktree", "path", wtDir, "error", rmErr)
@@ -1518,5 +1526,20 @@ func (m *RunManager) cancelActiveRuns(repoID, branch string) {
 			slog.Warn("timed out waiting for cancelled runs to finish")
 			return
 		}
+	}
+}
+
+// retainFinishedRunObjects covers both fresh and crash-recovered execution.
+// Failure cannot undo a finished validation result; the lane gate still owns
+// its local objects and is never pruned by this cleanup path.
+func (m *RunManager) retainFinishedRunObjects(runID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	current, err := m.db.GetRun(runID)
+	if err == nil && current != nil {
+		err = gate.RetainRun(ctx, m.paths, current)
+	}
+	if err != nil {
+		slog.Warn("failed to retain upstream run objects", "run_id", runID, "error", safeurl.RedactText(err.Error()))
 	}
 }

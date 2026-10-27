@@ -17,6 +17,7 @@ import (
 	"github.com/Blakeolson21/no-slop/internal/config"
 	"github.com/Blakeolson21/no-slop/internal/db"
 	"github.com/Blakeolson21/no-slop/internal/evidence"
+	"github.com/Blakeolson21/no-slop/internal/gate"
 	"github.com/Blakeolson21/no-slop/internal/gateguidance"
 	"github.com/Blakeolson21/no-slop/internal/git"
 	"github.com/Blakeolson21/no-slop/internal/ipc"
@@ -1079,6 +1080,11 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			}
 			e.emitStepEventWithFindingsAndError(ipc.EventStepStatusChanged, run, repo, stepName, string(types.StepStatusFailed), "", redactedErr, &durationMS)
 			return false, "", fmt.Errorf("step %s failed: %s", stepName, redactedErr)
+		}
+		if e.gateDir != "" {
+			if err := gate.RetainRunInGate(ctx, e.paths, e.gateDir, run, reviewStartingHeadSHA, outcome.ReviewApprovedHeadSHA); err != nil {
+				return false, "", fmt.Errorf("retain upstream run checkpoint: %w", err)
+			}
 		}
 		restartFrom = outcome.RestartFrom
 
