@@ -10,8 +10,11 @@
 package filelock
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
+	"time"
 )
 
 // Lock is a held advisory lock on a lock file.
@@ -43,3 +46,37 @@ func (l *Lock) Release() {
 	_ = unlockFile(l.file)
 	_ = l.file.Close()
 }
+
+// AcquireContext acquires the same cross-process lock as Acquire, but lets a
+// cancelled operation stop waiting for another writer. No waiter goroutine is
+// left behind holding a lock after its caller exits.
+func AcquireContext(ctx context.Context, path string) (*Lock, error) {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open lock file: %w", err)
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			file.Close()
+			return nil, err
+		}
+		err := tryLockFile(file)
+		if err == nil {
+			return &Lock{file: file}, nil
+		}
+		if !errors.Is(err, errLockBusy) {
+			file.Close()
+			return nil, fmt.Errorf("lock file: %w", err)
+		}
+		timer := time.NewTimer(25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			file.Close()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+var errLockBusy = errors.New("file lock is busy")
