@@ -361,7 +361,10 @@ func makeSocketSafeTempDir(t *testing.T) string {
 	t.Helper()
 
 	base := os.TempDir()
-	if runtime.GOOS != "windows" {
+	// Honor a lane-local TMPDIR when its short generated name fits. Unlike
+	// t.TempDir, this name does not include a potentially long test name.
+	// Keep the existing fallback for long macOS system temp paths.
+	if runtime.GOOS != "windows" && len(filepath.Join(base, "nmh-0123456789", "socket")) >= 100 {
 		base = "/tmp"
 	}
 	dir, err := os.MkdirTemp(base, "nmh-")

@@ -26,7 +26,7 @@ type cliSyncFixture struct {
 
 func newCLISyncFixture(t *testing.T) cliSyncFixture {
 	t.Helper()
-	nmHome := filepath.Join(t.TempDir(), "ns-home")
+	nmHome := makeSocketSafeTempDir(t)
 	t.Setenv("NS_HOME", nmHome)
 	root := t.TempDir()
 	remote := filepath.Join(root, "remote.git")
@@ -356,7 +356,7 @@ type cliRecoverFixture struct {
 // operator worktree sits at the submitted head with no push binding.
 func newCLIRecoverFixture(t *testing.T) cliRecoverFixture {
 	t.Helper()
-	nmHome := filepath.Join(t.TempDir(), "ns-home")
+	nmHome := makeSocketSafeTempDir(t)
 	t.Setenv("NS_HOME", nmHome)
 	root := t.TempDir()
 	remote := filepath.Join(root, "remote.git")

@@ -896,7 +896,7 @@ func TestResolveRunPrefersCurrentBranchLatestRun(t *testing.T) {
 func setupAxiQueryRepo(t *testing.T) (string, *paths.Paths, *db.DB, *db.Repo) {
 	t.Helper()
 	repoDir := t.TempDir()
-	nmHome := t.TempDir()
+	nmHome := makeSocketSafeTempDir(t)
 	t.Setenv("NS_HOME", nmHome)
 	run(t, repoDir, "git", "init")
 	run(t, repoDir, "git", "config", "user.email", "test@test.com")
