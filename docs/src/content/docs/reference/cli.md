@@ -364,6 +364,35 @@ Use it after `axi migrate-status-names` to confirm the store is clean.
 no-slop axi lint-store
 ```
 
+## no-slop migrate
+
+```sh
+no-slop migrate --dry-run
+```
+
+Prints a JSON plan for merging registered per-path gate objects into their
+normalized upstream pools. This command opens the existing registry read-only,
+reads only local gate repositories, and performs no network operations, object
+imports, ref/config writes, registration changes, or deletions. Invoking it
+without `--dry-run` fails; migration execution is not implemented.
+
+Each source lists its destination pool, namespaced ref imports, and verification
+results for every live run's recorded head, base, submitted/approved/pushed
+commits, review-round commits, and any existing worktree head. Verification
+checks object connectivity as well as tip existence. Same-named branches from
+different lane gates map into separate `refs/lanes/<repo-id>/...` namespaces;
+run commits map into `refs/runs/<run-id>/<object-id>`.
+
+`verified: true` means the source objects were verified, even if the destination
+pool does not yet exist. `destination_present` reports whether the exact planned
+ref already exists there. `removal_allowed` is always false. Missing objects,
+unreadable or mismatched gates, unknown gate directories, or changing live-run
+records produce an unverified report and nonzero exit. This is an advisory
+snapshot; applying a migration requires stopping writers and verifying again.
+Existing gate metadata and local-only run state must also be preserved by the
+future migration. See [shared upstream objects](/no-slop/concepts/gate-model/#shared-upstream-objects)
+for the storage and retention model.
+
 ## no-slop eject
 
 Remove the gate from the current repository.

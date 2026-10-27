@@ -99,6 +99,37 @@ under `refs/gate-evidence/`, which `init` and daemon startup configure to
 survive garbage collection for the life of the gate. The
 [Review step](/no-slop/reference/pipeline-steps/#review) owns that contract.
 
+### Shared upstream objects
+
+New gates borrow common history from one bare object pool under
+`<NS_HOME>/stores/<upstream-hash>.git`. The key normalizes the upstream URL:
+host case, default ports, trailing slashes, and a network URL's `.git` suffix
+are normalized; HTTP credentials are excluded. Local paths and `file://` URLs
+resolve to the same canonical path. Transport, SSH username, nondefault port,
+and repository-path case remain significant to avoid combining distinct
+repositories.
+
+Each lane keeps its own gate registration, branch refs, hooks, credentials,
+and detached run worktrees. Git alternates let those gates read shared history
+without copying it into each gate. New objects received or authored in a lane
+remain local; run admission and completion also copy known run commits into
+the pool under immutable `refs/runs/<run-id>/<object-id>` refs. Successful phase
+checkpoints retain new generations before the pipeline can park at a gate.
+Bootstrap tips
+have separate immutable `refs/retained/<object-id>` roots. These roots survive
+upstream branch deletion and force pushes. Ejecting a lane leaves the shared
+pool intact for its other borrowers.
+
+Automatic Git maintenance is disabled on pools and their borrowers. Ref and
+object retention is deliberately conservative in this slice: terminal-run
+reclamation and a grace window are not implemented. Do not prune borrowed
+pools or repack borrowers without `--local`; that can respectively break a
+borrower or recreate a full history copy in every lane.
+
+Refreshing an existing gate preserves its storage layout. The read-only
+[`migrate --dry-run`](/no-slop/reference/cli/#no-slop-migrate) command inventories
+legacy gates and verifies live-run objects before a future explicit migration.
+
 ### Daemon
 
 The daemon owns long-running work: creating worktrees, running the pipeline,
