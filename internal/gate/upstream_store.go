@@ -39,6 +39,15 @@ func UpstreamIdentity(baseDir, raw string) (string, error) {
 			raw = "ssh://" + raw[:colon] + "/" + raw[colon+1:]
 		}
 	}
+	// Parse native paths before URL syntax. Windows drive letters are not
+	// schemes, and literal '%' or '#' in a filesystem name is not URL data.
+	if !strings.Contains(raw, "://") || filepath.IsAbs(raw) {
+		local, ok := workingRemoteLocalPath(baseDir, raw)
+		if !ok {
+			return "", fmt.Errorf("unsupported local upstream URL")
+		}
+		return (&url.URL{Scheme: "file", Path: filepath.ToSlash(canonicalWorkingRemotePath(local))}).String(), nil
+	}
 	u, err := url.Parse(raw)
 	if err != nil {
 		return "", fmt.Errorf("malformed upstream URL")

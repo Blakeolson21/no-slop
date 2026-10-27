@@ -280,3 +280,22 @@ func TestConcurrentLanesInitializeOneUpstreamPool(t *testing.T) {
 		t.Fatalf("concurrent initializers created %d upstream pools", count)
 	}
 }
+
+func TestUpstreamIdentityAcceptsLiteralLocalPathCharacters(t *testing.T) {
+	root := t.TempDir()
+	local := filepath.Join(root, "upstream%# repo.git")
+	if err := os.Mkdir(local, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pathIdentity, err := UpstreamIdentity(root, local)
+	if err != nil {
+		t.Fatalf("literal local path: %v", err)
+	}
+	fileIdentity, err := UpstreamIdentity(root, (&url.URL{Scheme: "file", Path: local}).String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pathIdentity != fileIdentity {
+		t.Fatalf("local path and escaped file URL differ: %q %q", pathIdentity, fileIdentity)
+	}
+}
